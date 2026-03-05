@@ -1,0 +1,59 @@
+"""Embedding client for Ollama nomic-embed-text on Windows host."""
+
+from __future__ import annotations
+
+import subprocess
+
+import httpx
+
+from .db import EMBED_DIM
+
+_OLLAMA_URL: str | None = None
+
+
+def _get_ollama_url() -> str:
+    global _OLLAMA_URL
+    if _OLLAMA_URL is not None:
+        return _OLLAMA_URL
+    # Try Windows host IP (WSL2 gateway)
+    try:
+        result = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True, text=True, timeout=5,
+        )
+        gateway = result.stdout.split()[2]
+        url = f"http://{gateway}:11434"
+        resp = httpx.get(f"{url}/api/tags", timeout=3)
+        if resp.status_code == 200:
+            _OLLAMA_URL = url
+            return _OLLAMA_URL
+    except Exception:
+        pass
+    # Fallback to localhost
+    _OLLAMA_URL = "http://localhost:11434"
+    return _OLLAMA_URL
+
+
+def embed(texts: list[str], model: str = "nomic-embed-text") -> list[list[float]]:
+    url = _get_ollama_url()
+    results = []
+    # Batch in groups of 32
+    for i in range(0, len(texts), 32):
+        batch = texts[i : i + 32]
+        resp = httpx.post(
+            f"{url}/api/embed",
+            json={"model": model, "input": batch},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        embeddings = data["embeddings"]
+        for emb in embeddings:
+            if len(emb) != EMBED_DIM:
+                raise ValueError(f"Expected {EMBED_DIM} dims, got {len(emb)}")
+            results.append(emb)
+    return results
+
+
+def embed_single(text: str, model: str = "nomic-embed-text") -> list[float]:
+    return embed([text], model)[0]

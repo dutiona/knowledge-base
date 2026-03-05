@@ -1,0 +1,103 @@
+"""SQLite database setup with FTS5 + sqlite-vec."""
+
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+import sqlite_vec
+
+DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "research-index" / "research.db"
+EMBED_DIM = 768  # nomic-embed-text
+
+
+def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def init_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(f"""
+    CREATE TABLE IF NOT EXISTS chunks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content_hash TEXT NOT NULL UNIQUE,
+        content TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK(source_type IN ('pdf', 'markdown', 'code', 'web', 'note')),
+        source_uri TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        metadata TEXT DEFAULT '{{}}'
+    );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+        content,
+        content='chunks',
+        content_rowid='id',
+        tokenize='porter unicode61'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+        INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+        INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+        INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
+        INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+    END;
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
+        embedding float[{EMBED_DIM}],
+        +chunk_id INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS papers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        authors TEXT DEFAULT '[]',
+        year INTEGER,
+        venue TEXT,
+        doi TEXT UNIQUE,
+        bibtex TEXT,
+        abstract_chunk_id INTEGER REFERENCES chunks(id),
+        added_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS relationships (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_paper_id INTEGER NOT NULL REFERENCES papers(id),
+        target_paper_id INTEGER NOT NULL REFERENCES papers(id),
+        relation_type TEXT NOT NULL CHECK(relation_type IN ('extends', 'contradicts', 'replicates', 'cites', 'compares')),
+        confidence REAL DEFAULT 1.0,
+        evidence_chunk_id INTEGER REFERENCES chunks(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(source_paper_id, target_paper_id, relation_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS conclusions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        claim TEXT NOT NULL,
+        confidence REAL DEFAULT 1.0,
+        source_chunk_ids TEXT NOT NULL DEFAULT '[]',
+        session_context TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        superseded_by INTEGER REFERENCES conclusions(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS executions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task TEXT NOT NULL,
+        result_summary TEXT,
+        conclusion_ids TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    """)
+    conn.commit()
