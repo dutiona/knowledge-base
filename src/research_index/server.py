@@ -318,9 +318,14 @@ def export_bibtex_tool(
     conn = _get_conn()
     bibtex = export_bibtex(conn, paper_ids, title_pattern)
     if output_path:
-        Path(output_path).expanduser().write_text(bibtex, encoding="utf-8")
-        return json.dumps({"written_to": output_path, "entries": bibtex.count("@")})
-    return bibtex
+        try:
+            p = Path(output_path).expanduser().resolve()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(bibtex, encoding="utf-8")
+            return json.dumps({"written_to": str(p), "entries": bibtex.count("@")})
+        except OSError as e:
+            return json.dumps({"error": f"Failed to write {output_path}: {e}"})
+    return json.dumps({"bibtex": bibtex, "entries": bibtex.count("@")})
 
 
 @mcp.tool()

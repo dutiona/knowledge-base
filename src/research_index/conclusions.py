@@ -12,8 +12,12 @@ def record_conclusion(
     confidence: float = 1.0,
     source_chunk_ids: list[int] | None = None,
     session_context: str | None = None,
+    _commit: bool = True,
 ) -> dict:
     """Record a conclusion with evidence links to source chunks."""
+    if not 0.0 <= confidence <= 1.0:
+        return {"error": "confidence must be between 0.0 and 1.0"}
+
     chunk_ids = source_chunk_ids or []
 
     # Validate that all chunk IDs exist
@@ -32,7 +36,8 @@ def record_conclusion(
            VALUES (?, ?, ?, ?)""",
         (claim, confidence, json.dumps(chunk_ids), session_context),
     )
-    conn.commit()
+    if _commit:
+        conn.commit()
     return {"conclusion_id": cursor.lastrowid}
 
 
@@ -98,15 +103,18 @@ def supersede_conclusion(
     source_chunk_ids: list[int] | None = None,
     session_context: str | None = None,
 ) -> dict:
-    """Supersede an old conclusion with a new one."""
+    """Supersede an old conclusion with a new one. Atomic transaction."""
     old = conn.execute(
-        "SELECT id FROM conclusions WHERE id = ?", (old_conclusion_id,)
+        "SELECT id, superseded_by FROM conclusions WHERE id = ?", (old_conclusion_id,)
     ).fetchone()
     if not old:
         return {"error": f"Conclusion {old_conclusion_id} not found"}
 
-    # Record the new conclusion
-    result = record_conclusion(conn, new_claim, confidence, source_chunk_ids, session_context)
+    if old["superseded_by"] is not None:
+        return {"error": f"Conclusion {old_conclusion_id} is already superseded by {old['superseded_by']}"}
+
+    # Atomic: insert new + update old in one transaction
+    result = record_conclusion(conn, new_claim, confidence, source_chunk_ids, session_context, _commit=False)
     if "error" in result:
         return result
 
@@ -124,18 +132,21 @@ def get_conclusion_chain(
     conclusion_id: int,
 ) -> list[dict]:
     """Follow the supersession chain for a conclusion (oldest first)."""
+    visited: set[int] = set()
+
     # Walk backwards to find the root
     current_id = conclusion_id
     chain_ids = [current_id]
+    visited.add(current_id)
 
-    # Find predecessors (conclusions that were superseded to reach this one)
     while True:
         prev = conn.execute(
             "SELECT id FROM conclusions WHERE superseded_by = ?", (current_id,)
         ).fetchone()
-        if not prev:
+        if not prev or prev["id"] in visited:
             break
         current_id = prev["id"]
+        visited.add(current_id)
         chain_ids.insert(0, current_id)
 
     # Walk forward from conclusion_id
@@ -144,9 +155,10 @@ def get_conclusion_chain(
         row = conn.execute(
             "SELECT superseded_by FROM conclusions WHERE id = ?", (current_id,)
         ).fetchone()
-        if not row or not row["superseded_by"]:
+        if not row or not row["superseded_by"] or row["superseded_by"] in visited:
             break
         current_id = row["superseded_by"]
+        visited.add(current_id)
         chain_ids.append(current_id)
 
     # Fetch all conclusions in the chain

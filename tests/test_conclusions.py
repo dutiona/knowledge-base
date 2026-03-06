@@ -106,6 +106,24 @@ def test_supersede_conclusion(tmp_path):
     assert len(all_conclusions) == 2
 
 
+def test_supersede_already_superseded(tmp_path):
+    conn = _setup(tmp_path)
+    r1 = record_conclusion(conn, "Original", 0.5)
+    supersede_conclusion(conn, r1["conclusion_id"], "Updated", 0.8)
+    result = supersede_conclusion(conn, r1["conclusion_id"], "Double supersede attempt")
+    assert "error" in result
+    assert "already superseded" in result["error"]
+
+
+def test_conclusion_confidence_range(tmp_path):
+    conn = _setup(tmp_path)
+    result = record_conclusion(conn, "Too confident", confidence=1.5)
+    assert "error" in result
+
+    result = record_conclusion(conn, "Negative", confidence=-0.1)
+    assert "error" in result
+
+
 def test_supersede_nonexistent(tmp_path):
     conn = _setup(tmp_path)
     result = supersede_conclusion(conn, 999, "New claim")
