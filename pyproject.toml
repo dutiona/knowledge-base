@@ -1,0 +1,21 @@
+[project]
+name = "research-index"
+version = "0.1.0"
+description = "Hybrid semantic search MCP server for research and code"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=3.1.0",
+    "httpx>=0.28.1",
+    "pymupdf>=1.27.1",
+    "sqlite-vec>=0.1.6",
+]
+
+[project.scripts]
+research-index = "research_index.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
