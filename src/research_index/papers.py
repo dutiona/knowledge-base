@@ -125,6 +125,9 @@ def add_relationship(
     if relation_type not in valid_types:
         return {"error": f"Invalid relation_type. Must be one of: {valid_types}"}
 
+    if not 0.0 <= confidence <= 1.0:
+        return {"error": "confidence must be between 0.0 and 1.0"}
+
     conn.execute(
         """INSERT INTO relationships (source_paper_id, target_paper_id, relation_type, confidence, evidence_chunk_id)
            VALUES (?, ?, ?, ?, ?)
@@ -148,6 +151,9 @@ def get_relationships(
     direction: str = "both",
 ) -> list[dict]:
     """Get relationships for a paper. direction: 'outgoing', 'incoming', or 'both'."""
+    if direction not in ("outgoing", "incoming", "both"):
+        return []
+
     conditions = []
     params: list = []
 
@@ -196,11 +202,16 @@ def get_relationships(
 def _bibtex_key(authors: list[str], year: int | None) -> str:
     """Generate a BibTeX key from first author surname + year."""
     if authors:
-        first = authors[0].split()[-1].lower()
-        first = re.sub(r"[^a-z]", "", first)
+        name = authors[0]
+        # Handle "Last, First" format
+        if "," in name:
+            surname = name.split(",")[0].strip()
+        else:
+            surname = name.split()[-1]
+        surname = re.sub(r"[^a-zA-Z]", "", surname).lower()
     else:
-        first = "unknown"
-    return f"{first}{year or 'nd'}"
+        surname = "unknown"
+    return f"{surname}{year or 'nd'}"
 
 
 def _generate_bibtex(paper: dict) -> str:
@@ -305,7 +316,7 @@ def suggest_relationships(
                     "matched_doi": doi,
                 })
 
-    # Strategy 2: Title matching via FTS5
+    # Strategy 2: Title substring matching
     other_papers = conn.execute(
         "SELECT id, title FROM papers WHERE id != ?", (paper_id,)
     ).fetchall()

@@ -154,7 +154,7 @@ def test_relationship_with_evidence(tmp_path):
 # --- BibTeX export ---
 
 def test_bibtex_key():
-    assert _bibtex_key(["Vaswani, A."], 2017) == "a2017"
+    assert _bibtex_key(["Vaswani, A."], 2017) == "vaswani2017"
     assert _bibtex_key(["John Smith"], 2023) == "smith2023"
     assert _bibtex_key([], None) == "unknownnd"
 
@@ -251,6 +251,25 @@ def test_suggest_skips_existing_relationships(tmp_path):
 
     suggestions = suggest_relationships(conn, p1)
     assert len(suggestions) == 0
+
+
+def test_relationship_invalid_direction(tmp_path):
+    conn = _setup(tmp_path)
+    p1 = register_paper(conn, "Paper A")["paper_id"]
+    rels = get_relationships(conn, p1, direction="invalid")
+    assert rels == []
+
+
+def test_relationship_confidence_range(tmp_path):
+    conn = _setup(tmp_path)
+    p1 = register_paper(conn, "Paper A")["paper_id"]
+    p2 = register_paper(conn, "Paper B")["paper_id"]
+
+    result = add_relationship(conn, p1, p2, "cites", confidence=1.5)
+    assert "error" in result
+
+    result = add_relationship(conn, p1, p2, "cites", confidence=-0.1)
+    assert "error" in result
 
 
 def test_suggest_no_chunks(tmp_path):
