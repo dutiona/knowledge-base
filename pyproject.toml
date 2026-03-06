@@ -1,8 +1,11 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "research-index"
 version = "0.1.0"
 description = "Hybrid semantic search MCP server for research and code"
-readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=3.1.0",
