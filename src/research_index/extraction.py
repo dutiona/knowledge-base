@@ -229,9 +229,7 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
     }
 
 
-_THINK_TAG_RE = re.compile(
-    r"<think(?:ing)?>\s*</think(?:ing)?>|<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL
-)
+_THINK_TAG_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
 
 _SYSTEM_JSON_DIRECTIVE = (
     "Respond directly with valid JSON. "
@@ -793,7 +791,12 @@ def configure_llm(
     model: str = "qwen3.5:27b",
     api_key: str | None = None,
 ) -> dict:
-    """Configure LLM provider settings."""
+    """Configure LLM provider settings.
+
+    Note: ``api_key`` is stored as plain text in the SQLite config table.
+    Acceptable for local-only use; consider system keyring integration
+    (e.g. ``keyring`` library) before exposing this tool over a network.
+    """
     if provider not in ("ollama", "openai_compat"):
         return {
             "error": f"Unknown provider: {provider}. Use 'ollama' or 'openai_compat'."
