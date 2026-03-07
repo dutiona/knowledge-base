@@ -410,13 +410,16 @@ def test_configure_llm(tmp_path):
 
     result = configure_llm(conn, provider="openai_compat",
                            base_url="http://192.168.1.41:1234",
-                           model="qwen/qwen3.5-35b-a3b")
+                           model="qwen/qwen3.5-35b-a3b",
+                           api_key="sk-test-123")
     assert result["provider"] == "openai_compat"
+    assert "api_key" not in result  # Redacted from response
 
     cfg = _get_llm_config(conn)
     assert cfg["provider"] == "openai_compat"
     assert cfg["base_url"] == "http://192.168.1.41:1234"
     assert cfg["model"] == "qwen/qwen3.5-35b-a3b"
+    assert cfg["api_key"] == "sk-test-123"  # But stored correctly
 
 
 @patch("research_index.ingest.embed", _fake_embed)

@@ -186,10 +186,11 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
 
     prov = provider["value"] if provider else "ollama"
 
-    if base_url_row:
-        base_url = base_url_row["value"]
-    elif prov == "ollama":
+    if prov == "ollama":
+        # Always auto-detect for Ollama — ignore stale base_url from previous provider
         base_url = _get_ollama_url()
+    elif base_url_row:
+        base_url = base_url_row["value"]
     else:
         raise ValueError("llm_base_url is required when llm_provider is 'openai_compat'")
 
@@ -300,13 +301,16 @@ def _collect_entity_mentions(all_extractions: list[dict]) -> list[dict]:
     for extraction in all_extractions:
         for entity_type in ("methods", "datasets"):
             for item in extraction.get(entity_type, []):
-                key = (item["name"].lower(), entity_type.rstrip("s"))
+                name = item.get("name", "").strip()
+                if not name:
+                    continue
+                key = (name.lower(), entity_type.rstrip("s"))
                 if key not in seen:
                     seen.add(key)
                     mentions.append({
-                        "name": item["name"],
+                        "name": name,
                         "type": entity_type.rstrip("s"),
-                        "surface_forms": item.get("surface_forms", [item["name"]]),
+                        "surface_forms": item.get("surface_forms", [name]),
                         "chunk_id": item.get("chunk_id"),
                         "description": item.get("description", ""),
                     })
@@ -388,11 +392,14 @@ def _store_resolved(
         for entity_type_plural in ("methods", "datasets"):
             etype = entity_type_plural.rstrip("s")
             for item in extraction.get(entity_type_plural, []):
-                canonical = surface_to_canonical.get(item["name"].lower(), item["name"])
+                name = item.get("name", "").strip()
+                if not name:
+                    continue
+                canonical = surface_to_canonical.get(name.lower(), name)
                 entity_data[canonical]["type"] = etype
                 if item.get("description"):
                     entity_data[canonical]["description"] = item["description"]
-                for sf in item.get("surface_forms", [item["name"]]):
+                for sf in item.get("surface_forms", [name]):
                     entity_data[canonical]["mentions"].append({
                         "surface_form": sf,
                         "chunk_id": item.get("chunk_id"),
@@ -407,15 +414,17 @@ def _store_resolved(
         )
         eid = cursor.lastrowid
         entity_id_map[canonical] = eid
-        seen_forms = set()
+        seen = set()
         for mention in data["mentions"]:
             sf = mention["surface_form"]
-            if sf not in seen_forms and mention.get("chunk_id"):
+            cid = mention.get("chunk_id")
+            key = (sf, cid)
+            if key not in seen and cid:
                 conn.execute(
                     "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
-                    (eid, sf, mention["chunk_id"]),
+                    (eid, sf, cid),
                 )
-                seen_forms.add(sf)
+                seen.add(key)
 
     # Write to methods/datasets tables
     method_map = {}
@@ -517,6 +526,9 @@ def _extract_single_pass(conn: sqlite3.Connection, paper_id: int, chunks: list[d
 
     _clear_previous_extraction(conn, paper_id)
 
+    # Use first chunk_id for entity mention provenance
+    first_chunk_id = chunks[0]["id"] if chunks else None
+
     method_map = {}
     methods_added = 0
     for m in extracted.get("methods", []):
@@ -525,6 +537,16 @@ def _extract_single_pass(conn: sqlite3.Connection, paper_id: int, chunks: list[d
             result = record_method(conn, name, paper_id, m.get("description"))
             method_map[name] = result["method_id"]
             methods_added += 1
+            # Populate entities table for get_entities_tool consistency
+            cursor = conn.execute(
+                "INSERT INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
+                (name, "method", paper_id, m.get("description")),
+            )
+            if first_chunk_id:
+                conn.execute(
+                    "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
+                    (cursor.lastrowid, name, first_chunk_id),
+                )
 
     dataset_map = {}
     datasets_added = 0
@@ -534,6 +556,15 @@ def _extract_single_pass(conn: sqlite3.Connection, paper_id: int, chunks: list[d
             result = record_dataset(conn, name, paper_id, d.get("description"))
             dataset_map[name] = result["dataset_id"]
             datasets_added += 1
+            cursor = conn.execute(
+                "INSERT INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
+                (name, "dataset", paper_id, d.get("description")),
+            )
+            if first_chunk_id:
+                conn.execute(
+                    "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
+                    (cursor.lastrowid, name, first_chunk_id),
+                )
 
     metrics_added = 0
     for met in extracted.get("metrics", []):
@@ -648,7 +679,10 @@ def configure_llm(
     if api_key:
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_api_key', ?)", (api_key,))
     conn.commit()
-    return _get_llm_config(conn)
+    cfg = _get_llm_config(conn)
+    # Redact sensitive fields from response
+    cfg.pop("api_key", None)
+    return cfg
 
 
 def get_entities(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
