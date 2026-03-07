@@ -129,6 +129,24 @@ def init_schema(conn: sqlite3.Connection) -> None:
         chunk_id INTEGER REFERENCES chunks(id)
     );
 
+    CREATE TABLE IF NOT EXISTS entities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        canonical_name TEXT NOT NULL,
+        entity_type TEXT NOT NULL CHECK(entity_type IN ('method', 'dataset', 'metric')),
+        paper_id INTEGER NOT NULL REFERENCES papers(id),
+        description TEXT,
+        UNIQUE(canonical_name, entity_type, paper_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_mentions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_id INTEGER NOT NULL REFERENCES entities(id),
+        surface_form TEXT NOT NULL,
+        chunk_id INTEGER NOT NULL REFERENCES chunks(id),
+        confidence REAL DEFAULT 1.0,
+        UNIQUE(entity_id, surface_form, chunk_id)
+    );
+
     CREATE TABLE IF NOT EXISTS config (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -140,5 +158,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if not existing:
         conn.execute("INSERT INTO config (key, value) VALUES ('embed_model', 'nomic-embed-text')")
         conn.execute("INSERT INTO config (key, value) VALUES ('embed_dim', ?)", (str(EMBED_DIM),))
+
+    conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('llm_provider', 'ollama')")
+    conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('llm_model', 'qwen3.5:27b')")
 
     conn.commit()

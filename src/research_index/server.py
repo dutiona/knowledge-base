@@ -17,8 +17,10 @@ from .db import DEFAULT_DB_PATH, get_connection, init_schema
 from .embed_swap import get_embed_config, re_embed
 from .extraction import (
     compare_papers,
+    configure_llm,
     extract_structure,
     get_datasets,
+    get_entities,
     get_methods,
     get_metrics,
     record_dataset,
@@ -484,17 +486,48 @@ def compare_papers_tool(paper_ids: list[int]) -> str:
 
 
 @mcp.tool()
-def extract_structure_tool(paper_id: int) -> str:
+def extract_structure_tool(paper_id: int, confirmed: bool = False) -> str:
     """Extract methods, datasets, and metrics from a paper using LLM.
 
-    Analyzes the paper's chunks and extracts structured information.
-    Requires Ollama with gemma3:12b model running.
+    For short papers, runs instantly. For long papers (>2min estimated),
+    returns a warning with ETA — call again with confirmed=True to proceed.
 
     Args:
         paper_id: Paper ID to extract structure from.
+        confirmed: Set True to skip the ETA warning for long documents.
     """
     conn = _get_conn()
-    return json.dumps(extract_structure(conn, paper_id))
+    return json.dumps(extract_structure(conn, paper_id, confirmed=confirmed))
+
+
+@mcp.tool()
+def configure_llm_tool(
+    provider: str = "ollama",
+    base_url: str | None = None,
+    model: str = "qwen3.5:27b",
+    api_key: str | None = None,
+) -> str:
+    """Configure the LLM used for structured extraction.
+
+    Args:
+        provider: 'ollama' (native API) or 'openai_compat' (OpenAI-compatible API).
+        base_url: Base URL (e.g. 'http://192.168.1.41:1234'). Required for openai_compat.
+        model: Model name (e.g. 'qwen3.5:27b', 'qwen/qwen3.5-35b-a3b').
+        api_key: Optional API key for authenticated endpoints.
+    """
+    conn = _get_conn()
+    return json.dumps(configure_llm(conn, provider, base_url, model, api_key))
+
+
+@mcp.tool()
+def get_entities_tool(paper_id: int) -> str:
+    """List resolved entities for a paper with their surface forms and chunk mentions.
+
+    Args:
+        paper_id: Paper ID to get entities for.
+    """
+    conn = _get_conn()
+    return json.dumps(get_entities(conn, paper_id))
 
 
 def main():

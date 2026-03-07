@@ -8,6 +8,8 @@ Hybrid semantic search MCP server for research papers, code, and notes. Ingests 
 - **Hybrid search** — combines BM25 keyword search (FTS5) with cosine vector similarity (sqlite-vec), merged via Reciprocal Rank Fusion
 - **Paper management** — register papers with metadata, track relationships (extends, contradicts, replicates), export BibTeX
 - **Structured extraction** — LLM-powered extraction of methods, datasets, and metrics from paper text; cross-paper comparison on shared datasets
+- **Map-reduce for long documents** — structured extraction handles documents of any size by splitting into chunks, extracting per-chunk, then merging with entity resolution
+- **Configurable LLM backend** — use Ollama natively or any OpenAI-compatible endpoint (e.g. LM Studio, vLLM)
 - **Embedding model flexibility** — swap embedding models and re-embed all chunks without data loss
 
 ## What it does not solve
@@ -15,7 +17,7 @@ Hybrid semantic search MCP server for research papers, code, and notes. Ingests 
 - No cloud sync — the index is a local SQLite database
 - No PDF layout analysis — uses PyMuPDF text extraction (works well for text-heavy papers, not for tables/figures)
 - No automatic paper discovery — you ingest documents manually or via URL
-- Structured extraction depends on a local Ollama LLM (gemma3:12b) — quality varies with model capability
+- Structured extraction depends on an LLM (Ollama or OpenAI-compatible) — quality varies with model capability
 
 ## Architecture
 
@@ -25,7 +27,7 @@ Hybrid semantic search MCP server for research papers, code, and notes. Ingests 
 └──────────────────┬──────────────────────────┘
                    │ MCP protocol
 ┌──────────────────▼──────────────────────────┐
-│              FastMCP Server (22 tools)        │
+│              FastMCP Server (24 tools)        │
 ├──────────────────────────────────────────────┤
 │  ingest.py     │ search.py    │ papers.py    │
 │  embed_swap.py │ extraction.py│ conclusions.py│
@@ -44,7 +46,7 @@ Hybrid semantic search MCP server for research papers, code, and notes. Ingests 
 - [uv](https://docs.astral.sh/uv/) package manager
 - [Ollama](https://ollama.ai/) running locally (or on a Windows host for WSL2)
   - `ollama pull nomic-embed-text` for embeddings
-  - `ollama pull gemma3:12b` for structured extraction (optional)
+  - `ollama pull qwen3.5:27b` for structured extraction (optional, or use any OpenAI-compatible endpoint)
 
 ### Install
 
@@ -123,13 +125,14 @@ uv run pytest tests/ -q
 
 ### Structured Extraction
 
-| Tool                     | Description                                              |
-| ------------------------ | -------------------------------------------------------- |
-| `record_method_tool`     | Record a method for a paper                              |
-| `record_dataset_tool`    | Record a dataset for a paper                             |
-| `record_metric_tool`     | Record a metric value (links to method + dataset)        |
-| `compare_papers_tool`    | Compare metrics across papers on shared datasets         |
-| `extract_structure_tool` | LLM-powered extraction of methods, datasets, and metrics |
+| Tool                     | Description                                                                                                                                                    |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `record_method_tool`     | Record a method for a paper                                                                                                                                    |
+| `record_dataset_tool`    | Record a dataset for a paper                                                                                                                                   |
+| `record_metric_tool`     | Record a metric value (links to method + dataset)                                                                                                              |
+| `compare_papers_tool`    | Compare metrics across papers on shared datasets                                                                                                               |
+| `extract_structure_tool` | LLM-powered extraction of methods, datasets, and metrics via map-reduce (handles any document size; pass `confirmed=True` to skip ETA warning for long papers) |
+| `get_entities_tool`      | List resolved entities for a paper with their surface forms and chunk mentions                                                                                 |
 
 ### Embedding Management
 
@@ -137,6 +140,12 @@ uv run pytest tests/ -q
 | --------------- | ------------------------------------------------------------------- |
 | `embed_config`  | Show current embedding model and dimension                          |
 | `re_embed_tool` | Swap embedding model and re-embed all chunks (atomic, no data loss) |
+
+### LLM Configuration
+
+| Tool                 | Description                                                                 |
+| -------------------- | --------------------------------------------------------------------------- |
+| `configure_llm_tool` | Set the LLM backend for structured extraction (`ollama` or `openai_compat`) |
 
 ## Database
 
@@ -149,12 +158,21 @@ The index is stored at `~/.local/share/research-index/research.db` by default. T
 - `relationships` — inter-paper relationships
 - `conclusions` — research conclusions with supersession chains
 - `methods` / `datasets` / `metrics` — structured extraction results
-- `config` — key-value store (current embedding model + dimension)
+- `config` — key-value store (current embedding model + dimension, LLM settings)
+
+### Config keys
+
+| Key            | Default            | Description                                                                |
+| -------------- | ------------------ | -------------------------------------------------------------------------- |
+| `embed_model`  | `nomic-embed-text` | Ollama embedding model name                                                |
+| `embed_dim`    | `768`              | Embedding vector dimension                                                 |
+| `llm_provider` | `ollama`           | LLM provider: `ollama` (native API) or `openai_compat` (OpenAI-compatible) |
+| `llm_model`    | `qwen3.5:27b`      | Model name passed to the provider                                          |
+| `llm_base_url` | _(unset)_          | Base URL for `openai_compat` provider (e.g. `http://192.168.1.41:1234`)    |
 
 ## Limitations
 
 - Single-user, single-process (SQLite WAL mode, no concurrent writers)
 - AST-aware chunking only for Python files; other code uses fixed-size chunks
 - Web ingest validates URL scheme (http/https) but does not block private IP ranges
-- Structured extraction truncates paper content at 8000 characters
 - Embedding model swap re-embeds all chunks sequentially (can be slow for large indexes)
