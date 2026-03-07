@@ -229,7 +229,7 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
     }
 
 
-_THINK_TAG_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
+_THINK_TAG_RE = re.compile(r"<(think(?:ing)?)>.*?</\1>", re.DOTALL)
 
 _SYSTEM_JSON_DIRECTIVE = (
     "Respond directly with valid JSON. "
