@@ -238,7 +238,11 @@ def _vision_call(
     )
     resp.raise_for_status()
 
-    content = resp.json()["choices"][0]["message"]["content"]
+    body = resp.json()
+    try:
+        content = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError(f"Malformed vision API response: {exc}") from exc
     content = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", content.strip())
 
     try:
@@ -393,19 +397,20 @@ def extract_figures(
         embeddings = _embed_with_config(conn, texts)
 
     # 10. Atomic transaction: delete old, insert new (main thread)
+    # Always delete old figure chunks (even if no new figures found — ensures idempotency)
     chunks_created = 0
-    if all_figures:
-        try:
-            conn.execute(
-                "DELETE FROM chunks_vec WHERE chunk_id IN "
-                "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')",
-                (source_uri,),
-            )
-            conn.execute(
-                "DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
-                (source_uri,),
-            )
+    try:
+        conn.execute(
+            "DELETE FROM chunks_vec WHERE chunk_id IN "
+            "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')",
+            (source_uri,),
+        )
+        conn.execute(
+            "DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
+            (source_uri,),
+        )
 
+        if all_figures:
             for i, (page_num, fig_idx, figure) in enumerate(all_figures):
                 content = figure["description"]
                 content_hash = _content_hash(content)
@@ -442,10 +447,10 @@ def extract_figures(
                 )
                 chunks_created += 1
 
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
     # 11. Save PNGs to disk (best effort, outside transaction)
     figures_dir = (

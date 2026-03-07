@@ -539,6 +539,25 @@ def test_vision_call_unwraps_dict_wrapper():
     assert result[0]["figure_type"] == "photo"
 
 
+def test_vision_call_malformed_response():
+    """Malformed API response (missing choices key) raises ValueError."""
+    from research_index.vision import _vision_call
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"error": "something went wrong"}
+    resp.raise_for_status = MagicMock()
+
+    with patch("research_index.vision.httpx.post", return_value=resp):
+        with pytest.raises(ValueError, match="Malformed vision API response"):
+            _vision_call(
+                "base64data",
+                "prompt",
+                base_url="http://localhost:11434",
+                model="test",
+            )
+
+
 # ---------------------------------------------------------------------------
 # Step 7: Orchestrator — extract_figures
 # ---------------------------------------------------------------------------
