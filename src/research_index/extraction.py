@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 import sqlite3
 from collections import defaultdict
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from .embeddings import _get_ollama_url
 
@@ -80,8 +84,15 @@ def get_methods(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
         "SELECT id, name, description, chunk_id FROM methods WHERE paper_id = ?",
         (paper_id,),
     ).fetchall()
-    return [{"id": r["id"], "name": r["name"], "description": r["description"],
-             "chunk_id": r["chunk_id"]} for r in rows]
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "description": r["description"],
+            "chunk_id": r["chunk_id"],
+        }
+        for r in rows
+    ]
 
 
 def get_datasets(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
@@ -89,8 +100,15 @@ def get_datasets(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
         "SELECT id, name, description, chunk_id FROM datasets WHERE paper_id = ?",
         (paper_id,),
     ).fetchall()
-    return [{"id": r["id"], "name": r["name"], "description": r["description"],
-             "chunk_id": r["chunk_id"]} for r in rows]
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "description": r["description"],
+            "chunk_id": r["chunk_id"],
+        }
+        for r in rows
+    ]
 
 
 def get_metrics(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
@@ -159,30 +177,38 @@ def compare_papers(
             [ds_name] + paper_ids,
         ).fetchall()
 
-        results.append({
-            "dataset": ds_name,
-            "results": [
-                {
-                    "paper_id": r["paper_id"],
-                    "paper_title": r["paper_title"],
-                    "method": r["method_name"],
-                    "metric": r["metric_name"],
-                    "value": r["value"],
-                    "unit": r["unit"],
-                }
-                for r in metrics
-            ],
-        })
+        results.append(
+            {
+                "dataset": ds_name,
+                "results": [
+                    {
+                        "paper_id": r["paper_id"],
+                        "paper_title": r["paper_title"],
+                        "method": r["method_name"],
+                        "metric": r["metric_name"],
+                        "value": r["value"],
+                        "unit": r["unit"],
+                    }
+                    for r in metrics
+                ],
+            }
+        )
 
     return results
 
 
 def _get_llm_config(conn: sqlite3.Connection) -> dict:
     """Read LLM configuration from config table."""
-    provider = conn.execute("SELECT value FROM config WHERE key = 'llm_provider'").fetchone()
+    provider = conn.execute(
+        "SELECT value FROM config WHERE key = 'llm_provider'"
+    ).fetchone()
     model = conn.execute("SELECT value FROM config WHERE key = 'llm_model'").fetchone()
-    base_url_row = conn.execute("SELECT value FROM config WHERE key = 'llm_base_url'").fetchone()
-    api_key_row = conn.execute("SELECT value FROM config WHERE key = 'llm_api_key'").fetchone()
+    base_url_row = conn.execute(
+        "SELECT value FROM config WHERE key = 'llm_base_url'"
+    ).fetchone()
+    api_key_row = conn.execute(
+        "SELECT value FROM config WHERE key = 'llm_api_key'"
+    ).fetchone()
 
     prov = provider["value"] if provider else "ollama"
 
@@ -191,7 +217,9 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
     elif prov == "ollama":
         base_url = _get_ollama_url()
     else:
-        raise ValueError("llm_base_url is required when llm_provider is 'openai_compat'")
+        raise ValueError(
+            "llm_base_url is required when llm_provider is 'openai_compat'"
+        )
 
     return {
         "provider": prov,
@@ -201,6 +229,47 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
     }
 
 
+_THINK_TAG_RE = re.compile(
+    r"<think(?:ing)?>\s*</think(?:ing)?>|<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL
+)
+
+_SYSTEM_JSON_DIRECTIVE = (
+    "Respond directly with valid JSON. "
+    "Output only the JSON object, with no preamble, tags, or commentary."
+)
+
+
+def _strip_think_tags(text: str) -> str:
+    """Strip reasoning/thinking tags from the preamble/trailer of LLM responses.
+
+    Only strips tags outside the JSON payload to avoid corrupting literal
+    <think> text inside JSON string fields.
+    """
+    # Find the start of JSON content
+    json_start = -1
+    for i, ch in enumerate(text):
+        if ch in ("{", "["):
+            json_start = i
+            break
+
+    if json_start == -1:
+        # No JSON found — strip tags from entire text
+        stripped = _THINK_TAG_RE.sub("", text).strip()
+    else:
+        # Strip tags only from preamble before JSON
+        preamble = text[:json_start]
+        json_body = text[json_start:]
+        stripped = (_THINK_TAG_RE.sub("", preamble) + json_body).strip()
+
+    if stripped != text.strip():
+        logger.debug(
+            "Stripped thinking tags from LLM response (%d → %d chars)",
+            len(text),
+            len(stripped),
+        )
+    return stripped
+
+
 def _llm_call(prompt: str, *, conn: sqlite3.Connection) -> str:
     """Call LLM to extract structured data. Supports Ollama and OpenAI-compatible APIs."""
     cfg = _get_llm_config(conn)
@@ -208,11 +277,17 @@ def _llm_call(prompt: str, *, conn: sqlite3.Connection) -> str:
     if cfg["provider"] == "ollama":
         resp = httpx.post(
             f"{cfg['base_url']}/api/generate",
-            json={"model": cfg["model"], "prompt": prompt, "stream": False, "format": "json"},
+            json={
+                "model": cfg["model"],
+                "prompt": prompt,
+                "system": _SYSTEM_JSON_DIRECTIVE,
+                "stream": False,
+                "format": "json",
+            },
             timeout=120,
         )
         resp.raise_for_status()
-        return resp.json()["response"]
+        raw = resp.json()["response"]
     else:  # openai_compat
         headers = {}
         if cfg.get("api_key"):
@@ -222,13 +297,23 @@ def _llm_call(prompt: str, *, conn: sqlite3.Connection) -> str:
             headers=headers,
             json={
                 "model": cfg["model"],
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [
+                    {"role": "system", "content": _SYSTEM_JSON_DIRECTIVE},
+                    {"role": "user", "content": prompt},
+                ],
                 "response_format": {"type": "json_object"},
             },
             timeout=120,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        raw = resp.json()["choices"][0]["message"]["content"]
+
+    raw = _strip_think_tags(raw)
+
+    if not raw:
+        raise ValueError("LLM returned empty response (possible thinking-mode issue)")
+
+    return raw
 
 
 _EXTRACT_PROMPT = """Extract structured information from this research paper text.
@@ -306,16 +391,20 @@ def _collect_entity_mentions(all_extractions: list[dict]) -> list[dict]:
                 key = (name.lower(), entity_type.rstrip("s"))
                 if key not in seen:
                     seen.add(key)
-                    mentions.append({
-                        "name": name,
-                        "type": entity_type.rstrip("s"),
-                        "surface_forms": item.get("surface_forms", [name]),
-                        "chunk_id": item.get("chunk_id"),
-                        "description": item.get("description", ""),
-                    })
+                    mentions.append(
+                        {
+                            "name": name,
+                            "type": entity_type.rstrip("s"),
+                            "surface_forms": item.get("surface_forms", [name]),
+                            "chunk_id": item.get("chunk_id"),
+                            "description": item.get("description", ""),
+                        }
+                    )
                 else:
                     for m in mentions:
-                        if m["name"].lower() == item["name"].lower() and m["type"] == entity_type.rstrip("s"):
+                        if m["name"].lower() == item["name"].lower() and m[
+                            "type"
+                        ] == entity_type.rstrip("s"):
                             for sf in item.get("surface_forms", []):
                                 if sf not in m["surface_forms"]:
                                     m["surface_forms"].append(sf)
@@ -384,7 +473,9 @@ def _store_resolved(
             surface_to_canonical[(member.lower(), etype)] = canon
 
     # Collect all unique entities and their mentions — keyed by (canonical, type)
-    entity_data = defaultdict(lambda: {"type": None, "description": None, "mentions": []})
+    entity_data = defaultdict(
+        lambda: {"type": None, "description": None, "mentions": []}
+    )
     for extraction in map_results:
         for entity_type_plural in ("methods", "datasets"):
             etype = entity_type_plural.rstrip("s")
@@ -397,10 +488,12 @@ def _store_resolved(
                 if item.get("description"):
                     entity_data[(canonical, etype)]["description"] = item["description"]
                 for sf in item.get("surface_forms", [name]):
-                    entity_data[(canonical, etype)]["mentions"].append({
-                        "surface_form": sf,
-                        "chunk_id": item.get("chunk_id"),
-                    })
+                    entity_data[(canonical, etype)]["mentions"].append(
+                        {
+                            "surface_form": sf,
+                            "chunk_id": item.get("chunk_id"),
+                        }
+                    )
 
     # Insert entities and mentions
     entity_id_map = {}
@@ -471,13 +564,23 @@ def _store_resolved(
             method_name = met.get("method", "")
             dataset_name = met.get("dataset", "")
             # Try both method and dataset lookups for canonical resolution
-            canonical_method = surface_to_canonical.get((method_name.lower(), "method"), method_name)
-            canonical_dataset = surface_to_canonical.get((dataset_name.lower(), "dataset"), dataset_name)
+            canonical_method = surface_to_canonical.get(
+                (method_name.lower(), "method"), method_name
+            )
+            canonical_dataset = surface_to_canonical.get(
+                (dataset_name.lower(), "dataset"), dataset_name
+            )
             method_id = method_map.get(canonical_method)
             dataset_id = dataset_map.get(canonical_dataset)
-            record_metric(conn, metric_name, value, paper_id,
-                          method_id=method_id, dataset_id=dataset_id,
-                          unit=met.get("unit"))
+            record_metric(
+                conn,
+                metric_name,
+                value,
+                paper_id,
+                method_id=method_id,
+                dataset_id=dataset_id,
+                unit=met.get("unit"),
+            )
             metrics_added += 1
 
     conn.commit()
@@ -514,7 +617,9 @@ def _get_paper_chunks(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
     return [{"id": c["id"], "content": c["content"]} for c in chunks]
 
 
-def _extract_single_pass(conn: sqlite3.Connection, paper_id: int, chunks: list[dict]) -> dict:
+def _extract_single_pass(
+    conn: sqlite3.Connection, paper_id: int, chunks: list[dict]
+) -> dict:
     """Fast path: single LLM call for short documents."""
     full_text = "\n\n".join(c["content"] for c in chunks)
     prompt = _EXTRACT_PROMPT.format(text=full_text)
@@ -588,16 +693,29 @@ def _extract_single_pass(conn: sqlite3.Connection, paper_id: int, chunks: list[d
                 continue
             method_id = method_map.get(met.get("method", ""))
             dataset_id = dataset_map.get(met.get("dataset", ""))
-            record_metric(conn, metric_name, value, paper_id,
-                          method_id=method_id, dataset_id=dataset_id, unit=met.get("unit"))
+            record_metric(
+                conn,
+                metric_name,
+                value,
+                paper_id,
+                method_id=method_id,
+                dataset_id=dataset_id,
+                unit=met.get("unit"),
+            )
             metrics_added += 1
 
     conn.commit()
-    return {"paper_id": paper_id, "methods_added": methods_added,
-            "datasets_added": datasets_added, "metrics_added": metrics_added}
+    return {
+        "paper_id": paper_id,
+        "methods_added": methods_added,
+        "datasets_added": datasets_added,
+        "metrics_added": metrics_added,
+    }
 
 
-def _extract_map_reduce(conn: sqlite3.Connection, paper_id: int, chunks: list[dict]) -> dict:
+def _extract_map_reduce(
+    conn: sqlite3.Connection, paper_id: int, chunks: list[dict]
+) -> dict:
     """Map-reduce path for long documents."""
     # Phase 1: Map
     map_results = []
@@ -615,7 +733,8 @@ def _extract_map_reduce(conn: sqlite3.Connection, paper_id: int, chunks: list[di
     # Phase 2: Resolve
     try:
         resolution = _resolve_entities(map_results, conn)
-    except Exception:
+    except Exception as e:
+        logger.warning("Entity resolution failed, proceeding without: %s", e)
         resolution = {"groups": []}
 
     # Phase 3: Store
@@ -638,7 +757,9 @@ def extract_structure(
     For long documents, uses map-reduce with entity resolution.
     Long documents require confirmation if estimated time > 2 minutes.
     """
-    paper = conn.execute("SELECT id, title FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    paper = conn.execute(
+        "SELECT id, title FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()
     if not paper:
         return {"error": f"Paper {paper_id} not found"}
 
@@ -674,24 +795,38 @@ def configure_llm(
 ) -> dict:
     """Configure LLM provider settings."""
     if provider not in ("ollama", "openai_compat"):
-        return {"error": f"Unknown provider: {provider}. Use 'ollama' or 'openai_compat'."}
+        return {
+            "error": f"Unknown provider: {provider}. Use 'ollama' or 'openai_compat'."
+        }
     if provider == "openai_compat" and not base_url:
         return {"error": "base_url is required for openai_compat provider"}
     if base_url:
         from urllib.parse import urlparse
+
         parsed = urlparse(base_url)
         if parsed.scheme not in ("http", "https"):
             return {"error": f"Invalid URL scheme: {parsed.scheme}. Use http or https."}
 
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_provider', ?)", (provider,))
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_model', ?)", (model,))
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_provider', ?)",
+        (provider,),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_model', ?)", (model,)
+    )
     if base_url:
-        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', ?)", (base_url,))
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', ?)",
+            (base_url,),
+        )
     elif provider == "ollama":
         # Clear stale base_url from previous provider to use auto-detection
         conn.execute("DELETE FROM config WHERE key = 'llm_base_url'")
     if api_key:
-        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_api_key', ?)", (api_key,))
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_api_key', ?)",
+            (api_key,),
+        )
     elif provider == "ollama":
         # Clear stale api_key — Ollama doesn't use auth
         conn.execute("DELETE FROM config WHERE key = 'llm_api_key'")
@@ -715,12 +850,20 @@ def get_entities(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
             "SELECT surface_form, chunk_id, confidence FROM entity_mentions WHERE entity_id = ?",
             (e["id"],),
         ).fetchall()
-        result.append({
-            "id": e["id"],
-            "canonical_name": e["canonical_name"],
-            "type": e["entity_type"],
-            "description": e["description"],
-            "mentions": [{"surface_form": m["surface_form"], "chunk_id": m["chunk_id"],
-                          "confidence": m["confidence"]} for m in mentions],
-        })
+        result.append(
+            {
+                "id": e["id"],
+                "canonical_name": e["canonical_name"],
+                "type": e["entity_type"],
+                "description": e["description"],
+                "mentions": [
+                    {
+                        "surface_form": m["surface_form"],
+                        "chunk_id": m["chunk_id"],
+                        "confidence": m["confidence"],
+                    }
+                    for m in mentions
+                ],
+            }
+        )
     return result
