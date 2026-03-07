@@ -578,6 +578,7 @@ def _store_resolved(
                 method_id=method_id,
                 dataset_id=dataset_id,
                 unit=met.get("unit"),
+                chunk_id=met.get("chunk_id"),
             )
             metrics_added += 1
 
@@ -699,6 +700,7 @@ def _extract_single_pass(
                 method_id=method_id,
                 dataset_id=dataset_id,
                 unit=met.get("unit"),
+                chunk_id=first_chunk_id,
             )
             metrics_added += 1
 
