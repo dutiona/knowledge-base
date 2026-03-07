@@ -27,7 +27,12 @@ from .extraction import (
     record_method,
     record_metric,
 )
-from .ingest import ingest_directory, ingest_file, ingest_url as _ingest_url, reingest_file
+from .ingest import (
+    ingest_directory,
+    ingest_file,
+    ingest_url as _ingest_url,
+    reingest_file,
+)
 from .papers import (
     add_relationship,
     export_bibtex,
@@ -37,6 +42,7 @@ from .papers import (
     suggest_relationships,
 )
 from .search import search
+from .vision import configure_vision, extract_figures
 
 mcp = FastMCP(
     "research-index",
@@ -69,7 +75,7 @@ def ingest(path: str, source_type: str | None = None) -> str:
 
     Args:
         path: Absolute path to a file or directory.
-        source_type: Override auto-detection. One of: pdf, markdown, code, web, note.
+        source_type: Override auto-detection. One of: pdf, markdown, code, web, note, figure.
     """
     conn = _get_conn()
     p = Path(path).expanduser().resolve()
@@ -81,12 +87,14 @@ def ingest(path: str, source_type: str | None = None) -> str:
         results = ingest_directory(conn, p)
         total_added = sum(r["chunks_added"] for r in results)
         total_skipped = sum(r["chunks_skipped"] for r in results)
-        return json.dumps({
-            "files_processed": len(results),
-            "chunks_added": total_added,
-            "chunks_skipped": total_skipped,
-            "details": results,
-        })
+        return json.dumps(
+            {
+                "files_processed": len(results),
+                "chunks_added": total_added,
+                "chunks_skipped": total_skipped,
+                "details": results,
+            }
+        )
     else:
         result = ingest_file(conn, p, source_type)
         return json.dumps(result)
@@ -100,7 +108,7 @@ def reingest(path: str, source_type: str | None = None) -> str:
 
     Args:
         path: Absolute path to the file to re-ingest.
-        source_type: Override auto-detection. One of: pdf, markdown, code, web, note.
+        source_type: Override auto-detection. One of: pdf, markdown, code, web, note, figure.
     """
     conn = _get_conn()
     p = Path(path).expanduser().resolve()
@@ -138,24 +146,26 @@ def search_index(
     Args:
         query: Natural language search query.
         top_k: Number of results to return (default 10).
-        source_type: Filter results by type (pdf, markdown, code, web, note).
+        source_type: Filter results by type (pdf, markdown, code, web, note, figure).
         mode: Search mode - 'hybrid' (default), 'fts' (keyword only), 'vec' (semantic only).
     """
     conn = _get_conn()
     results = search(conn, query, top_k=top_k, source_type=source_type, mode=mode)
 
-    return json.dumps([
-        {
-            "chunk_id": r.chunk_id,
-            "content": r.content,
-            "source_type": r.source_type,
-            "source_uri": r.source_uri,
-            "chunk_index": r.chunk_index,
-            "score": round(r.score, 6),
-            "match_type": r.match_type,
-        }
-        for r in results
-    ])
+    return json.dumps(
+        [
+            {
+                "chunk_id": r.chunk_id,
+                "content": r.content,
+                "source_type": r.source_type,
+                "source_uri": r.source_uri,
+                "chunk_index": r.chunk_index,
+                "score": round(r.score, 6),
+                "match_type": r.match_type,
+            }
+            for r in results
+        ]
+    )
 
 
 @mcp.tool()
@@ -169,12 +179,24 @@ def status() -> str:
 
     total = conn.execute("SELECT COUNT(*) as count FROM chunks").fetchone()["count"]
 
-    paper_count = conn.execute("SELECT COUNT(*) as count FROM papers").fetchone()["count"]
-    conclusion_count = conn.execute("SELECT COUNT(*) as count FROM conclusions").fetchone()["count"]
-    relationship_count = conn.execute("SELECT COUNT(*) as count FROM relationships").fetchone()["count"]
-    method_count = conn.execute("SELECT COUNT(*) as count FROM methods").fetchone()["count"]
-    dataset_count = conn.execute("SELECT COUNT(*) as count FROM datasets").fetchone()["count"]
-    metric_count = conn.execute("SELECT COUNT(*) as count FROM metrics").fetchone()["count"]
+    paper_count = conn.execute("SELECT COUNT(*) as count FROM papers").fetchone()[
+        "count"
+    ]
+    conclusion_count = conn.execute(
+        "SELECT COUNT(*) as count FROM conclusions"
+    ).fetchone()["count"]
+    relationship_count = conn.execute(
+        "SELECT COUNT(*) as count FROM relationships"
+    ).fetchone()["count"]
+    method_count = conn.execute("SELECT COUNT(*) as count FROM methods").fetchone()[
+        "count"
+    ]
+    dataset_count = conn.execute("SELECT COUNT(*) as count FROM datasets").fetchone()[
+        "count"
+    ]
+    metric_count = conn.execute("SELECT COUNT(*) as count FROM metrics").fetchone()[
+        "count"
+    ]
 
     recent = conn.execute(
         """SELECT source_uri, source_type, COUNT(*) as chunks, created_at
@@ -184,28 +206,30 @@ def status() -> str:
 
     db_size_bytes = DEFAULT_DB_PATH.stat().st_size if DEFAULT_DB_PATH.exists() else 0
 
-    return json.dumps({
-        "total_chunks": total,
-        "by_type": {row["source_type"]: row["count"] for row in type_counts},
-        "papers": paper_count,
-        "conclusions": conclusion_count,
-        "relationships": relationship_count,
-        "methods": method_count,
-        "datasets": dataset_count,
-        "metrics": metric_count,
-        "embed_config": get_embed_config(conn),
-        "recent_ingestions": [
-            {
-                "source_uri": row["source_uri"],
-                "source_type": row["source_type"],
-                "chunks": row["chunks"],
-                "created_at": row["created_at"],
-            }
-            for row in recent
-        ],
-        "db_size_mb": round(db_size_bytes / (1024 * 1024), 2),
-        "db_path": str(DEFAULT_DB_PATH),
-    })
+    return json.dumps(
+        {
+            "total_chunks": total,
+            "by_type": {row["source_type"]: row["count"] for row in type_counts},
+            "papers": paper_count,
+            "conclusions": conclusion_count,
+            "relationships": relationship_count,
+            "methods": method_count,
+            "datasets": dataset_count,
+            "metrics": metric_count,
+            "embed_config": get_embed_config(conn),
+            "recent_ingestions": [
+                {
+                    "source_uri": row["source_uri"],
+                    "source_type": row["source_type"],
+                    "chunks": row["chunks"],
+                    "created_at": row["created_at"],
+                }
+                for row in recent
+            ],
+            "db_size_mb": round(db_size_bytes / (1024 * 1024), 2),
+            "db_path": str(DEFAULT_DB_PATH),
+        }
+    )
 
 
 @mcp.tool()
@@ -252,7 +276,9 @@ def register_paper_tool(
         source_uri: Path of an already-ingested file to link chunks to this paper.
     """
     conn = _get_conn()
-    return json.dumps(register_paper(conn, title, authors, year, venue, doi, bibtex, source_uri))
+    return json.dumps(
+        register_paper(conn, title, authors, year, venue, doi, bibtex, source_uri)
+    )
 
 
 @mcp.tool()
@@ -290,7 +316,16 @@ def add_relationship_tool(
         evidence_chunk_id: Optional chunk ID containing evidence for this relationship.
     """
     conn = _get_conn()
-    return json.dumps(add_relationship(conn, source_paper_id, target_paper_id, relation_type, confidence, evidence_chunk_id))
+    return json.dumps(
+        add_relationship(
+            conn,
+            source_paper_id,
+            target_paper_id,
+            relation_type,
+            confidence,
+            evidence_chunk_id,
+        )
+    )
 
 
 @mcp.tool()
@@ -326,7 +361,9 @@ def record_conclusion_tool(
         session_context: Context about why this conclusion was drawn.
     """
     conn = _get_conn()
-    return json.dumps(record_conclusion(conn, claim, confidence, source_chunk_ids, session_context))
+    return json.dumps(
+        record_conclusion(conn, claim, confidence, source_chunk_ids, session_context)
+    )
 
 
 @mcp.tool()
@@ -343,7 +380,9 @@ def get_conclusions_tool(
         include_superseded: Include conclusions that have been superseded (default false).
     """
     conn = _get_conn()
-    return json.dumps(get_conclusions(conn, keyword, min_confidence, include_superseded))
+    return json.dumps(
+        get_conclusions(conn, keyword, min_confidence, include_superseded)
+    )
 
 
 @mcp.tool()
@@ -364,7 +403,16 @@ def supersede_conclusion_tool(
         session_context: Context for why the conclusion changed.
     """
     conn = _get_conn()
-    return json.dumps(supersede_conclusion(conn, old_conclusion_id, new_claim, confidence, source_chunk_ids, session_context))
+    return json.dumps(
+        supersede_conclusion(
+            conn,
+            old_conclusion_id,
+            new_claim,
+            confidence,
+            source_chunk_ids,
+            session_context,
+        )
+    )
 
 
 @mcp.tool()
@@ -469,7 +517,9 @@ def record_metric_tool(
         unit: Unit of measurement (e.g. '%', 'ms').
     """
     conn = _get_conn()
-    return json.dumps(record_metric(conn, name, value, paper_id, method_id, dataset_id, unit))
+    return json.dumps(
+        record_metric(conn, name, value, paper_id, method_id, dataset_id, unit)
+    )
 
 
 @mcp.tool()
@@ -528,6 +578,48 @@ def get_entities_tool(paper_id: int) -> str:
     """
     conn = _get_conn()
     return json.dumps(get_entities(conn, paper_id))
+
+
+@mcp.tool()
+def extract_figures_tool(
+    paper_id: int, pages: list[int] | None = None, confirmed: bool = False
+) -> str:
+    """Extract figures from a paper's PDF using a vision model.
+
+    Renders candidate pages as images, sends them to the configured vision model,
+    and stores figure descriptions as searchable 'figure' chunks.
+
+    Args:
+        paper_id: Paper ID.
+        pages: 1-based page numbers to process (optional, auto-detects if omitted).
+        confirmed: Skip ETA warning for long documents.
+    """
+    conn = _get_conn()
+    # Convert 1-based (user-facing) to 0-based (internal)
+    pages_0 = None
+    if pages is not None:
+        invalid = [p for p in pages if p <= 0]
+        if invalid:
+            return json.dumps({"error": f"Pages must be >= 1 (got {invalid})"})
+        pages_0 = [p - 1 for p in pages]
+    return json.dumps(
+        extract_figures(conn, paper_id, pages=pages_0, confirmed=confirmed)
+    )
+
+
+@mcp.tool()
+def configure_vision_tool(
+    model: str | None = None,
+    base_url: str | None = None,
+) -> str:
+    """Configure the vision model used for figure extraction.
+
+    Args:
+        model: Vision model name (e.g. 'gemma3:27b', 'llava:13b').
+        base_url: Base URL for the vision API (e.g. 'http://localhost:11434').
+    """
+    conn = _get_conn()
+    return json.dumps(configure_vision(conn, model=model, base_url=base_url))
 
 
 def main():
