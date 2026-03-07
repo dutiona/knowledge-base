@@ -206,3 +206,202 @@ def test_migration_preserves_existing_data(tmp_path):
         "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'architecture'"
     ).fetchall()
     assert len(fts_rows) == 1
+
+
+# ---------------------------------------------------------------------------
+# Step 1: Config functions
+# ---------------------------------------------------------------------------
+
+
+def test_get_vision_config_defaults(tmp_path):
+    """Defaults returned when no vision config rows exist."""
+    from research_index.vision import _get_vision_config
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    cfg = _get_vision_config(conn)
+    assert cfg["model"] == "gemma3:27b"
+    assert isinstance(cfg["base_url"], str)
+    assert cfg["base_url"]  # non-empty
+
+
+def test_configure_vision_roundtrip(tmp_path):
+    """Set values, read them back."""
+    from research_index.vision import _get_vision_config, configure_vision
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    result = configure_vision(conn, model="llava:13b", base_url="http://localhost:11434")
+    assert result["model"] == "llava:13b"
+    assert result["base_url"] == "http://localhost:11434"
+
+    cfg = _get_vision_config(conn)
+    assert cfg["model"] == "llava:13b"
+    assert cfg["base_url"] == "http://localhost:11434"
+
+
+# ---------------------------------------------------------------------------
+# Step 2: Figure validation
+# ---------------------------------------------------------------------------
+
+
+def test_validate_figure_valid():
+    """Full valid input passes through."""
+    from research_index.vision import _validate_figure
+
+    obj = {
+        "figure_type": "diagram",
+        "description": "Architecture overview",
+        "title": "Fig 1",
+        "entities_mentioned": ["ResNet", "BERT"],
+    }
+    result = _validate_figure(obj)
+    assert result is not None
+    assert result["figure_type"] == "diagram"
+    assert result["description"] == "Architecture overview"
+    assert result["title"] == "Fig 1"
+    assert result["entities_mentioned"] == ["ResNet", "BERT"]
+
+
+def test_validate_figure_coerces_optionals():
+    """Missing title/entities get defaults."""
+    from research_index.vision import _validate_figure
+
+    obj = {"figure_type": "chart", "description": "Loss curves"}
+    result = _validate_figure(obj)
+    assert result is not None
+    assert result["title"] is None
+    assert result["entities_mentioned"] == []
+
+
+def test_validate_figure_rejects_empty_description():
+    """Empty description returns None."""
+    from research_index.vision import _validate_figure
+
+    result = _validate_figure({"figure_type": "chart", "description": ""})
+    assert result is None
+
+
+def test_validate_figure_rejects_missing_type():
+    """Missing figure_type returns None."""
+    from research_index.vision import _validate_figure
+
+    result = _validate_figure({"description": "something"})
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Step 3: Page rendering
+# ---------------------------------------------------------------------------
+
+import fitz as _fitz
+import pytest
+
+
+def _make_test_pdf(path, pages_text: list[str]) -> str:
+    """Create a minimal PDF with given page texts."""
+    doc = _fitz.open()
+    for text in pages_text:
+        page = doc.new_page()
+        page.insert_text((72, 72), text)
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
+def test_render_page_valid_png(tmp_path):
+    """Render page 0 and check PNG header."""
+    from research_index.vision import _render_page
+
+    pdf_path = _make_test_pdf(tmp_path / "test.pdf", ["Hello World"])
+    png_bytes = _render_page(pdf_path, 0)
+    assert png_bytes[:4] == b"\x89PNG"
+
+
+def test_render_page_out_of_range(tmp_path):
+    """Out-of-range page raises IndexError."""
+    from research_index.vision import _render_page
+
+    pdf_path = _make_test_pdf(tmp_path / "test.pdf", ["Only page"])
+    with pytest.raises(IndexError):
+        _render_page(pdf_path, 5)
+
+
+# ---------------------------------------------------------------------------
+# Step 4: Heuristic filter
+# ---------------------------------------------------------------------------
+
+
+def test_heuristic_filter_caption_cues(tmp_path):
+    """Page with 'Figure 1: Test' is selected, plain text pages are not."""
+    from research_index.vision import _heuristic_filter
+
+    pdf_path = _make_test_pdf(
+        tmp_path / "test.pdf",
+        ["Plain text only", "Figure 1: Test diagram", "More plain text"],
+    )
+    candidates = _heuristic_filter(pdf_path)
+    assert 1 in candidates  # page with caption cue
+    # Should not include all pages (at least one excluded)
+    assert len(candidates) < 3
+
+
+def test_heuristic_filter_fallback_all_pages(tmp_path):
+    """All-text PDF with no signals returns all pages."""
+    from research_index.vision import _heuristic_filter
+
+    pdf_path = _make_test_pdf(
+        tmp_path / "test.pdf",
+        ["Just some text", "Another paragraph", "Third page of text"],
+    )
+    candidates = _heuristic_filter(pdf_path)
+    assert candidates == [0, 1, 2]
+
+
+# ---------------------------------------------------------------------------
+# Step 6: Source URI helper
+# ---------------------------------------------------------------------------
+
+
+def test_get_paper_source_uri_found(tmp_path):
+    """Paper with abstract_chunk_id resolves to source_uri."""
+    from research_index.vision import _get_paper_source_uri
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('abs_hash', 'abstract text', 'pdf', '/tmp/paper.pdf', 0)"
+    )
+    chunk_id = conn.execute("SELECT id FROM chunks WHERE content_hash = 'abs_hash'").fetchone()["id"]
+    conn.execute(
+        "INSERT INTO papers (title, abstract_chunk_id) VALUES ('Test Paper', ?)",
+        (chunk_id,),
+    )
+    paper_id = conn.execute("SELECT id FROM papers WHERE title = 'Test Paper'").fetchone()["id"]
+    conn.commit()
+
+    uri = _get_paper_source_uri(conn, paper_id)
+    assert uri == "/tmp/paper.pdf"
+
+
+def test_get_paper_source_uri_not_found(tmp_path):
+    """Paper without abstract_chunk_id returns None."""
+    from research_index.vision import _get_paper_source_uri
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    conn.execute("INSERT INTO papers (title) VALUES ('No Abstract Paper')")
+    paper_id = conn.execute("SELECT id FROM papers WHERE title = 'No Abstract Paper'").fetchone()["id"]
+    conn.commit()
+
+    uri = _get_paper_source_uri(conn, paper_id)
+    assert uri is None
