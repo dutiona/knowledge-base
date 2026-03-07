@@ -745,3 +745,54 @@ def test_extract_figures_per_page_error(mock_vision, mock_embed, tmp_path):
     assert result["pages_failed"] == 1
     assert len(result["errors"]) == 1
     assert result["figures_found"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Step 8: Page boundary tests for MCP tool layer
+# ---------------------------------------------------------------------------
+
+
+def test_extract_figures_page_out_of_range(tmp_path):
+    """Passing a 0-indexed page >= total_pages returns error dict."""
+    from research_index.vision import extract_figures
+
+    conn, paper_id, _ = _setup_paper_with_pdf(
+        tmp_path, ["Page 0 text", "Page 1 text"]
+    )
+
+    # Page 2 is out of range for a 2-page document (0-indexed)
+    result = extract_figures(conn, paper_id=paper_id, pages=[2])
+    assert "error" in result
+    assert "out of range" in result["error"]
+
+    # Negative page is also out of range
+    result_neg = extract_figures(conn, paper_id=paper_id, pages=[-1])
+    assert "error" in result_neg
+    assert "out of range" in result_neg["error"]
+
+
+def test_extract_figures_zero_indexed_boundary(tmp_path):
+    """Page 0 is valid, page total_pages is not — confirms 0-indexed internal API.
+
+    This validates that the MCP tool's 1-to-0 conversion is correct:
+    MCP pages=[1] -> internal pages=[0] (valid for any document).
+    MCP pages=[N+1] where N=total_pages -> internal pages=[N] (out of range).
+    """
+    from research_index.vision import extract_figures
+
+    # 3-page document: valid 0-indexed pages are 0, 1, 2
+    conn, paper_id, _ = _setup_paper_with_pdf(
+        tmp_path, ["Page 0", "Page 1", "Page 2"]
+    )
+
+    # Page 2 (0-indexed, last page) should NOT error
+    # It will fail at vision call (no mock), but should not return page-range error
+    with patch("research_index.vision._vision_call", return_value=[]):
+        with patch("research_index.vision._embed_with_config", return_value=[]):
+            result = extract_figures(conn, paper_id=paper_id, pages=[2])
+    assert "error" not in result
+
+    # Page 3 (0-indexed) is out of range for a 3-page doc
+    result_bad = extract_figures(conn, paper_id=paper_id, pages=[3])
+    assert "error" in result_bad
+    assert "out of range" in result_bad["error"]

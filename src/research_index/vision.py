@@ -256,7 +256,9 @@ def _vision_call(
             )
 
     if not isinstance(parsed, list):
-        raise ValueError(f"Vision model returned {type(parsed).__name__}, expected list")
+        raise ValueError(
+            f"Vision model returned {type(parsed).__name__}, expected list"
+        )
 
     return [v for obj in parsed if (v := _validate_figure(obj)) is not None]
 
@@ -436,7 +438,9 @@ def extract_figures(
         conn.commit()
 
     # 11. Save PNGs to disk (best effort, outside transaction)
-    figures_dir = Path.home() / ".local" / "share" / "research-index" / "figures" / str(paper_id)
+    figures_dir = (
+        Path.home() / ".local" / "share" / "research-index" / "figures" / str(paper_id)
+    )
     try:
         figures_dir.mkdir(parents=True, exist_ok=True)
         for page_num, png_bytes in rendered.items():
