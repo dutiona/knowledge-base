@@ -351,6 +351,132 @@ def _resolve_entities(all_extractions: list[dict], conn: sqlite3.Connection) -> 
     return json.loads(raw)
 
 
+def _clear_previous_extraction(conn: sqlite3.Connection, paper_id: int) -> None:
+    """Delete previous extraction data for idempotency. FK-dependency order."""
+    conn.execute("DELETE FROM metrics WHERE paper_id = ?", (paper_id,))
+    conn.execute(
+        "DELETE FROM entity_mentions WHERE entity_id IN (SELECT id FROM entities WHERE paper_id = ?)",
+        (paper_id,),
+    )
+    conn.execute("DELETE FROM entities WHERE paper_id = ?", (paper_id,))
+    conn.execute("DELETE FROM datasets WHERE paper_id = ?", (paper_id,))
+    conn.execute("DELETE FROM methods WHERE paper_id = ?", (paper_id,))
+
+
+def _store_resolved(
+    conn: sqlite3.Connection,
+    paper_id: int,
+    map_results: list[dict],
+    resolution: dict,
+) -> dict:
+    """Store resolved entities, methods, datasets, and metrics."""
+    _clear_previous_extraction(conn, paper_id)
+
+    # Build canonical name lookup from resolution groups
+    surface_to_canonical = {}
+    canonical_type = {}
+    for group in resolution.get("groups", []):
+        canon = group["canonical"]
+        etype = group.get("type", "method")
+        canonical_type[canon] = etype
+        for member in group.get("members", []):
+            surface_to_canonical[member.lower()] = canon
+
+    # Collect all unique entities and their mentions
+    entity_data = defaultdict(lambda: {"type": None, "description": None, "mentions": []})
+    for extraction in map_results:
+        for entity_type_plural in ("methods", "datasets"):
+            etype = entity_type_plural.rstrip("s")
+            for item in extraction.get(entity_type_plural, []):
+                canonical = surface_to_canonical.get(item["name"].lower(), item["name"])
+                entity_data[canonical]["type"] = etype
+                if item.get("description"):
+                    entity_data[canonical]["description"] = item["description"]
+                for sf in item.get("surface_forms", [item["name"]]):
+                    entity_data[canonical]["mentions"].append({
+                        "surface_form": sf,
+                        "chunk_id": item.get("chunk_id"),
+                    })
+
+    # Insert entities and mentions
+    entity_id_map = {}
+    for canonical, data in entity_data.items():
+        cursor = conn.execute(
+            "INSERT INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
+            (canonical, data["type"], paper_id, data["description"]),
+        )
+        eid = cursor.lastrowid
+        entity_id_map[canonical] = eid
+        seen_forms = set()
+        for mention in data["mentions"]:
+            sf = mention["surface_form"]
+            if sf not in seen_forms and mention.get("chunk_id"):
+                conn.execute(
+                    "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
+                    (eid, sf, mention["chunk_id"]),
+                )
+                seen_forms.add(sf)
+
+    # Write to methods/datasets tables
+    method_map = {}
+    dataset_map = {}
+    methods_added = 0
+    datasets_added = 0
+
+    for canonical, data in entity_data.items():
+        if data["type"] == "method":
+            result = record_method(conn, canonical, paper_id, data["description"])
+            method_map[canonical] = result["method_id"]
+            methods_added += 1
+        elif data["type"] == "dataset":
+            result = record_dataset(conn, canonical, paper_id, data["description"])
+            dataset_map[canonical] = result["dataset_id"]
+            datasets_added += 1
+
+    # Map surface forms to method/dataset IDs for metric attribution
+    for canonical, mid in list(method_map.items()):
+        for group in resolution.get("groups", []):
+            if group["canonical"] == canonical:
+                for member in group.get("members", []):
+                    method_map[member] = mid
+    for canonical, did in list(dataset_map.items()):
+        for group in resolution.get("groups", []):
+            if group["canonical"] == canonical:
+                for member in group.get("members", []):
+                    dataset_map[member] = did
+
+    # Write metrics
+    metrics_added = 0
+    for extraction in map_results:
+        for met in extraction.get("metrics", []):
+            metric_name = met.get("metric", "").strip()
+            value = met.get("value")
+            if not metric_name or value is None:
+                continue
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                continue
+            method_name = met.get("method", "")
+            dataset_name = met.get("dataset", "")
+            canonical_method = surface_to_canonical.get(method_name.lower(), method_name)
+            canonical_dataset = surface_to_canonical.get(dataset_name.lower(), dataset_name)
+            method_id = method_map.get(canonical_method)
+            dataset_id = dataset_map.get(canonical_dataset)
+            record_metric(conn, metric_name, value, paper_id,
+                          method_id=method_id, dataset_id=dataset_id,
+                          unit=met.get("unit"))
+            metrics_added += 1
+
+    conn.commit()
+    return {
+        "methods_added": methods_added,
+        "datasets_added": datasets_added,
+        "metrics_added": metrics_added,
+        "entities_resolved": len(entity_data),
+    }
+
+
 def extract_structure(
     conn: sqlite3.Connection,
     paper_id: int,

@@ -5,9 +5,11 @@ from unittest.mock import patch
 
 from research_index.db import EMBED_DIM, get_connection, init_schema
 from research_index.extraction import (
+    _clear_previous_extraction,
     _get_llm_config,
     _map_extract,
     _resolve_entities,
+    _store_resolved,
     record_method,
     record_dataset,
     record_metric,
@@ -280,3 +282,56 @@ def test_resolve_entities_merges_aliases(tmp_path):
     assert len(resolution["groups"]) == 1
     assert resolution["groups"][0]["canonical"] == "CNN-LSTM"
     assert "the proposed approach" in resolution["groups"][0]["members"]
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_store_resolved_writes_entities_and_methods(tmp_path):
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("CNN-LSTM achieves 92% accuracy on CIFAR-10.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    # Get actual chunk_id from the DB
+    chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    map_results = [
+        {
+            "methods": [{"name": "CNN-LSTM", "description": "Hybrid arch", "surface_forms": ["CNN-LSTM", "our method"], "chunk_id": chunk_id}],
+            "datasets": [{"name": "CIFAR-10", "description": "Image dataset", "surface_forms": ["CIFAR-10"], "chunk_id": chunk_id}],
+            "metrics": [{"metric": "accuracy", "value": 92.0, "unit": "%", "method": "CNN-LSTM", "dataset": "CIFAR-10", "chunk_id": chunk_id}],
+        },
+    ]
+    resolution = {
+        "groups": [
+            {"canonical": "CNN-LSTM", "type": "method", "members": ["CNN-LSTM", "our method"]},
+            {"canonical": "CIFAR-10", "type": "dataset", "members": ["CIFAR-10"]},
+        ],
+    }
+
+    result = _store_resolved(conn, p, map_results, resolution)
+    assert result["methods_added"] >= 1
+    assert result["datasets_added"] >= 1
+    assert result["metrics_added"] >= 1
+
+    # Check entities table
+    entities = conn.execute("SELECT * FROM entities WHERE paper_id = ?", (p,)).fetchall()
+    assert len(entities) == 2
+
+    # Check entity_mentions
+    mentions = conn.execute(
+        "SELECT em.* FROM entity_mentions em JOIN entities e ON em.entity_id = e.id WHERE e.paper_id = ?",
+        (p,),
+    ).fetchall()
+    assert len(mentions) >= 2  # "CNN-LSTM" + "our method" at minimum
+
+
+def test_clear_previous_extraction_idempotent(tmp_path):
+    """Running extraction twice produces same result, not duplicates."""
+    conn = _setup(tmp_path)
+    p = register_paper(conn, "Test")["paper_id"]
+    record_method(conn, "OldMethod", p, "should be removed")
+    assert len(get_methods(conn, p)) == 1
+
+    _clear_previous_extraction(conn, p)
+    assert len(get_methods(conn, p)) == 0
