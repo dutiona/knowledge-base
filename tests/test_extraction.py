@@ -802,3 +802,77 @@ def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
     assert result["error"] == "All chunks failed extraction"
     assert len(result["errors"]) > 0
     assert "empty response" in result["errors"][0]["error"]
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_store_resolved_passes_chunk_id_to_metrics(tmp_path):
+    """Map-reduce path: record_metric receives chunk_id from per-chunk extraction."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("ResNet gets 95% on ImageNet.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test", source_uri=str(md.resolve()))["paper_id"]
+    chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    map_results = [
+        {
+            "methods": [
+                {
+                    "name": "ResNet",
+                    "description": "Deep residual net",
+                    "chunk_id": chunk_id,
+                }
+            ],
+            "datasets": [
+                {
+                    "name": "ImageNet",
+                    "description": "Image dataset",
+                    "chunk_id": chunk_id,
+                }
+            ],
+            "metrics": [
+                {
+                    "metric": "accuracy",
+                    "value": 95.0,
+                    "unit": "%",
+                    "method": "ResNet",
+                    "dataset": "ImageNet",
+                    "chunk_id": chunk_id,
+                }
+            ],
+        }
+    ]
+    resolution = {"groups": []}
+
+    _store_resolved(conn, p, map_results, resolution)
+
+    row = conn.execute(
+        "SELECT chunk_id FROM metrics WHERE paper_id = ?", (p,)
+    ).fetchone()
+    assert row is not None
+    assert row["chunk_id"] == chunk_id
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
+    """Single-pass path: record_metric receives first_chunk_id as approximate provenance."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("BERT achieves 88.5% accuracy on GLUE.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "BERT Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    first_chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    def _mock_llm_call(prompt, *, conn):
+        return FAKE_LLM_RESPONSE
+
+    with patch("research_index.extraction._llm_call", _mock_llm_call):
+        result = extract_structure(conn, p)
+
+    assert result["metrics_added"] == 1
+    row = conn.execute(
+        "SELECT chunk_id FROM metrics WHERE paper_id = ?", (p,)
+    ).fetchone()
+    assert row is not None
+    assert row["chunk_id"] == first_chunk_id
