@@ -177,3 +177,35 @@ def test_extract_structure_no_chunks(tmp_path):
 
     result = extract_structure(conn, p)
     assert "error" in result
+
+
+def test_entity_tables_exist(tmp_path):
+    conn = _setup(tmp_path)
+    p = register_paper(conn, "Test")["paper_id"]
+    conn.execute(
+        "INSERT INTO entities (canonical_name, entity_type, paper_id) VALUES (?, ?, ?)",
+        ("CNN-LSTM", "method", p),
+    )
+    row = conn.execute("SELECT * FROM entities WHERE canonical_name = 'CNN-LSTM'").fetchone()
+    assert row is not None
+    assert row["entity_type"] == "method"
+
+    # entity_mentions table — need a real chunk for FK
+    from research_index.ingest import ingest_file
+    md = tmp_path / "doc.md"
+    md.write_text("test content")
+    with patch("research_index.ingest.embed", _fake_embed):
+        ingest_file(conn, md)
+    chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+    conn.execute(
+        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id, confidence) VALUES (?, ?, ?, ?)",
+        (row["id"], "our method", chunk_id, 0.9),
+    )
+
+
+def test_llm_config_defaults(tmp_path):
+    conn = _setup(tmp_path)
+    provider = conn.execute("SELECT value FROM config WHERE key = 'llm_provider'").fetchone()
+    model = conn.execute("SELECT value FROM config WHERE key = 'llm_model'").fetchone()
+    assert provider["value"] == "ollama"
+    assert model["value"] == "qwen3.5:27b"
