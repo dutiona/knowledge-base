@@ -558,6 +558,29 @@ def test_vision_call_malformed_response():
             )
 
 
+def test_vision_call_skips_non_dict_items():
+    """Non-dict items in the response list are silently skipped."""
+    from research_index.vision import _vision_call
+
+    mixed = [
+        {"figure_type": "diagram", "description": "Valid figure"},
+        None,
+        "stray string",
+        42,
+        {"figure_type": "table", "description": "Another valid one"},
+    ]
+    mock_resp = _mock_httpx_response(json.dumps(mixed))
+
+    with patch("research_index.vision.httpx.post", return_value=mock_resp):
+        result = _vision_call(
+            "base64data", "prompt", base_url="http://localhost:11434", model="test"
+        )
+
+    assert len(result) == 2
+    assert result[0]["figure_type"] == "diagram"
+    assert result[1]["figure_type"] == "table"
+
+
 # ---------------------------------------------------------------------------
 # Step 7: Orchestrator — extract_figures
 # ---------------------------------------------------------------------------

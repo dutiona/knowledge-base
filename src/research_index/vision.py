@@ -265,7 +265,11 @@ def _vision_call(
             f"Vision model returned {type(parsed).__name__}, expected list"
         )
 
-    return [v for obj in parsed if (v := _validate_figure(obj)) is not None]
+    return [
+        v
+        for obj in parsed
+        if isinstance(obj, dict) and (v := _validate_figure(obj)) is not None
+    ]
 
 
 # ---------------------------------------------------------------------------
