@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from research_index.db import EMBED_DIM, get_connection, init_schema
 from research_index.extraction import (
+    _get_llm_config,
     record_method,
     record_dataset,
     record_metric,
@@ -150,10 +151,10 @@ def test_extract_structure_basic(tmp_path):
 
     p = register_paper(conn, "BERT Paper", source_uri=str(md.resolve()))["paper_id"]
 
-    def _mock_llm_extract(prompt):
+    def _mock_llm_call(prompt, *, conn):
         return FAKE_LLM_RESPONSE
 
-    with patch("research_index.extraction._llm_extract", _mock_llm_extract):
+    with patch("research_index.extraction._llm_call", _mock_llm_call):
         result = extract_structure(conn, p)
 
     assert result["methods_added"] == 1
@@ -209,3 +210,23 @@ def test_llm_config_defaults(tmp_path):
     model = conn.execute("SELECT value FROM config WHERE key = 'llm_model'").fetchone()
     assert provider["value"] == "ollama"
     assert model["value"] == "qwen3.5:27b"
+
+
+def test_get_llm_config_defaults(tmp_path):
+    conn = _setup(tmp_path)
+    cfg = _get_llm_config(conn)
+    assert cfg["provider"] == "ollama"
+    assert cfg["model"] == "qwen3.5:27b"
+    assert "base_url" in cfg
+
+
+def test_get_llm_config_custom(tmp_path):
+    conn = _setup(tmp_path)
+    conn.execute("UPDATE config SET value = 'openai_compat' WHERE key = 'llm_provider'")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', 'http://192.168.1.41:1234')")
+    conn.execute("UPDATE config SET value = 'qwen/qwen3.5-35b-a3b' WHERE key = 'llm_model'")
+    conn.commit()
+    cfg = _get_llm_config(conn)
+    assert cfg["provider"] == "openai_compat"
+    assert cfg["base_url"] == "http://192.168.1.41:1234"
+    assert cfg["model"] == "qwen/qwen3.5-35b-a3b"

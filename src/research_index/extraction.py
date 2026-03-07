@@ -177,21 +177,58 @@ def compare_papers(
     return results
 
 
-def _llm_extract(prompt: str) -> str:
-    """Call Ollama to extract structured data from text."""
-    url = _get_ollama_url()
-    resp = httpx.post(
-        f"{url}/api/generate",
-        json={
-            "model": "gemma3:12b",
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",
-        },
-        timeout=120,
-    )
-    resp.raise_for_status()
-    return resp.json()["response"]
+def _get_llm_config(conn: sqlite3.Connection) -> dict:
+    """Read LLM configuration from config table."""
+    provider = conn.execute("SELECT value FROM config WHERE key = 'llm_provider'").fetchone()
+    model = conn.execute("SELECT value FROM config WHERE key = 'llm_model'").fetchone()
+    base_url_row = conn.execute("SELECT value FROM config WHERE key = 'llm_base_url'").fetchone()
+    api_key_row = conn.execute("SELECT value FROM config WHERE key = 'llm_api_key'").fetchone()
+
+    prov = provider["value"] if provider else "ollama"
+
+    if base_url_row:
+        base_url = base_url_row["value"]
+    elif prov == "ollama":
+        base_url = _get_ollama_url()
+    else:
+        raise ValueError("llm_base_url is required when llm_provider is 'openai_compat'")
+
+    return {
+        "provider": prov,
+        "model": model["value"] if model else "qwen3.5:27b",
+        "base_url": base_url,
+        "api_key": api_key_row["value"] if api_key_row else None,
+    }
+
+
+def _llm_call(prompt: str, *, conn: sqlite3.Connection) -> str:
+    """Call LLM to extract structured data. Supports Ollama and OpenAI-compatible APIs."""
+    cfg = _get_llm_config(conn)
+
+    if cfg["provider"] == "ollama":
+        resp = httpx.post(
+            f"{cfg['base_url']}/api/generate",
+            json={"model": cfg["model"], "prompt": prompt, "stream": False, "format": "json"},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()["response"]
+    else:  # openai_compat
+        headers = {}
+        if cfg.get("api_key"):
+            headers["Authorization"] = f"Bearer {cfg['api_key']}"
+        resp = httpx.post(
+            f"{cfg['base_url']}/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": cfg["model"],
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"},
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
 
 
 _EXTRACT_PROMPT = """Extract structured information from this research paper text.
@@ -249,7 +286,7 @@ def extract_structure(
 
     prompt = _EXTRACT_PROMPT.format(text=full_text)
     try:
-        raw = _llm_extract(prompt)
+        raw = _llm_call(prompt, conn=conn)
     except Exception as e:
         return {"error": f"LLM extraction failed: {e}"}
 
