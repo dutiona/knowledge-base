@@ -7,6 +7,7 @@ import struct
 from dataclasses import dataclass
 
 from .db import EMBED_DIM
+from .embed_swap import get_embed_config
 from .embeddings import embed_single
 
 
@@ -103,7 +104,8 @@ def search(
             pass
 
     if mode in ("hybrid", "vec"):
-        query_embedding = embed_single(query)
+        cfg = get_embed_config(conn)
+        query_embedding = embed_single(query, model=cfg["model"])
         vec_results = _vec_search(conn, query_embedding, fetch_limit)
 
     # Merge

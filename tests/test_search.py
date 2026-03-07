@@ -7,8 +7,9 @@ from research_index.ingest import ingest_file
 from research_index.search import search, _rrf_merge
 
 
-def _fake_embed(texts, model="nomic-embed-text"):
-    return [[0.1] * EMBED_DIM for _ in texts]
+def _fake_embed(texts, model="nomic-embed-text", expected_dim=None):
+    dim = expected_dim if expected_dim is not None else EMBED_DIM
+    return [[0.1] * dim for _ in texts]
 
 
 def _fake_embed_single(text, model="nomic-embed-text"):

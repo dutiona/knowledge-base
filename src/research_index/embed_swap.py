@@ -30,13 +30,43 @@ def re_embed(
 ) -> dict:
     """Re-embed all chunks with a new model.
 
-    Drops and recreates the chunks_vec table with the new dimension,
-    then re-embeds all chunks in batches.
+    Embeds into a staging table first. Only drops/recreates the real vec table
+    after all embeddings succeed, preventing data loss on failure.
     """
-    # Get all chunks
-    chunks = conn.execute("SELECT id, content FROM chunks ORDER BY id").fetchall()
+    # Stage embeddings in a regular table (vec0 tables can't be renamed)
+    conn.execute("DROP TABLE IF EXISTS _embed_staging")
+    conn.execute("""
+        CREATE TABLE _embed_staging (
+            chunk_id INTEGER PRIMARY KEY,
+            embedding BLOB NOT NULL
+        )
+    """)
 
-    # Drop and recreate vec table with new dimension
+    # Process in batches using ID-based cursor to avoid OOM
+    processed = 0
+    last_id = 0
+    while True:
+        batch = conn.execute(
+            "SELECT id, content FROM chunks WHERE id > ? ORDER BY id LIMIT ?",
+            (last_id, batch_size),
+        ).fetchall()
+        if not batch:
+            break
+
+        texts = [row["content"] for row in batch]
+        ids = [row["id"] for row in batch]
+        last_id = ids[-1]
+
+        embeddings = embed(texts, model=new_model, expected_dim=new_dim)
+
+        for chunk_id, emb_vec in zip(ids, embeddings):
+            conn.execute(
+                "INSERT INTO _embed_staging (chunk_id, embedding) VALUES (?, ?)",
+                (chunk_id, _serialize_f32(emb_vec)),
+            )
+        processed += len(batch)
+
+    # All embeddings succeeded — now swap atomically
     conn.execute("DROP TABLE IF EXISTS chunks_vec")
     conn.execute(f"""
         CREATE VIRTUAL TABLE chunks_vec USING vec0(
@@ -44,21 +74,11 @@ def re_embed(
             +chunk_id INTEGER
         )
     """)
-
-    processed = 0
-    for i in range(0, len(chunks), batch_size):
-        batch = chunks[i : i + batch_size]
-        texts = [row["content"] for row in batch]
-        ids = [row["id"] for row in batch]
-
-        embeddings = embed(texts, model=new_model)
-
-        for chunk_id, emb_vec in zip(ids, embeddings):
-            conn.execute(
-                "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
-                (chunk_id, _serialize_f32(emb_vec), chunk_id),
-            )
-        processed += len(batch)
+    conn.execute("""
+        INSERT INTO chunks_vec (rowid, embedding, chunk_id)
+        SELECT chunk_id, embedding, chunk_id FROM _embed_staging
+    """)
+    conn.execute("DROP TABLE _embed_staging")
 
     # Update config
     conn.execute(

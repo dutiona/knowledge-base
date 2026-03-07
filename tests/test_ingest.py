@@ -9,8 +9,9 @@ from research_index.papers import register_paper, get_paper, add_relationship, g
 from research_index.conclusions import record_conclusion, get_conclusions
 
 
-def _fake_embed(texts, model="nomic-embed-text"):
-    return [[0.1] * EMBED_DIM for _ in texts]
+def _fake_embed(texts, model="nomic-embed-text", expected_dim=None):
+    dim = expected_dim if expected_dim is not None else EMBED_DIM
+    return [[0.1] * dim for _ in texts]
 
 
 def test_chunk_text_basic():
@@ -330,6 +331,18 @@ def test_ingest_url_http_error(tmp_path):
 
     with patch("research_index.ingest.httpx.get", _mock_get_error):
         result = ingest_url(conn, "https://example.com/down")
+    assert "error" in result
+
+
+def test_ingest_url_rejects_non_http_schemes(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    result = ingest_url(conn, "file:///etc/passwd")
+    assert "error" in result
+
+    result = ingest_url(conn, "ftp://internal/data")
     assert "error" in result
 
 

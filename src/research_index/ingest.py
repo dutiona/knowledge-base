@@ -14,10 +14,31 @@ import httpx
 import trafilatura
 
 from .db import EMBED_DIM
+from .embed_swap import get_embed_config
 from .embeddings import embed
 
 CHUNK_SIZE = 1000  # characters
 CHUNK_OVERLAP = 200
+
+_ALLOWED_URL_SCHEMES = {"http", "https"}
+
+
+def _detect_source_type(path: Path) -> str:
+    """Detect source_type from file extension."""
+    ext = path.suffix.lower()
+    if ext == ".pdf":
+        return "pdf"
+    if ext in (".md", ".txt", ".typ", ".rst"):
+        return "markdown"
+    if ext in (".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".toml", ".yaml", ".yml", ".json"):
+        return "code"
+    return "markdown"
+
+
+def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[float]]:
+    """Call embed() using the model and dim from the config table."""
+    cfg = get_embed_config(conn)
+    return embed(texts, model=cfg["model"], expected_dim=cfg["dim"])
 
 
 def _content_hash(text: str) -> str:
@@ -128,18 +149,7 @@ def ingest_file(
 ) -> dict:
     path = path.resolve()
     if source_type is None:
-        ext = path.suffix.lower()
-        source_type = {"pdf": "pdf", ".md": "markdown", ".txt": "markdown"}.get(
-            ext if ext != ".pdf" else "pdf", "markdown"
-        )
-        if ext == ".pdf":
-            source_type = "pdf"
-        elif ext in (".md", ".txt", ".typ", ".rst"):
-            source_type = "markdown"
-        elif ext in (".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".toml", ".yaml", ".yml", ".json"):
-            source_type = "code"
-        else:
-            source_type = "markdown"
+        source_type = _detect_source_type(path)
 
     if source_type == "pdf":
         text = _extract_pdf_text(path)
@@ -182,9 +192,9 @@ def ingest_file(
     if not new_chunks:
         return {"file": str(path), "chunks_added": 0, "chunks_skipped": skipped}
 
-    # Embed all new chunks
+    # Embed all new chunks using configured model
     texts_to_embed = [c[1] for c in new_chunks]
-    embeddings = embed(texts_to_embed)
+    embeddings = _embed_with_config(conn, texts_to_embed)
 
     # Insert
     source_uri = str(path)
@@ -268,35 +278,43 @@ def reingest_file(
 
     # --- Re-ingest ---
     if source_type is None:
-        ext = path.suffix.lower()
-        if ext == ".pdf":
-            source_type = "pdf"
-        elif ext in (".md", ".txt", ".typ", ".rst"):
-            source_type = "markdown"
-        elif ext in (".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".toml", ".yaml", ".yml", ".json"):
-            source_type = "code"
-        else:
-            source_type = "markdown"
+        source_type = _detect_source_type(path)
 
     if source_type == "pdf":
         text = _extract_pdf_text(path)
     else:
         text = _extract_markdown_text(path)
 
-    chunks = _chunk_text(text)
-    if not chunks:
+    # Try AST-aware chunking for Python files
+    ast_chunks = None
+    if source_type == "code" and path.suffix.lower() == ".py":
+        ast_chunks = _chunk_python_ast(text)
+
+    if ast_chunks:
+        insert_items = []
+        for i, ac in enumerate(ast_chunks):
+            meta = json.dumps({"name": ac["name"], "type": ac["type"],
+                               "start_line": ac["start_line"], "end_line": ac["end_line"]})
+            insert_items.append((i, ac["text"], _content_hash(ac["text"]), meta))
+    else:
+        fixed_chunks = _chunk_text(text)
+        if not fixed_chunks:
+            conn.commit()
+            return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": 0}
+        insert_items = [(i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)]
+
+    if not insert_items:
         conn.commit()
         return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": 0}
 
-    texts_to_embed = [c for c in chunks]
-    embeddings = embed(texts_to_embed)
+    texts_to_embed = [item[1] for item in insert_items]
+    embeddings = _embed_with_config(conn, texts_to_embed)
 
-    for i, (chunk_text, emb_vec) in enumerate(zip(chunks, embeddings)):
-        chunk_hash = _content_hash(chunk_text)
+    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(insert_items, embeddings):
         cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)
-               VALUES (?, ?, ?, ?, ?)""",
-            (chunk_hash, chunk_text, source_type, source_uri, i),
+            """INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (chunk_hash, chunk_text, source_type, source_uri, idx, meta_json),
         )
         chunk_id = cursor.lastrowid
         conn.execute(
@@ -305,7 +323,7 @@ def reingest_file(
         )
 
     conn.commit()
-    return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": len(chunks)}
+    return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": len(insert_items)}
 
 
 def ingest_url(
@@ -316,6 +334,14 @@ def ingest_url(
 
     Uses trafilatura for content extraction (strips boilerplate, extracts main content).
     """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in _ALLOWED_URL_SCHEMES:
+        return {"error": f"URL scheme must be http or https, got: {parsed.scheme!r}"}
+    if not parsed.hostname:
+        return {"error": "URL must include a hostname"}
+
     try:
         response = httpx.get(url, follow_redirects=True, timeout=30.0)
         response.raise_for_status()
@@ -354,7 +380,7 @@ def ingest_url(
         return {"url": url, "chunks_added": 0, "chunks_skipped": skipped, "source_uri": url, "source_type": "web"}
 
     texts_to_embed = [c[1] for c in new_chunks]
-    embeddings = embed(texts_to_embed)
+    embeddings = _embed_with_config(conn, texts_to_embed)
 
     for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings):
         cursor = conn.execute(
