@@ -467,7 +467,12 @@ def _store_resolved(
     # Build canonical name lookup from resolution groups — keyed by (name, type)
     surface_to_canonical = {}
     for group in resolution.get("groups", []):
-        canon = group["canonical"]
+        canon = group.get("canonical")
+        if not canon:
+            logger.warning(
+                "Skipping resolution group missing 'canonical' key: %s", group
+            )
+            continue
         etype = group.get("type", "method")
         for member in group.get("members", []):
             surface_to_canonical[(member.lower(), etype)] = canon
@@ -540,12 +545,12 @@ def _store_resolved(
     # Map surface forms to method/dataset IDs for metric attribution
     for canonical, mid in list(method_map.items()):
         for group in resolution.get("groups", []):
-            if group["canonical"] == canonical:
+            if group.get("canonical") == canonical:
                 for member in group.get("members", []):
                     method_map[member] = mid
     for canonical, did in list(dataset_map.items()):
         for group in resolution.get("groups", []):
-            if group["canonical"] == canonical:
+            if group.get("canonical") == canonical:
                 for member in group.get("members", []):
                     dataset_map[member] = did
 
