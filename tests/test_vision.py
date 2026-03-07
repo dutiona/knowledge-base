@@ -146,7 +146,9 @@ def test_schema_accepts_figure_source_type(tmp_path):
     )
     conn.commit()
 
-    row = conn.execute("SELECT source_type FROM chunks WHERE content_hash = 'fig_hash'").fetchone()
+    row = conn.execute(
+        "SELECT source_type FROM chunks WHERE content_hash = 'fig_hash'"
+    ).fetchone()
     assert row["source_type"] == "figure"
 
 
@@ -184,7 +186,9 @@ def test_migration_preserves_existing_data(tmp_path):
     init_schema(conn)
 
     # Verify old data is preserved
-    rows = conn.execute("SELECT content_hash, source_type FROM chunks ORDER BY id").fetchall()
+    rows = conn.execute(
+        "SELECT content_hash, source_type FROM chunks ORDER BY id"
+    ).fetchall()
     assert len(rows) == 2
     assert rows[0]["content_hash"] == "old_hash_1"
     assert rows[0]["source_type"] == "pdf"
@@ -198,7 +202,9 @@ def test_migration_preserves_existing_data(tmp_path):
     )
     conn.commit()
 
-    fig_row = conn.execute("SELECT source_type FROM chunks WHERE content_hash = 'fig_hash'").fetchone()
+    fig_row = conn.execute(
+        "SELECT source_type FROM chunks WHERE content_hash = 'fig_hash'"
+    ).fetchone()
     assert fig_row["source_type"] == "figure"
 
     # Verify FTS still works after migration
@@ -235,7 +241,9 @@ def test_configure_vision_roundtrip(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    result = configure_vision(conn, model="llava:13b", base_url="http://localhost:11434")
+    result = configure_vision(
+        conn, model="llava:13b", base_url="http://localhost:11434"
+    )
     assert result["model"] == "llava:13b"
     assert result["base_url"] == "http://localhost:11434"
 
@@ -379,12 +387,16 @@ def test_get_paper_source_uri_found(tmp_path):
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
         "VALUES ('abs_hash', 'abstract text', 'pdf', '/tmp/paper.pdf', 0)"
     )
-    chunk_id = conn.execute("SELECT id FROM chunks WHERE content_hash = 'abs_hash'").fetchone()["id"]
+    chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE content_hash = 'abs_hash'"
+    ).fetchone()["id"]
     conn.execute(
         "INSERT INTO papers (title, abstract_chunk_id) VALUES ('Test Paper', ?)",
         (chunk_id,),
     )
-    paper_id = conn.execute("SELECT id FROM papers WHERE title = 'Test Paper'").fetchone()["id"]
+    paper_id = conn.execute(
+        "SELECT id FROM papers WHERE title = 'Test Paper'"
+    ).fetchone()["id"]
     conn.commit()
 
     uri = _get_paper_source_uri(conn, paper_id)
@@ -400,7 +412,9 @@ def test_get_paper_source_uri_not_found(tmp_path):
     init_schema(conn)
 
     conn.execute("INSERT INTO papers (title) VALUES ('No Abstract Paper')")
-    paper_id = conn.execute("SELECT id FROM papers WHERE title = 'No Abstract Paper'").fetchone()["id"]
+    paper_id = conn.execute(
+        "SELECT id FROM papers WHERE title = 'No Abstract Paper'"
+    ).fetchone()["id"]
     conn.commit()
 
     uri = _get_paper_source_uri(conn, paper_id)
@@ -442,7 +456,10 @@ def test_vision_call_parses_valid_response():
 
     with patch("research_index.vision.httpx.post", return_value=mock_resp) as mock_post:
         result = _vision_call(
-            "base64data", "prompt", base_url="http://localhost:11434", model="gemma3:27b"
+            "base64data",
+            "prompt",
+            base_url="http://localhost:11434",
+            model="gemma3:27b",
         )
 
     assert len(result) == 1
@@ -450,15 +467,27 @@ def test_vision_call_parses_valid_response():
     assert result[0]["description"] == "Architecture overview"
     mock_post.assert_called_once()
     call_kwargs = mock_post.call_args
-    assert "http://localhost:11434/v1/chat/completions" in call_kwargs.args or \
-           call_kwargs.kwargs.get("url", call_kwargs.args[0] if call_kwargs.args else "") == "http://localhost:11434/v1/chat/completions"
+    assert (
+        "http://localhost:11434/v1/chat/completions" in call_kwargs.args
+        or call_kwargs.kwargs.get(
+            "url", call_kwargs.args[0] if call_kwargs.args else ""
+        )
+        == "http://localhost:11434/v1/chat/completions"
+    )
 
 
 def test_vision_call_strips_markdown_fences():
     """Response wrapped in ```json ... ``` is parsed correctly."""
     from research_index.vision import _vision_call
 
-    figures = [{"figure_type": "chart", "description": "Loss curves", "title": None, "entities_mentioned": []}]
+    figures = [
+        {
+            "figure_type": "chart",
+            "description": "Loss curves",
+            "title": None,
+            "entities_mentioned": [],
+        }
+    ]
     content = f"```json\n{json.dumps(figures)}\n```"
     mock_resp = _mock_httpx_response(content)
 
@@ -606,9 +635,7 @@ def test_extract_figures_end_to_end(mock_vision, mock_embed, tmp_path):
     assert result["errors"] == []
 
     # Verify chunk in DB
-    rows = conn.execute(
-        "SELECT * FROM chunks WHERE source_type = 'figure'"
-    ).fetchall()
+    rows = conn.execute("SELECT * FROM chunks WHERE source_type = 'figure'").fetchall()
     assert len(rows) == 1
 
     row = rows[0]
@@ -756,9 +783,7 @@ def test_extract_figures_page_out_of_range(tmp_path):
     """Passing a 0-indexed page >= total_pages returns error dict."""
     from research_index.vision import extract_figures
 
-    conn, paper_id, _ = _setup_paper_with_pdf(
-        tmp_path, ["Page 0 text", "Page 1 text"]
-    )
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0 text", "Page 1 text"])
 
     # Page 2 is out of range for a 2-page document (0-indexed)
     result = extract_figures(conn, paper_id=paper_id, pages=[2])
@@ -781,9 +806,7 @@ def test_extract_figures_zero_indexed_boundary(tmp_path):
     from research_index.vision import extract_figures
 
     # 3-page document: valid 0-indexed pages are 0, 1, 2
-    conn, paper_id, _ = _setup_paper_with_pdf(
-        tmp_path, ["Page 0", "Page 1", "Page 2"]
-    )
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0", "Page 1", "Page 2"])
 
     # Page 2 (0-indexed, last page) should NOT error
     # It will fail at vision call (no mock), but should not return page-range error
@@ -796,3 +819,98 @@ def test_extract_figures_zero_indexed_boundary(tmp_path):
     result_bad = extract_figures(conn, paper_id=paper_id, pages=[3])
     assert "error" in result_bad
     assert "out of range" in result_bad["error"]
+
+
+# ---------------------------------------------------------------------------
+# Step 7 addendum: Transaction rollback on failure
+# ---------------------------------------------------------------------------
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path):
+    """If _serialize_f32 fails mid-insert, the transaction is rolled back."""
+    from research_index.vision import extract_figures
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "diagram",
+            "description": "First figure description",
+            "title": "Fig 1",
+            "entities_mentioned": [],
+        },
+        {
+            "figure_type": "chart",
+            "description": "Second figure description",
+            "title": "Fig 2",
+            "entities_mentioned": [],
+        },
+    ]
+    mock_embed.return_value = [[0.1] * 768, [0.2] * 768]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
+
+    call_count = 0
+    original_serialize = __import__(
+        "research_index.vision", fromlist=["_serialize_f32"]
+    )._serialize_f32
+
+    def failing_serialize(vec):
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 2:
+            raise RuntimeError("Simulated serialization failure")
+        return original_serialize(vec)
+
+    with patch("research_index.vision._serialize_f32", side_effect=failing_serialize):
+        with pytest.raises(RuntimeError, match="Simulated serialization failure"):
+            extract_figures(conn, paper_id=paper_id, pages=[0])
+
+    # Rollback should have cleaned up: no figure chunks at all
+    figure_count = conn.execute(
+        "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()["c"]
+    assert figure_count == 0, "Transaction should have been rolled back"
+
+    vec_count = conn.execute("SELECT COUNT(*) as c FROM chunks_vec").fetchone()["c"]
+    assert vec_count == 0, "Vector inserts should have been rolled back"
+
+
+# ---------------------------------------------------------------------------
+# Step 8 addendum: MCP tool page conversion tests
+# ---------------------------------------------------------------------------
+
+
+@patch("research_index.server.extract_figures")
+@patch("research_index.server._get_conn")
+def test_mcp_tool_page_conversion(mock_get_conn, mock_ef):
+    """extract_figures_tool converts 1-based pages to 0-based."""
+    from research_index.server import extract_figures_tool
+
+    mock_ef.return_value = {"pages_processed": 1}
+    mock_get_conn.return_value = MagicMock()
+
+    result = json.loads(extract_figures_tool(paper_id=1, pages=[1, 5, 10]))
+    assert result["pages_processed"] == 1
+
+    # Verify extract_figures was called with 0-based pages
+    call_args = mock_ef.call_args
+    assert call_args[1].get("pages") == [0, 4, 9] or list(call_args[0][2:3]) == [
+        [0, 4, 9]
+    ]
+
+
+@patch("research_index.server._get_conn")
+def test_mcp_tool_rejects_zero_and_negative_pages(mock_get_conn):
+    """extract_figures_tool rejects pages <= 0."""
+    from research_index.server import extract_figures_tool
+
+    mock_get_conn.return_value = MagicMock()
+
+    result = json.loads(extract_figures_tool(paper_id=1, pages=[0, 3]))
+    assert "error" in result
+    assert "Pages must be >= 1" in result["error"]
+
+    result_neg = json.loads(extract_figures_tool(paper_id=1, pages=[-1]))
+    assert "error" in result_neg
+    assert "Pages must be >= 1" in result_neg["error"]

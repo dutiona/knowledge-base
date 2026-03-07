@@ -389,53 +389,57 @@ def extract_figures(
     # 10. Atomic transaction: delete old, insert new (main thread)
     chunks_created = 0
     if all_figures:
-        conn.execute(
-            "DELETE FROM chunks_vec WHERE chunk_id IN "
-            "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')",
-            (source_uri,),
-        )
-        conn.execute(
-            "DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
-            (source_uri,),
-        )
-
-        for i, (page_num, fig_idx, figure) in enumerate(all_figures):
-            content = figure["description"]
-            content_hash = _content_hash(content)
-
-            # Check for content_hash collision
-            existing = conn.execute(
-                "SELECT id FROM chunks WHERE content_hash = ?", (content_hash,)
-            ).fetchone()
-            if existing:
-                continue
-
-            chunk_index = 1_000_000 + page_num * 100 + fig_idx
-            metadata = json.dumps(
-                {
-                    "page": page_num,
-                    "figure_type": figure["figure_type"],
-                    "title": figure["title"],
-                    "entities_mentioned": figure["entities_mentioned"],
-                    "vision_model": model,
-                }
-            )
-
-            cursor = conn.execute(
-                "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
-                "VALUES (?, ?, 'figure', ?, ?, ?)",
-                (content_hash, content, source_uri, chunk_index, metadata),
-            )
-            chunk_id = cursor.lastrowid
-
-            embedding_blob = _serialize_f32(embeddings[i])
+        try:
             conn.execute(
-                "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
-                (chunk_id, embedding_blob, chunk_id),
+                "DELETE FROM chunks_vec WHERE chunk_id IN "
+                "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')",
+                (source_uri,),
             )
-            chunks_created += 1
+            conn.execute(
+                "DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
+                (source_uri,),
+            )
 
-        conn.commit()
+            for i, (page_num, fig_idx, figure) in enumerate(all_figures):
+                content = figure["description"]
+                content_hash = _content_hash(content)
+
+                # Check for content_hash collision
+                existing = conn.execute(
+                    "SELECT id FROM chunks WHERE content_hash = ?", (content_hash,)
+                ).fetchone()
+                if existing:
+                    continue
+
+                chunk_index = 1_000_000 + page_num * 100 + fig_idx
+                metadata = json.dumps(
+                    {
+                        "page": page_num,
+                        "figure_type": figure["figure_type"],
+                        "title": figure["title"],
+                        "entities_mentioned": figure["entities_mentioned"],
+                        "vision_model": model,
+                    }
+                )
+
+                cursor = conn.execute(
+                    "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+                    "VALUES (?, ?, 'figure', ?, ?, ?)",
+                    (content_hash, content, source_uri, chunk_index, metadata),
+                )
+                chunk_id = cursor.lastrowid
+
+                embedding_blob = _serialize_f32(embeddings[i])
+                conn.execute(
+                    "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
+                    (chunk_id, embedding_blob, chunk_id),
+                )
+                chunks_created += 1
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     # 11. Save PNGs to disk (best effort, outside transaction)
     figures_dir = (
