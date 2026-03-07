@@ -234,7 +234,7 @@ def _vision_call(
     resp = httpx.post(
         f"{base_url}/v1/chat/completions",
         json={"model": model, "messages": messages, "temperature": 0.1},
-        timeout=30,
+        timeout=120,
     )
     resp.raise_for_status()
 
