@@ -7,6 +7,7 @@ from research_index.db import EMBED_DIM, get_connection, init_schema
 from research_index.extraction import (
     _get_llm_config,
     _map_extract,
+    _resolve_entities,
     record_method,
     record_dataset,
     record_metric,
@@ -251,3 +252,31 @@ def test_map_extract_single_chunk(tmp_path):
     assert result["methods"][0]["surface_forms"] == ["BERT", "our model"]
     assert len(result["metrics"]) == 1
     assert result["metrics"][0]["chunk_id"] == 1
+
+
+def test_resolve_entities_merges_aliases(tmp_path):
+    conn = _setup(tmp_path)
+
+    map_results = [
+        {
+            "methods": [{"name": "CNN-LSTM", "description": "Proposed arch", "surface_forms": ["CNN-LSTM", "our method"], "chunk_id": 1}],
+            "datasets": [], "metrics": [],
+        },
+        {
+            "methods": [{"name": "the proposed approach", "description": "See section 3", "surface_forms": ["the proposed approach"], "chunk_id": 5}],
+            "datasets": [], "metrics": [],
+        },
+    ]
+
+    resolve_response = json.dumps({
+        "groups": [
+            {"canonical": "CNN-LSTM", "type": "method", "members": ["CNN-LSTM", "our method", "the proposed approach"]},
+        ],
+    })
+
+    with patch("research_index.extraction._llm_call", return_value=resolve_response):
+        resolution = _resolve_entities(map_results, conn)
+
+    assert len(resolution["groups"]) == 1
+    assert resolution["groups"][0]["canonical"] == "CNN-LSTM"
+    assert "the proposed approach" in resolution["groups"][0]["members"]

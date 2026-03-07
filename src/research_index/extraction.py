@@ -293,6 +293,64 @@ def _map_extract(
     return result
 
 
+def _collect_entity_mentions(all_extractions: list[dict]) -> list[dict]:
+    """Collect all entity mentions from map results for resolution."""
+    seen = set()
+    mentions = []
+    for extraction in all_extractions:
+        for entity_type in ("methods", "datasets"):
+            for item in extraction.get(entity_type, []):
+                key = (item["name"].lower(), entity_type.rstrip("s"))
+                if key not in seen:
+                    seen.add(key)
+                    mentions.append({
+                        "name": item["name"],
+                        "type": entity_type.rstrip("s"),
+                        "surface_forms": item.get("surface_forms", [item["name"]]),
+                        "chunk_id": item.get("chunk_id"),
+                        "description": item.get("description", ""),
+                    })
+                else:
+                    for m in mentions:
+                        if m["name"].lower() == item["name"].lower() and m["type"] == entity_type.rstrip("s"):
+                            for sf in item.get("surface_forms", []):
+                                if sf not in m["surface_forms"]:
+                                    m["surface_forms"].append(sf)
+                            break
+    return mentions
+
+
+_RESOLVE_PROMPT = """You are given a list of entity mentions extracted from different chunks of a document.
+Group mentions that refer to the same real-world entity. Return a JSON object:
+
+{{"groups": [
+    {{"canonical": "best name for this entity", "type": "method|dataset", "members": ["name1", "alias1", ...]}},
+    ...
+]}}
+
+Rules:
+- Every mention name must appear in exactly one group's members list.
+- The canonical name should be the most specific/formal name.
+- Only group mentions that clearly refer to the same entity.
+- If unsure, keep them separate.
+
+Mentions:
+{entities}
+
+JSON:"""
+
+
+def _resolve_entities(all_extractions: list[dict], conn: sqlite3.Connection) -> dict:
+    """Merge entities across chunks by resolving aliases."""
+    entity_list = _collect_entity_mentions(all_extractions)
+    if not entity_list:
+        return {"groups": []}
+
+    prompt = _RESOLVE_PROMPT.format(entities=json.dumps(entity_list, indent=2))
+    raw = _llm_call(prompt, conn=conn)
+    return json.loads(raw)
+
+
 def extract_structure(
     conn: sqlite3.Connection,
     paper_id: int,
