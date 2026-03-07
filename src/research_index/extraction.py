@@ -248,7 +248,10 @@ def extract_structure(
     full_text = "\n\n".join(r["content"] for r in chunks)[:8000]
 
     prompt = _EXTRACT_PROMPT.format(text=full_text)
-    raw = _llm_extract(prompt)
+    try:
+        raw = _llm_extract(prompt)
+    except Exception as e:
+        return {"error": f"LLM extraction failed: {e}"}
 
     try:
         extracted = json.loads(raw)

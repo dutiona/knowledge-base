@@ -78,10 +78,11 @@ def _extract_markdown_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def _chunk_python_ast(source: str) -> list[dict]:
+def _chunk_python_ast(source: str, max_chunk_chars: int = CHUNK_SIZE) -> list[dict]:
     """Split Python source into semantic chunks using the ast module.
 
     Returns list of dicts with keys: text, name, type, start_line, end_line.
+    Oversized chunks (> max_chunk_chars) are split using fixed-size chunking.
     Returns empty list on syntax error (caller should fall back to fixed-size).
     """
     if not source.strip():
@@ -139,7 +140,23 @@ def _chunk_python_ast(source: str) -> list[dict]:
                 "end_line": end,
             })
 
-    return chunks
+    # Split oversized chunks to stay within embedding model token limits
+    bounded = []
+    for chunk in chunks:
+        if len(chunk["text"]) <= max_chunk_chars:
+            bounded.append(chunk)
+        else:
+            sub_texts = _chunk_text(chunk["text"], size=max_chunk_chars)
+            for i, sub in enumerate(sub_texts):
+                bounded.append({
+                    "text": sub,
+                    "name": f"{chunk['name']}[{i}]",
+                    "type": chunk["type"],
+                    "start_line": chunk["start_line"],
+                    "end_line": chunk["end_line"],
+                })
+
+    return bounded
 
 
 def ingest_file(
@@ -264,6 +281,20 @@ def reingest_file(
                 (json.dumps(filtered), row["id"]),
             )
 
+    # 4. methods/datasets/metrics.chunk_id → SET NULL
+    conn.execute(
+        f"UPDATE methods SET chunk_id = NULL WHERE chunk_id IN ({placeholders})",
+        old_ids,
+    )
+    conn.execute(
+        f"UPDATE datasets SET chunk_id = NULL WHERE chunk_id IN ({placeholders})",
+        old_ids,
+    )
+    conn.execute(
+        f"UPDATE metrics SET chunk_id = NULL WHERE chunk_id IN ({placeholders})",
+        old_ids,
+    )
+
     # --- Delete old chunks (triggers handle FTS cleanup) ---
     # Delete from vec table first (no trigger)
     conn.execute(
@@ -350,8 +381,6 @@ def ingest_url(
 
     html = response.text
     text = trafilatura.extract(html, include_links=False, include_tables=True) or ""
-    title = trafilatura.extract(html, favor_recall=False, output_format="txt")
-    # Extract title from HTML directly as trafilatura doesn't expose it cleanly
     extracted_title = None
     metadata = trafilatura.extract_metadata(html)
     if metadata and metadata.title:
