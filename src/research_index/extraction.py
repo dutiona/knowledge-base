@@ -477,60 +477,48 @@ def _store_resolved(
     }
 
 
-def extract_structure(
-    conn: sqlite3.Connection,
-    paper_id: int,
-) -> dict:
-    """Extract methods, datasets, and metrics from a paper's chunks using LLM."""
-    # Get paper chunks
-    paper = conn.execute("SELECT id, title FROM papers WHERE id = ?", (paper_id,)).fetchone()
-    if not paper:
-        return {"error": f"Paper {paper_id} not found"}
+AVG_SECONDS_PER_CHUNK = 4
 
-    # Get chunks linked to this paper via source_uri
-    chunks = conn.execute(
-        """SELECT c.id, c.content FROM chunks c
-           JOIN papers p ON c.source_uri = (
-               SELECT source_uri FROM chunks WHERE id = p.abstract_chunk_id LIMIT 1
-           )
-           WHERE p.id = ?""",
+
+def _get_paper_chunks(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
+    """Get chunks for a paper via its source_uri."""
+    # Find source_uri from the paper's linked chunks
+    row = conn.execute(
+        "SELECT source_uri FROM chunks WHERE id = (SELECT abstract_chunk_id FROM papers WHERE id = ?)",
         (paper_id,),
+    ).fetchone()
+    if row:
+        source_uri = row["source_uri"]
+    else:
+        source_uri = None
+
+    if not source_uri:
+        return []
+
+    chunks = conn.execute(
+        "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+        (source_uri,),
     ).fetchall()
+    return [{"id": c["id"], "content": c["content"]} for c in chunks]
 
-    if not chunks:
-        # Fallback: try to get chunks via any source_uri linked to the paper
-        chunks = conn.execute(
-            """SELECT c.id, c.content FROM chunks c
-               WHERE c.source_uri IN (
-                   SELECT DISTINCT source_uri FROM chunks
-                   WHERE id IN (SELECT abstract_chunk_id FROM papers WHERE id = ?)
-               )""",
-            (paper_id,),
-        ).fetchall()
 
-    if not chunks:
-        return {"error": f"No chunks found for paper {paper_id}"}
-
-    # Concatenate chunk content (limit to avoid token overflow)
-    full_text = "\n\n".join(r["content"] for r in chunks)[:8000]
-
+def _extract_single_pass(conn: sqlite3.Connection, paper_id: int, chunks: list[dict]) -> dict:
+    """Fast path: single LLM call for short documents."""
+    full_text = "\n\n".join(c["content"] for c in chunks)
     prompt = _EXTRACT_PROMPT.format(text=full_text)
     try:
         raw = _llm_call(prompt, conn=conn)
     except Exception as e:
         return {"error": f"LLM extraction failed: {e}"}
-
     try:
         extracted = json.loads(raw)
     except json.JSONDecodeError:
         return {"error": "LLM returned invalid JSON", "raw": raw}
 
-    methods_added = 0
-    datasets_added = 0
-    metrics_added = 0
+    _clear_previous_extraction(conn, paper_id)
 
-    # Record methods
-    method_map = {}  # name -> method_id
+    method_map = {}
+    methods_added = 0
     for m in extracted.get("methods", []):
         name = m.get("name", "").strip()
         if name:
@@ -538,8 +526,8 @@ def extract_structure(
             method_map[name] = result["method_id"]
             methods_added += 1
 
-    # Record datasets
-    dataset_map = {}  # name -> dataset_id
+    dataset_map = {}
+    datasets_added = 0
     for d in extracted.get("datasets", []):
         name = d.get("name", "").strip()
         if name:
@@ -547,7 +535,7 @@ def extract_structure(
             dataset_map[name] = result["dataset_id"]
             datasets_added += 1
 
-    # Record metrics
+    metrics_added = 0
     for met in extracted.get("metrics", []):
         metric_name = met.get("metric", "").strip()
         value = met.get("value")
@@ -558,16 +546,78 @@ def extract_structure(
                 continue
             method_id = method_map.get(met.get("method", ""))
             dataset_id = dataset_map.get(met.get("dataset", ""))
-            record_metric(
-                conn, metric_name, value, paper_id,
-                method_id=method_id, dataset_id=dataset_id,
-                unit=met.get("unit"),
-            )
+            record_metric(conn, metric_name, value, paper_id,
+                          method_id=method_id, dataset_id=dataset_id, unit=met.get("unit"))
             metrics_added += 1
 
-    return {
-        "paper_id": paper_id,
-        "methods_added": methods_added,
-        "datasets_added": datasets_added,
-        "metrics_added": metrics_added,
-    }
+    conn.commit()
+    return {"paper_id": paper_id, "methods_added": methods_added,
+            "datasets_added": datasets_added, "metrics_added": metrics_added}
+
+
+def _extract_map_reduce(conn: sqlite3.Connection, paper_id: int, chunks: list[dict]) -> dict:
+    """Map-reduce path for long documents."""
+    # Phase 1: Map
+    map_results = []
+    errors = []
+    for i, chunk in enumerate(chunks):
+        try:
+            result = _map_extract(chunk["id"], chunk["content"], i, len(chunks), conn)
+            map_results.append(result)
+        except Exception as e:
+            errors.append({"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)})
+
+    if not map_results:
+        return {"error": "All chunks failed extraction", "errors": errors}
+
+    # Phase 2: Resolve
+    try:
+        resolution = _resolve_entities(map_results, conn)
+    except Exception:
+        resolution = {"groups": []}
+
+    # Phase 3: Store
+    result = _store_resolved(conn, paper_id, map_results, resolution)
+    result["paper_id"] = paper_id
+    result["chunks_processed"] = len(map_results)
+    result["chunks_failed"] = len(errors)
+    result["errors"] = errors
+    return result
+
+
+def extract_structure(
+    conn: sqlite3.Connection,
+    paper_id: int,
+    confirmed: bool = False,
+) -> dict:
+    """Extract methods, datasets, and metrics from a paper's chunks using LLM.
+
+    For short documents (<8000 chars), uses a single LLM call.
+    For long documents, uses map-reduce with entity resolution.
+    Long documents require confirmation if estimated time > 2 minutes.
+    """
+    paper = conn.execute("SELECT id, title FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    if not paper:
+        return {"error": f"Paper {paper_id} not found"}
+
+    chunks = _get_paper_chunks(conn, paper_id)
+    if not chunks:
+        return {"error": f"No chunks found for paper {paper_id}"}
+
+    total_chars = sum(len(c["content"]) for c in chunks)
+
+    # Fast path: short document
+    if total_chars <= 8000:
+        return _extract_single_pass(conn, paper_id, chunks)
+
+    # Long document: ETA gate
+    estimated_seconds = len(chunks) * AVG_SECONDS_PER_CHUNK
+    if estimated_seconds > 120 and not confirmed:
+        return {
+            "warning": f"Extraction will take ~{estimated_seconds // 60}min for {len(chunks)} chunks",
+            "estimated_seconds": estimated_seconds,
+            "chunk_count": len(chunks),
+            "confirm_required": True,
+        }
+
+    return _extract_map_reduce(conn, paper_id, chunks)

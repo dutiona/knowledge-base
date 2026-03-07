@@ -335,3 +335,69 @@ def test_clear_previous_extraction_idempotent(tmp_path):
 
     _clear_previous_extraction(conn, p)
     assert len(get_methods(conn, p)) == 0
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_extract_structure_fast_path_short_doc(tmp_path):
+    """Short docs (<8000 chars) use single LLM call, no entity resolution."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("BERT achieves 88.5% accuracy on GLUE benchmark.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "BERT Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    def _mock_llm_call(prompt, *, conn):
+        return FAKE_LLM_RESPONSE
+
+    with patch("research_index.extraction._llm_call", _mock_llm_call):
+        result = extract_structure(conn, p)
+
+    assert result["methods_added"] == 1
+    assert result["datasets_added"] == 1
+    assert result["metrics_added"] == 1
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_extract_structure_eta_gate_long_doc(tmp_path):
+    """Long docs return warning + ETA when not confirmed."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "long.md"
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(50)))
+    ingest_file(conn, md)
+    p = register_paper(conn, "Long Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    result = extract_structure(conn, p, confirmed=False)
+    assert result.get("confirm_required") is True
+    assert "estimated_seconds" in result
+    assert "warning" in result
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_extract_structure_map_reduce_confirmed(tmp_path):
+    """Long docs with confirmed=True run the full pipeline."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "long.md"
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20)))
+    ingest_file(conn, md)
+    p = register_paper(conn, "Long Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    map_response = json.dumps({
+        "methods": [{"name": "ResNet", "description": "Deep residual", "surface_forms": ["ResNet"]}],
+        "datasets": [], "metrics": [],
+    })
+    resolve_response = json.dumps({
+        "groups": [{"canonical": "ResNet", "type": "method", "members": ["ResNet"]}],
+    })
+    call_count = {"n": 0}
+
+    def _mock_llm(prompt, *, conn):
+        call_count["n"] += 1
+        if "Group mentions" in prompt or "canonical" in prompt.lower():
+            return resolve_response
+        return map_response
+
+    with patch("research_index.extraction._llm_call", _mock_llm):
+        result = extract_structure(conn, p, confirmed=True)
+
+    assert "confirm_required" not in result
+    assert result["methods_added"] >= 1
