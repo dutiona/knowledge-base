@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -58,15 +59,16 @@ mcp = FastMCP(
     ),
 )
 
-_conn = None
+_local = threading.local()
 
 
 def _get_conn():
-    global _conn
-    if _conn is None:
-        _conn = get_connection()
-        init_schema(_conn)
-    return _conn
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        conn = get_connection()
+        init_schema(conn)
+        _local.conn = conn
+    return conn
 
 
 @mcp.tool()
