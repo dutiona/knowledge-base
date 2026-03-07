@@ -17,6 +17,7 @@ wheels/
 # IDE
 .idea/
 .vscode/
+.history/
 
 # OS
 .DS_Store
@@ -26,3 +27,7 @@ wheels/
 
 # Lock file
 uv.lock
+
+.claude
+.serena
+.worktrees
