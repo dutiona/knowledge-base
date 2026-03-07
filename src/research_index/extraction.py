@@ -247,6 +247,52 @@ Text:
 JSON:"""
 
 
+_MAP_PROMPT = """Extract structured information from this text chunk ({chunk_index}/{total_chunks}).
+Return a JSON object with three arrays:
+
+1. "methods": array of {{"name": "method name", "description": "brief description", "surface_forms": ["name1", "alias1", ...]}}
+2. "datasets": array of {{"name": "dataset name", "description": "brief description", "surface_forms": ["name1", "alias1", ...]}}
+3. "metrics": array of {{"metric": "metric name", "value": number, "unit": "unit string", "method": "method name", "dataset": "dataset name"}}
+
+For surface_forms, include ALL names/aliases used to refer to the entity in this chunk
+(e.g., ["our method", "CNN-LSTM", "the proposed approach"]).
+
+Only extract information that is explicitly stated. Do not infer or hallucinate.
+For metrics, only include numeric values that are clearly reported results.
+
+Text:
+{text}
+
+JSON:"""
+
+
+def _map_extract(
+    chunk_id: int,
+    chunk_text: str,
+    chunk_index: int,
+    total_chunks: int,
+    conn: sqlite3.Connection,
+) -> dict:
+    """Extract structured facts from a single chunk."""
+    prompt = _MAP_PROMPT.format(
+        text=chunk_text,
+        chunk_index=chunk_index + 1,
+        total_chunks=total_chunks,
+    )
+    raw = _llm_call(prompt, conn=conn)
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"LLM returned invalid JSON for chunk {chunk_id}: {e}") from e
+    for item in result.get("methods", []):
+        item["chunk_id"] = chunk_id
+    for item in result.get("datasets", []):
+        item["chunk_id"] = chunk_id
+    for item in result.get("metrics", []):
+        item["chunk_id"] = chunk_id
+    return result
+
+
 def extract_structure(
     conn: sqlite3.Connection,
     paper_id: int,

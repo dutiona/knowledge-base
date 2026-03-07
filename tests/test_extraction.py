@@ -6,6 +6,7 @@ from unittest.mock import patch
 from research_index.db import EMBED_DIM, get_connection, init_schema
 from research_index.extraction import (
     _get_llm_config,
+    _map_extract,
     record_method,
     record_dataset,
     record_metric,
@@ -230,3 +231,23 @@ def test_get_llm_config_custom(tmp_path):
     assert cfg["provider"] == "openai_compat"
     assert cfg["base_url"] == "http://192.168.1.41:1234"
     assert cfg["model"] == "qwen/qwen3.5-35b-a3b"
+
+
+def test_map_extract_single_chunk(tmp_path):
+    conn = _setup(tmp_path)
+
+    fake_response = json.dumps({
+        "methods": [{"name": "BERT", "description": "Encoder", "surface_forms": ["BERT", "our model"]}],
+        "datasets": [{"name": "GLUE", "description": "NLU benchmark", "surface_forms": ["GLUE"]}],
+        "metrics": [{"metric": "accuracy", "value": 88.5, "unit": "%", "method": "BERT", "dataset": "GLUE"}],
+    })
+
+    with patch("research_index.extraction._llm_call", return_value=fake_response):
+        result = _map_extract(chunk_id=1, chunk_text="BERT achieves 88.5% on GLUE.",
+                              chunk_index=0, total_chunks=1, conn=conn)
+
+    assert len(result["methods"]) == 1
+    assert result["methods"][0]["chunk_id"] == 1
+    assert result["methods"][0]["surface_forms"] == ["BERT", "our model"]
+    assert len(result["metrics"]) == 1
+    assert result["metrics"][0]["chunk_id"] == 1
