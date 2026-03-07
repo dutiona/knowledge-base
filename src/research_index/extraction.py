@@ -186,11 +186,10 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
 
     prov = provider["value"] if provider else "ollama"
 
-    if prov == "ollama":
-        # Always auto-detect for Ollama — ignore stale base_url from previous provider
-        base_url = _get_ollama_url()
-    elif base_url_row:
+    if base_url_row:
         base_url = base_url_row["value"]
+    elif prov == "ollama":
+        base_url = _get_ollama_url()
     else:
         raise ValueError("llm_base_url is required when llm_provider is 'openai_compat'")
 
@@ -688,6 +687,9 @@ def configure_llm(
     conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_model', ?)", (model,))
     if base_url:
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', ?)", (base_url,))
+    elif provider == "ollama":
+        # Clear stale base_url from previous provider to use auto-detection
+        conn.execute("DELETE FROM config WHERE key = 'llm_base_url'")
     if api_key:
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_api_key', ?)", (api_key,))
     conn.commit()
