@@ -10,6 +10,8 @@ from research_index.extraction import (
     _map_extract,
     _resolve_entities,
     _store_resolved,
+    configure_llm,
+    get_entities,
     record_method,
     record_dataset,
     record_metric,
@@ -401,3 +403,46 @@ def test_extract_structure_map_reduce_confirmed(tmp_path):
 
     assert "confirm_required" not in result
     assert result["methods_added"] >= 1
+
+
+def test_configure_llm(tmp_path):
+    conn = _setup(tmp_path)
+
+    result = configure_llm(conn, provider="openai_compat",
+                           base_url="http://192.168.1.41:1234",
+                           model="qwen/qwen3.5-35b-a3b")
+    assert result["provider"] == "openai_compat"
+
+    cfg = _get_llm_config(conn)
+    assert cfg["provider"] == "openai_compat"
+    assert cfg["base_url"] == "http://192.168.1.41:1234"
+    assert cfg["model"] == "qwen/qwen3.5-35b-a3b"
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_get_entities(tmp_path):
+    conn = _setup(tmp_path)
+    p = register_paper(conn, "Test")["paper_id"]
+
+    conn.execute(
+        "INSERT INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
+        ("CNN-LSTM", "method", p, "Hybrid architecture"),
+    )
+    eid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    md = tmp_path / "doc.md"
+    md.write_text("test content")
+    ingest_file(conn, md)
+    chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    conn.execute(
+        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id, confidence) VALUES (?, ?, ?, ?)",
+        (eid, "our method", chunk_id, 0.9),
+    )
+    conn.commit()
+
+    entities = get_entities(conn, p)
+    assert len(entities) == 1
+    assert entities[0]["canonical_name"] == "CNN-LSTM"
+    assert len(entities[0]["mentions"]) == 1
+    assert entities[0]["mentions"][0]["surface_form"] == "our method"

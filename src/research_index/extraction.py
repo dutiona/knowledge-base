@@ -621,3 +621,55 @@ def extract_structure(
         }
 
     return _extract_map_reduce(conn, paper_id, chunks)
+
+
+def configure_llm(
+    conn: sqlite3.Connection,
+    provider: str = "ollama",
+    base_url: str | None = None,
+    model: str = "qwen3.5:27b",
+    api_key: str | None = None,
+) -> dict:
+    """Configure LLM provider settings."""
+    if provider not in ("ollama", "openai_compat"):
+        return {"error": f"Unknown provider: {provider}. Use 'ollama' or 'openai_compat'."}
+    if provider == "openai_compat" and not base_url:
+        return {"error": "base_url is required for openai_compat provider"}
+    if base_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(base_url)
+        if parsed.scheme not in ("http", "https"):
+            return {"error": f"Invalid URL scheme: {parsed.scheme}. Use http or https."}
+
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_provider', ?)", (provider,))
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_model', ?)", (model,))
+    if base_url:
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', ?)", (base_url,))
+    if api_key:
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_api_key', ?)", (api_key,))
+    conn.commit()
+    return _get_llm_config(conn)
+
+
+def get_entities(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
+    """List resolved entities for a paper with their mentions."""
+    entities = conn.execute(
+        "SELECT id, canonical_name, entity_type, description FROM entities WHERE paper_id = ?",
+        (paper_id,),
+    ).fetchall()
+
+    result = []
+    for e in entities:
+        mentions = conn.execute(
+            "SELECT surface_form, chunk_id, confidence FROM entity_mentions WHERE entity_id = ?",
+            (e["id"],),
+        ).fetchall()
+        result.append({
+            "id": e["id"],
+            "canonical_name": e["canonical_name"],
+            "type": e["entity_type"],
+            "description": e["description"],
+            "mentions": [{"surface_form": m["surface_form"], "chunk_id": m["chunk_id"],
+                          "confidence": m["confidence"]} for m in mentions],
+        })
+    return result
