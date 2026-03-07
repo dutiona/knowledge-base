@@ -405,3 +405,106 @@ def test_get_paper_source_uri_not_found(tmp_path):
 
     uri = _get_paper_source_uri(conn, paper_id)
     assert uri is None
+
+
+# ---------------------------------------------------------------------------
+# Step 5: Vision API call
+# ---------------------------------------------------------------------------
+
+import json
+from unittest.mock import MagicMock, patch
+
+
+def _mock_httpx_response(content: str, status_code: int = 200) -> MagicMock:
+    """Build a mock httpx response with the given content string."""
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = {
+        "choices": [{"message": {"content": content}}],
+    }
+    resp.raise_for_status = MagicMock()
+    return resp
+
+
+def test_vision_call_parses_valid_response():
+    """Valid JSON array response is parsed and validated."""
+    from research_index.vision import _vision_call
+
+    figures = [
+        {
+            "figure_type": "diagram",
+            "title": "Fig 1",
+            "description": "Architecture overview",
+            "entities_mentioned": ["BERT"],
+        }
+    ]
+    mock_resp = _mock_httpx_response(json.dumps(figures))
+
+    with patch("research_index.vision.httpx.post", return_value=mock_resp) as mock_post:
+        result = _vision_call(
+            "base64data", "prompt", base_url="http://localhost:11434", model="gemma3:27b"
+        )
+
+    assert len(result) == 1
+    assert result[0]["figure_type"] == "diagram"
+    assert result[0]["description"] == "Architecture overview"
+    mock_post.assert_called_once()
+    call_kwargs = mock_post.call_args
+    assert "http://localhost:11434/v1/chat/completions" in call_kwargs.args or \
+           call_kwargs.kwargs.get("url", call_kwargs.args[0] if call_kwargs.args else "") == "http://localhost:11434/v1/chat/completions"
+
+
+def test_vision_call_strips_markdown_fences():
+    """Response wrapped in ```json ... ``` is parsed correctly."""
+    from research_index.vision import _vision_call
+
+    figures = [{"figure_type": "chart", "description": "Loss curves", "title": None, "entities_mentioned": []}]
+    content = f"```json\n{json.dumps(figures)}\n```"
+    mock_resp = _mock_httpx_response(content)
+
+    with patch("research_index.vision.httpx.post", return_value=mock_resp):
+        result = _vision_call(
+            "base64data", "prompt", base_url="http://localhost:11434", model="test"
+        )
+
+    assert len(result) == 1
+    assert result[0]["figure_type"] == "chart"
+
+
+def test_vision_call_filters_invalid_figures():
+    """Mix of valid and invalid objects: only valid ones returned."""
+    from research_index.vision import _vision_call
+
+    figures = [
+        {"figure_type": "diagram", "description": "Valid figure"},
+        {"figure_type": "", "description": "Missing type"},  # invalid: empty type
+        {"description": "No type field"},  # invalid: no figure_type
+        {"figure_type": "table", "description": "Another valid one"},
+    ]
+    mock_resp = _mock_httpx_response(json.dumps(figures))
+
+    with patch("research_index.vision.httpx.post", return_value=mock_resp):
+        result = _vision_call(
+            "base64data", "prompt", base_url="http://localhost:11434", model="test"
+        )
+
+    assert len(result) == 2
+    assert result[0]["figure_type"] == "diagram"
+    assert result[1]["figure_type"] == "table"
+
+
+def test_vision_call_unwraps_dict_wrapper():
+    """Response as {"figures": [...]} is unwrapped."""
+    from research_index.vision import _vision_call
+
+    figures = [{"figure_type": "photo", "description": "A photograph"}]
+    wrapper = {"figures": figures}
+    mock_resp = _mock_httpx_response(json.dumps(wrapper))
+
+    with patch("research_index.vision.httpx.post", return_value=mock_resp):
+        result = _vision_call(
+            "base64data", "prompt", base_url="http://localhost:11434", model="test"
+        )
+
+    assert len(result) == 1
+    assert result[0]["figure_type"] == "photo"

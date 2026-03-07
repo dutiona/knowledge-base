@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
 
 import fitz
+import httpx
 
 from .embeddings import _get_ollama_url
 
@@ -178,6 +180,80 @@ def _heuristic_filter(pdf_path: str) -> list[int]:
         return candidates
     finally:
         doc.close()
+
+
+# ---------------------------------------------------------------------------
+# Step 5: Vision API call
+# ---------------------------------------------------------------------------
+
+_VISION_PROMPT = """Analyze this PDF page image. Identify all figures, diagrams, charts, tables, or significant visual elements.
+
+Return a JSON array. One object per distinct figure. For sub-figures (a), (b), (c), create separate objects if they represent different concepts.
+
+Each object:
+{
+  "figure_type": "diagram|chart|table|photo|equation",
+  "title": "Exact caption as shown, or null if none visible",
+  "description": "Detailed natural language description of visual content and relationships",
+  "entities_mentioned": ["only names explicitly visible in the figure"]
+}
+
+Rules:
+- Do NOT fabricate text not visible in the image
+- If text is illegible, describe layout rather than guessing
+- Return [] if no figures/diagrams/charts/tables are present"""
+
+
+def _vision_call(
+    image_b64: str, prompt: str, *, base_url: str, model: str
+) -> list[dict]:
+    """Send an image to a vision model and return validated figure dicts.
+
+    Takes base_url and model as plain strings (not conn) for thread safety
+    with ThreadPoolExecutor.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
+    resp = httpx.post(
+        f"{base_url}/v1/chat/completions",
+        json={"model": model, "messages": messages, "temperature": 0.1},
+        timeout=30,
+    )
+    resp.raise_for_status()
+
+    content = resp.json()["choices"][0]["message"]["content"]
+    content = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", content.strip())
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Vision model returned invalid JSON: {exc}") from exc
+
+    # Unwrap dict wrapper: if result is a dict with a single key whose value is a list
+    if isinstance(parsed, dict):
+        values = list(parsed.values())
+        if len(values) == 1 and isinstance(values[0], list):
+            parsed = values[0]
+        else:
+            raise ValueError(
+                f"Vision model returned a dict that cannot be unwrapped: {list(parsed.keys())}"
+            )
+
+    if not isinstance(parsed, list):
+        raise ValueError(f"Vision model returned {type(parsed).__name__}, expected list")
+
+    return [v for obj in parsed if (v := _validate_figure(obj)) is not None]
 
 
 # ---------------------------------------------------------------------------
