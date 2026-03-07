@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import fitz
 import httpx
 
 from .embeddings import _get_ollama_url
+from .ingest import _content_hash, _embed_with_config, _serialize_f32
 
 logger = logging.getLogger(__name__)
 
@@ -273,3 +278,176 @@ def _get_paper_source_uri(conn: sqlite3.Connection, paper_id: int) -> str | None
         (paper_id,),
     ).fetchone()
     return row["source_uri"] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Step 7: Orchestrator
+# ---------------------------------------------------------------------------
+
+
+def extract_figures(
+    conn: sqlite3.Connection,
+    paper_id: int,
+    pages: list[int] | None = None,
+    confirmed: bool = False,
+) -> dict:
+    """Extract figures from a paper's PDF using vision models.
+
+    Thread-safe architecture: all SQLite access happens on the main thread.
+    Vision API calls are dispatched to a thread pool.
+    """
+    # 1. Verify paper exists
+    paper_row = conn.execute(
+        "SELECT id, title FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()
+    if paper_row is None:
+        return {"error": f"Paper {paper_id} not found"}
+
+    # 2. Resolve source URI
+    source_uri = _get_paper_source_uri(conn, paper_id)
+    if source_uri is None:
+        return {"error": f"No source URI found for paper {paper_id}"}
+
+    pdf_path = Path(source_uri)
+    if pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
+        return {"error": f"Source is not an existing PDF: {source_uri}"}
+
+    # 3. Determine candidate pages
+    doc = fitz.open(str(pdf_path))
+    total_pages = len(doc)
+    doc.close()
+
+    if pages is not None:
+        # Bounds-check
+        for p in pages:
+            if p < 0 or p >= total_pages:
+                return {
+                    "error": f"Page {p} out of range (document has {total_pages} pages)"
+                }
+        candidate_pages = pages
+    else:
+        candidate_pages = _heuristic_filter(str(pdf_path))
+
+    # 4. ETA gate
+    estimated = len(candidate_pages) * 4
+    if estimated > 120 and not confirmed:
+        return {
+            "confirm_required": True,
+            "estimated_seconds": estimated,
+            "candidate_pages": len(candidate_pages),
+        }
+
+    # 5. Render all candidate pages to PNG bytes (main thread)
+    rendered: dict[int, bytes] = {}
+    for page_num in candidate_pages:
+        rendered[page_num] = _render_page(str(pdf_path), page_num)
+
+    # 6. Read vision config once (main thread)
+    config = _get_vision_config(conn)
+    base_url = config["base_url"]
+    model = config["model"]
+
+    # 7. Dispatch vision calls in thread pool (no conn access)
+    page_results: dict[int, list[dict]] = {}
+    errors: list[str] = []
+    pages_failed = 0
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_page = {}
+        for page_num, png_bytes in rendered.items():
+            b64 = base64.b64encode(png_bytes).decode("ascii")
+            future = executor.submit(
+                _vision_call, b64, _VISION_PROMPT, base_url=base_url, model=model
+            )
+            future_to_page[future] = page_num
+
+        for future in as_completed(future_to_page):
+            page_num = future_to_page[future]
+            try:
+                figures = future.result()
+                page_results[page_num] = figures
+            except Exception as exc:
+                pages_failed += 1
+                errors.append(f"Page {page_num}: {exc}")
+                logger.warning("Vision call failed for page %d: %s", page_num, exc)
+
+    # 8. Collect all figure descriptions for batch embedding
+    all_figures: list[tuple[int, int, dict]] = []  # (page_num, fig_idx, figure)
+    texts: list[str] = []
+    for page_num in sorted(page_results):
+        for fig_idx, figure in enumerate(page_results[page_num]):
+            all_figures.append((page_num, fig_idx, figure))
+            texts.append(figure["description"])
+
+    # 9. Compute embeddings in one batch (main thread)
+    embeddings: list[list[float]] = []
+    if texts:
+        embeddings = _embed_with_config(conn, texts)
+
+    # 10. Atomic transaction: delete old, insert new (main thread)
+    chunks_created = 0
+    if all_figures:
+        conn.execute(
+            "DELETE FROM chunks_vec WHERE chunk_id IN "
+            "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')",
+            (source_uri,),
+        )
+        conn.execute(
+            "DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
+            (source_uri,),
+        )
+
+        for i, (page_num, fig_idx, figure) in enumerate(all_figures):
+            content = figure["description"]
+            content_hash = _content_hash(content)
+
+            # Check for content_hash collision
+            existing = conn.execute(
+                "SELECT id FROM chunks WHERE content_hash = ?", (content_hash,)
+            ).fetchone()
+            if existing:
+                continue
+
+            chunk_index = 1_000_000 + page_num * 100 + fig_idx
+            metadata = json.dumps(
+                {
+                    "page": page_num,
+                    "figure_type": figure["figure_type"],
+                    "title": figure["title"],
+                    "entities_mentioned": figure["entities_mentioned"],
+                    "vision_model": model,
+                }
+            )
+
+            cursor = conn.execute(
+                "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+                "VALUES (?, ?, 'figure', ?, ?, ?)",
+                (content_hash, content, source_uri, chunk_index, metadata),
+            )
+            chunk_id = cursor.lastrowid
+
+            embedding_blob = _serialize_f32(embeddings[i])
+            conn.execute(
+                "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
+                (chunk_id, embedding_blob, chunk_id),
+            )
+            chunks_created += 1
+
+        conn.commit()
+
+    # 11. Save PNGs to disk (best effort, outside transaction)
+    figures_dir = Path.home() / ".local" / "share" / "research-index" / "figures" / str(paper_id)
+    try:
+        figures_dir.mkdir(parents=True, exist_ok=True)
+        for page_num, png_bytes in rendered.items():
+            (figures_dir / f"page_{page_num}.png").write_bytes(png_bytes)
+    except OSError as exc:
+        logger.warning("Failed to save figure PNGs: %s", exc)
+
+    return {
+        "pages_processed": len(page_results),
+        "pages_failed": pages_failed,
+        "figures_found": len(all_figures),
+        "chunks_created": chunks_created,
+        "errors": errors,
+    }

@@ -508,3 +508,240 @@ def test_vision_call_unwraps_dict_wrapper():
 
     assert len(result) == 1
     assert result[0]["figure_type"] == "photo"
+
+
+# ---------------------------------------------------------------------------
+# Step 7: Orchestrator — extract_figures
+# ---------------------------------------------------------------------------
+
+
+def _setup_paper_with_pdf(tmp_path, pages_text: list[str] | None = None):
+    """Helper: create a DB with a paper linked to a real test PDF.
+
+    Returns (conn, paper_id, pdf_path).
+    """
+    if pages_text is None:
+        pages_text = ["Figure 1: architecture", "Plain text page"]
+
+    pdf_path = _make_test_pdf(tmp_path / "paper.pdf", pages_text)
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Insert a chunk so the paper has a source_uri
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('abs_hash', 'abstract text', 'pdf', ?, 0)",
+        (pdf_path,),
+    )
+    chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE content_hash = 'abs_hash'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO papers (title, abstract_chunk_id) VALUES ('Test Paper', ?)",
+        (chunk_id,),
+    )
+    paper_id = conn.execute(
+        "SELECT id FROM papers WHERE title = 'Test Paper'"
+    ).fetchone()["id"]
+    conn.commit()
+
+    return conn, paper_id, pdf_path
+
+
+def test_extract_figures_paper_not_found(tmp_path):
+    """Nonexistent paper_id returns error dict."""
+    from research_index.vision import extract_figures
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    result = extract_figures(conn, paper_id=9999)
+    assert "error" in result
+    assert "not found" in result["error"]
+
+
+def test_extract_figures_eta_gate(tmp_path):
+    """Many candidate pages + not confirmed returns confirm_required."""
+    from research_index.vision import extract_figures
+
+    # Create a PDF with 50 pages — all will be candidates (fallback: all pages)
+    pages_text = [f"Page {i}" for i in range(50)]
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, pages_text)
+
+    result = extract_figures(conn, paper_id=paper_id, confirmed=False)
+    assert result.get("confirm_required") is True
+    assert result["estimated_seconds"] == 50 * 4
+    assert result["candidate_pages"] == 50
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+def test_extract_figures_end_to_end(mock_vision, mock_embed, tmp_path):
+    """Full run: mock vision + embed, verify chunks created correctly."""
+    from research_index.vision import extract_figures
+
+    mock_figures = [
+        {
+            "figure_type": "diagram",
+            "description": "Test diagram of architecture",
+            "title": "Fig 1",
+            "entities_mentioned": ["ResNet"],
+        }
+    ]
+    mock_vision.return_value = mock_figures
+    mock_embed.return_value = [[0.1] * 768]
+
+    conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
+
+    # Pass specific pages so we control which are processed
+    result = extract_figures(conn, paper_id=paper_id, pages=[0])
+
+    assert result["pages_processed"] == 1
+    assert result["pages_failed"] == 0
+    assert result["figures_found"] == 1
+    assert result["chunks_created"] == 1
+    assert result["errors"] == []
+
+    # Verify chunk in DB
+    rows = conn.execute(
+        "SELECT * FROM chunks WHERE source_type = 'figure'"
+    ).fetchall()
+    assert len(rows) == 1
+
+    row = rows[0]
+    assert row["source_uri"] == pdf_path
+    assert row["chunk_index"] >= 1_000_000
+
+    meta = json.loads(row["metadata"])
+    assert meta["page"] == 0
+    assert meta["figure_type"] == "diagram"
+    assert meta["title"] == "Fig 1"
+    assert meta["entities_mentioned"] == ["ResNet"]
+    assert "vision_model" in meta
+
+    # Verify vector embedding inserted
+    vec_rows = conn.execute(
+        "SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (row["id"],)
+    ).fetchall()
+    assert len(vec_rows) == 1
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+def test_extract_figures_idempotent(mock_vision, mock_embed, tmp_path):
+    """Running twice replaces old chunks, no duplicates."""
+    from research_index.vision import extract_figures
+
+    mock_figures = [
+        {
+            "figure_type": "chart",
+            "description": "Loss curve over epochs",
+            "title": "Fig 2",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_vision.return_value = mock_figures
+    mock_embed.return_value = [[0.2] * 768]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
+
+    # First run
+    extract_figures(conn, paper_id=paper_id, pages=[0])
+    count_1 = conn.execute(
+        "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()["c"]
+
+    # Second run — old chunks should be deleted first
+    # Use a different description so content_hash differs
+    mock_figures_2 = [
+        {
+            "figure_type": "chart",
+            "description": "Updated loss curve over epochs v2",
+            "title": "Fig 2 updated",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_vision.return_value = mock_figures_2
+    extract_figures(conn, paper_id=paper_id, pages=[0])
+    count_2 = conn.execute(
+        "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()["c"]
+
+    assert count_1 == 1
+    assert count_2 == 1  # No duplicates — old one was deleted
+
+    # Verify it's the new one
+    row = conn.execute(
+        "SELECT content FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    assert "v2" in row["content"]
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+def test_extract_figures_pages_hint(mock_vision, mock_embed, tmp_path):
+    """Passing specific pages processes only those pages."""
+    from research_index.vision import extract_figures
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "table",
+            "description": "Results table",
+            "title": "Table 1",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.3] * 768]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(
+        tmp_path, ["Page 0 text", "Page 1 text", "Page 2 text"]
+    )
+
+    result = extract_figures(conn, paper_id=paper_id, pages=[1])
+
+    assert result["pages_processed"] == 1
+    # vision_call should have been called exactly once (for page 1)
+    assert mock_vision.call_count == 1
+
+    # Verify chunk_index encodes page 1
+    row = conn.execute(
+        "SELECT chunk_index FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    assert row["chunk_index"] == 1_000_000 + 1 * 100 + 0
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+def test_extract_figures_per_page_error(mock_vision, mock_embed, tmp_path):
+    """One page fails, others succeed."""
+    from research_index.vision import extract_figures
+
+    def side_effect(b64, prompt, *, base_url, model):
+        # We can't easily tell which page from b64, so fail on second call
+        if mock_vision.call_count <= 1:
+            return [
+                {
+                    "figure_type": "diagram",
+                    "description": "Good figure",
+                    "title": None,
+                    "entities_mentioned": [],
+                }
+            ]
+        raise RuntimeError("Vision API timeout")
+
+    mock_vision.side_effect = side_effect
+    mock_embed.return_value = [[0.4] * 768]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(
+        tmp_path, ["Page 0 with Figure 1: test", "Page 1 with Figure 2: test"]
+    )
+
+    result = extract_figures(conn, paper_id=paper_id, pages=[0, 1])
+
+    assert result["pages_processed"] == 1
+    assert result["pages_failed"] == 1
+    assert len(result["errors"]) == 1
+    assert result["figures_found"] == 1
