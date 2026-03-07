@@ -23,13 +23,54 @@ def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def _migrate_source_type_figure(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'"
+    ).fetchone()
+    if not row or "'figure'" in row[0]:
+        return
+
+    conn.executescript(f"""
+    PRAGMA foreign_keys = OFF;
+    BEGIN;
+    CREATE TABLE chunks_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content_hash TEXT NOT NULL UNIQUE,
+        content TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK(source_type IN ('pdf', 'markdown', 'code', 'web', 'note', 'figure')),
+        source_uri TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        metadata TEXT DEFAULT '{{}}'
+    );
+
+    INSERT INTO chunks_new SELECT * FROM chunks;
+    DROP TABLE chunks;
+    ALTER TABLE chunks_new RENAME TO chunks;
+
+    CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
+        INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+    END;
+    CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
+        INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
+    END;
+    CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
+        INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
+        INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+    END;
+
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+    """)
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(f"""
     CREATE TABLE IF NOT EXISTS chunks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         content_hash TEXT NOT NULL UNIQUE,
         content TEXT NOT NULL,
-        source_type TEXT NOT NULL CHECK(source_type IN ('pdf', 'markdown', 'code', 'web', 'note')),
+        source_type TEXT NOT NULL CHECK(source_type IN ('pdf', 'markdown', 'code', 'web', 'note', 'figure')),
         source_uri TEXT NOT NULL,
         chunk_index INTEGER NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -163,3 +204,5 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('llm_model', 'qwen3.5:27b')")
 
     conn.commit()
+
+    _migrate_source_type_figure(conn)
