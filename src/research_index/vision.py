@@ -39,7 +39,7 @@ def _get_vision_config(conn: sqlite3.Connection) -> dict:
 
     return {
         "model": model_row["value"] if model_row else "gemma3:27b",
-        "base_url": base_url.rstrip("/"),
+        "base_url": re.sub(r"/v1/?$", "", base_url.rstrip("/")),
     }
 
 
