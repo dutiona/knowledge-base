@@ -1,7 +1,8 @@
-"""Ingest pipeline for PDF and markdown files."""
+"""Ingest pipeline for PDF, markdown, code, and web files."""
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import sqlite3
@@ -9,6 +10,8 @@ import struct
 from pathlib import Path
 
 import fitz  # pymupdf
+import httpx
+import trafilatura
 
 from .db import EMBED_DIM
 from .embeddings import embed
@@ -54,6 +57,70 @@ def _extract_markdown_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _chunk_python_ast(source: str) -> list[dict]:
+    """Split Python source into semantic chunks using the ast module.
+
+    Returns list of dicts with keys: text, name, type, start_line, end_line.
+    Returns empty list on syntax error (caller should fall back to fixed-size).
+    """
+    if not source.strip():
+        return []
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    lines = source.splitlines(keepends=True)
+    chunks = []
+
+    # Collect top-level node line ranges
+    top_level_ranges: list[tuple[int, int, str, str]] = []  # (start, end, name, type)
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end_line = node.end_lineno or node.lineno
+            top_level_ranges.append((node.lineno, end_line, node.name, "function"))
+        elif isinstance(node, ast.ClassDef):
+            end_line = node.end_lineno or node.lineno
+            top_level_ranges.append((node.lineno, end_line, node.name, "class"))
+
+    # Collect module-level code (lines not covered by any function/class)
+    if top_level_ranges:
+        covered = set()
+        for start, end, _, _ in top_level_ranges:
+            for i in range(start, end + 1):
+                covered.add(i)
+
+        module_lines = []
+        for i, line in enumerate(lines, 1):
+            if i not in covered:
+                module_lines.append(line)
+
+        module_text = "".join(module_lines).strip()
+        if module_text:
+            chunks.append({
+                "text": module_text,
+                "name": "<module>",
+                "type": "module",
+                "start_line": 1,
+                "end_line": len(lines),
+            })
+
+    # Add function/class chunks
+    for start, end, name, node_type in top_level_ranges:
+        text = "".join(lines[start - 1:end]).rstrip()
+        if text:
+            chunks.append({
+                "text": text,
+                "name": name,
+                "type": node_type,
+                "start_line": start,
+                "end_line": end,
+            })
+
+    return chunks
+
+
 def ingest_file(
     conn: sqlite3.Connection,
     path: Path,
@@ -79,20 +146,38 @@ def ingest_file(
     else:
         text = _extract_markdown_text(path)
 
-    chunks = _chunk_text(text)
-    if not chunks:
-        return {"file": str(path), "chunks_added": 0, "chunks_skipped": 0}
+    # Try AST-aware chunking for Python files
+    ast_chunks = None
+    if source_type == "code" and path.suffix.lower() == ".py":
+        ast_chunks = _chunk_python_ast(text)
 
-    # Compute content hashes, skip duplicates
-    new_chunks = []
-    skipped = 0
-    for i, chunk in enumerate(chunks):
-        h = _content_hash(chunk)
-        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
-        if existing:
-            skipped += 1
-            continue
-        new_chunks.append((i, chunk, h))
+    if ast_chunks:
+        # AST-aware path: each chunk has metadata
+        new_chunks = []
+        skipped = 0
+        for i, ac in enumerate(ast_chunks):
+            h = _content_hash(ac["text"])
+            existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
+            if existing:
+                skipped += 1
+                continue
+            meta = {"name": ac["name"], "type": ac["type"],
+                    "start_line": ac["start_line"], "end_line": ac["end_line"]}
+            new_chunks.append((i, ac["text"], h, json.dumps(meta)))
+    else:
+        # Fixed-size chunking path
+        fixed_chunks = _chunk_text(text)
+        if not fixed_chunks:
+            return {"file": str(path), "chunks_added": 0, "chunks_skipped": 0}
+        new_chunks = []
+        skipped = 0
+        for i, chunk in enumerate(fixed_chunks):
+            h = _content_hash(chunk)
+            existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
+            if existing:
+                skipped += 1
+                continue
+            new_chunks.append((i, chunk, h, "{}"))
 
     if not new_chunks:
         return {"file": str(path), "chunks_added": 0, "chunks_skipped": skipped}
@@ -103,11 +188,11 @@ def ingest_file(
 
     # Insert
     source_uri = str(path)
-    for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings):
+    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(new_chunks, embeddings):
         cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)
-               VALUES (?, ?, ?, ?, ?)""",
-            (chunk_hash, chunk_text, source_type, source_uri, idx),
+            """INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (chunk_hash, chunk_text, source_type, source_uri, idx, meta_json),
         )
         chunk_id = cursor.lastrowid
         conn.execute(
@@ -117,6 +202,181 @@ def ingest_file(
 
     conn.commit()
     return {"file": str(path), "chunks_added": len(new_chunks), "chunks_skipped": skipped}
+
+
+def reingest_file(
+    conn: sqlite3.Connection,
+    path: Path,
+    source_type: str | None = None,
+) -> dict:
+    """Delete all chunks for a source_uri, then re-ingest the file.
+
+    Cleans up FK references in papers, relationships, and conclusions
+    before deleting chunks.
+    """
+    path = path.resolve()
+    source_uri = str(path)
+
+    # Check that this source_uri was previously ingested
+    existing = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (source_uri,)
+    ).fetchall()
+    if not existing:
+        return {"error": f"No chunks found for source_uri: {source_uri}"}
+
+    old_ids = [r["id"] for r in existing]
+    old_id_set = set(old_ids)
+    placeholders = ",".join("?" * len(old_ids))
+
+    # --- FK cleanup ---
+    # 1. papers.abstract_chunk_id → SET NULL
+    conn.execute(
+        f"UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({placeholders})",
+        old_ids,
+    )
+
+    # 2. relationships.evidence_chunk_id → SET NULL
+    conn.execute(
+        f"UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({placeholders})",
+        old_ids,
+    )
+
+    # 3. conclusions.source_chunk_ids — JSON array, remove deleted IDs
+    rows = conn.execute(
+        "SELECT id, source_chunk_ids FROM conclusions"
+    ).fetchall()
+    for row in rows:
+        chunk_ids = json.loads(row["source_chunk_ids"])
+        filtered = [cid for cid in chunk_ids if cid not in old_id_set]
+        if len(filtered) != len(chunk_ids):
+            conn.execute(
+                "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
+                (json.dumps(filtered), row["id"]),
+            )
+
+    # --- Delete old chunks (triggers handle FTS cleanup) ---
+    # Delete from vec table first (no trigger)
+    conn.execute(
+        f"DELETE FROM chunks_vec WHERE chunk_id IN ({placeholders})",
+        old_ids,
+    )
+    # Delete from chunks (triggers clean up FTS)
+    conn.execute(
+        f"DELETE FROM chunks WHERE source_uri = ?",
+        (source_uri,),
+    )
+
+    # --- Re-ingest ---
+    if source_type is None:
+        ext = path.suffix.lower()
+        if ext == ".pdf":
+            source_type = "pdf"
+        elif ext in (".md", ".txt", ".typ", ".rst"):
+            source_type = "markdown"
+        elif ext in (".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".toml", ".yaml", ".yml", ".json"):
+            source_type = "code"
+        else:
+            source_type = "markdown"
+
+    if source_type == "pdf":
+        text = _extract_pdf_text(path)
+    else:
+        text = _extract_markdown_text(path)
+
+    chunks = _chunk_text(text)
+    if not chunks:
+        conn.commit()
+        return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": 0}
+
+    texts_to_embed = [c for c in chunks]
+    embeddings = embed(texts_to_embed)
+
+    for i, (chunk_text, emb_vec) in enumerate(zip(chunks, embeddings)):
+        chunk_hash = _content_hash(chunk_text)
+        cursor = conn.execute(
+            """INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)
+               VALUES (?, ?, ?, ?, ?)""",
+            (chunk_hash, chunk_text, source_type, source_uri, i),
+        )
+        chunk_id = cursor.lastrowid
+        conn.execute(
+            "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
+            (chunk_id, _serialize_f32(emb_vec), chunk_id),
+        )
+
+    conn.commit()
+    return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": len(chunks)}
+
+
+def ingest_url(
+    conn: sqlite3.Connection,
+    url: str,
+) -> dict:
+    """Fetch a web page, extract content, and ingest as chunks.
+
+    Uses trafilatura for content extraction (strips boilerplate, extracts main content).
+    """
+    try:
+        response = httpx.get(url, follow_redirects=True, timeout=30.0)
+        response.raise_for_status()
+    except httpx.HTTPError as e:
+        return {"error": f"Failed to fetch {url}: {e}"}
+
+    html = response.text
+    text = trafilatura.extract(html, include_links=False, include_tables=True) or ""
+    title = trafilatura.extract(html, favor_recall=False, output_format="txt")
+    # Extract title from HTML directly as trafilatura doesn't expose it cleanly
+    extracted_title = None
+    metadata = trafilatura.extract_metadata(html)
+    if metadata and metadata.title:
+        extracted_title = metadata.title
+
+    if not text.strip():
+        return {"url": url, "chunks_added": 0, "chunks_skipped": 0, "source_uri": url, "source_type": "web"}
+
+    chunks = _chunk_text(text)
+    if not chunks:
+        return {"url": url, "chunks_added": 0, "chunks_skipped": 0, "source_uri": url, "source_type": "web"}
+
+    # Compute content hashes, skip duplicates
+    new_chunks = []
+    skipped = 0
+    meta_json = json.dumps({"title": extracted_title} if extracted_title else {})
+    for i, chunk in enumerate(chunks):
+        h = _content_hash(chunk)
+        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
+        if existing:
+            skipped += 1
+            continue
+        new_chunks.append((i, chunk, h))
+
+    if not new_chunks:
+        return {"url": url, "chunks_added": 0, "chunks_skipped": skipped, "source_uri": url, "source_type": "web"}
+
+    texts_to_embed = [c[1] for c in new_chunks]
+    embeddings = embed(texts_to_embed)
+
+    for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings):
+        cursor = conn.execute(
+            """INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata)
+               VALUES (?, ?, 'web', ?, ?, ?)""",
+            (chunk_hash, chunk_text, url, idx, meta_json),
+        )
+        chunk_id = cursor.lastrowid
+        conn.execute(
+            "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
+            (chunk_id, _serialize_f32(emb_vec), chunk_id),
+        )
+
+    conn.commit()
+    return {
+        "url": url,
+        "chunks_added": len(new_chunks),
+        "chunks_skipped": skipped,
+        "source_uri": url,
+        "source_type": "web",
+        "title": extracted_title,
+    }
 
 
 def ingest_directory(
