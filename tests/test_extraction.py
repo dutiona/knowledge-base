@@ -422,6 +422,37 @@ def test_configure_llm(tmp_path):
     assert cfg["api_key"] == "sk-test-123"  # But stored correctly
 
 
+def test_configure_llm_switch_to_ollama_clears_stale(tmp_path):
+    """Switching from openai_compat to ollama clears stale base_url and api_key."""
+    conn = _setup(tmp_path)
+    # First configure openai_compat with base_url and api_key
+    configure_llm(conn, provider="openai_compat",
+                  base_url="http://192.168.1.41:1234",
+                  model="some-model", api_key="sk-secret")
+    cfg = _get_llm_config(conn)
+    assert cfg["base_url"] == "http://192.168.1.41:1234"
+    assert cfg["api_key"] == "sk-secret"
+
+    # Switch to ollama without explicit base_url — stale values should be cleared
+    configure_llm(conn, provider="ollama", model="qwen3.5:27b")
+    cfg = _get_llm_config(conn)
+    assert cfg["provider"] == "ollama"
+    assert cfg["api_key"] is None
+    # base_url should be auto-detected (not the old openai_compat URL)
+    assert cfg["base_url"] != "http://192.168.1.41:1234"
+
+
+def test_configure_llm_remote_ollama_preserves_base_url(tmp_path):
+    """Explicitly setting base_url for ollama (remote) is preserved."""
+    conn = _setup(tmp_path)
+    configure_llm(conn, provider="ollama",
+                  base_url="http://remote-ollama:11434",
+                  model="qwen3.5:27b")
+    cfg = _get_llm_config(conn)
+    assert cfg["provider"] == "ollama"
+    assert cfg["base_url"] == "http://remote-ollama:11434"
+
+
 @patch("research_index.ingest.embed", _fake_embed)
 def test_get_entities(tmp_path):
     conn = _setup(tmp_path)

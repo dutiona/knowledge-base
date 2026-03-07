@@ -423,7 +423,7 @@ def _store_resolved(
             key = (sf, cid)
             if key not in seen and cid:
                 conn.execute(
-                    "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
+                    "INSERT OR IGNORE INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
                     (eid, sf, cid),
                 )
                 seen.add(key)
@@ -692,6 +692,9 @@ def configure_llm(
         conn.execute("DELETE FROM config WHERE key = 'llm_base_url'")
     if api_key:
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_api_key', ?)", (api_key,))
+    elif provider == "ollama":
+        # Clear stale api_key — Ollama doesn't use auth
+        conn.execute("DELETE FROM config WHERE key = 'llm_api_key'")
     conn.commit()
     cfg = _get_llm_config(conn)
     # Redact sensitive fields from response

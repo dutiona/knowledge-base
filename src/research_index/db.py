@@ -143,7 +143,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
         entity_id INTEGER NOT NULL REFERENCES entities(id),
         surface_form TEXT NOT NULL,
         chunk_id INTEGER NOT NULL REFERENCES chunks(id),
-        confidence REAL DEFAULT 1.0
+        confidence REAL DEFAULT 1.0,
+        UNIQUE(entity_id, surface_form, chunk_id)
     );
 
     CREATE TABLE IF NOT EXISTS config (
