@@ -240,12 +240,27 @@ _SYSTEM_JSON_DIRECTIVE = (
 
 
 def _strip_think_tags(text: str) -> str:
-    """Strip reasoning/thinking tags from LLM responses.
+    """Strip reasoning/thinking tags from the preamble/trailer of LLM responses.
 
-    Handles <think>...</think> and <thinking>...</thinking> tags
-    emitted by reasoning models (Qwen 3.x, DeepSeek R1, etc.).
+    Only strips tags outside the JSON payload to avoid corrupting literal
+    <think> text inside JSON string fields.
     """
-    stripped = _THINK_TAG_RE.sub("", text).strip()
+    # Find the start of JSON content
+    json_start = -1
+    for i, ch in enumerate(text):
+        if ch in ("{", "["):
+            json_start = i
+            break
+
+    if json_start == -1:
+        # No JSON found — strip tags from entire text
+        stripped = _THINK_TAG_RE.sub("", text).strip()
+    else:
+        # Strip tags only from preamble before JSON
+        preamble = text[:json_start]
+        json_body = text[json_start:]
+        stripped = (_THINK_TAG_RE.sub("", preamble) + json_body).strip()
+
     if stripped != text.strip():
         logger.debug(
             "Stripped thinking tags from LLM response (%d → %d chars)",

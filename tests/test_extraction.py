@@ -646,6 +646,16 @@ def test_get_entities(tmp_path):
         ("<think>just thinking</think>", ""),
         # No tags, just whitespace — preserves stripped result
         ('  {"x": 1}  ', '{"x": 1}'),
+        # Literal <think> inside JSON field — must NOT be corrupted
+        (
+            '{"description": "Uses <think>tags</think> for reasoning"}',
+            '{"description": "Uses <think>tags</think> for reasoning"}',
+        ),
+        # Think preamble + literal <think> inside JSON — only preamble stripped
+        (
+            '<think>reasoning</think>{"description": "model uses <think>mode</think>"}',
+            '{"description": "model uses <think>mode</think>"}',
+        ),
     ],
     ids=[
         "no_tags",
@@ -656,6 +666,8 @@ def test_get_entities(tmp_path):
         "multiline_thinking",
         "only_thinking_no_json",
         "whitespace_only",
+        "literal_think_in_json",
+        "preamble_plus_literal_in_json",
     ],
 )
 def test_strip_think_tags(input_text, expected):
