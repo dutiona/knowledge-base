@@ -30,7 +30,7 @@ def _migrate_source_type_figure(conn: sqlite3.Connection) -> None:
     if not row or "'figure'" in row[0]:
         return
 
-    conn.executescript(f"""
+    conn.executescript("""
     PRAGMA foreign_keys = OFF;
     BEGIN;
     CREATE TABLE chunks_new (
@@ -41,7 +41,7 @@ def _migrate_source_type_figure(conn: sqlite3.Connection) -> None:
         source_uri TEXT NOT NULL,
         chunk_index INTEGER NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        metadata TEXT DEFAULT '{{}}'
+        metadata TEXT DEFAULT '{}'
     );
 
     INSERT INTO chunks_new SELECT * FROM chunks;
@@ -195,13 +195,23 @@ def init_schema(conn: sqlite3.Connection) -> None:
     """)
 
     # Initialize default config if not set
-    existing = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
+    existing = conn.execute(
+        "SELECT value FROM config WHERE key = 'embed_model'"
+    ).fetchone()
     if not existing:
-        conn.execute("INSERT INTO config (key, value) VALUES ('embed_model', 'nomic-embed-text')")
-        conn.execute("INSERT INTO config (key, value) VALUES ('embed_dim', ?)", (str(EMBED_DIM),))
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES ('embed_model', 'nomic-embed-text')"
+        )
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES ('embed_dim', ?)", (str(EMBED_DIM),)
+        )
 
-    conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('llm_provider', 'ollama')")
-    conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('llm_model', 'qwen3.5:27b')")
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_provider', 'ollama')"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_model', 'qwen3.5:27b')"
+    )
 
     conn.commit()
 
