@@ -197,7 +197,7 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
     return {
         "provider": prov,
         "model": model["value"] if model else "qwen3.5:27b",
-        "base_url": base_url,
+        "base_url": base_url.rstrip("/"),
         "api_key": api_key_row["value"] if api_key_row else None,
     }
 
@@ -376,17 +376,15 @@ def _store_resolved(
     """Store resolved entities, methods, datasets, and metrics."""
     _clear_previous_extraction(conn, paper_id)
 
-    # Build canonical name lookup from resolution groups
+    # Build canonical name lookup from resolution groups — keyed by (name, type)
     surface_to_canonical = {}
-    canonical_type = {}
     for group in resolution.get("groups", []):
         canon = group["canonical"]
         etype = group.get("type", "method")
-        canonical_type[canon] = etype
         for member in group.get("members", []):
-            surface_to_canonical[member.lower()] = canon
+            surface_to_canonical[(member.lower(), etype)] = canon
 
-    # Collect all unique entities and their mentions
+    # Collect all unique entities and their mentions — keyed by (canonical, type)
     entity_data = defaultdict(lambda: {"type": None, "description": None, "mentions": []})
     for extraction in map_results:
         for entity_type_plural in ("methods", "datasets"):
@@ -395,25 +393,30 @@ def _store_resolved(
                 name = item.get("name", "").strip()
                 if not name:
                     continue
-                canonical = surface_to_canonical.get(name.lower(), name)
-                entity_data[canonical]["type"] = etype
+                canonical = surface_to_canonical.get((name.lower(), etype), name)
+                entity_data[(canonical, etype)]["type"] = etype
                 if item.get("description"):
-                    entity_data[canonical]["description"] = item["description"]
+                    entity_data[(canonical, etype)]["description"] = item["description"]
                 for sf in item.get("surface_forms", [name]):
-                    entity_data[canonical]["mentions"].append({
+                    entity_data[(canonical, etype)]["mentions"].append({
                         "surface_form": sf,
                         "chunk_id": item.get("chunk_id"),
                     })
 
     # Insert entities and mentions
     entity_id_map = {}
-    for canonical, data in entity_data.items():
+    for (canonical, etype), data in entity_data.items():
         cursor = conn.execute(
-            "INSERT INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
-            (canonical, data["type"], paper_id, data["description"]),
+            "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
+            (canonical, etype, paper_id, data["description"]),
         )
         eid = cursor.lastrowid
-        entity_id_map[canonical] = eid
+        if not eid:
+            eid = conn.execute(
+                "SELECT id FROM entities WHERE canonical_name = ? AND entity_type = ? AND paper_id = ?",
+                (canonical, etype, paper_id),
+            ).fetchone()["id"]
+        entity_id_map[(canonical, etype)] = eid
         seen = set()
         for mention in data["mentions"]:
             sf = mention["surface_form"]
@@ -432,12 +435,12 @@ def _store_resolved(
     methods_added = 0
     datasets_added = 0
 
-    for canonical, data in entity_data.items():
-        if data["type"] == "method":
+    for (canonical, etype), data in entity_data.items():
+        if etype == "method":
             result = record_method(conn, canonical, paper_id, data["description"])
             method_map[canonical] = result["method_id"]
             methods_added += 1
-        elif data["type"] == "dataset":
+        elif etype == "dataset":
             result = record_dataset(conn, canonical, paper_id, data["description"])
             dataset_map[canonical] = result["dataset_id"]
             datasets_added += 1
@@ -468,8 +471,9 @@ def _store_resolved(
                 continue
             method_name = met.get("method", "")
             dataset_name = met.get("dataset", "")
-            canonical_method = surface_to_canonical.get(method_name.lower(), method_name)
-            canonical_dataset = surface_to_canonical.get(dataset_name.lower(), dataset_name)
+            # Try both method and dataset lookups for canonical resolution
+            canonical_method = surface_to_canonical.get((method_name.lower(), "method"), method_name)
+            canonical_dataset = surface_to_canonical.get((dataset_name.lower(), "dataset"), dataset_name)
             method_id = method_map.get(canonical_method)
             dataset_id = dataset_map.get(canonical_dataset)
             record_metric(conn, metric_name, value, paper_id,
@@ -538,14 +542,18 @@ def _extract_single_pass(conn: sqlite3.Connection, paper_id: int, chunks: list[d
             method_map[name] = result["method_id"]
             methods_added += 1
             # Populate entities table for get_entities_tool consistency
-            cursor = conn.execute(
-                "INSERT INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
+            conn.execute(
+                "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
                 (name, "method", paper_id, m.get("description")),
             )
             if first_chunk_id:
+                eid = conn.execute(
+                    "SELECT id FROM entities WHERE canonical_name = ? AND entity_type = 'method' AND paper_id = ?",
+                    (name, paper_id),
+                ).fetchone()["id"]
                 conn.execute(
-                    "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
-                    (cursor.lastrowid, name, first_chunk_id),
+                    "INSERT OR IGNORE INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
+                    (eid, name, first_chunk_id),
                 )
 
     dataset_map = {}
@@ -556,14 +564,18 @@ def _extract_single_pass(conn: sqlite3.Connection, paper_id: int, chunks: list[d
             result = record_dataset(conn, name, paper_id, d.get("description"))
             dataset_map[name] = result["dataset_id"]
             datasets_added += 1
-            cursor = conn.execute(
-                "INSERT INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
+            conn.execute(
+                "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
                 (name, "dataset", paper_id, d.get("description")),
             )
             if first_chunk_id:
+                eid = conn.execute(
+                    "SELECT id FROM entities WHERE canonical_name = ? AND entity_type = 'dataset' AND paper_id = ?",
+                    (name, paper_id),
+                ).fetchone()["id"]
                 conn.execute(
-                    "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
-                    (cursor.lastrowid, name, first_chunk_id),
+                    "INSERT OR IGNORE INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
+                    (eid, name, first_chunk_id),
                 )
 
     metrics_added = 0
