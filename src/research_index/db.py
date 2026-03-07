@@ -99,5 +99,46 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conclusion_ids TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS methods (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        paper_id INTEGER NOT NULL REFERENCES papers(id),
+        description TEXT,
+        chunk_id INTEGER REFERENCES chunks(id),
+        UNIQUE(name, paper_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS datasets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        paper_id INTEGER NOT NULL REFERENCES papers(id),
+        description TEXT,
+        chunk_id INTEGER REFERENCES chunks(id),
+        UNIQUE(name, paper_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS metrics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        value REAL NOT NULL,
+        unit TEXT,
+        dataset_id INTEGER REFERENCES datasets(id),
+        method_id INTEGER REFERENCES methods(id),
+        paper_id INTEGER NOT NULL REFERENCES papers(id),
+        chunk_id INTEGER REFERENCES chunks(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
     """)
+
+    # Initialize default config if not set
+    existing = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
+    if not existing:
+        conn.execute("INSERT INTO config (key, value) VALUES ('embed_model', 'nomic-embed-text')")
+        conn.execute("INSERT INTO config (key, value) VALUES ('embed_dim', ?)", (str(EMBED_DIM),))
+
     conn.commit()

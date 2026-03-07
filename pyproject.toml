@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.28.1",
     "pymupdf>=1.27.1",
     "sqlite-vec>=0.1.6",
+    "trafilatura>=2.0.0",
 ]
 
 [project.scripts]

@@ -48,7 +48,12 @@ def _get_ollama_url() -> str:
     return _OLLAMA_URL
 
 
-def embed(texts: list[str], model: str = "nomic-embed-text") -> list[list[float]]:
+def embed(
+    texts: list[str],
+    model: str = "nomic-embed-text",
+    expected_dim: int | None = None,
+) -> list[list[float]]:
+    dim = expected_dim if expected_dim is not None else EMBED_DIM
     url = _get_ollama_url()
     results = []
     # Batch in groups of 32
@@ -63,8 +68,8 @@ def embed(texts: list[str], model: str = "nomic-embed-text") -> list[list[float]
         data = resp.json()
         embeddings = data["embeddings"]
         for emb in embeddings:
-            if len(emb) != EMBED_DIM:
-                raise ValueError(f"Expected {EMBED_DIM} dims, got {len(emb)}")
+            if len(emb) != dim:
+                raise ValueError(f"Expected {dim} dims, got {len(emb)}")
             results.append(emb)
     return results
 

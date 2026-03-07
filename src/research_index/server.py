@@ -14,7 +14,18 @@ from .conclusions import (
     supersede_conclusion,
 )
 from .db import DEFAULT_DB_PATH, get_connection, init_schema
-from .ingest import ingest_directory, ingest_file
+from .embed_swap import get_embed_config, re_embed
+from .extraction import (
+    compare_papers,
+    extract_structure,
+    get_datasets,
+    get_methods,
+    get_metrics,
+    record_dataset,
+    record_method,
+    record_metric,
+)
+from .ingest import ingest_directory, ingest_file, ingest_url as _ingest_url, reingest_file
 from .papers import (
     add_relationship,
     export_bibtex,
@@ -80,6 +91,40 @@ def ingest(path: str, source_type: str | None = None) -> str:
 
 
 @mcp.tool()
+def reingest(path: str, source_type: str | None = None) -> str:
+    """Force re-ingest of a previously ingested file. Deletes old chunks and inserts new ones.
+
+    Cleans up FK references in papers, relationships, and conclusions.
+
+    Args:
+        path: Absolute path to the file to re-ingest.
+        source_type: Override auto-detection. One of: pdf, markdown, code, web, note.
+    """
+    conn = _get_conn()
+    p = Path(path).expanduser().resolve()
+
+    if not p.exists():
+        return json.dumps({"error": f"Path does not exist: {p}"})
+
+    result = reingest_file(conn, p, source_type)
+    return json.dumps(result)
+
+
+@mcp.tool()
+def ingest_url(url: str) -> str:
+    """Ingest a web page by URL. Fetches the page, extracts main content, and indexes it.
+
+    Uses content-hash dedup — unchanged pages are skipped on re-ingest.
+    Use the reingest tool with the URL as path to force re-ingest.
+
+    Args:
+        url: The URL to fetch and ingest.
+    """
+    conn = _get_conn()
+    return json.dumps(_ingest_url(conn, url))
+
+
+@mcp.tool()
 def search_index(
     query: str,
     top_k: int = 10,
@@ -125,6 +170,9 @@ def status() -> str:
     paper_count = conn.execute("SELECT COUNT(*) as count FROM papers").fetchone()["count"]
     conclusion_count = conn.execute("SELECT COUNT(*) as count FROM conclusions").fetchone()["count"]
     relationship_count = conn.execute("SELECT COUNT(*) as count FROM relationships").fetchone()["count"]
+    method_count = conn.execute("SELECT COUNT(*) as count FROM methods").fetchone()["count"]
+    dataset_count = conn.execute("SELECT COUNT(*) as count FROM datasets").fetchone()["count"]
+    metric_count = conn.execute("SELECT COUNT(*) as count FROM metrics").fetchone()["count"]
 
     recent = conn.execute(
         """SELECT source_uri, source_type, COUNT(*) as chunks, created_at
@@ -140,6 +188,10 @@ def status() -> str:
         "papers": paper_count,
         "conclusions": conclusion_count,
         "relationships": relationship_count,
+        "methods": method_count,
+        "datasets": dataset_count,
+        "metrics": metric_count,
+        "embed_config": get_embed_config(conn),
         "recent_ingestions": [
             {
                 "source_uri": row["source_uri"],
@@ -152,6 +204,28 @@ def status() -> str:
         "db_size_mb": round(db_size_bytes / (1024 * 1024), 2),
         "db_path": str(DEFAULT_DB_PATH),
     })
+
+
+@mcp.tool()
+def embed_config() -> str:
+    """Get current embedding model configuration (model name and dimension)."""
+    conn = _get_conn()
+    return json.dumps(get_embed_config(conn))
+
+
+@mcp.tool()
+def re_embed_tool(model: str, dim: int) -> str:
+    """Re-embed all chunks with a new embedding model.
+
+    Drops and recreates the vector table with new dimensions, then re-embeds
+    all existing chunks. This is expensive — use only when switching models.
+
+    Args:
+        model: Ollama model name (e.g. 'mxbai-embed-large', 'nomic-embed-text').
+        dim: Embedding dimension for the new model.
+    """
+    conn = _get_conn()
+    return json.dumps(re_embed(conn, model, dim))
 
 
 @mcp.tool()
@@ -337,6 +411,90 @@ def suggest_relationships_tool(paper_id: int) -> str:
     """
     conn = _get_conn()
     return json.dumps(suggest_relationships(conn, paper_id))
+
+
+@mcp.tool()
+def record_method_tool(
+    name: str,
+    paper_id: int,
+    description: str | None = None,
+) -> str:
+    """Record a method used in a paper.
+
+    Args:
+        name: Method name (e.g. 'Transformer', 'ResNet-50').
+        paper_id: Paper that uses this method.
+        description: Brief description of the method.
+    """
+    conn = _get_conn()
+    return json.dumps(record_method(conn, name, paper_id, description))
+
+
+@mcp.tool()
+def record_dataset_tool(
+    name: str,
+    paper_id: int,
+    description: str | None = None,
+) -> str:
+    """Record a dataset used in a paper.
+
+    Args:
+        name: Dataset name (e.g. 'ImageNet', 'GLUE').
+        paper_id: Paper that uses this dataset.
+        description: Brief description of the dataset.
+    """
+    conn = _get_conn()
+    return json.dumps(record_dataset(conn, name, paper_id, description))
+
+
+@mcp.tool()
+def record_metric_tool(
+    name: str,
+    value: float,
+    paper_id: int,
+    method_id: int | None = None,
+    dataset_id: int | None = None,
+    unit: str | None = None,
+) -> str:
+    """Record a metric value from a paper.
+
+    Args:
+        name: Metric name (e.g. 'accuracy', 'F1', 'BLEU').
+        value: Numeric value of the metric.
+        paper_id: Paper reporting this metric.
+        method_id: Method that achieved this metric.
+        dataset_id: Dataset the metric was measured on.
+        unit: Unit of measurement (e.g. '%', 'ms').
+    """
+    conn = _get_conn()
+    return json.dumps(record_metric(conn, name, value, paper_id, method_id, dataset_id, unit))
+
+
+@mcp.tool()
+def compare_papers_tool(paper_ids: list[int]) -> str:
+    """Compare metrics across papers on shared datasets.
+
+    Shows side-by-side results for papers that report metrics on the same datasets.
+
+    Args:
+        paper_ids: List of 2+ paper IDs to compare.
+    """
+    conn = _get_conn()
+    return json.dumps(compare_papers(conn, paper_ids))
+
+
+@mcp.tool()
+def extract_structure_tool(paper_id: int) -> str:
+    """Extract methods, datasets, and metrics from a paper using LLM.
+
+    Analyzes the paper's chunks and extracts structured information.
+    Requires Ollama with gemma3:12b model running.
+
+    Args:
+        paper_id: Paper ID to extract structure from.
+    """
+    conn = _get_conn()
+    return json.dumps(extract_structure(conn, paper_id))
 
 
 def main():
