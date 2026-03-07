@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import logging
 import re
@@ -18,6 +17,8 @@ from .embeddings import _get_ollama_url
 from .ingest import _content_hash, _embed_with_config, _serialize_f32
 
 logger = logging.getLogger(__name__)
+
+_CAPTION_RE = re.compile(r"(?:Figure|Fig\.|Table)\s+\d+", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -146,16 +147,16 @@ def _heuristic_filter(pdf_path: str) -> list[int]:
         if n == 0:
             return []
 
-        # Collect text lengths for density calculation
-        text_lengths: list[int] = []
+        # Collect page texts and lengths for density calculation
+        page_texts: list[str] = []
         for page in doc:
-            text_lengths.append(len(page.get_text()))
+            page_texts.append(page.get_text())
+        text_lengths = [len(t) for t in page_texts]
 
         avg_text_len = sum(text_lengths) / n if n > 0 else 0
         threshold = avg_text_len * 0.5
 
         candidates: list[int] = []
-        caption_re = re.compile(r"(?:Figure|Fig\.|Table)\s+\d+", re.IGNORECASE)
 
         for i, page in enumerate(doc):
             # Signal 1: embedded images
@@ -174,7 +175,7 @@ def _heuristic_filter(pdf_path: str) -> list[int]:
                 continue
 
             # Signal 4: caption cues
-            if caption_re.search(page.get_text()):
+            if _CAPTION_RE.search(page_texts[i]):
                 candidates.append(i)
                 continue
 
@@ -315,11 +316,10 @@ def extract_figures(
         return {"error": f"Source is not an existing PDF: {source_uri}"}
 
     # 3. Determine candidate pages
-    doc = fitz.open(str(pdf_path))
-    total_pages = len(doc)
-    doc.close()
-
     if pages is not None:
+        doc = fitz.open(str(pdf_path))
+        total_pages = len(doc)
+        doc.close()
         # Bounds-check
         for p in pages:
             if p < 0 or p >= total_pages:
@@ -339,10 +339,16 @@ def extract_figures(
             "candidate_pages": len(candidate_pages),
         }
 
-    # 5. Render all candidate pages to PNG bytes (main thread)
+    # 5. Render all candidate pages to PNG bytes (main thread, single doc open)
     rendered: dict[int, bytes] = {}
-    for page_num in candidate_pages:
-        rendered[page_num] = _render_page(str(pdf_path), page_num)
+    doc = fitz.open(str(pdf_path))
+    try:
+        for page_num in candidate_pages:
+            page = doc[page_num]
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            rendered[page_num] = pix.tobytes("png")
+    finally:
+        doc.close()
 
     # 6. Read vision config once (main thread)
     config = _get_vision_config(conn)
