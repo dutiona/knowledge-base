@@ -30,7 +30,18 @@ def _detect_source_type(path: Path) -> str:
         return "pdf"
     if ext in (".md", ".txt", ".typ", ".rst"):
         return "markdown"
-    if ext in (".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".toml", ".yaml", ".yml", ".json"):
+    if ext in (
+        ".py",
+        ".rs",
+        ".cpp",
+        ".c",
+        ".h",
+        ".hpp",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".json",
+    ):
         return "code"
     return "markdown"
 
@@ -45,7 +56,9 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
-def _chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
+def _chunk_text(
+    text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
+) -> list[str]:
     if len(text) <= size:
         return [text] if text.strip() else []
     chunks = []
@@ -120,25 +133,29 @@ def _chunk_python_ast(source: str, max_chunk_chars: int = CHUNK_SIZE) -> list[di
 
         module_text = "".join(module_lines).strip()
         if module_text:
-            chunks.append({
-                "text": module_text,
-                "name": "<module>",
-                "type": "module",
-                "start_line": 1,
-                "end_line": len(lines),
-            })
+            chunks.append(
+                {
+                    "text": module_text,
+                    "name": "<module>",
+                    "type": "module",
+                    "start_line": 1,
+                    "end_line": len(lines),
+                }
+            )
 
     # Add function/class chunks
     for start, end, name, node_type in top_level_ranges:
-        text = "".join(lines[start - 1:end]).rstrip()
+        text = "".join(lines[start - 1 : end]).rstrip()
         if text:
-            chunks.append({
-                "text": text,
-                "name": name,
-                "type": node_type,
-                "start_line": start,
-                "end_line": end,
-            })
+            chunks.append(
+                {
+                    "text": text,
+                    "name": name,
+                    "type": node_type,
+                    "start_line": start,
+                    "end_line": end,
+                }
+            )
 
     # Split oversized chunks to stay within embedding model token limits
     bounded = []
@@ -148,13 +165,15 @@ def _chunk_python_ast(source: str, max_chunk_chars: int = CHUNK_SIZE) -> list[di
         else:
             sub_texts = _chunk_text(chunk["text"], size=max_chunk_chars)
             for i, sub in enumerate(sub_texts):
-                bounded.append({
-                    "text": sub,
-                    "name": f"{chunk['name']}[{i}]",
-                    "type": chunk["type"],
-                    "start_line": chunk["start_line"],
-                    "end_line": chunk["end_line"],
-                })
+                bounded.append(
+                    {
+                        "text": sub,
+                        "name": f"{chunk['name']}[{i}]",
+                        "type": chunk["type"],
+                        "start_line": chunk["start_line"],
+                        "end_line": chunk["end_line"],
+                    }
+                )
 
     return bounded
 
@@ -184,12 +203,18 @@ def ingest_file(
         skipped = 0
         for i, ac in enumerate(ast_chunks):
             h = _content_hash(ac["text"])
-            existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
+            existing = conn.execute(
+                "SELECT id FROM chunks WHERE content_hash = ?", (h,)
+            ).fetchone()
             if existing:
                 skipped += 1
                 continue
-            meta = {"name": ac["name"], "type": ac["type"],
-                    "start_line": ac["start_line"], "end_line": ac["end_line"]}
+            meta = {
+                "name": ac["name"],
+                "type": ac["type"],
+                "start_line": ac["start_line"],
+                "end_line": ac["end_line"],
+            }
             new_chunks.append((i, ac["text"], h, json.dumps(meta)))
     else:
         # Fixed-size chunking path
@@ -200,7 +225,9 @@ def ingest_file(
         skipped = 0
         for i, chunk in enumerate(fixed_chunks):
             h = _content_hash(chunk)
-            existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
+            existing = conn.execute(
+                "SELECT id FROM chunks WHERE content_hash = ?", (h,)
+            ).fetchone()
             if existing:
                 skipped += 1
                 continue
@@ -215,7 +242,9 @@ def ingest_file(
 
     # Insert
     source_uri = str(path)
-    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(new_chunks, embeddings):
+    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(
+        new_chunks, embeddings
+    ):
         cursor = conn.execute(
             """INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata)
                VALUES (?, ?, ?, ?, ?, ?)""",
@@ -228,7 +257,11 @@ def ingest_file(
         )
 
     conn.commit()
-    return {"file": str(path), "chunks_added": len(new_chunks), "chunks_skipped": skipped}
+    return {
+        "file": str(path),
+        "chunks_added": len(new_chunks),
+        "chunks_skipped": skipped,
+    }
 
 
 def reingest_file(
@@ -256,7 +289,14 @@ def reingest_file(
     placeholders = ",".join("?" * len(old_ids))
 
     # --- FK cleanup ---
-    # 1. papers.abstract_chunk_id → SET NULL
+    # 1. papers.abstract_chunk_id → SET NULL (track affected papers for re-linking)
+    affected_paper_ids = [
+        r["id"]
+        for r in conn.execute(
+            f"SELECT id FROM papers WHERE abstract_chunk_id IN ({placeholders})",
+            old_ids,
+        ).fetchall()
+    ]
     conn.execute(
         f"UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({placeholders})",
         old_ids,
@@ -269,9 +309,7 @@ def reingest_file(
     )
 
     # 3. conclusions.source_chunk_ids — JSON array, remove deleted IDs
-    rows = conn.execute(
-        "SELECT id, source_chunk_ids FROM conclusions"
-    ).fetchall()
+    rows = conn.execute("SELECT id, source_chunk_ids FROM conclusions").fetchall()
     for row in rows:
         chunk_ids = json.loads(row["source_chunk_ids"])
         filtered = [cid for cid in chunk_ids if cid not in old_id_set]
@@ -324,15 +362,27 @@ def reingest_file(
     if ast_chunks:
         insert_items = []
         for i, ac in enumerate(ast_chunks):
-            meta = json.dumps({"name": ac["name"], "type": ac["type"],
-                               "start_line": ac["start_line"], "end_line": ac["end_line"]})
+            meta = json.dumps(
+                {
+                    "name": ac["name"],
+                    "type": ac["type"],
+                    "start_line": ac["start_line"],
+                    "end_line": ac["end_line"],
+                }
+            )
             insert_items.append((i, ac["text"], _content_hash(ac["text"]), meta))
     else:
         fixed_chunks = _chunk_text(text)
         if not fixed_chunks:
             conn.commit()
-            return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": 0}
-        insert_items = [(i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)]
+            return {
+                "file": source_uri,
+                "chunks_deleted": len(old_ids),
+                "chunks_added": 0,
+            }
+        insert_items = [
+            (i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)
+        ]
 
     if not insert_items:
         conn.commit()
@@ -341,7 +391,9 @@ def reingest_file(
     texts_to_embed = [item[1] for item in insert_items]
     embeddings = _embed_with_config(conn, texts_to_embed)
 
-    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(insert_items, embeddings):
+    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(
+        insert_items, embeddings
+    ):
         cursor = conn.execute(
             """INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata)
                VALUES (?, ?, ?, ?, ?, ?)""",
@@ -353,8 +405,25 @@ def reingest_file(
             (chunk_id, _serialize_f32(emb_vec), chunk_id),
         )
 
+    # --- Re-link papers whose abstract_chunk_id was nullified ---
+    if affected_paper_ids:
+        new_first = conn.execute(
+            "SELECT id FROM chunks WHERE source_uri = ? ORDER BY chunk_index LIMIT 1",
+            (source_uri,),
+        ).fetchone()
+        if new_first:
+            pp = ",".join("?" * len(affected_paper_ids))
+            conn.execute(
+                f"UPDATE papers SET abstract_chunk_id = ? WHERE id IN ({pp})",
+                [new_first["id"]] + affected_paper_ids,
+            )
+
     conn.commit()
-    return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": len(insert_items)}
+    return {
+        "file": source_uri,
+        "chunks_deleted": len(old_ids),
+        "chunks_added": len(insert_items),
+    }
 
 
 def ingest_url(
@@ -387,11 +456,23 @@ def ingest_url(
         extracted_title = metadata.title
 
     if not text.strip():
-        return {"url": url, "chunks_added": 0, "chunks_skipped": 0, "source_uri": url, "source_type": "web"}
+        return {
+            "url": url,
+            "chunks_added": 0,
+            "chunks_skipped": 0,
+            "source_uri": url,
+            "source_type": "web",
+        }
 
     chunks = _chunk_text(text)
     if not chunks:
-        return {"url": url, "chunks_added": 0, "chunks_skipped": 0, "source_uri": url, "source_type": "web"}
+        return {
+            "url": url,
+            "chunks_added": 0,
+            "chunks_skipped": 0,
+            "source_uri": url,
+            "source_type": "web",
+        }
 
     # Compute content hashes, skip duplicates
     new_chunks = []
@@ -399,14 +480,22 @@ def ingest_url(
     meta_json = json.dumps({"title": extracted_title} if extracted_title else {})
     for i, chunk in enumerate(chunks):
         h = _content_hash(chunk)
-        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
+        existing = conn.execute(
+            "SELECT id FROM chunks WHERE content_hash = ?", (h,)
+        ).fetchone()
         if existing:
             skipped += 1
             continue
         new_chunks.append((i, chunk, h))
 
     if not new_chunks:
-        return {"url": url, "chunks_added": 0, "chunks_skipped": skipped, "source_uri": url, "source_type": "web"}
+        return {
+            "url": url,
+            "chunks_added": 0,
+            "chunks_skipped": skipped,
+            "source_uri": url,
+            "source_type": "web",
+        }
 
     texts_to_embed = [c[1] for c in new_chunks]
     embeddings = _embed_with_config(conn, texts_to_embed)
