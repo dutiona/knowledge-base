@@ -489,7 +489,12 @@ def _store_resolved(
 
         # Collect all unique entities and their mentions — keyed by (canonical, type)
         entity_data = defaultdict(
-            lambda: {"type": None, "description": None, "mentions": []}
+            lambda: {
+                "type": None,
+                "description": None,
+                "description_chunk_id": None,
+                "mentions": [],
+            }
         )
         for extraction in map_results:
             for entity_type_plural in ("methods", "datasets"):
@@ -504,6 +509,9 @@ def _store_resolved(
                         entity_data[(canonical, etype)]["description"] = item[
                             "description"
                         ]
+                        entity_data[(canonical, etype)]["description_chunk_id"] = (
+                            item.get("chunk_id")
+                        )
                     for sf in item.get("surface_forms", [name]):
                         entity_data[(canonical, etype)]["mentions"].append(
                             {
@@ -548,13 +556,16 @@ def _store_resolved(
             first_chunk_id = next(
                 (m["chunk_id"] for m in data["mentions"] if m.get("chunk_id")), None
             )
+            # Prefer the chunk that provided the description for provenance
+            # consistency (#39); fall back to first-mention chunk.
+            chunk_id = data.get("description_chunk_id") or first_chunk_id
             if etype == "method":
                 result = record_method(
                     conn,
                     canonical,
                     paper_id,
                     data["description"],
-                    first_chunk_id,
+                    chunk_id,
                     commit=False,
                 )
                 method_map[canonical] = result["method_id"]
@@ -565,7 +576,7 @@ def _store_resolved(
                     canonical,
                     paper_id,
                     data["description"],
-                    first_chunk_id,
+                    chunk_id,
                     commit=False,
                 )
                 dataset_map[canonical] = result["dataset_id"]
