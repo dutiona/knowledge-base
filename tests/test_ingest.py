@@ -18,6 +18,7 @@ from research_index.papers import (
     get_relationships,
 )
 from research_index.conclusions import record_conclusion, get_conclusions
+from research_index.extraction import record_method, record_dataset, record_metric
 
 
 def _fake_embed(texts, model="nomic-embed-text", expected_dim=None):
@@ -300,6 +301,242 @@ def test_reingest_cleans_conclusion_chunk_refs(tmp_path):
     assert len(conclusions) == 1
     # The deleted chunk_id should be removed from source_chunk_ids
     assert chunk_id not in conclusions[0]["source_chunk_ids"]
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_reingest_relinks_method_by_name_search(tmp_path):
+    """After reingest, method.chunk_id should point to the new chunk containing the method name."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Create a multi-chunk document where "TransformerXL" appears in chunk 1 (not chunk 0)
+    # Each chunk needs to be large enough to be its own chunk
+    chunk0_text = "Introduction. " * 80  # ~1100 chars, no method name
+    chunk1_text = (
+        "We propose TransformerXL for sequence modeling. " * 30
+    )  # has the method name
+    md = tmp_path / "paper.md"
+    md.write_text(chunk0_text + chunk1_text)
+    ingest_file(conn, md)
+
+    # Verify we got multiple chunks
+    chunks = conn.execute(
+        "SELECT id, chunk_index, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+        (str(md.resolve()),),
+    ).fetchall()
+    assert len(chunks) >= 2, f"Expected >=2 chunks, got {len(chunks)}"
+
+    # Find the chunk that contains "TransformerXL"
+    method_chunk = next(c for c in chunks if "TransformerXL" in c["content"])
+    old_chunk_id = method_chunk["id"]
+
+    # Register a paper and a method linked to that chunk
+    paper = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))
+    record_method(conn, "TransformerXL", paper["paper_id"], "A method", old_chunk_id)
+
+    # Reingest with slightly different content but same method name still in a non-first chunk
+    chunk0_text_new = "Revised introduction. " * 80
+    chunk1_text_new = "We introduce TransformerXL as an improved architecture. " * 30
+    md.write_text(chunk0_text_new + chunk1_text_new)
+    reingest_file(conn, md)
+
+    # Method should be re-linked to the new chunk containing "TransformerXL"
+    row = conn.execute(
+        "SELECT chunk_id FROM methods WHERE paper_id = ? AND name = 'TransformerXL'",
+        (paper["paper_id"],),
+    ).fetchone()
+    assert row["chunk_id"] is not None, (
+        "method chunk_id should not be None after reingest"
+    )
+    assert row["chunk_id"] != old_chunk_id, "Should point to new chunk, not old one"
+
+    # Verify the new chunk contains the method name
+    new_chunk = conn.execute(
+        "SELECT content FROM chunks WHERE id = ?", (row["chunk_id"],)
+    ).fetchone()
+    assert "TransformerXL" in new_chunk["content"]
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_reingest_relinks_dataset_by_name_search(tmp_path):
+    """After reingest, dataset.chunk_id should point to the new chunk containing the dataset name."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    chunk0_text = "Background section. " * 80
+    chunk1_text = "We evaluate on ImageNet-1K benchmark dataset. " * 30
+    md = tmp_path / "paper.md"
+    md.write_text(chunk0_text + chunk1_text)
+    ingest_file(conn, md)
+
+    chunks = conn.execute(
+        "SELECT id, chunk_index, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+        (str(md.resolve()),),
+    ).fetchall()
+    assert len(chunks) >= 2
+
+    dataset_chunk = next(c for c in chunks if "ImageNet-1K" in c["content"])
+    old_chunk_id = dataset_chunk["id"]
+
+    paper = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))
+    record_dataset(conn, "ImageNet-1K", paper["paper_id"], "A dataset", old_chunk_id)
+
+    chunk0_new = "Updated background. " * 80
+    chunk1_new = "Results on ImageNet-1K show improvements. " * 30
+    md.write_text(chunk0_new + chunk1_new)
+    reingest_file(conn, md)
+
+    row = conn.execute(
+        "SELECT chunk_id FROM datasets WHERE paper_id = ? AND name = 'ImageNet-1K'",
+        (paper["paper_id"],),
+    ).fetchone()
+    assert row["chunk_id"] is not None, (
+        "dataset chunk_id should not be None after reingest"
+    )
+    assert row["chunk_id"] != old_chunk_id
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_reingest_relinks_metric_by_name_search(tmp_path):
+    """After reingest, metric.chunk_id should point to the new chunk containing the metric name."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    chunk0_text = "Introduction to our work. " * 80
+    chunk1_text = "We achieve top-1 accuracy of 85.3% on the benchmark. " * 30
+    md = tmp_path / "paper.md"
+    md.write_text(chunk0_text + chunk1_text)
+    ingest_file(conn, md)
+
+    chunks = conn.execute(
+        "SELECT id, chunk_index, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+        (str(md.resolve()),),
+    ).fetchall()
+    assert len(chunks) >= 2
+
+    metric_chunk = next(c for c in chunks if "accuracy" in c["content"])
+    old_chunk_id = metric_chunk["id"]
+
+    paper = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))
+    record_metric(conn, "accuracy", 85.3, paper["paper_id"], chunk_id=old_chunk_id)
+
+    chunk0_new = "Revised introduction. " * 80
+    chunk1_new = "Our model achieves accuracy of 87.1% surpassing prior work. " * 30
+    md.write_text(chunk0_new + chunk1_new)
+    reingest_file(conn, md)
+
+    row = conn.execute(
+        "SELECT chunk_id FROM metrics WHERE paper_id = ? AND name = 'accuracy'",
+        (paper["paper_id"],),
+    ).fetchone()
+    assert row["chunk_id"] is not None, (
+        "metric chunk_id should not be None after reingest"
+    )
+    assert row["chunk_id"] != old_chunk_id
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_reingest_relinks_entity_at_chunk_index_zero(tmp_path):
+    """Entities linked to chunk_index=0 should be re-linked to the new first chunk."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "paper.md"
+    md.write_text("We use BERT for text classification.\n")
+    ingest_file(conn, md)
+
+    first_chunk = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ? AND chunk_index = 0",
+        (str(md.resolve()),),
+    ).fetchone()
+    old_chunk_id = first_chunk["id"]
+
+    paper = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))
+    record_method(conn, "BERT", paper["paper_id"], "A method", old_chunk_id)
+
+    md.write_text("Updated: we fine-tune BERT on downstream tasks.\n")
+    reingest_file(conn, md)
+
+    row = conn.execute(
+        "SELECT chunk_id FROM methods WHERE paper_id = ? AND name = 'BERT'",
+        (paper["paper_id"],),
+    ).fetchone()
+    assert row["chunk_id"] is not None, (
+        "method chunk_id should not be None after reingest"
+    )
+    assert row["chunk_id"] != old_chunk_id
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_reingest_leaves_null_when_no_name_match(tmp_path):
+    """If the entity name doesn't appear in any new chunk, chunk_id stays NULL."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "paper.md"
+    md.write_text("We use SpecialMethod for experiments.\n")
+    ingest_file(conn, md)
+
+    chunk = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ? LIMIT 1",
+        (str(md.resolve()),),
+    ).fetchone()
+
+    paper = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))
+    record_method(conn, "SpecialMethod", paper["paper_id"], "A method", chunk["id"])
+
+    # Reingest with content that does NOT contain "SpecialMethod"
+    md.write_text("Completely different content with no method references.\n")
+    reingest_file(conn, md)
+
+    row = conn.execute(
+        "SELECT chunk_id FROM methods WHERE paper_id = ? AND name = 'SpecialMethod'",
+        (paper["paper_id"],),
+    ).fetchone()
+    assert row["chunk_id"] is None, (
+        "Should remain NULL when name not found in new chunks"
+    )
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_reingest_does_not_relink_unrelated_entities(tmp_path):
+    """Entities from other papers should not be affected by reingest."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md_a = tmp_path / "a.md"
+    md_a.write_text("Paper A uses MethodA for analysis.\n")
+    ingest_file(conn, md_a)
+
+    md_b = tmp_path / "b.md"
+    md_b.write_text("Paper B uses MethodB for testing.\n")
+    ingest_file(conn, md_b)
+
+    chunk_b = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ? LIMIT 1",
+        (str(md_b.resolve()),),
+    ).fetchone()
+
+    paper_b = register_paper(conn, "Paper B", source_uri=str(md_b.resolve()))
+    record_method(conn, "MethodB", paper_b["paper_id"], "B's method", chunk_b["id"])
+    old_b_chunk_id = chunk_b["id"]
+
+    # Reingest only file A
+    md_a.write_text("Updated paper A content.\n")
+    reingest_file(conn, md_a)
+
+    # Paper B's method should be untouched
+    row = conn.execute(
+        "SELECT chunk_id FROM methods WHERE paper_id = ? AND name = 'MethodB'",
+        (paper_b["paper_id"],),
+    ).fetchone()
+    assert row["chunk_id"] == old_b_chunk_id, "Unrelated entity should not be affected"
 
 
 @patch("research_index.ingest.embed", _fake_embed)
