@@ -1537,7 +1537,10 @@ def test_map_reduce_logs_revised_eta_every_5_chunks(tmp_path, caplog):
             _extract_map_reduce(conn, p, chunks)
 
     eta_logs = [m for m in caplog.messages if "revised ETA" in m]
+    # ETA logged every 5 chunks + on the last chunk (if not already a multiple of 5)
     expected_eta_count = len(chunks) // 5
+    if len(chunks) % 5 != 0:
+        expected_eta_count += 1  # final chunk also logs ETA
     assert len(eta_logs) == expected_eta_count
 
 

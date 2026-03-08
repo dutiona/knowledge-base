@@ -829,7 +829,7 @@ def _extract_map_reduce(
                 elapsed,
             )
 
-        if (i + 1) % 5 == 0:
+        if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
             avg = total_elapsed / (i + 1)
             remaining = avg * (len(chunks) - i - 1)
             logger.info(
