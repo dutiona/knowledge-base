@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 import sqlite3
 import struct
 from pathlib import Path
@@ -356,16 +357,22 @@ def reingest_file(
                 (json.dumps(filtered), row["id"]),
             )
 
-    # 4. methods/datasets/metrics.chunk_id → SET NULL
-    _batched_execute(
-        conn, "UPDATE methods SET chunk_id = NULL WHERE chunk_id IN ({ph})", old_ids
-    )
-    _batched_execute(
-        conn, "UPDATE datasets SET chunk_id = NULL WHERE chunk_id IN ({ph})", old_ids
-    )
-    _batched_execute(
-        conn, "UPDATE metrics SET chunk_id = NULL WHERE chunk_id IN ({ph})", old_ids
-    )
+    # 4. methods/datasets/metrics.chunk_id → SET NULL (track for re-linking)
+    affected_entities: dict[str, list[dict]] = {}
+    for table in ("methods", "datasets", "metrics"):
+        affected_entities[table] = [
+            {"id": r["id"], "name": r["name"], "old_chunk_id": r["chunk_id"]}
+            for r in _batched_select(
+                conn,
+                f"SELECT id, name, chunk_id FROM {table} WHERE chunk_id IN ({{ph}})",
+                old_ids,
+            )
+        ]
+        _batched_execute(
+            conn,
+            f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",
+            old_ids,
+        )
 
     # --- Delete old chunks (triggers handle FTS cleanup) ---
     # Delete from vec table first (no trigger)
@@ -449,6 +456,25 @@ def reingest_file(
                 affected_paper_ids,
                 extra_params=[new_first["id"]],
             )
+
+    # --- Re-link methods/datasets/metrics by name search ---
+    new_chunks = conn.execute(
+        "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+        (source_uri,),
+    ).fetchall()
+    if new_chunks:
+        for table, affected in affected_entities.items():
+            for entity in affected:
+                for nc in new_chunks:
+                    if re.search(
+                        r"\b" + re.escape(entity["name"]) + r"\b",
+                        nc["content"],
+                    ):
+                        conn.execute(
+                            f"UPDATE {table} SET chunk_id = ? WHERE id = ?",
+                            (nc["id"], entity["id"]),
+                        )
+                        break
 
     conn.commit()
     return {
