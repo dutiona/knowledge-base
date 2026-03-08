@@ -374,6 +374,13 @@ def reingest_file(
             old_ids,
         )
 
+    # 5. entity_mentions.chunk_id — NOT NULL FK, must delete (re-created by extraction)
+    _batched_execute(
+        conn,
+        "DELETE FROM entity_mentions WHERE chunk_id IN ({ph})",
+        old_ids,
+    )
+
     # --- Delete old chunks (triggers handle FTS cleanup) ---
     # Delete from vec table first (no trigger)
     _batched_execute(conn, "DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_ids)
