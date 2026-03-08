@@ -956,7 +956,6 @@ def test_store_resolved_passes_chunk_id_to_methods_and_datasets(tmp_path, table)
     assert row["chunk_id"] == chunk_id
 
 
-@patch("research_index.ingest.embed", _fake_embed)
 @pytest.mark.parametrize(
     "table,entity_type", [("methods", "methods"), ("datasets", "datasets")]
 )
@@ -970,23 +969,23 @@ def test_store_resolved_description_and_chunk_id_same_provenance(
     that supplied the description — not the first-mention chunk.
     """
     conn = _setup(tmp_path)
-    md = tmp_path / "paper.md"
-    md.write_text("chunk one content\n\nchunk two with description\n")
-    ingest_file(conn, md)
-    p = register_paper(conn, "Provenance Test", source_uri=str(md.resolve()))[
-        "paper_id"
-    ]
+    source_uri = str((tmp_path / "paper.md").resolve())
+    p = register_paper(conn, "Provenance Test", source_uri=source_uri)["paper_id"]
 
+    # Create two chunks directly — this test targets _store_resolved,
+    # not the chunking logic.
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES ('hash1', 'chunk one', 'markdown', ?, 0, '{}')",
+        (source_uri,),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES ('hash2', 'chunk two', 'markdown', ?, 1, '{}')",
+        (source_uri,),
+    )
+    conn.commit()
     chunks = conn.execute("SELECT id FROM chunks ORDER BY chunk_index").fetchall()
-    # Need at least 2 chunks; if only 1, insert a second manually
-    if len(chunks) < 2:
-        conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
-            "VALUES ('hash2', 'chunk two', 'markdown', ?, 1, '{}')",
-            (str(md.resolve()),),
-        )
-        conn.commit()
-        chunks = conn.execute("SELECT id FROM chunks ORDER BY chunk_index").fetchall()
     chunk_1 = chunks[0]["id"]
     chunk_2 = chunks[1]["id"]
 
