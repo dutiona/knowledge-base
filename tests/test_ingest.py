@@ -910,3 +910,100 @@ def test_chunk_python_ast_syntax_error():
 def test_chunk_python_ast_empty():
     chunks = _chunk_python_ast("")
     assert chunks == []
+
+
+# ---------- entity_mentions FK cleanup on reingest (#47) ----------
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_reingest_deletes_entity_mentions(tmp_path):
+    """reingest_file must delete entity_mentions referencing old chunks."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "entities.md"
+    md.write_text("Transformers use self-attention mechanisms.\n")
+    ingest_file(conn, md)
+    chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    # Create entity + mention pointing at the chunk
+    paper_id = register_paper(conn, "Test Paper")["paper_id"]
+    conn.execute(
+        "INSERT INTO entities (canonical_name, entity_type, paper_id) VALUES (?, ?, ?)",
+        ("transformer", "method", paper_id),
+    )
+    entity_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
+        (entity_id, "Transformers", chunk_id),
+    )
+    conn.commit()
+
+    # Reingest — should NOT raise FK violation
+    md.write_text("Updated content about attention.\n")
+    reingest_file(conn, md)
+
+    # entity_mentions referencing old chunk should be gone
+    remaining = conn.execute(
+        "SELECT COUNT(*) as cnt FROM entity_mentions WHERE entity_id = ?",
+        (entity_id,),
+    ).fetchone()["cnt"]
+    assert remaining == 0
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_reingest_preserves_unrelated_entity_mentions(tmp_path):
+    """reingest_file must not delete entity_mentions for other source files."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Ingest two files
+    md1 = tmp_path / "file1.md"
+    md1.write_text("Content about BERT.\n")
+    ingest_file(conn, md1)
+    chunk_id_1 = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (str(md1),)
+    ).fetchone()["id"]
+
+    md2 = tmp_path / "file2.md"
+    md2.write_text("Content about GPT.\n")
+    ingest_file(conn, md2)
+    chunk_id_2 = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (str(md2),)
+    ).fetchone()["id"]
+
+    # Create entities + mentions for both chunks
+    paper_id = register_paper(conn, "Test Paper")["paper_id"]
+    conn.execute(
+        "INSERT INTO entities (canonical_name, entity_type, paper_id) VALUES (?, ?, ?)",
+        ("bert", "method", paper_id),
+    )
+    eid1 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
+        (eid1, "BERT", chunk_id_1),
+    )
+
+    conn.execute(
+        "INSERT INTO entities (canonical_name, entity_type, paper_id) VALUES (?, ?, ?)",
+        ("gpt", "method", paper_id),
+    )
+    eid2 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
+        (eid2, "GPT", chunk_id_2),
+    )
+    conn.commit()
+
+    # Reingest only file1
+    md1.write_text("Updated BERT content.\n")
+    reingest_file(conn, md1)
+
+    # file2's entity_mentions should be untouched
+    remaining = conn.execute(
+        "SELECT COUNT(*) as cnt FROM entity_mentions WHERE entity_id = ?",
+        (eid2,),
+    ).fetchone()["cnt"]
+    assert remaining == 1
