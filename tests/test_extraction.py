@@ -269,6 +269,41 @@ def test_get_llm_config_custom(tmp_path):
     assert cfg["model"] == "qwen/qwen3.5-35b-a3b"
 
 
+@pytest.mark.parametrize(
+    "input_url,expected",
+    [
+        ("http://host:1234", "http://host:1234"),
+        ("http://host:1234/v1", "http://host:1234"),
+        ("http://host:1234/v1/", "http://host:1234"),
+        ("https://api.openai.com/v1", "https://api.openai.com"),
+        ("http://host:1234/", "http://host:1234"),
+        ("http://host/v1beta", "http://host/v1beta"),  # not stripped
+    ],
+)
+def test_get_llm_config_strips_v1(tmp_path, input_url, expected):
+    conn = _setup(tmp_path)
+    conn.execute("UPDATE config SET value = 'openai_compat' WHERE key = 'llm_provider'")
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', ?)",
+        (input_url,),
+    )
+    conn.commit()
+    cfg = _get_llm_config(conn)
+    assert cfg["base_url"] == expected
+
+
+def test_get_llm_config_ollama_preserves_v1(tmp_path):
+    """Ollama provider should NOT strip /v1 (proxy path-prefix scenario)."""
+    conn = _setup(tmp_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', 'http://proxy:8080/v1')"
+    )
+    conn.commit()
+    cfg = _get_llm_config(conn)
+    assert cfg["provider"] == "ollama"
+    assert cfg["base_url"] == "http://proxy:8080/v1"
+
+
 def test_map_extract_single_chunk(tmp_path):
     conn = _setup(tmp_path)
 
