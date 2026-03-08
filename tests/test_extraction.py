@@ -1,6 +1,7 @@
 """Tests for structured extraction (methods, datasets, metrics)."""
 
 import json
+import logging
 from unittest.mock import patch
 
 from research_index.db import EMBED_DIM, get_connection, init_schema
@@ -838,8 +839,6 @@ def test_store_resolved_skips_group_missing_canonical(tmp_path, caplog):
         ],
     }
 
-    import logging
-
     with caplog.at_level(logging.WARNING, logger="research_index.extraction"):
         result = _store_resolved(conn, p, map_results, resolution)
 
@@ -861,8 +860,6 @@ def test_store_resolved_skips_group_with_empty_canonical(tmp_path, caplog):
             {"canonical": "", "type": "method", "members": ["Ghost"]},
         ],
     }
-
-    import logging
 
     with caplog.at_level(logging.WARNING, logger="research_index.extraction"):
         result = _store_resolved(conn, p, map_results, resolution)
@@ -887,8 +884,6 @@ def test_store_resolved_all_groups_malformed(tmp_path, caplog):
             {},
         ],
     }
-
-    import logging
 
     with caplog.at_level(logging.WARNING, logger="research_index.extraction"):
         result = _store_resolved(conn, p, map_results, resolution)
