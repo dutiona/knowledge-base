@@ -778,6 +778,101 @@ def test_extract_figures_idempotent(mock_vision, mock_embed, tmp_path):
 
 @patch("research_index.vision._embed_with_config")
 @patch("research_index.vision._vision_call")
+def test_extract_figures_idempotent_with_fk_references(
+    mock_vision, mock_embed, tmp_path
+):
+    """Re-extracting figures when entity_mentions/methods/datasets reference
+    figure chunk IDs must not raise FOREIGN KEY constraint error (#53)."""
+    from research_index.vision import extract_figures
+
+    mock_figures = [
+        {
+            "figure_type": "diagram",
+            "description": "Architecture overview",
+            "title": "Fig 1",
+            "entities_mentioned": ["BERT"],
+        }
+    ]
+    mock_vision.return_value = mock_figures
+    mock_embed.return_value = [[0.1] * 768]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
+
+    # First extraction — creates figure chunks
+    result1 = extract_figures(conn, paper_id=paper_id, pages=[0])
+    assert result1["chunks_created"] == 1
+
+    fig_chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()["id"]
+
+    # Simulate extract_structure creating FK references to figure chunks:
+    # 1. entity_mentions referencing the figure chunk
+    conn.execute(
+        "INSERT INTO entities (canonical_name, entity_type, paper_id) "
+        "VALUES ('BERT', 'method', ?)",
+        (paper_id,),
+    )
+    entity_id = conn.execute(
+        "SELECT id FROM entities WHERE canonical_name = 'BERT'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) "
+        "VALUES (?, 'BERT', ?)",
+        (entity_id, fig_chunk_id),
+    )
+
+    # 2. methods referencing the figure chunk
+    conn.execute(
+        "INSERT INTO methods (name, paper_id, chunk_id) VALUES ('BERT', ?, ?)",
+        (paper_id, fig_chunk_id),
+    )
+
+    # 3. datasets referencing the figure chunk
+    conn.execute(
+        "INSERT INTO datasets (name, paper_id, chunk_id) VALUES ('ImageNet', ?, ?)",
+        (paper_id, fig_chunk_id),
+    )
+    conn.commit()
+
+    # Re-extract — this triggers chunk deletion. Without FK cleanup, this
+    # raises sqlite3.IntegrityError: FOREIGN KEY constraint failed
+    mock_figures_2 = [
+        {
+            "figure_type": "diagram",
+            "description": "Updated architecture overview v2",
+            "title": "Fig 1 updated",
+            "entities_mentioned": ["BERT"],
+        }
+    ]
+    mock_vision.return_value = mock_figures_2
+    result2 = extract_figures(conn, paper_id=paper_id, pages=[0])
+    assert result2["chunks_created"] == 1
+
+    # entity_mentions referencing old chunk should be deleted
+    em_count = conn.execute(
+        "SELECT COUNT(*) as c FROM entity_mentions WHERE chunk_id = ?",
+        (fig_chunk_id,),
+    ).fetchone()["c"]
+    assert em_count == 0
+
+    # methods.chunk_id should be NULLed out (not deleted — method still exists)
+    method = conn.execute(
+        "SELECT chunk_id FROM methods WHERE name = 'BERT' AND paper_id = ?",
+        (paper_id,),
+    ).fetchone()
+    assert method["chunk_id"] is None
+
+    # datasets.chunk_id should be NULLed out
+    dataset = conn.execute(
+        "SELECT chunk_id FROM datasets WHERE name = 'ImageNet' AND paper_id = ?",
+        (paper_id,),
+    ).fetchone()
+    assert dataset["chunk_id"] is None
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
 def test_extract_figures_pages_hint(mock_vision, mock_embed, tmp_path):
     """Passing specific pages processes only those pages."""
     from research_index.vision import extract_figures
