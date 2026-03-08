@@ -9,6 +9,7 @@ import pytest
 
 from research_index.extraction import (
     _clear_previous_extraction,
+    _extract_single_pass,
     _get_llm_config,
     _llm_call,
     _map_extract,
@@ -1057,3 +1058,88 @@ def test_store_resolved_all_groups_malformed(tmp_path, caplog):
     # All 3 groups should have triggered warnings
     canonical_warnings = [m for m in caplog.messages if "missing 'canonical'" in m]
     assert len(canonical_warnings) == 3
+
+
+# --- rollback guard tests ---
+
+
+def test_store_resolved_rollback_on_error(tmp_path):
+    """Verify _store_resolved rolls back all writes when an exception occurs mid-transaction."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "doc.md"
+    md.write_text("# Test\nSome content")
+    with patch("research_index.ingest.embed", _fake_embed):
+        ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    # Pre-populate a method so we can verify rollback restores clean state
+    record_method(conn, "PreExisting", p, "should survive")
+
+    map_results = [
+        {
+            "methods": [{"name": "MethodA", "description": "desc"}],
+            "datasets": [{"name": "DatasetA", "description": "desc"}],
+            "metrics": [
+                {
+                    "metric": "F1",
+                    "value": "0.9",
+                    "method": "MethodA",
+                    "dataset": "DatasetA",
+                }
+            ],
+        }
+    ]
+    resolution = {"groups": []}
+
+    # Patch record_metric to raise after methods/datasets have been written
+    with patch(
+        "research_index.extraction.record_metric",
+        side_effect=RuntimeError("simulated failure"),
+    ):
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            _store_resolved(conn, p, map_results, resolution)
+
+    # Verify rollback: no new methods or datasets from the failed transaction
+    methods = get_methods(conn, p)
+    method_names = [m["name"] for m in methods]
+    assert "MethodA" not in method_names
+    # _clear_previous_extraction deletes PreExisting, but rollback should restore it
+    assert "PreExisting" in method_names
+
+    datasets = get_datasets(conn, p)
+    assert len([d for d in datasets if d["name"] == "DatasetA"]) == 0
+
+
+def test_extract_single_pass_rollback_on_error(tmp_path):
+    """Verify _extract_single_pass rolls back all writes when an exception occurs mid-transaction."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "doc.md"
+    md.write_text("# Test\nSome content")
+    with patch("research_index.ingest.embed", _fake_embed):
+        ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    record_method(conn, "PreExisting", p, "should survive")
+
+    chunks = [{"id": 1, "content": "some text"}]
+
+    llm_response = json.dumps(
+        {
+            "methods": [{"name": "NewMethod", "description": "desc"}],
+            "datasets": [],
+            "metrics": [{"metric": "Acc", "value": "0.95", "method": "NewMethod"}],
+        }
+    )
+
+    with patch("research_index.extraction._llm_call", return_value=llm_response):
+        with patch(
+            "research_index.extraction.record_metric",
+            side_effect=RuntimeError("simulated failure"),
+        ):
+            with pytest.raises(RuntimeError, match="simulated failure"):
+                _extract_single_pass(conn, p, chunks)
+
+    methods = get_methods(conn, p)
+    method_names = [m["name"] for m in methods]
+    assert "NewMethod" not in method_names
+    assert "PreExisting" in method_names
