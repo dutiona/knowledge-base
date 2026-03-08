@@ -4,8 +4,19 @@ import json
 from unittest.mock import patch, MagicMock
 
 from research_index.db import EMBED_DIM, get_connection, init_schema
-from research_index.ingest import ingest_file, reingest_file, ingest_url, _chunk_text, _chunk_python_ast
-from research_index.papers import register_paper, get_paper, add_relationship, get_relationships
+from research_index.ingest import (
+    ingest_file,
+    reingest_file,
+    ingest_url,
+    _chunk_text,
+    _chunk_python_ast,
+)
+from research_index.papers import (
+    register_paper,
+    get_paper,
+    add_relationship,
+    get_relationships,
+)
 from research_index.conclusions import record_conclusion, get_conclusions
 
 
@@ -40,7 +51,9 @@ def test_ingest_markdown_file(tmp_path):
     init_schema(conn)
 
     md_file = tmp_path / "test.md"
-    md_file.write_text("# Test\n\nSome content about transformers and attention mechanisms.\n")
+    md_file.write_text(
+        "# Test\n\nSome content about transformers and attention mechanisms.\n"
+    )
 
     result = ingest_file(conn, md_file)
     assert result["chunks_added"] >= 1
@@ -94,9 +107,10 @@ def test_reingest_replaces_chunks(tmp_path):
     assert result["chunks_added"] >= 1
 
     # Old content gone from chunks table
-    remaining = conn.execute("SELECT id FROM chunks WHERE id IN ({})".format(
-        ",".join("?" * len(old_ids))
-    ), old_ids).fetchall()
+    remaining = conn.execute(
+        "SELECT id FROM chunks WHERE id IN ({})".format(",".join("?" * len(old_ids))),
+        old_ids,
+    ).fetchall()
     assert len(remaining) == 0
 
     # New content present
@@ -152,7 +166,8 @@ def test_reingest_cleans_vec_table(tmp_path):
 
 
 @patch("research_index.ingest.embed", _fake_embed)
-def test_reingest_nullifies_paper_abstract_chunk(tmp_path):
+def test_reingest_relinks_paper_abstract_chunk(tmp_path):
+    """After reingest, abstract_chunk_id should point to the new first chunk."""
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
@@ -162,15 +177,84 @@ def test_reingest_nullifies_paper_abstract_chunk(tmp_path):
     ingest_file(conn, md)
 
     paper = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))
-    assert paper["abstract_chunk_id"] is not None
+    old_chunk_id = paper["abstract_chunk_id"]
+    assert old_chunk_id is not None
 
     md.write_text("Completely rewritten paper.\n")
     reingest_file(conn, md)
 
-    # Paper should still exist but abstract_chunk_id should be NULL
+    # Paper should still exist with abstract_chunk_id pointing to the NEW first chunk
     papers = get_paper(conn, paper_id=paper["paper_id"])
     assert len(papers) == 1
-    assert papers[0]["abstract_chunk_id"] is None
+    new_chunk_id = papers[0]["abstract_chunk_id"]
+    assert new_chunk_id is not None, (
+        "abstract_chunk_id should not be None after reingest"
+    )
+    assert new_chunk_id != old_chunk_id, "Should point to new chunk, not old one"
+
+    # Verify the new chunk actually exists and belongs to the same source_uri
+    chunk = conn.execute(
+        "SELECT * FROM chunks WHERE id = ?", (new_chunk_id,)
+    ).fetchone()
+    assert chunk is not None
+    assert chunk["source_uri"] == str(md.resolve())
+    assert chunk["chunk_index"] == 0
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_reingest_relinks_multiple_papers_same_source(tmp_path):
+    """Multiple papers linked to same source should all get relinked."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "paper.md"
+    md.write_text("Shared abstract content.\n")
+    ingest_file(conn, md)
+
+    p1 = register_paper(conn, "Paper A", source_uri=str(md.resolve()))
+    p2 = register_paper(conn, "Paper B", source_uri=str(md.resolve()))
+    assert p1["abstract_chunk_id"] is not None
+    assert p2["abstract_chunk_id"] is not None
+
+    md.write_text("Updated shared content.\n")
+    reingest_file(conn, md)
+
+    papers_a = get_paper(conn, paper_id=p1["paper_id"])
+    papers_b = get_paper(conn, paper_id=p2["paper_id"])
+    assert papers_a[0]["abstract_chunk_id"] is not None
+    assert papers_b[0]["abstract_chunk_id"] is not None
+
+    # Both should point to the same new first chunk
+    assert papers_a[0]["abstract_chunk_id"] == papers_b[0]["abstract_chunk_id"]
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_reingest_does_not_relink_unrelated_papers(tmp_path):
+    """Papers linked to a different source should not be affected."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md_a = tmp_path / "a.md"
+    md_a.write_text("Content A.\n")
+    ingest_file(conn, md_a)
+
+    md_b = tmp_path / "b.md"
+    md_b.write_text("Content B.\n")
+    ingest_file(conn, md_b)
+
+    paper_a = register_paper(conn, "Paper A", source_uri=str(md_a.resolve()))
+    paper_b = register_paper(conn, "Paper B", source_uri=str(md_b.resolve()))
+    old_b_chunk = paper_b["abstract_chunk_id"]
+
+    # Reingest only file A
+    md_a.write_text("Updated A.\n")
+    reingest_file(conn, md_a)
+
+    # Paper B should be untouched
+    papers_b = get_paper(conn, paper_id=paper_b["paper_id"])
+    assert papers_b[0]["abstract_chunk_id"] == old_b_chunk
 
 
 @patch("research_index.ingest.embed", _fake_embed)
@@ -327,6 +411,7 @@ def test_ingest_url_http_error(tmp_path):
 
     def _mock_get_error(url, **kwargs):
         import httpx
+
         raise httpx.HTTPError("Connection refused")
 
     with patch("research_index.ingest.httpx.get", _mock_get_error):
@@ -446,7 +531,9 @@ def test_ingest_python_file_uses_ast(tmp_path):
     assert result["chunks_added"] >= 3
 
     # Check metadata is stored
-    rows = conn.execute("SELECT metadata FROM chunks WHERE source_type = 'code'").fetchall()
+    rows = conn.execute(
+        "SELECT metadata FROM chunks WHERE source_type = 'code'"
+    ).fetchall()
     for row in rows:
         meta = json.loads(row["metadata"])
         assert "name" in meta
