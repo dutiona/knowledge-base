@@ -378,11 +378,11 @@ def _map_extract(
         result = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ValueError(f"LLM returned invalid JSON for chunk {chunk_id}: {e}") from e
-    for item in result.get("methods", []):
+    for item in result.get("methods") or []:
         item["chunk_id"] = chunk_id
-    for item in result.get("datasets", []):
+    for item in result.get("datasets") or []:
         item["chunk_id"] = chunk_id
-    for item in result.get("metrics", []):
+    for item in result.get("metrics") or []:
         item["chunk_id"] = chunk_id
     return result
 
@@ -393,8 +393,8 @@ def _collect_entity_mentions(all_extractions: list[dict]) -> list[dict]:
     mentions = []
     for extraction in all_extractions:
         for entity_type in ("methods", "datasets"):
-            for item in extraction.get(entity_type, []):
-                name = item.get("name", "").strip()
+            for item in extraction.get(entity_type) or []:
+                name = (item.get("name") or "").strip()
                 if not name:
                     continue
                 key = (name.lower(), entity_type.rstrip("s"))
@@ -404,17 +404,17 @@ def _collect_entity_mentions(all_extractions: list[dict]) -> list[dict]:
                         {
                             "name": name,
                             "type": entity_type.rstrip("s"),
-                            "surface_forms": item.get("surface_forms", [name]),
+                            "surface_forms": item.get("surface_forms") or [name],
                             "chunk_id": item.get("chunk_id"),
-                            "description": item.get("description", ""),
+                            "description": item.get("description") or "",
                         }
                     )
                 else:
                     for m in mentions:
-                        if m["name"].lower() == item["name"].lower() and m[
+                        if m["name"].lower() == name.lower() and m[
                             "type"
                         ] == entity_type.rstrip("s"):
-                            for sf in item.get("surface_forms", []):
+                            for sf in item.get("surface_forms") or []:
                                 if sf not in m["surface_forms"]:
                                     m["surface_forms"].append(sf)
                             break
@@ -476,7 +476,7 @@ def _store_resolved(
 
         # Build canonical name lookup from resolution groups — keyed by (name, type)
         surface_to_canonical = {}
-        for group in resolution.get("groups", []):
+        for group in resolution.get("groups") or []:
             canon = group.get("canonical")
             if not canon:
                 logger.warning(
@@ -484,7 +484,7 @@ def _store_resolved(
                 )
                 continue
             etype = group.get("type", "method")
-            for member in group.get("members", []):
+            for member in group.get("members") or []:
                 surface_to_canonical[(member.lower(), etype)] = canon
 
         # Collect all unique entities and their mentions — keyed by (canonical, type)
@@ -499,8 +499,8 @@ def _store_resolved(
         for extraction in map_results:
             for entity_type_plural in ("methods", "datasets"):
                 etype = entity_type_plural.rstrip("s")
-                for item in extraction.get(entity_type_plural, []):
-                    name = item.get("name", "").strip()
+                for item in extraction.get(entity_type_plural) or []:
+                    name = (item.get("name") or "").strip()
                     if not name:
                         continue
                     canonical = surface_to_canonical.get((name.lower(), etype), name)
@@ -512,7 +512,7 @@ def _store_resolved(
                         entity_data[(canonical, etype)]["description_chunk_id"] = (
                             item.get("chunk_id")
                         )
-                    for sf in item.get("surface_forms", [name]):
+                    for sf in item.get("surface_forms") or [name]:
                         entity_data[(canonical, etype)]["mentions"].append(
                             {
                                 "surface_form": sf,
@@ -584,10 +584,10 @@ def _store_resolved(
 
         # Map surface forms to method/dataset IDs for metric attribution
         canonical_to_members: dict[str, list[str]] = {}
-        for group in resolution.get("groups", []):
+        for group in resolution.get("groups") or []:
             canon = group.get("canonical")
             if canon:
-                canonical_to_members[canon] = group.get("members", [])
+                canonical_to_members[canon] = group.get("members") or []
 
         for canonical, mid in list(method_map.items()):
             for member in canonical_to_members.get(canonical, []):
@@ -599,8 +599,8 @@ def _store_resolved(
         # Write metrics
         metrics_added = 0
         for extraction in map_results:
-            for met in extraction.get("metrics", []):
-                metric_name = met.get("metric", "").strip()
+            for met in extraction.get("metrics") or []:
+                metric_name = (met.get("metric") or "").strip()
                 value = met.get("value")
                 if not metric_name or value is None:
                     continue
@@ -608,8 +608,8 @@ def _store_resolved(
                     value = float(value)
                 except (ValueError, TypeError):
                     continue
-                method_name = met.get("method", "")
-                dataset_name = met.get("dataset", "")
+                method_name = met.get("method") or ""
+                dataset_name = met.get("dataset") or ""
                 # Try both method and dataset lookups for canonical resolution
                 canonical_method = surface_to_canonical.get(
                     (method_name.lower(), "method"), method_name
@@ -692,8 +692,8 @@ def _extract_single_pass(
 
         method_map = {}
         methods_added = 0
-        for m in extracted.get("methods", []):
-            name = m.get("name", "").strip()
+        for m in extracted.get("methods") or []:
+            name = (m.get("name") or "").strip()
             if name:
                 result = record_method(
                     conn,
@@ -722,8 +722,8 @@ def _extract_single_pass(
 
         dataset_map = {}
         datasets_added = 0
-        for d in extracted.get("datasets", []):
-            name = d.get("name", "").strip()
+        for d in extracted.get("datasets") or []:
+            name = (d.get("name") or "").strip()
             if name:
                 result = record_dataset(
                     conn,
@@ -750,16 +750,16 @@ def _extract_single_pass(
                     )
 
         metrics_added = 0
-        for met in extracted.get("metrics", []):
-            metric_name = met.get("metric", "").strip()
+        for met in extracted.get("metrics") or []:
+            metric_name = (met.get("metric") or "").strip()
             value = met.get("value")
             if metric_name and value is not None:
                 try:
                     value = float(value)
                 except (ValueError, TypeError):
                     continue
-                method_id = method_map.get(met.get("method", ""))
-                dataset_id = dataset_map.get(met.get("dataset", ""))
+                method_id = method_map.get(met.get("method") or "")
+                dataset_id = dataset_map.get(met.get("dataset") or "")
                 record_metric(
                     conn,
                     metric_name,

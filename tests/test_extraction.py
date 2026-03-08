@@ -9,6 +9,7 @@ import pytest
 
 from research_index.extraction import (
     _clear_previous_extraction,
+    _collect_entity_mentions,
     _extract_single_pass,
     _get_llm_config,
     _llm_call,
@@ -1283,3 +1284,148 @@ def test_extract_single_pass_rollback_on_error(tmp_path):
     method_names = [m["name"] for m in methods]
     assert "NewMethod" not in method_names
     assert "PreExisting" in method_names
+
+
+# --- Null-safety: LLM returning None for fields (issue #49) ---
+
+
+def test_collect_entity_mentions_skips_none_name(tmp_path):
+    """_collect_entity_mentions must not crash when LLM returns 'name': null."""
+    extractions = [
+        {
+            "methods": [
+                {"name": None, "description": "ghost method"},
+                {"name": "RealMethod", "description": "valid"},
+            ],
+            "datasets": [
+                {"name": None},
+                {"name": "RealDataset", "description": "valid"},
+            ],
+        }
+    ]
+    mentions = _collect_entity_mentions(extractions)
+    names = {m["name"] for m in mentions}
+    assert "RealMethod" in names
+    assert "RealDataset" in names
+    assert len(mentions) == 2  # None-named items skipped
+
+
+def test_store_resolved_handles_none_method_and_dataset(tmp_path):
+    """_store_resolved must not crash when metric has 'method': null or 'dataset': null."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Some content about models.\n")
+    with patch("research_index.ingest.embed", _fake_embed):
+        ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+    chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    map_results = [
+        {
+            "methods": [
+                {
+                    "name": "BERT",
+                    "description": "encoder",
+                    "surface_forms": ["BERT"],
+                    "chunk_id": chunk_id,
+                }
+            ],
+            "datasets": [],
+            "metrics": [
+                {
+                    "metric": "F1",
+                    "value": 91.0,
+                    "method": None,
+                    "dataset": None,
+                    "chunk_id": chunk_id,
+                },
+            ],
+        }
+    ]
+    resolution = {
+        "groups": [{"canonical": "BERT", "type": "method", "members": ["BERT"]}],
+    }
+    # Should not raise AttributeError: 'NoneType' has no attribute 'lower'
+    result = _store_resolved(conn, p, map_results, resolution)
+    assert result["metrics_added"] >= 1
+
+
+def test_extract_single_pass_handles_none_fields(tmp_path):
+    """_extract_single_pass must not crash when LLM returns null for name/metric fields."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "doc.md"
+    md.write_text("# Test\nSome content about methods.")
+    with patch("research_index.ingest.embed", _fake_embed):
+        ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    chunks = [{"id": 1, "content": "some text"}]
+    llm_response = json.dumps(
+        {
+            "methods": [
+                {"name": None, "description": "ghost"},
+                {"name": "ValidMethod", "description": "real"},
+            ],
+            "datasets": [
+                {"name": None},
+                {"name": "ValidDataset", "description": "real"},
+            ],
+            "metrics": [
+                {"metric": None, "value": 0.5},
+                {"metric": "Accuracy", "value": 0.95, "method": None, "dataset": None},
+            ],
+        }
+    )
+    with patch("research_index.extraction._llm_call", return_value=llm_response):
+        result = _extract_single_pass(conn, p, chunks)
+
+    assert "error" not in result
+    assert result["methods_added"] == 1  # Only ValidMethod
+    assert result["datasets_added"] == 1  # Only ValidDataset
+
+
+def test_collect_entity_mentions_handles_null_containers():
+    """_collect_entity_mentions must not crash when 'methods' or 'datasets' is null."""
+    extractions = [
+        {"methods": None, "datasets": [{"name": "Valid", "description": "ok"}]},
+        {"methods": [{"name": "Also Valid"}], "datasets": None},
+    ]
+    mentions = _collect_entity_mentions(extractions)
+    names = {m["name"] for m in mentions}
+    assert names == {"Valid", "Also Valid"}
+
+
+def test_store_resolved_handles_null_containers(tmp_path):
+    """_store_resolved must not crash when 'groups', 'methods', or 'metrics' is null."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content.\n")
+    with patch("research_index.ingest.embed", _fake_embed):
+        ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    map_results = [{"methods": None, "datasets": None, "metrics": None}]
+    resolution = {"groups": None}
+    result = _store_resolved(conn, p, map_results, resolution)
+    assert result["methods_added"] == 0
+    assert result["datasets_added"] == 0
+    assert result["metrics_added"] == 0
+
+
+def test_extract_single_pass_handles_null_containers(tmp_path):
+    """_extract_single_pass must not crash when LLM returns null for methods/datasets/metrics."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "doc.md"
+    md.write_text("# Test\nContent.")
+    with patch("research_index.ingest.embed", _fake_embed):
+        ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    chunks = [{"id": 1, "content": "some text"}]
+    llm_response = json.dumps({"methods": None, "datasets": None, "metrics": None})
+    with patch("research_index.extraction._llm_call", return_value=llm_response):
+        result = _extract_single_pass(conn, p, chunks)
+
+    assert "error" not in result
+    assert result["methods_added"] == 0
+    assert result["datasets_added"] == 0
