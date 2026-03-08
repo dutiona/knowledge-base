@@ -1382,3 +1382,50 @@ def test_extract_single_pass_handles_none_fields(tmp_path):
     assert "error" not in result
     assert result["methods_added"] == 1  # Only ValidMethod
     assert result["datasets_added"] == 1  # Only ValidDataset
+
+
+def test_collect_entity_mentions_handles_null_containers():
+    """_collect_entity_mentions must not crash when 'methods' or 'datasets' is null."""
+    extractions = [
+        {"methods": None, "datasets": [{"name": "Valid", "description": "ok"}]},
+        {"methods": [{"name": "Also Valid"}], "datasets": None},
+    ]
+    mentions = _collect_entity_mentions(extractions)
+    names = {m["name"] for m in mentions}
+    assert names == {"Valid", "Also Valid"}
+
+
+def test_store_resolved_handles_null_containers(tmp_path):
+    """_store_resolved must not crash when 'groups', 'methods', or 'metrics' is null."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content.\n")
+    with patch("research_index.ingest.embed", _fake_embed):
+        ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    map_results = [{"methods": None, "datasets": None, "metrics": None}]
+    resolution = {"groups": None}
+    result = _store_resolved(conn, p, map_results, resolution)
+    assert result["methods_added"] == 0
+    assert result["datasets_added"] == 0
+    assert result["metrics_added"] == 0
+
+
+def test_extract_single_pass_handles_null_containers(tmp_path):
+    """_extract_single_pass must not crash when LLM returns null for methods/datasets/metrics."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "doc.md"
+    md.write_text("# Test\nContent.")
+    with patch("research_index.ingest.embed", _fake_embed):
+        ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    chunks = [{"id": 1, "content": "some text"}]
+    llm_response = json.dumps({"methods": None, "datasets": None, "metrics": None})
+    with patch("research_index.extraction._llm_call", return_value=llm_response):
+        result = _extract_single_pass(conn, p, chunks)
+
+    assert "error" not in result
+    assert result["methods_added"] == 0
+    assert result["datasets_added"] == 0
