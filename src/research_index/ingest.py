@@ -22,6 +22,43 @@ CHUNK_OVERLAP = 200
 
 _ALLOWED_URL_SCHEMES = {"http", "https"}
 
+# SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999.
+# We use 900 to leave headroom for other parameters in the same statement.
+_SQL_BATCH_SIZE = 900
+
+
+def _batched_execute(
+    conn: sqlite3.Connection,
+    sql_template: str,
+    ids: list,
+    extra_params: list | None = None,
+) -> None:
+    """Execute a SQL statement with an IN clause in batches.
+
+    sql_template must contain a single ``{ph}`` placeholder where the
+    ``IN (?,?,...)`` list will be substituted.  extra_params (if given)
+    are prepended to each batch's parameter list.
+    """
+    for i in range(0, len(ids), _SQL_BATCH_SIZE):
+        batch = ids[i : i + _SQL_BATCH_SIZE]
+        placeholders = ",".join("?" * len(batch))
+        params = (extra_params or []) + batch
+        conn.execute(sql_template.format(ph=placeholders), params)
+
+
+def _batched_select(
+    conn: sqlite3.Connection, sql_template: str, ids: list
+) -> list[sqlite3.Row]:
+    """Execute a SELECT with an IN clause in batches, returning all rows."""
+    results: list[sqlite3.Row] = []
+    for i in range(0, len(ids), _SQL_BATCH_SIZE):
+        batch = ids[i : i + _SQL_BATCH_SIZE]
+        placeholders = ",".join("?" * len(batch))
+        results.extend(
+            conn.execute(sql_template.format(ph=placeholders), batch).fetchall()
+        )
+    return results
+
 
 def _detect_source_type(path: Path) -> str:
     """Detect source_type from file extension."""
@@ -286,25 +323,25 @@ def reingest_file(
 
     old_ids = [r["id"] for r in existing]
     old_id_set = set(old_ids)
-    placeholders = ",".join("?" * len(old_ids))
 
-    # --- FK cleanup ---
+    # --- FK cleanup (batched to stay under SQLITE_MAX_VARIABLE_NUMBER) ---
     # 1. papers.abstract_chunk_id → SET NULL (track affected papers for re-linking)
     affected_paper_ids = [
         r["id"]
-        for r in conn.execute(
-            f"SELECT id FROM papers WHERE abstract_chunk_id IN ({placeholders})",
-            old_ids,
-        ).fetchall()
+        for r in _batched_select(
+            conn, "SELECT id FROM papers WHERE abstract_chunk_id IN ({ph})", old_ids
+        )
     ]
-    conn.execute(
-        f"UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({placeholders})",
+    _batched_execute(
+        conn,
+        "UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({ph})",
         old_ids,
     )
 
     # 2. relationships.evidence_chunk_id → SET NULL
-    conn.execute(
-        f"UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({placeholders})",
+    _batched_execute(
+        conn,
+        "UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({ph})",
         old_ids,
     )
 
@@ -320,28 +357,22 @@ def reingest_file(
             )
 
     # 4. methods/datasets/metrics.chunk_id → SET NULL
-    conn.execute(
-        f"UPDATE methods SET chunk_id = NULL WHERE chunk_id IN ({placeholders})",
-        old_ids,
+    _batched_execute(
+        conn, "UPDATE methods SET chunk_id = NULL WHERE chunk_id IN ({ph})", old_ids
     )
-    conn.execute(
-        f"UPDATE datasets SET chunk_id = NULL WHERE chunk_id IN ({placeholders})",
-        old_ids,
+    _batched_execute(
+        conn, "UPDATE datasets SET chunk_id = NULL WHERE chunk_id IN ({ph})", old_ids
     )
-    conn.execute(
-        f"UPDATE metrics SET chunk_id = NULL WHERE chunk_id IN ({placeholders})",
-        old_ids,
+    _batched_execute(
+        conn, "UPDATE metrics SET chunk_id = NULL WHERE chunk_id IN ({ph})", old_ids
     )
 
     # --- Delete old chunks (triggers handle FTS cleanup) ---
     # Delete from vec table first (no trigger)
-    conn.execute(
-        f"DELETE FROM chunks_vec WHERE chunk_id IN ({placeholders})",
-        old_ids,
-    )
+    _batched_execute(conn, "DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_ids)
     # Delete from chunks (triggers clean up FTS)
     conn.execute(
-        f"DELETE FROM chunks WHERE source_uri = ?",
+        "DELETE FROM chunks WHERE source_uri = ?",
         (source_uri,),
     )
 
@@ -412,10 +443,11 @@ def reingest_file(
             (source_uri,),
         ).fetchone()
         if new_first:
-            pp = ",".join("?" * len(affected_paper_ids))
-            conn.execute(
-                f"UPDATE papers SET abstract_chunk_id = ? WHERE id IN ({pp})",
-                [new_first["id"]] + affected_paper_ids,
+            _batched_execute(
+                conn,
+                "UPDATE papers SET abstract_chunk_id = ? WHERE id IN ({ph})",
+                affected_paper_ids,
+                extra_params=[new_first["id"]],
             )
 
     conn.commit()
