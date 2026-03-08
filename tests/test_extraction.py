@@ -915,6 +915,73 @@ def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
     assert row["chunk_id"] == first_chunk_id
 
 
+@patch("research_index.ingest.embed", _fake_embed)
+@pytest.mark.parametrize("table", ["methods", "datasets"])
+def test_store_resolved_passes_chunk_id_to_methods_and_datasets(tmp_path, table):
+    """Map-reduce path: record_method/record_dataset receive chunk_id from mentions."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("ResNet gets 95% on ImageNet.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test", source_uri=str(md.resolve()))["paper_id"]
+    chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    map_results = [
+        {
+            "methods": [
+                {
+                    "name": "ResNet",
+                    "description": "Deep residual net",
+                    "chunk_id": chunk_id,
+                }
+            ],
+            "datasets": [
+                {
+                    "name": "ImageNet",
+                    "description": "Image dataset",
+                    "chunk_id": chunk_id,
+                }
+            ],
+            "metrics": [],
+        }
+    ]
+    resolution = {"groups": []}
+
+    _store_resolved(conn, p, map_results, resolution)
+
+    row = conn.execute(
+        f"SELECT chunk_id FROM {table} WHERE paper_id = ?", (p,)
+    ).fetchone()
+    assert row is not None
+    assert row["chunk_id"] == chunk_id
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@pytest.mark.parametrize("table", ["methods", "datasets"])
+def test_single_pass_passes_first_chunk_id_to_methods_and_datasets(tmp_path, table):
+    """Single-pass path: record_method/record_dataset receive first_chunk_id."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("BERT achieves 88.5% accuracy on GLUE.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "BERT Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    first_chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    def _mock_llm_call(prompt, *, conn):
+        return FAKE_LLM_RESPONSE
+
+    with patch("research_index.extraction._llm_call", _mock_llm_call):
+        result = extract_structure(conn, p)
+
+    assert result["methods_added"] >= 1
+    row = conn.execute(
+        f"SELECT chunk_id FROM {table} WHERE paper_id = ?", (p,)
+    ).fetchone()
+    assert row is not None
+    assert row["chunk_id"] == first_chunk_id
+
+
 # --- commit=False batching (issue #18) ---
 
 

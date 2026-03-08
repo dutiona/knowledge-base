@@ -545,15 +545,28 @@ def _store_resolved(
         datasets_added = 0
 
         for (canonical, etype), data in entity_data.items():
+            first_chunk_id = next(
+                (m["chunk_id"] for m in data["mentions"] if m.get("chunk_id")), None
+            )
             if etype == "method":
                 result = record_method(
-                    conn, canonical, paper_id, data["description"], commit=False
+                    conn,
+                    canonical,
+                    paper_id,
+                    data["description"],
+                    first_chunk_id,
+                    commit=False,
                 )
                 method_map[canonical] = result["method_id"]
                 methods_added += 1
             elif etype == "dataset":
                 result = record_dataset(
-                    conn, canonical, paper_id, data["description"], commit=False
+                    conn,
+                    canonical,
+                    paper_id,
+                    data["description"],
+                    first_chunk_id,
+                    commit=False,
                 )
                 dataset_map[canonical] = result["dataset_id"]
                 datasets_added += 1
@@ -672,7 +685,12 @@ def _extract_single_pass(
             name = m.get("name", "").strip()
             if name:
                 result = record_method(
-                    conn, name, paper_id, m.get("description"), commit=False
+                    conn,
+                    name,
+                    paper_id,
+                    m.get("description"),
+                    first_chunk_id,
+                    commit=False,
                 )
                 method_map[name] = result["method_id"]
                 methods_added += 1
@@ -697,7 +715,12 @@ def _extract_single_pass(
             name = d.get("name", "").strip()
             if name:
                 result = record_dataset(
-                    conn, name, paper_id, d.get("description"), commit=False
+                    conn,
+                    name,
+                    paper_id,
+                    d.get("description"),
+                    first_chunk_id,
+                    commit=False,
                 )
                 dataset_map[name] = result["dataset_id"]
                 datasets_added += 1
