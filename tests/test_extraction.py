@@ -292,6 +292,18 @@ def test_get_llm_config_strips_v1(tmp_path, input_url, expected):
     assert cfg["base_url"] == expected
 
 
+def test_get_llm_config_ollama_preserves_v1(tmp_path):
+    """Ollama provider should NOT strip /v1 (proxy path-prefix scenario)."""
+    conn = _setup(tmp_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', 'http://proxy:8080/v1')"
+    )
+    conn.commit()
+    cfg = _get_llm_config(conn)
+    assert cfg["provider"] == "ollama"
+    assert cfg["base_url"] == "http://proxy:8080/v1"
+
+
 def test_map_extract_single_chunk(tmp_path):
     conn = _setup(tmp_path)
 

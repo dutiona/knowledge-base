@@ -240,6 +240,8 @@ def test_get_vision_config_defaults(tmp_path):
         ("http://host:1234", "http://host:1234"),
         ("http://host:1234/v1", "http://host:1234"),
         ("http://host:1234/v1/", "http://host:1234"),
+        ("https://api.openai.com/v1", "https://api.openai.com"),
+        ("http://host:1234/", "http://host:1234"),
         ("http://host/v1beta", "http://host/v1beta"),
     ],
 )
