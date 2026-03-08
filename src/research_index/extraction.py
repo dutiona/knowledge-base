@@ -394,7 +394,7 @@ def _collect_entity_mentions(all_extractions: list[dict]) -> list[dict]:
     for extraction in all_extractions:
         for entity_type in ("methods", "datasets"):
             for item in extraction.get(entity_type, []):
-                name = item.get("name", "").strip()
+                name = (item.get("name") or "").strip()
                 if not name:
                     continue
                 key = (name.lower(), entity_type.rstrip("s"))
@@ -406,7 +406,7 @@ def _collect_entity_mentions(all_extractions: list[dict]) -> list[dict]:
                             "type": entity_type.rstrip("s"),
                             "surface_forms": item.get("surface_forms", [name]),
                             "chunk_id": item.get("chunk_id"),
-                            "description": item.get("description", ""),
+                            "description": item.get("description") or "",
                         }
                     )
                 else:
@@ -500,7 +500,7 @@ def _store_resolved(
             for entity_type_plural in ("methods", "datasets"):
                 etype = entity_type_plural.rstrip("s")
                 for item in extraction.get(entity_type_plural, []):
-                    name = item.get("name", "").strip()
+                    name = (item.get("name") or "").strip()
                     if not name:
                         continue
                     canonical = surface_to_canonical.get((name.lower(), etype), name)
@@ -600,7 +600,7 @@ def _store_resolved(
         metrics_added = 0
         for extraction in map_results:
             for met in extraction.get("metrics", []):
-                metric_name = met.get("metric", "").strip()
+                metric_name = (met.get("metric") or "").strip()
                 value = met.get("value")
                 if not metric_name or value is None:
                     continue
@@ -608,8 +608,8 @@ def _store_resolved(
                     value = float(value)
                 except (ValueError, TypeError):
                     continue
-                method_name = met.get("method", "")
-                dataset_name = met.get("dataset", "")
+                method_name = met.get("method") or ""
+                dataset_name = met.get("dataset") or ""
                 # Try both method and dataset lookups for canonical resolution
                 canonical_method = surface_to_canonical.get(
                     (method_name.lower(), "method"), method_name
@@ -693,7 +693,7 @@ def _extract_single_pass(
         method_map = {}
         methods_added = 0
         for m in extracted.get("methods", []):
-            name = m.get("name", "").strip()
+            name = (m.get("name") or "").strip()
             if name:
                 result = record_method(
                     conn,
@@ -723,7 +723,7 @@ def _extract_single_pass(
         dataset_map = {}
         datasets_added = 0
         for d in extracted.get("datasets", []):
-            name = d.get("name", "").strip()
+            name = (d.get("name") or "").strip()
             if name:
                 result = record_dataset(
                     conn,
@@ -751,15 +751,15 @@ def _extract_single_pass(
 
         metrics_added = 0
         for met in extracted.get("metrics", []):
-            metric_name = met.get("metric", "").strip()
+            metric_name = (met.get("metric") or "").strip()
             value = met.get("value")
             if metric_name and value is not None:
                 try:
                     value = float(value)
                 except (ValueError, TypeError):
                     continue
-                method_id = method_map.get(met.get("method", ""))
-                dataset_id = dataset_map.get(met.get("dataset", ""))
+                method_id = method_map.get(met.get("method") or "")
+                dataset_id = dataset_map.get(met.get("dataset") or "")
                 record_metric(
                     conn,
                     metric_name,
