@@ -403,10 +403,25 @@ def extract_figures(
     # 10. Atomic transaction: delete old, insert new (main thread)
     # Always delete old figure chunks (even if no new figures found — ensures idempotency)
     chunks_created = 0
+    fig_chunk_subquery = (
+        "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')"
+    )
     try:
+        # Clean up FK references before deleting figure chunks (#53)
         conn.execute(
-            "DELETE FROM chunks_vec WHERE chunk_id IN "
-            "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')",
+            f"DELETE FROM entity_mentions WHERE chunk_id IN {fig_chunk_subquery}",
+            (source_uri,),
+        )
+        conn.execute(
+            f"UPDATE methods SET chunk_id = NULL WHERE chunk_id IN {fig_chunk_subquery}",
+            (source_uri,),
+        )
+        conn.execute(
+            f"UPDATE datasets SET chunk_id = NULL WHERE chunk_id IN {fig_chunk_subquery}",
+            (source_uri,),
+        )
+        conn.execute(
+            f"DELETE FROM chunks_vec WHERE chunk_id IN {fig_chunk_subquery}",
             (source_uri,),
         )
         conn.execute(
