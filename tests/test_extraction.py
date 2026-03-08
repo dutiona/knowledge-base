@@ -956,6 +956,79 @@ def test_store_resolved_passes_chunk_id_to_methods_and_datasets(tmp_path, table)
     assert row["chunk_id"] == chunk_id
 
 
+@pytest.mark.parametrize(
+    "table,entity_type", [("methods", "methods"), ("datasets", "datasets")]
+)
+def test_store_resolved_description_and_chunk_id_same_provenance(
+    tmp_path, table, entity_type
+):
+    """Description and chunk_id must originate from the same chunk (#39).
+
+    When an entity is mentioned across multiple chunks but only the second
+    chunk provides a description, the stored chunk_id must be the chunk
+    that supplied the description — not the first-mention chunk.
+    """
+    conn = _setup(tmp_path)
+    source_uri = str((tmp_path / "paper.md").resolve())
+    p = register_paper(conn, "Provenance Test", source_uri=source_uri)["paper_id"]
+
+    # Create two chunks directly — this test targets _store_resolved,
+    # not the chunking logic.
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES ('hash1', 'chunk one', 'markdown', ?, 0, '{}')",
+        (source_uri,),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES ('hash2', 'chunk two', 'markdown', ?, 1, '{}')",
+        (source_uri,),
+    )
+    conn.commit()
+    chunks = conn.execute("SELECT id FROM chunks ORDER BY chunk_index").fetchall()
+    chunk_1 = chunks[0]["id"]
+    chunk_2 = chunks[1]["id"]
+
+    entity_name = "ResNet" if table == "methods" else "ImageNet"
+    map_results = [
+        {
+            entity_type: [
+                {
+                    "name": entity_name,
+                    "chunk_id": chunk_1,
+                },  # mention without description
+            ],
+            "metrics": [],
+            # ensure both entity type keys are present
+            "methods" if entity_type == "datasets" else "datasets": [],
+        },
+        {
+            entity_type: [
+                {
+                    "name": entity_name,
+                    "description": "Detailed description from chunk 2",
+                    "chunk_id": chunk_2,
+                },
+            ],
+            "metrics": [],
+            "methods" if entity_type == "datasets" else "datasets": [],
+        },
+    ]
+    resolution = {"groups": []}
+
+    _store_resolved(conn, p, map_results, resolution)
+
+    row = conn.execute(
+        f"SELECT description, chunk_id FROM {table} WHERE paper_id = ?", (p,)
+    ).fetchone()
+    assert row is not None
+    assert row["description"] == "Detailed description from chunk 2"
+    # chunk_id must match the chunk that provided the description
+    assert row["chunk_id"] == chunk_2, (
+        f"chunk_id should be {chunk_2} (description source) but got {row['chunk_id']}"
+    )
+
+
 @patch("research_index.ingest.embed", _fake_embed)
 @pytest.mark.parametrize("table", ["methods", "datasets"])
 def test_single_pass_passes_first_chunk_id_to_methods_and_datasets(tmp_path, table):
