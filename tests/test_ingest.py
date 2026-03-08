@@ -334,6 +334,129 @@ def test_reingest_idempotent_content(tmp_path):
     assert total == r1["chunks_added"]
 
 
+# --- reingest batching (issue #40) ---
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.ingest._SQL_BATCH_SIZE", 2)
+def test_reingest_batches_in_clauses(tmp_path):
+    """reingest_file works when old chunk count exceeds _SQL_BATCH_SIZE.
+
+    With batch size 2, a file producing 4 chunks forces multi-batch IN clauses
+    for every FK cleanup and deletion step.
+    """
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Create a file that produces exactly 4 chunks (each paragraph is a chunk)
+    paragraphs = [f"Paragraph {i} " + "word " * 200 for i in range(4)]
+    md = tmp_path / "big.md"
+    md.write_text("\n\n".join(paragraphs))
+    ingest_file(conn, md)
+
+    old_ids = [r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()]
+    assert len(old_ids) >= 3, f"Need >=3 chunks to test batching, got {len(old_ids)}"
+
+    # Set up FK references that span multiple batches
+    source_uri = str(md.resolve())
+    paper = register_paper(conn, "Batched Paper", source_uri=source_uri)
+    assert paper["abstract_chunk_id"] is not None
+
+    # Add relationship evidence pointing to one of the old chunks
+    p2 = register_paper(conn, "Other Paper")
+    add_relationship(
+        conn,
+        paper["paper_id"],
+        p2["paper_id"],
+        "cites",
+        evidence_chunk_id=old_ids[1],
+    )
+
+    # Add conclusion referencing multiple old chunks
+    record_conclusion(
+        conn,
+        claim="Test claim",
+        source_chunk_ids=old_ids[:3],
+    )
+
+    # Add method/dataset/metric referencing old chunks
+    pid = paper["paper_id"]
+    conn.execute(
+        "INSERT INTO methods (name, chunk_id, paper_id) VALUES (?, ?, ?)",
+        ("test_method", old_ids[0], pid),
+    )
+    conn.execute(
+        "INSERT INTO datasets (name, chunk_id, paper_id) VALUES (?, ?, ?)",
+        ("test_dataset", old_ids[1], pid),
+    )
+    conn.execute(
+        "INSERT INTO metrics (name, value, chunk_id, paper_id) VALUES (?, ?, ?, ?)",
+        ("test_metric", 0.95, old_ids[2], pid),
+    )
+    conn.commit()
+
+    # Reingest with batch_size=2 (monkeypatched above)
+    new_paragraphs = [f"New paragraph {i} " + "text " * 200 for i in range(4)]
+    md.write_text("\n\n".join(new_paragraphs))
+    result = reingest_file(conn, md)
+
+    assert result["chunks_deleted"] == len(old_ids)
+    assert result["chunks_added"] >= 3
+
+    # All old chunks should be gone
+    remaining = conn.execute(
+        "SELECT id FROM chunks WHERE id IN ({})".format(",".join("?" * len(old_ids))),
+        old_ids,
+    ).fetchall()
+    assert len(remaining) == 0
+
+    # Paper should be re-linked to new first chunk
+    papers = get_paper(conn, paper_id=paper["paper_id"])
+    assert papers[0]["abstract_chunk_id"] is not None
+    new_chunk = conn.execute(
+        "SELECT * FROM chunks WHERE id = ?", (papers[0]["abstract_chunk_id"],)
+    ).fetchone()
+    assert new_chunk["chunk_index"] == 0
+    assert new_chunk["source_uri"] == source_uri
+
+    # Relationship evidence should be nullified
+    rels = get_relationships(conn, paper["paper_id"])
+    assert rels[0]["evidence_chunk_id"] is None
+
+    # Conclusion chunk refs should have old IDs removed
+    conclusions = get_conclusions(conn)
+    chunk_ids = conclusions[0]["source_chunk_ids"]
+    if isinstance(chunk_ids, str):
+        chunk_ids = json.loads(chunk_ids)
+    for old_id in old_ids[:3]:
+        assert old_id not in chunk_ids
+
+    # Methods/datasets/metrics should be nullified
+    assert (
+        conn.execute(
+            "SELECT chunk_id FROM methods WHERE name='test_method'"
+        ).fetchone()["chunk_id"]
+        is None
+    )
+    assert (
+        conn.execute(
+            "SELECT chunk_id FROM datasets WHERE name='test_dataset'"
+        ).fetchone()["chunk_id"]
+        is None
+    )
+    assert (
+        conn.execute(
+            "SELECT chunk_id FROM metrics WHERE name='test_metric'"
+        ).fetchone()["chunk_id"]
+        is None
+    )
+
+    # Vec table should only have new chunks
+    vec_count = conn.execute("SELECT COUNT(*) as c FROM chunks_vec").fetchone()["c"]
+    assert vec_count == result["chunks_added"]
+
+
 # --- ingest_url ---
 
 FAKE_HTML = """
