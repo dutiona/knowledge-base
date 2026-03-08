@@ -1,6 +1,7 @@
 """Tests for structured extraction (methods, datasets, metrics)."""
 
 import json
+import logging
 from unittest.mock import patch
 
 from research_index.db import EMBED_DIM, get_connection, init_schema
@@ -966,3 +967,93 @@ def test_batch_commit_atomicity(tmp_path):
     assert len(get_methods(conn, p)) == 1
     assert len(get_datasets(conn, p)) == 1
     assert len(get_metrics(conn, p)) == 1
+
+
+# ── _store_resolved: malformed resolution groups ──────────────────────
+
+
+def test_store_resolved_skips_group_missing_canonical(tmp_path, caplog):
+    """Groups without 'canonical' key are skipped with a warning, not KeyError."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Some method described here.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+    chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    map_results = [
+        {
+            "methods": [
+                {
+                    "name": "MethodA",
+                    "description": "A method",
+                    "surface_forms": ["MethodA"],
+                    "chunk_id": chunk_id,
+                }
+            ],
+            "datasets": [],
+            "metrics": [],
+        },
+    ]
+    # One valid group, one missing "canonical"
+    resolution = {
+        "groups": [
+            {"canonical": "MethodA", "type": "method", "members": ["MethodA"]},
+            {"type": "method", "members": ["OrphanMethod"]},  # no canonical
+        ],
+    }
+
+    with caplog.at_level(logging.WARNING, logger="research_index.extraction"):
+        result = _store_resolved(conn, p, map_results, resolution)
+
+    assert result["methods_added"] >= 1
+    assert any("missing 'canonical'" in msg for msg in caplog.messages)
+
+
+def test_store_resolved_skips_group_with_empty_canonical(tmp_path, caplog):
+    """Groups with empty-string canonical are skipped like missing ones."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Some content.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    map_results = [{"methods": [], "datasets": [], "metrics": []}]
+    resolution = {
+        "groups": [
+            {"canonical": "", "type": "method", "members": ["Ghost"]},
+        ],
+    }
+
+    with caplog.at_level(logging.WARNING, logger="research_index.extraction"):
+        result = _store_resolved(conn, p, map_results, resolution)
+
+    assert result["methods_added"] == 0
+    assert any("missing 'canonical'" in msg for msg in caplog.messages)
+
+
+def test_store_resolved_all_groups_malformed(tmp_path, caplog):
+    """All groups malformed — function completes without crash, 0 entities."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    map_results = [{"methods": [], "datasets": [], "metrics": []}]
+    resolution = {
+        "groups": [
+            {"type": "method", "members": ["A"]},
+            {"members": ["B"]},
+            {},
+        ],
+    }
+
+    with caplog.at_level(logging.WARNING, logger="research_index.extraction"):
+        result = _store_resolved(conn, p, map_results, resolution)
+
+    assert result["methods_added"] == 0
+    assert result["datasets_added"] == 0
+    # All 3 groups should have triggered warnings
+    canonical_warnings = [m for m in caplog.messages if "missing 'canonical'" in m]
+    assert len(canonical_warnings) == 3
