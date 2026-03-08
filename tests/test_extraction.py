@@ -270,6 +270,41 @@ def test_get_llm_config_custom(tmp_path):
     assert cfg["model"] == "qwen/qwen3.5-35b-a3b"
 
 
+@pytest.mark.parametrize(
+    "input_url,expected",
+    [
+        ("http://host:1234", "http://host:1234"),
+        ("http://host:1234/v1", "http://host:1234"),
+        ("http://host:1234/v1/", "http://host:1234"),
+        ("https://api.openai.com/v1", "https://api.openai.com"),
+        ("http://host:1234/", "http://host:1234"),
+        ("http://host/v1beta", "http://host/v1beta"),  # not stripped
+    ],
+)
+def test_get_llm_config_strips_v1(tmp_path, input_url, expected):
+    conn = _setup(tmp_path)
+    conn.execute("UPDATE config SET value = 'openai_compat' WHERE key = 'llm_provider'")
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', ?)",
+        (input_url,),
+    )
+    conn.commit()
+    cfg = _get_llm_config(conn)
+    assert cfg["base_url"] == expected
+
+
+def test_get_llm_config_ollama_preserves_v1(tmp_path):
+    """Ollama provider should NOT strip /v1 (proxy path-prefix scenario)."""
+    conn = _setup(tmp_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', 'http://proxy:8080/v1')"
+    )
+    conn.commit()
+    cfg = _get_llm_config(conn)
+    assert cfg["provider"] == "ollama"
+    assert cfg["base_url"] == "http://proxy:8080/v1"
+
+
 def test_map_extract_single_chunk(tmp_path):
     conn = _setup(tmp_path)
 
@@ -803,6 +838,135 @@ def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
     assert result["error"] == "All chunks failed extraction"
     assert len(result["errors"]) > 0
     assert "empty response" in result["errors"][0]["error"]
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_store_resolved_passes_chunk_id_to_metrics(tmp_path):
+    """Map-reduce path: record_metric receives chunk_id from per-chunk extraction."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("ResNet gets 95% on ImageNet.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test", source_uri=str(md.resolve()))["paper_id"]
+    chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    map_results = [
+        {
+            "methods": [
+                {
+                    "name": "ResNet",
+                    "description": "Deep residual net",
+                    "chunk_id": chunk_id,
+                }
+            ],
+            "datasets": [
+                {
+                    "name": "ImageNet",
+                    "description": "Image dataset",
+                    "chunk_id": chunk_id,
+                }
+            ],
+            "metrics": [
+                {
+                    "metric": "accuracy",
+                    "value": 95.0,
+                    "unit": "%",
+                    "method": "ResNet",
+                    "dataset": "ImageNet",
+                    "chunk_id": chunk_id,
+                }
+            ],
+        }
+    ]
+    resolution = {"groups": []}
+
+    _store_resolved(conn, p, map_results, resolution)
+
+    row = conn.execute(
+        "SELECT chunk_id FROM metrics WHERE paper_id = ?", (p,)
+    ).fetchone()
+    assert row is not None
+    assert row["chunk_id"] == chunk_id
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
+    """Single-pass path: record_metric receives first_chunk_id as approximate provenance."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("BERT achieves 88.5% accuracy on GLUE.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "BERT Paper", source_uri=str(md.resolve()))["paper_id"]
+
+    first_chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    def _mock_llm_call(prompt, *, conn):
+        return FAKE_LLM_RESPONSE
+
+    with patch("research_index.extraction._llm_call", _mock_llm_call):
+        result = extract_structure(conn, p)
+
+    assert result["metrics_added"] == 1
+    row = conn.execute(
+        "SELECT chunk_id FROM metrics WHERE paper_id = ?", (p,)
+    ).fetchone()
+    assert row is not None
+    assert row["chunk_id"] == first_chunk_id
+
+
+# --- commit=False batching (issue #18) ---
+
+
+@pytest.mark.parametrize(
+    "record_func, get_func, record_args",
+    [
+        (record_method, get_methods, ("Transformer",)),
+        (record_dataset, get_datasets, ("ImageNet",)),
+        (record_metric, get_metrics, ("accuracy", 0.95)),
+    ],
+    ids=["method", "dataset", "metric"],
+)
+def test_record_commit_false_does_not_persist(
+    tmp_path, record_func, get_func, record_args
+):
+    """When commit=False, data is visible in-transaction but not persisted."""
+    conn = _setup(tmp_path)
+    p = register_paper(conn, "Test Paper")["paper_id"]
+    record_func(conn, *record_args, p, commit=False)
+    # Visible within same connection (uncommitted read)
+    assert len(get_func(conn, p)) == 1
+    # Rollback should discard the uncommitted write
+    conn.rollback()
+    assert len(get_func(conn, p)) == 0
+
+
+def test_record_method_default_commit_persists(tmp_path):
+    """Default commit=True still auto-commits (backward compat)."""
+    conn = _setup(tmp_path)
+    p = register_paper(conn, "Test Paper")["paper_id"]
+    record_method(conn, "ResNet", p)
+    conn.rollback()  # Should have no effect — already committed
+    assert len(get_methods(conn, p)) == 1
+
+
+def test_batch_commit_atomicity(tmp_path):
+    """Multiple commit=False calls followed by one conn.commit() is atomic."""
+    conn = _setup(tmp_path)
+    p = register_paper(conn, "Test Paper")["paper_id"]
+    record_method(conn, "BERT", p, commit=False)
+    record_dataset(conn, "GLUE", p, commit=False)
+    m = record_method(conn, "BERT", p, commit=False)  # upsert
+    record_metric(conn, "F1", 0.88, p, method_id=m["method_id"], commit=False)
+    # All visible pre-commit
+    assert len(get_methods(conn, p)) == 1
+    assert len(get_datasets(conn, p)) == 1
+    assert len(get_metrics(conn, p)) == 1
+    # Single commit persists everything
+    conn.commit()
+    conn.rollback()  # No effect
+    assert len(get_methods(conn, p)) == 1
+    assert len(get_datasets(conn, p)) == 1
+    assert len(get_metrics(conn, p)) == 1
 
 
 # ── _store_resolved: malformed resolution groups ──────────────────────

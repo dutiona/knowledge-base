@@ -1,5 +1,6 @@
 """Tests for vision/figure extraction schema support."""
 
+import pytest
 import sqlite3
 
 from research_index.db import get_connection, init_schema, EMBED_DIM
@@ -231,6 +232,32 @@ def test_get_vision_config_defaults(tmp_path):
     assert cfg["model"] == "gemma3:27b"
     assert isinstance(cfg["base_url"], str)
     assert cfg["base_url"]  # non-empty
+
+
+@pytest.mark.parametrize(
+    "input_url,expected",
+    [
+        ("http://host:1234", "http://host:1234"),
+        ("http://host:1234/v1", "http://host:1234"),
+        ("http://host:1234/v1/", "http://host:1234"),
+        ("https://api.openai.com/v1", "https://api.openai.com"),
+        ("http://host:1234/", "http://host:1234"),
+        ("http://host/v1beta", "http://host/v1beta"),
+    ],
+)
+def test_get_vision_config_strips_v1(tmp_path, input_url, expected):
+    from research_index.vision import _get_vision_config
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('vision_base_url', ?)",
+        (input_url,),
+    )
+    conn.commit()
+    cfg = _get_vision_config(conn)
+    assert cfg["base_url"] == expected
 
 
 def test_configure_vision_roundtrip(tmp_path):
