@@ -21,6 +21,8 @@ def record_method(
     paper_id: int,
     description: str | None = None,
     chunk_id: int | None = None,
+    *,
+    commit: bool = True,
 ) -> dict:
     """Record or update a method for a paper."""
     conn.execute(
@@ -30,7 +32,8 @@ def record_method(
            DO UPDATE SET description = excluded.description, chunk_id = excluded.chunk_id""",
         (name, paper_id, description, chunk_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     row = conn.execute(
         "SELECT id FROM methods WHERE name = ? AND paper_id = ?", (name, paper_id)
     ).fetchone()
@@ -43,6 +46,8 @@ def record_dataset(
     paper_id: int,
     description: str | None = None,
     chunk_id: int | None = None,
+    *,
+    commit: bool = True,
 ) -> dict:
     """Record or update a dataset for a paper."""
     conn.execute(
@@ -52,7 +57,8 @@ def record_dataset(
            DO UPDATE SET description = excluded.description, chunk_id = excluded.chunk_id""",
         (name, paper_id, description, chunk_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     row = conn.execute(
         "SELECT id FROM datasets WHERE name = ? AND paper_id = ?", (name, paper_id)
     ).fetchone()
@@ -68,6 +74,8 @@ def record_metric(
     dataset_id: int | None = None,
     unit: str | None = None,
     chunk_id: int | None = None,
+    *,
+    commit: bool = True,
 ) -> dict:
     """Record a metric value."""
     cursor = conn.execute(
@@ -75,7 +83,8 @@ def record_metric(
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (name, value, unit, dataset_id, method_id, paper_id, chunk_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return {"metric_id": cursor.lastrowid}
 
 
@@ -527,11 +536,15 @@ def _store_resolved(
 
     for (canonical, etype), data in entity_data.items():
         if etype == "method":
-            result = record_method(conn, canonical, paper_id, data["description"])
+            result = record_method(
+                conn, canonical, paper_id, data["description"], commit=False
+            )
             method_map[canonical] = result["method_id"]
             methods_added += 1
         elif etype == "dataset":
-            result = record_dataset(conn, canonical, paper_id, data["description"])
+            result = record_dataset(
+                conn, canonical, paper_id, data["description"], commit=False
+            )
             dataset_map[canonical] = result["dataset_id"]
             datasets_added += 1
 
@@ -579,6 +592,7 @@ def _store_resolved(
                 dataset_id=dataset_id,
                 unit=met.get("unit"),
                 chunk_id=met.get("chunk_id"),
+                commit=False,
             )
             metrics_added += 1
 
@@ -641,7 +655,9 @@ def _extract_single_pass(
     for m in extracted.get("methods", []):
         name = m.get("name", "").strip()
         if name:
-            result = record_method(conn, name, paper_id, m.get("description"))
+            result = record_method(
+                conn, name, paper_id, m.get("description"), commit=False
+            )
             method_map[name] = result["method_id"]
             methods_added += 1
             # Populate entities table for get_entities_tool consistency
@@ -664,7 +680,9 @@ def _extract_single_pass(
     for d in extracted.get("datasets", []):
         name = d.get("name", "").strip()
         if name:
-            result = record_dataset(conn, name, paper_id, d.get("description"))
+            result = record_dataset(
+                conn, name, paper_id, d.get("description"), commit=False
+            )
             dataset_map[name] = result["dataset_id"]
             datasets_added += 1
             conn.execute(
@@ -701,6 +719,7 @@ def _extract_single_pass(
                 dataset_id=dataset_id,
                 unit=met.get("unit"),
                 chunk_id=first_chunk_id,
+                commit=False,
             )
             metrics_added += 1
 

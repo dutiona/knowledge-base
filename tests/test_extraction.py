@@ -876,3 +876,58 @@ def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
     ).fetchone()
     assert row is not None
     assert row["chunk_id"] == first_chunk_id
+
+
+# --- commit=False batching (issue #18) ---
+
+
+@pytest.mark.parametrize(
+    "record_func, get_func, record_args",
+    [
+        (record_method, get_methods, ("Transformer",)),
+        (record_dataset, get_datasets, ("ImageNet",)),
+        (record_metric, get_metrics, ("accuracy", 0.95)),
+    ],
+    ids=["method", "dataset", "metric"],
+)
+def test_record_commit_false_does_not_persist(
+    tmp_path, record_func, get_func, record_args
+):
+    """When commit=False, data is visible in-transaction but not persisted."""
+    conn = _setup(tmp_path)
+    p = register_paper(conn, "Test Paper")["paper_id"]
+    record_func(conn, *record_args, p, commit=False)
+    # Visible within same connection (uncommitted read)
+    assert len(get_func(conn, p)) == 1
+    # Rollback should discard the uncommitted write
+    conn.rollback()
+    assert len(get_func(conn, p)) == 0
+
+
+def test_record_method_default_commit_persists(tmp_path):
+    """Default commit=True still auto-commits (backward compat)."""
+    conn = _setup(tmp_path)
+    p = register_paper(conn, "Test Paper")["paper_id"]
+    record_method(conn, "ResNet", p)
+    conn.rollback()  # Should have no effect — already committed
+    assert len(get_methods(conn, p)) == 1
+
+
+def test_batch_commit_atomicity(tmp_path):
+    """Multiple commit=False calls followed by one conn.commit() is atomic."""
+    conn = _setup(tmp_path)
+    p = register_paper(conn, "Test Paper")["paper_id"]
+    record_method(conn, "BERT", p, commit=False)
+    record_dataset(conn, "GLUE", p, commit=False)
+    m = record_method(conn, "BERT", p, commit=False)  # upsert
+    record_metric(conn, "F1", 0.88, p, method_id=m["method_id"], commit=False)
+    # All visible pre-commit
+    assert len(get_methods(conn, p)) == 1
+    assert len(get_datasets(conn, p)) == 1
+    assert len(get_metrics(conn, p)) == 1
+    # Single commit persists everything
+    conn.commit()
+    conn.rollback()  # No effect
+    assert len(get_methods(conn, p)) == 1
+    assert len(get_datasets(conn, p)) == 1
+    assert len(get_metrics(conn, p)) == 1
