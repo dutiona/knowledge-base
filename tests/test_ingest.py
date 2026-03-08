@@ -915,6 +915,20 @@ def test_chunk_python_ast_empty():
 # ---------- entity_mentions FK cleanup on reingest (#47) ----------
 
 
+def _create_entity_with_mention(conn, paper_id, canonical_name, chunk_id, surface_form):
+    """Insert an entity + mention row, return the entity id."""
+    conn.execute(
+        "INSERT INTO entities (canonical_name, entity_type, paper_id) VALUES (?, ?, ?)",
+        (canonical_name, "method", paper_id),
+    )
+    entity_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
+        (entity_id, surface_form, chunk_id),
+    )
+    return entity_id
+
+
 @patch("research_index.ingest.embed", _fake_embed)
 def test_reingest_deletes_entity_mentions(tmp_path):
     """reingest_file must delete entity_mentions referencing old chunks."""
@@ -927,16 +941,9 @@ def test_reingest_deletes_entity_mentions(tmp_path):
     ingest_file(conn, md)
     chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
 
-    # Create entity + mention pointing at the chunk
     paper_id = register_paper(conn, "Test Paper")["paper_id"]
-    conn.execute(
-        "INSERT INTO entities (canonical_name, entity_type, paper_id) VALUES (?, ?, ?)",
-        ("transformer", "method", paper_id),
-    )
-    entity_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.execute(
-        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
-        (entity_id, "Transformers", chunk_id),
+    entity_id = _create_entity_with_mention(
+        conn, paper_id, "transformer", chunk_id, "Transformers"
     )
     conn.commit()
 
@@ -974,27 +981,9 @@ def test_reingest_preserves_unrelated_entity_mentions(tmp_path):
         "SELECT id FROM chunks WHERE source_uri = ?", (str(md2),)
     ).fetchone()["id"]
 
-    # Create entities + mentions for both chunks
     paper_id = register_paper(conn, "Test Paper")["paper_id"]
-    conn.execute(
-        "INSERT INTO entities (canonical_name, entity_type, paper_id) VALUES (?, ?, ?)",
-        ("bert", "method", paper_id),
-    )
-    eid1 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.execute(
-        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
-        (eid1, "BERT", chunk_id_1),
-    )
-
-    conn.execute(
-        "INSERT INTO entities (canonical_name, entity_type, paper_id) VALUES (?, ?, ?)",
-        ("gpt", "method", paper_id),
-    )
-    eid2 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.execute(
-        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, ?, ?)",
-        (eid2, "GPT", chunk_id_2),
-    )
+    _create_entity_with_mention(conn, paper_id, "bert", chunk_id_1, "BERT")
+    eid2 = _create_entity_with_mention(conn, paper_id, "gpt", chunk_id_2, "GPT")
     conn.commit()
 
     # Reingest only file1
