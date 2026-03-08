@@ -233,7 +233,9 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
     return {
         "provider": prov,
         "model": model["value"] if model else "qwen3.5:27b",
-        "base_url": base_url.rstrip("/"),
+        "base_url": base_url.rstrip("/").removesuffix("/v1")
+        if prov == "openai_compat"
+        else base_url.rstrip("/"),
         "api_key": api_key_row["value"] if api_key_row else None,
     }
 
