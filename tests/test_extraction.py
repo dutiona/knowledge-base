@@ -10,6 +10,7 @@ import pytest
 from research_index.extraction import (
     _clear_previous_extraction,
     _collect_entity_mentions,
+    _extract_map_reduce,
     _extract_single_pass,
     _get_llm_config,
     _llm_call,
@@ -1429,3 +1430,199 @@ def test_extract_single_pass_handles_null_containers(tmp_path):
     assert "error" not in result
     assert result["methods_added"] == 0
     assert result["datasets_added"] == 0
+
+
+# --- Progress logging tests (#50) ---
+
+
+def _make_chunks(n: int) -> list[dict]:
+    """Create a list of fake chunk dicts for progress logging tests."""
+    return [{"id": i + 1, "content": f"Chunk {i} content"} for i in range(n)]
+
+
+_MAP_RESPONSE = json.dumps(
+    {
+        "methods": [
+            {
+                "name": "ResNet",
+                "description": "Deep residual",
+                "surface_forms": ["ResNet"],
+            }
+        ],
+        "datasets": [
+            {
+                "name": "ImageNet",
+                "description": "Image dataset",
+                "surface_forms": ["ImageNet"],
+            }
+        ],
+        "metrics": [
+            {
+                "metric": "accuracy",
+                "value": 95.0,
+                "unit": "%",
+                "method": "ResNet",
+                "dataset": "ImageNet",
+            }
+        ],
+    }
+)
+
+_RESOLVE_RESPONSE = json.dumps(
+    {
+        "groups": [
+            {"canonical": "ResNet", "type": "method", "members": ["ResNet"]},
+            {"canonical": "ImageNet", "type": "dataset", "members": ["ImageNet"]},
+        ]
+    }
+)
+
+
+def _mock_llm_for_progress(prompt, *, conn):
+    if "Group mentions" in prompt or "canonical" in prompt.lower():
+        return _RESOLVE_RESPONSE
+    return _MAP_RESPONSE
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_map_reduce_logs_per_chunk_progress(tmp_path, caplog):
+    """Each chunk emits an INFO log with chunk number, percentage, timing, and entity counts."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content " * 200)
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test", source_uri=str(md.resolve()))["paper_id"]
+    chunks = [
+        {"id": row["id"], "content": row["content"]}
+        for row in conn.execute(
+            "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+            (str(md.resolve()),),
+        ).fetchall()
+    ]
+
+    with caplog.at_level(logging.INFO, logger="research_index.extraction"):
+        with patch("research_index.extraction._llm_call", _mock_llm_for_progress):
+            _extract_map_reduce(conn, p, chunks)
+
+    chunk_logs = [m for m in caplog.messages if "Chunk" in m and "/" in m]
+    assert len(chunk_logs) == len(chunks)
+    # First chunk log should contain entity counts
+    assert "methods=" in chunk_logs[0]
+    assert "datasets=" in chunk_logs[0]
+    assert "metrics=" in chunk_logs[0]
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_map_reduce_logs_revised_eta_every_5_chunks(tmp_path, caplog):
+    """Revised ETA is logged every 5 chunks."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    # Need enough content for >5 chunks
+    md.write_text(
+        "\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(10))
+    )
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test", source_uri=str(md.resolve()))["paper_id"]
+    chunks = [
+        {"id": row["id"], "content": row["content"]}
+        for row in conn.execute(
+            "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+            (str(md.resolve()),),
+        ).fetchall()
+    ]
+    assert len(chunks) >= 5, f"Need >= 5 chunks for ETA test, got {len(chunks)}"
+
+    with caplog.at_level(logging.INFO, logger="research_index.extraction"):
+        with patch("research_index.extraction._llm_call", _mock_llm_for_progress):
+            _extract_map_reduce(conn, p, chunks)
+
+    eta_logs = [m for m in caplog.messages if "revised ETA" in m]
+    expected_eta_count = len(chunks) // 5
+    assert len(eta_logs) == expected_eta_count
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_map_reduce_logs_failed_chunk(tmp_path, caplog):
+    """Failed chunks log 'FAILED' instead of entity counts."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content " * 200)
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test", source_uri=str(md.resolve()))["paper_id"]
+    chunks = [
+        {"id": row["id"], "content": row["content"]}
+        for row in conn.execute(
+            "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+            (str(md.resolve()),),
+        ).fetchall()
+    ]
+
+    call_count = {"n": 0}
+
+    def _mock_llm_fail_first(prompt, *, conn):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise ValueError("simulated LLM failure")
+        return _mock_llm_for_progress(prompt, conn=conn)
+
+    with caplog.at_level(logging.INFO, logger="research_index.extraction"):
+        with patch("research_index.extraction._llm_call", _mock_llm_fail_first):
+            _extract_map_reduce(conn, p, chunks)
+
+    chunk_logs = [m for m in caplog.messages if "Chunk" in m and "/" in m]
+    assert "FAILED" in chunk_logs[0]
+    # Subsequent chunks should have entity counts, not FAILED
+    if len(chunk_logs) > 1:
+        assert "methods=" in chunk_logs[1]
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_map_reduce_logs_entity_resolution(tmp_path, caplog):
+    """Map phase completion and entity resolution are logged."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content " * 200)
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test", source_uri=str(md.resolve()))["paper_id"]
+    chunks = [
+        {"id": row["id"], "content": row["content"]}
+        for row in conn.execute(
+            "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+            (str(md.resolve()),),
+        ).fetchall()
+    ]
+
+    with caplog.at_level(logging.INFO, logger="research_index.extraction"):
+        with patch("research_index.extraction._llm_call", _mock_llm_for_progress):
+            _extract_map_reduce(conn, p, chunks)
+
+    assert any("Map phase complete" in m for m in caplog.messages)
+    assert any("Starting entity resolution" in m for m in caplog.messages)
+    assert any("Entity resolution complete" in m for m in caplog.messages)
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_map_reduce_result_includes_timing(tmp_path):
+    """Result dict includes extraction_seconds and resolution_seconds."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content " * 200)
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test", source_uri=str(md.resolve()))["paper_id"]
+    chunks = [
+        {"id": row["id"], "content": row["content"]}
+        for row in conn.execute(
+            "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+            (str(md.resolve()),),
+        ).fetchall()
+    ]
+
+    with patch("research_index.extraction._llm_call", _mock_llm_for_progress):
+        result = _extract_map_reduce(conn, p, chunks)
+
+    assert "extraction_seconds" in result
+    assert "resolution_seconds" in result
+    assert isinstance(result["extraction_seconds"], float)
+    assert isinstance(result["resolution_seconds"], float)
+    assert result["extraction_seconds"] >= 0
+    assert result["resolution_seconds"] >= 0

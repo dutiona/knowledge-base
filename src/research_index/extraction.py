@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sqlite3
+import time
 from collections import defaultdict
 
 import httpx
@@ -792,22 +793,79 @@ def _extract_map_reduce(
     # Phase 1: Map
     map_results = []
     errors = []
+    total_elapsed = 0.0
     for i, chunk in enumerate(chunks):
+        start = time.monotonic()
         try:
             result = _map_extract(chunk["id"], chunk["content"], i, len(chunks), conn)
             map_results.append(result)
         except Exception as e:
             errors.append({"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)})
+            result = None
+
+        elapsed = time.monotonic() - start
+        total_elapsed += elapsed
+
+        if result is not None:
+            m = len(result.get("methods", []))
+            d = len(result.get("datasets", []))
+            mt = len(result.get("metrics", []))
+            logger.info(
+                "Chunk %3d/%d (%.1f%%) - %.1fs - methods=%d, datasets=%d, metrics=%d",
+                i + 1,
+                len(chunks),
+                (i + 1) / len(chunks) * 100,
+                elapsed,
+                m,
+                d,
+                mt,
+            )
+        else:
+            logger.info(
+                "Chunk %3d/%d (%.1f%%) - %.1fs - FAILED",
+                i + 1,
+                len(chunks),
+                (i + 1) / len(chunks) * 100,
+                elapsed,
+            )
+
+        if (i + 1) % 5 == 0:
+            avg = total_elapsed / (i + 1)
+            remaining = avg * (len(chunks) - i - 1)
+            logger.info(
+                "  avg %.1fs/chunk - revised ETA: %.0fmin remaining",
+                avg,
+                remaining / 60,
+            )
 
     if not map_results:
         return {"error": "All chunks failed extraction", "errors": errors}
 
     # Phase 2: Resolve
+    total_raw = sum(
+        len(r.get("methods", [])) + len(r.get("datasets", [])) for r in map_results
+    )
+    logger.info(
+        "Map phase complete: %d raw entities from %d chunks (%.1fs)",
+        total_raw,
+        len(map_results),
+        total_elapsed,
+    )
+    logger.info("Starting entity resolution...")
+    resolve_start = time.monotonic()
     try:
         resolution = _resolve_entities(map_results, conn)
     except Exception as e:
         logger.warning("Entity resolution failed, proceeding without: %s", e)
         resolution = {"groups": []}
+    resolve_elapsed = time.monotonic() - resolve_start
+    n_groups = len(resolution.get("groups", []))
+    logger.info(
+        "Entity resolution complete: %d -> %d canonical entities (%.1fs)",
+        total_raw,
+        n_groups,
+        resolve_elapsed,
+    )
 
     # Phase 3: Store
     result = _store_resolved(conn, paper_id, map_results, resolution)
@@ -815,6 +873,8 @@ def _extract_map_reduce(
     result["chunks_processed"] = len(map_results)
     result["chunks_failed"] = len(errors)
     result["errors"] = errors
+    result["extraction_seconds"] = total_elapsed
+    result["resolution_seconds"] = resolve_elapsed
     return result
 
 
