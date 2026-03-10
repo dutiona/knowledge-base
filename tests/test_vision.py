@@ -1183,23 +1183,34 @@ def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path)
 # ---------------------------------------------------------------------------
 
 
-@patch("research_index.server.extract_figures")
+@patch("research_index.server.submit_job")
+@patch("research_index.server.estimate_figures_time")
 @patch("research_index.server._get_conn")
-def test_mcp_tool_page_conversion(mock_get_conn, mock_ef):
-    """extract_figures_tool converts 1-based pages to 0-based."""
+def test_mcp_tool_page_conversion(mock_get_conn, mock_eft, mock_submit):
+    """extract_figures_tool converts 1-based pages to 0-based and submits a job."""
     from research_index.server import extract_figures_tool
 
-    mock_ef.return_value = {"pages_processed": 1}
     mock_get_conn.return_value = MagicMock()
+    mock_eft.return_value = {
+        "candidate_pages": 3,
+        "estimated_seconds": 200,
+        "has_omniparser": False,
+    }
+    mock_submit.return_value = 42
 
-    result = json.loads(extract_figures_tool(paper_id=1, pages=[1, 5, 10]))
-    assert result["pages_processed"] == 1
+    result = json.loads(
+        extract_figures_tool(paper_id=1, pages=[1, 5, 10], confirmed=True)
+    )
+    assert result["deferred"] is True
+    assert result["job_id"] == 42
 
-    # Verify extract_figures was called with 0-based pages
-    call_args = mock_ef.call_args
-    assert call_args[1].get("pages") == [0, 4, 9] or list(call_args[0][2:3]) == [
-        [0, 4, 9]
-    ]
+    # Verify estimate_figures_time was called with 0-based pages
+    call_args = mock_eft.call_args
+    assert call_args[1].get("pages") == [0, 4, 9] or call_args[0][2] == [0, 4, 9]
+
+    # Verify submit_job was called with 0-based pages in params
+    submit_args = mock_submit.call_args
+    assert submit_args[0][3] == {"pages": [0, 4, 9]}
 
 
 @patch("research_index.server._get_conn")

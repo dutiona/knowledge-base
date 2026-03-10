@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -616,11 +617,62 @@ def _get_paper_source_uri(conn: sqlite3.Connection, paper_id: int) -> str | None
 # ---------------------------------------------------------------------------
 
 
+def estimate_figures_time(
+    conn: sqlite3.Connection,
+    paper_id: int,
+    pages: list[int] | None = None,
+) -> dict:
+    """Estimate figure extraction time without running it.
+
+    Returns dict with candidate_pages, estimated_seconds, has_omniparser.
+    Returns {"error": ...} on validation failure.
+    """
+    paper_row = conn.execute(
+        "SELECT id FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()
+    if paper_row is None:
+        return {"error": f"Paper {paper_id} not found"}
+
+    source_uri = _get_paper_source_uri(conn, paper_id)
+    if source_uri is None:
+        return {"error": f"No source URI found for paper {paper_id}"}
+
+    pdf_path = Path(source_uri)
+    if pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
+        return {"error": f"Source is not an existing PDF: {source_uri}"}
+
+    if pages is not None:
+        # Bounds-check explicit pages
+        doc = fitz.open(str(pdf_path))
+        total_pages = len(doc)
+        doc.close()
+        for p in pages:
+            if p < 0 or p >= total_pages:
+                return {
+                    "error": f"Page {p} out of range (document has {total_pages} pages)"
+                }
+        candidate_pages = pages
+    else:
+        candidate_pages = _heuristic_filter(str(pdf_path))
+
+    omniparser_path = _get_omniparser_config(conn)
+    per_page = _ETA_SECS_PER_PAGE_BASE + (
+        _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
+    )
+    estimated = len(candidate_pages) * per_page
+    return {
+        "candidate_pages": len(candidate_pages),
+        "estimated_seconds": estimated,
+        "has_omniparser": omniparser_path is not None,
+    }
+
+
 def extract_figures(
     conn: sqlite3.Connection,
     paper_id: int,
     pages: list[int] | None = None,
     confirmed: bool = False,
+    on_progress: Callable[[str], None] | None = None,
 ) -> dict:
     """Extract figures from a paper's PDF using vision models.
 
@@ -677,6 +729,8 @@ def extract_figures(
         }
 
     # 5. Render all candidate pages to PNG bytes (main thread, single doc open)
+    if on_progress:
+        on_progress(f"rendering {len(candidate_pages)} pages...")
     rendered: dict[int, bytes] = {}
     doc = fitz.open(str(pdf_path))
     try:
@@ -703,6 +757,8 @@ def extract_figures(
     ] = {}
     omniparser_elapsed = 0.0
     if omniparser_path:
+        if on_progress:
+            on_progress(f"omniparser {len(rendered)} pages...")
         t_omni_start = time.monotonic()
         for page_num, png_bytes in rendered.items():
             png_fd, png_tmp = tempfile.mkstemp(suffix=".png")
@@ -740,6 +796,8 @@ def extract_figures(
         )
 
     # 7. Dispatch vision calls in thread pool (no conn access)
+    if on_progress:
+        on_progress(f"vision {len(rendered)} pages...")
     # For pages with multiple detected regions, send one vision call per crop.
     # For pages with single region (or no OmniParser), send the full page.
     page_results: dict[int, list[dict]] = {}
@@ -853,6 +911,8 @@ def extract_figures(
                     }
 
     # 8. Collect all figure descriptions for batch embedding
+    if on_progress:
+        on_progress("embedding figures...")
     all_figures: list[tuple[int, int, dict]] = []  # (page_num, fig_idx, figure)
     texts: list[str] = []
     for page_num in sorted(page_results):
