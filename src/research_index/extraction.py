@@ -895,6 +895,7 @@ def estimate_extraction_time(conn: sqlite3.Connection, paper_id: int) -> dict:
         "chunk_count": len(chunks),
         "estimated_seconds": estimated_seconds,
         "is_long": total_chars > 8000,
+        "_chunks": chunks,  # reused by extract_structure to avoid refetch
     }
 
 
@@ -914,7 +915,7 @@ def extract_structure(
     if "error" in est:
         return est
 
-    chunks = _get_paper_chunks(conn, paper_id)
+    chunks = est.pop("_chunks")
 
     # Fast path: short document
     if not est["is_long"]:

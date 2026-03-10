@@ -642,6 +642,15 @@ def estimate_figures_time(
         return {"error": f"Source is not an existing PDF: {source_uri}"}
 
     if pages is not None:
+        # Bounds-check explicit pages
+        doc = fitz.open(str(pdf_path))
+        total_pages = len(doc)
+        doc.close()
+        for p in pages:
+            if p < 0 or p >= total_pages:
+                return {
+                    "error": f"Page {p} out of range (document has {total_pages} pages)"
+                }
         candidate_pages = pages
     else:
         candidate_pages = _heuristic_filter(str(pdf_path))

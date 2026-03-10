@@ -88,6 +88,12 @@ def test_deduplication(tmp_path):
     job_id3 = submit_job(conn, paper_id, "extract_figures")
     assert job_id3 != job_id1
 
+    # Same type but different params is not a duplicate
+    job_id4 = submit_job(conn, paper_id, "extract_figures", {"pages": [0]})
+    job_id5 = submit_job(conn, paper_id, "extract_figures", {"pages": [1]})
+    assert job_id4 != job_id3  # different params vs default
+    assert job_id5 != job_id4  # different page lists
+
 
 # --- Worker ---
 

@@ -30,16 +30,19 @@ def submit_job(
     If a pending/running job already exists for the same (paper_id, job_type),
     returns the existing job_id instead of creating a duplicate.
     """
+    params_json = json.dumps(params or {}, sort_keys=True)
     existing = conn.execute(
-        "SELECT id FROM jobs WHERE paper_id = ? AND job_type = ? AND status IN ('pending', 'running')",
-        (paper_id, job_type),
+        "SELECT id FROM jobs "
+        "WHERE paper_id = ? AND job_type = ? AND params = ? "
+        "AND status IN ('pending', 'running')",
+        (paper_id, job_type, params_json),
     ).fetchone()
     if existing:
         return existing["id"]
 
     cursor = conn.execute(
         "INSERT INTO jobs (paper_id, job_type, params) VALUES (?, ?, ?)",
-        (paper_id, job_type, json.dumps(params or {})),
+        (paper_id, job_type, params_json),
     )
     conn.commit()
     job_id = cursor.lastrowid
