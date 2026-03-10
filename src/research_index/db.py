@@ -64,36 +64,6 @@ def _migrate_source_type_figure(conn: sqlite3.Connection) -> None:
     """)
 
 
-def _migrate_relationship_types(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='relationships'"
-    ).fetchone()
-    if not row or "'applies'" in row[0]:
-        return
-
-    conn.executescript("""
-    PRAGMA foreign_keys = OFF;
-    BEGIN;
-    CREATE TABLE relationships_new (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_paper_id INTEGER NOT NULL REFERENCES papers(id),
-        target_paper_id INTEGER NOT NULL REFERENCES papers(id),
-        relation_type TEXT NOT NULL CHECK(relation_type IN ('extends', 'contradicts', 'replicates', 'cites', 'compares', 'applies', 'implements')),
-        confidence REAL DEFAULT 1.0,
-        evidence_chunk_id INTEGER REFERENCES chunks(id),
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(source_paper_id, target_paper_id, relation_type)
-    );
-
-    INSERT INTO relationships_new SELECT * FROM relationships;
-    DROP TABLE relationships;
-    ALTER TABLE relationships_new RENAME TO relationships;
-
-    COMMIT;
-    PRAGMA foreign_keys = ON;
-    """)
-
-
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(f"""
     CREATE TABLE IF NOT EXISTS chunks (
@@ -146,7 +116,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         source_paper_id INTEGER NOT NULL REFERENCES papers(id),
         target_paper_id INTEGER NOT NULL REFERENCES papers(id),
-        relation_type TEXT NOT NULL CHECK(relation_type IN ('extends', 'contradicts', 'replicates', 'cites', 'compares', 'applies', 'implements')),
+        relation_type TEXT NOT NULL CHECK(relation_type IN ('extends', 'contradicts', 'replicates', 'cites', 'compares')),
         confidence REAL DEFAULT 1.0,
         evidence_chunk_id INTEGER REFERENCES chunks(id),
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -246,4 +216,3 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
     _migrate_source_type_figure(conn)
-    _migrate_relationship_types(conn)
