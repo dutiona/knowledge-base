@@ -288,6 +288,27 @@ def _crop_regions(
     return crops
 
 
+def _elements_in_region(
+    elements: list[dict],
+    region: tuple[float, float, float, float],
+) -> list[dict]:
+    """Filter OmniParser elements whose bbox center falls within *region*.
+
+    Both element bboxes and region are in ratio coordinates (0-1).
+    """
+    rx1, ry1, rx2, ry2 = region
+    result = []
+    for el in elements:
+        bbox = el.get("bbox")
+        if not bbox or len(bbox) != 4:
+            continue
+        cx = (bbox[0] + bbox[2]) / 2
+        cy = (bbox[1] + bbox[3]) / 2
+        if rx1 <= cx <= rx2 and ry1 <= cy <= ry2:
+            result.append(el)
+    return result
+
+
 def _merge_omniparser_elements(figure: dict, elements: list[dict]) -> dict:
     """Append OmniParser OCR text and icon captions to figure description.
 
@@ -641,7 +662,11 @@ def extract_figures(
     base_url = config["base_url"]
     model = config["model"]
 
-    # 6b. Run OmniParser BEFORE vision calls to detect multi-figure layouts
+    # 6b. Run OmniParser BEFORE vision calls to detect multi-figure layouts.
+    # NOTE: OmniParser runs sequentially per page. Since it's CPU/GPU-bound
+    # (not I/O-bound like vision API calls), parallelizing would contend for
+    # the same compute resources. Future: consider async if OmniParser moves
+    # to a network service.
     # Maps page_num -> (omni_result, regions, crops)
     omni_data: dict[
         int, tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]]
@@ -734,11 +759,14 @@ def extract_figures(
                     exc,
                 )
 
-        # Flatten: merge all regions for each page into a single list
+        # Flatten: merge all regions for each page into a single list,
+        # tagging each figure with its region index for later element filtering.
         for page_num, region_map in page_figures_by_region.items():
             merged: list[dict] = []
             for key in sorted(region_map, key=lambda k: (k is None, k)):
-                merged.extend(region_map[key])
+                for fig in region_map[key]:
+                    fig["_region_idx"] = key
+                    merged.append(fig)
             page_results[page_num] = merged
 
     # 7b. Enrich with OmniParser text/icon data (post-vision)
@@ -762,11 +790,18 @@ def extract_figures(
                     omniparser_enriched += 1
                 page_results[page_num] = [enriched]
             else:
-                # Multi-figure: store elements in metadata only
+                # Multi-figure: filter elements to each figure's region
                 for i, fig in enumerate(figures_on_page):
+                    region_idx = fig.get("_region_idx")
+                    if region_idx is not None and region_idx < len(regions):
+                        region_elements = _elements_in_region(
+                            omni_elements, regions[region_idx]
+                        )
+                    else:
+                        region_elements = omni_elements
                     figures_on_page[i] = {
                         **fig,
-                        "_omniparser_elements": omni_elements,
+                        "_omniparser_elements": region_elements,
                     }
 
     # 8. Collect all figure descriptions for batch embedding

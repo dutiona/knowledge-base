@@ -7,6 +7,7 @@ from PIL import Image
 from research_index.vision import (
     _cluster_bboxes,
     _crop_regions,
+    _elements_in_region,
     _split_cluster_x,
     _CLUSTER_GAP_THRESHOLD,
 )
@@ -128,6 +129,35 @@ class TestSplitClusterX:
         cluster = [(0.05, 0.1, 0.35, 0.4), (0.55, 0.1, 0.85, 0.4)]
         result = _split_cluster_x(cluster, _CLUSTER_GAP_THRESHOLD)
         assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# _elements_in_region
+# ---------------------------------------------------------------------------
+
+
+class TestElementsInRegion:
+    def test_filters_by_center(self):
+        elements = _make_elements([(0.1, 0.1, 0.3, 0.3), (0.6, 0.6, 0.8, 0.8)])
+        # Region covers top-left quadrant only
+        result = _elements_in_region(elements, (0.0, 0.0, 0.5, 0.5))
+        assert len(result) == 1
+        assert result[0]["content"] == "el0"
+
+    def test_all_inside(self):
+        elements = _make_elements([(0.1, 0.1, 0.4, 0.4), (0.2, 0.2, 0.3, 0.3)])
+        result = _elements_in_region(elements, (0.0, 0.0, 1.0, 1.0))
+        assert len(result) == 2
+
+    def test_none_inside(self):
+        elements = _make_elements([(0.6, 0.6, 0.9, 0.9)])
+        result = _elements_in_region(elements, (0.0, 0.0, 0.4, 0.4))
+        assert len(result) == 0
+
+    def test_skips_missing_bbox(self):
+        elements = [{"type": "text", "content": "no bbox"}]
+        result = _elements_in_region(elements, (0.0, 0.0, 1.0, 1.0))
+        assert len(result) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +324,21 @@ class TestMultiFigureIntegration:
         assert len(vision_calls) == 4, (
             f"Expected 4 vision calls (one per crop), got {len(vision_calls)}"
         )
+
+        # Verify per-region element filtering: each figure should only have
+        # elements from its own region, not all 4 elements
+        import json
+
+        rows = conn.execute(
+            "SELECT metadata FROM chunks WHERE source_type = 'figure'"
+        ).fetchall()
+        assert len(rows) == 4
+        for row in rows:
+            meta = json.loads(row[0])
+            if "omniparser_elements" in meta:
+                assert len(meta["omniparser_elements"]) == 1, (
+                    f"Expected 1 element per region, got {len(meta['omniparser_elements'])}"
+                )
 
     def test_no_omniparser_falls_back_to_full_page(self, _db_and_pdf, monkeypatch):
         """Without OmniParser, pipeline sends full page (original behavior)."""
