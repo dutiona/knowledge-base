@@ -331,6 +331,22 @@ def test_export_bibtex_stored_vs_generated_collision(tmp_path):
     assert "smith2024a," in bib  # generated avoids collision
 
 
+def test_sync_bibtex_stored_vs_generated_collision(tmp_path):
+    """Stored and generated entries with same key get distinct keys in sync."""
+    conn = _setup(tmp_path)
+    custom = "@article{smith2024,\n  title = {Stored Smith},\n  year = {2024},\n}"
+    register_paper(conn, "Stored Smith", bibtex=custom)
+    register_paper(conn, "Generated Smith", ["Smith, Alice"], 2024)
+
+    bib_file = tmp_path / "refs.bib"
+    result = sync_bibtex(conn, str(bib_file))
+    assert result["appended"] == 2
+
+    content = bib_file.read_text()
+    assert "smith2024," in content  # stored entry
+    assert "smith2024a," in content  # generated avoids collision
+
+
 def test_sync_bibtex_with_filters(tmp_path):
     conn = _setup(tmp_path)
     register_paper(conn, "Paper A", ["Author A"], 2020)

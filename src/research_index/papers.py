@@ -345,21 +345,22 @@ def sync_bibtex(
     p = Path(output_path).expanduser().resolve()
     existing_text = p.read_text(encoding="utf-8") if p.exists() else ""
     file_keys = _extract_bibtex_keys(existing_text)
-    # Track all keys (file + newly generated) for collision avoidance
-    all_keys = set(file_keys)
-
-    # Get all candidate entries
+    # Pre-seed all_keys with file keys + stored BibTeX keys from candidates
     rows = _query_papers(conn, paper_ids, title_pattern)
+    all_keys = set(file_keys)
+    for row in rows:
+        if row["bibtex"]:
+            all_keys.update(_extract_bibtex_keys(row["bibtex"]))
+
     new_entries = []
     skipped = 0
     for row in rows:
         if row["bibtex"]:
-            # Stored BibTeX: skip only if exact key already in file
+            # Stored BibTeX: skip if exact key already in file or earlier stored entry
             entry_keys = _extract_bibtex_keys(row["bibtex"])
             if entry_keys & file_keys:
                 skipped += 1
                 continue
-            all_keys.update(entry_keys)
             new_entries.append(row["bibtex"])
         else:
             paper = {
