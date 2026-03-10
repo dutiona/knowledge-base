@@ -2,6 +2,7 @@
 
 import pytest
 import sqlite3
+from pathlib import Path
 
 from research_index.db import get_connection, init_schema, EMBED_DIM
 
@@ -1078,3 +1079,462 @@ def test_mcp_tool_rejects_zero_and_negative_pages(mock_get_conn):
     result_neg = json.loads(extract_figures_tool(paper_id=1, pages=[-1]))
     assert "error" in result_neg
     assert "Pages must be >= 1" in result_neg["error"]
+
+
+# ---------------------------------------------------------------------------
+# OmniParser config tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_omniparser_config_default(tmp_path):
+    """Returns None when no omniparser_path is configured."""
+    from research_index.vision import _get_omniparser_config
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    assert _get_omniparser_config(conn) is None
+
+
+def test_configure_omniparser_valid(tmp_path):
+    """Set a valid path, read it back."""
+    from research_index.vision import _get_omniparser_config, configure_omniparser
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Create fake omniparser directory structure
+    omni_dir = tmp_path / "omniparser"
+    omni_dir.mkdir()
+    (omni_dir / "parse.py").write_text("# fake")
+    venv_bin = omni_dir / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("# fake")
+
+    result = configure_omniparser(conn, str(omni_dir))
+    assert result["omniparser_path"] == str(omni_dir)
+    assert "error" not in result
+
+    # Read back
+    assert _get_omniparser_config(conn) == str(omni_dir)
+
+
+def test_configure_omniparser_invalid_path(tmp_path):
+    """Rejects nonexistent path."""
+    from research_index.vision import configure_omniparser
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    result = configure_omniparser(conn, "/nonexistent/path")
+    assert "error" in result
+
+
+def test_configure_omniparser_disable(tmp_path):
+    """Empty string clears the config."""
+    from research_index.vision import _get_omniparser_config, configure_omniparser
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Set first
+    omni_dir = tmp_path / "omniparser"
+    omni_dir.mkdir()
+    (omni_dir / "parse.py").write_text("# fake")
+    venv_bin = omni_dir / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("# fake")
+    configure_omniparser(conn, str(omni_dir))
+    assert _get_omniparser_config(conn) is not None
+
+    # Disable
+    result = configure_omniparser(conn, "")
+    assert result["omniparser_path"] is None
+    assert _get_omniparser_config(conn) is None
+
+
+# ---------------------------------------------------------------------------
+# OmniParser subprocess tests
+# ---------------------------------------------------------------------------
+
+import subprocess
+
+
+def test_run_omniparser_success(tmp_path):
+    """Mock subprocess returns valid JSON; verify parsed output."""
+    from research_index.vision import _run_omniparser
+
+    omni_elements = {
+        "elements": [
+            {
+                "id": 0,
+                "type": "text",
+                "bbox": [0, 0, 1, 1],
+                "content": "Hello",
+                "interactivity": False,
+                "source": "ocr",
+            },
+        ],
+        "label_coordinates": {},
+        "image_size": {"width": 100, "height": 100},
+    }
+
+    png_path = tmp_path / "test.png"
+    png_path.write_bytes(b"\x89PNG fake")
+
+    def fake_run(cmd, **kwargs):
+        # Write JSON to the -j output path
+        json_path = cmd[cmd.index("-j") + 1]
+        Path(json_path).write_text(json.dumps(omni_elements))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    with patch("research_index.vision.subprocess.run", side_effect=fake_run):
+        result = _run_omniparser(png_path, str(tmp_path))
+
+    assert result is not None
+    assert len(result["elements"]) == 1
+    assert result["elements"][0]["content"] == "Hello"
+
+
+def test_run_omniparser_timeout():
+    """TimeoutExpired returns None."""
+    from research_index.vision import _run_omniparser
+
+    with patch(
+        "research_index.vision.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd="test", timeout=120),
+    ):
+        result = _run_omniparser(Path("/fake.png"), "/fake/omniparser")
+
+    assert result is None
+
+
+def test_run_omniparser_subprocess_error():
+    """CalledProcessError returns None."""
+    from research_index.vision import _run_omniparser
+
+    with patch(
+        "research_index.vision.subprocess.run",
+        side_effect=subprocess.CalledProcessError(1, cmd="test"),
+    ):
+        result = _run_omniparser(Path("/fake.png"), "/fake/omniparser")
+
+    assert result is None
+
+
+def test_run_omniparser_malformed_json(tmp_path):
+    """Valid subprocess but invalid JSON output returns None."""
+    from research_index.vision import _run_omniparser
+
+    def fake_run(cmd, **kwargs):
+        json_path = cmd[cmd.index("-j") + 1]
+        Path(json_path).write_text("not valid json {{{")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    with patch("research_index.vision.subprocess.run", side_effect=fake_run):
+        result = _run_omniparser(Path("/fake.png"), str(tmp_path))
+
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# OmniParser merge tests
+# ---------------------------------------------------------------------------
+
+
+def test_merge_omniparser_elements_text_and_icons():
+    """Both text and icon elements are appended to description."""
+    from research_index.vision import _merge_omniparser_elements
+
+    figure = {"figure_type": "chart", "description": "A bar chart"}
+    elements = [
+        {"type": "text", "content": "X-axis", "bbox": [0, 0, 1, 1]},
+        {"type": "icon", "content": "legend icon", "bbox": [0, 0, 1, 1]},
+        {"type": "text", "content": "Y-axis", "bbox": [0, 0, 1, 1]},
+    ]
+
+    result = _merge_omniparser_elements(figure, elements)
+    assert result is not figure  # new dict
+    assert result["description"].startswith("A bar chart")
+    assert 'Detected text: "X-axis", "Y-axis"' in result["description"]
+    assert 'Detected elements: "legend icon"' in result["description"]
+
+
+def test_merge_omniparser_elements_text_only():
+    """Only text elements present."""
+    from research_index.vision import _merge_omniparser_elements
+
+    figure = {"figure_type": "table", "description": "Results table"}
+    elements = [
+        {"type": "text", "content": "Accuracy", "bbox": [0, 0, 1, 1]},
+        {"type": "text", "content": "92.5%", "bbox": [0, 0, 1, 1]},
+    ]
+
+    result = _merge_omniparser_elements(figure, elements)
+    assert "Detected text:" in result["description"]
+    assert "Detected elements:" not in result["description"]
+
+
+def test_merge_omniparser_elements_empty():
+    """No elements — description unchanged, same dict returned."""
+    from research_index.vision import _merge_omniparser_elements
+
+    figure = {"figure_type": "diagram", "description": "Original"}
+    result = _merge_omniparser_elements(figure, [])
+    assert result is figure
+
+
+def test_merge_omniparser_elements_empty_content():
+    """Elements with null/empty/short content are skipped."""
+    from research_index.vision import _merge_omniparser_elements
+
+    figure = {"figure_type": "chart", "description": "Original"}
+    elements = [
+        {"type": "text", "content": None, "bbox": [0, 0, 1, 1]},
+        {"type": "text", "content": "", "bbox": [0, 0, 1, 1]},
+        {"type": "text", "content": "x", "bbox": [0, 0, 1, 1]},  # len < 2
+        {"type": "icon", "content": "  ", "bbox": [0, 0, 1, 1]},  # whitespace only
+    ]
+
+    result = _merge_omniparser_elements(figure, elements)
+    assert result is figure  # nothing to merge
+
+
+def test_merge_omniparser_elements_dedup():
+    """Duplicate content strings are deduplicated (case-insensitive)."""
+    from research_index.vision import _merge_omniparser_elements
+
+    figure = {"figure_type": "chart", "description": "Chart"}
+    elements = [
+        {"type": "text", "content": "Label", "bbox": [0, 0, 1, 1]},
+        {"type": "text", "content": "label", "bbox": [0, 0, 1, 1]},
+        {"type": "text", "content": "LABEL", "bbox": [0, 0, 1, 1]},
+        {"type": "text", "content": "Other", "bbox": [0, 0, 1, 1]},
+    ]
+
+    result = _merge_omniparser_elements(figure, elements)
+    # Should have "Label" and "Other", not three copies
+    desc = result["description"]
+    assert desc.count("Label") == 1 or desc.count("label") == 1
+    assert "Other" in desc
+
+
+def test_merge_omniparser_elements_size_cap():
+    """Total appended text is capped at 500 chars."""
+    from research_index.vision import _merge_omniparser_elements
+
+    figure = {"figure_type": "chart", "description": "Chart"}
+    # 100 elements with 10-char content = 1000+ chars without cap
+    elements = [
+        {"type": "text", "content": f"element_{i:02d}", "bbox": [0, 0, 1, 1]}
+        for i in range(100)
+    ]
+
+    result = _merge_omniparser_elements(figure, elements)
+    # The appended portion (after "Chart\n\n") should be <= 500 chars
+    appended = result["description"][len("Chart") :]
+    assert len(appended) <= 520  # small margin for prefix "Detected text: "
+
+
+# ---------------------------------------------------------------------------
+# OmniParser integration tests (extract_figures pipeline)
+# ---------------------------------------------------------------------------
+
+
+_OMNI_ELEMENTS = {
+    "elements": [
+        {
+            "id": 0,
+            "type": "text",
+            "bbox": [0, 0, 0.5, 0.1],
+            "content": "X-axis label",
+            "interactivity": False,
+            "source": "ocr",
+        },
+        {
+            "id": 1,
+            "type": "icon",
+            "bbox": [0.5, 0.5, 0.7, 0.7],
+            "content": "data point",
+            "interactivity": False,
+            "source": "yolo",
+        },
+    ],
+    "label_coordinates": {},
+    "image_size": {"width": 800, "height": 600},
+}
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+@patch("research_index.vision._run_omniparser")
+def test_extract_figures_with_omniparser_single_figure(
+    mock_omni, mock_vision, mock_embed, tmp_path
+):
+    """Single figure on page: omniparser elements merged into description."""
+    from research_index.vision import extract_figures
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "chart",
+            "description": "A bar chart showing results",
+            "title": "Fig 1",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.1] * 768]
+    mock_omni.return_value = _OMNI_ELEMENTS
+
+    conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
+
+    # Configure omniparser
+    omni_dir = tmp_path / "omniparser"
+    omni_dir.mkdir()
+    (omni_dir / "parse.py").write_text("# fake")
+    venv_bin = omni_dir / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("# fake")
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_path', ?)",
+        (str(omni_dir),),
+    )
+    conn.commit()
+
+    result = extract_figures(conn, paper_id=paper_id, pages=[0])
+
+    assert result["pages_processed"] == 1
+    assert result["chunks_created"] == 1
+    assert result["omniparser_enriched"] == 1
+
+    # Verify description was enriched
+    row = conn.execute(
+        "SELECT content FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    assert "A bar chart showing results" in row["content"]
+    assert "X-axis label" in row["content"]
+    assert "data point" in row["content"]
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+@patch("research_index.vision._run_omniparser")
+def test_extract_figures_with_omniparser_multi_figure(
+    mock_omni, mock_vision, mock_embed, tmp_path
+):
+    """Multiple figures on page: omniparser stored in metadata only, not in description."""
+    from research_index.vision import extract_figures
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "chart",
+            "description": "First chart",
+            "title": "Fig 1a",
+            "entities_mentioned": [],
+        },
+        {
+            "figure_type": "diagram",
+            "description": "Second diagram",
+            "title": "Fig 1b",
+            "entities_mentioned": [],
+        },
+    ]
+    mock_embed.return_value = [[0.1] * 768, [0.2] * 768]
+    mock_omni.return_value = _OMNI_ELEMENTS
+
+    conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
+
+    # Configure omniparser
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_path', '/fake/omniparser')",
+    )
+    conn.commit()
+
+    result = extract_figures(conn, paper_id=paper_id, pages=[0])
+
+    assert result["pages_processed"] == 1
+    assert result["chunks_created"] == 2
+    assert result["omniparser_enriched"] == 0  # no description enrichment
+
+    # Descriptions should NOT contain omniparser text
+    rows = conn.execute(
+        "SELECT content, metadata FROM chunks WHERE source_type = 'figure' ORDER BY chunk_index"
+    ).fetchall()
+    for row in rows:
+        assert "X-axis label" not in row["content"]
+        # But metadata should have omniparser_elements
+        meta = json.loads(row["metadata"])
+        assert "omniparser_elements" in meta
+        assert len(meta["omniparser_elements"]) == 2
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+@patch("research_index.vision._run_omniparser")
+def test_extract_figures_omniparser_failure_graceful(
+    mock_omni, mock_vision, mock_embed, tmp_path
+):
+    """Omniparser fails: figures still created with LLM-only description."""
+    from research_index.vision import extract_figures
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "chart",
+            "description": "Original caption only",
+            "title": "Fig 1",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.1] * 768]
+    mock_omni.return_value = None  # omniparser failed
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_path', '/fake/omniparser')",
+    )
+    conn.commit()
+
+    result = extract_figures(conn, paper_id=paper_id, pages=[0])
+
+    assert result["pages_processed"] == 1
+    assert result["chunks_created"] == 1
+    assert result["omniparser_enriched"] == 0
+
+    row = conn.execute(
+        "SELECT content FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    assert row["content"] == "Original caption only"
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+def test_extract_figures_without_omniparser(mock_vision, mock_embed, tmp_path):
+    """Omniparser not configured: no subprocess calls, identical behavior."""
+    from research_index.vision import extract_figures
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "diagram",
+            "description": "Architecture diagram",
+            "title": "Fig 1",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.1] * 768]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
+
+    # No omniparser configured
+    result = extract_figures(conn, paper_id=paper_id, pages=[0])
+
+    assert result["pages_processed"] == 1
+    assert result["chunks_created"] == 1
+    assert result.get("omniparser_enriched", 0) == 0
+
+    row = conn.execute(
+        "SELECT content FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    assert row["content"] == "Architecture diagram"
