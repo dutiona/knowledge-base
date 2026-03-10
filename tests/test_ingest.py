@@ -1502,3 +1502,30 @@ def test_extract_web_figures_dedup(mock_vision_cfg, mock_vision_call, tmp_path):
         ("https://example.com/page",),
     ).fetchone()["cnt"]
     assert total == 1
+
+# --- duplicate detection by content hash (issue #59, task 10) ---
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_ingest_detects_duplicate_by_hash(tmp_path):
+    """If a file with same content hash exists under a different path, return info."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md1 = tmp_path / "dir1" / "paper.md"
+    md1.parent.mkdir()
+    md1.write_text("Identical content.\n")
+    ingest_file(conn, md1)
+    register_paper(conn, "Paper A", source_uri=str(md1.resolve()))
+
+    # Copy same content to different path
+    md2 = tmp_path / "dir2" / "paper.md"
+    md2.parent.mkdir()
+    md2.write_text("Identical content.\n")
+    result = ingest_file(conn, md2)
+
+    # Chunks are deduplicated by content_hash, so no new chunks added
+    assert result["chunks_added"] == 0
+    assert result["chunks_skipped"] >= 1
+    assert result["duplicate_of_paper_id"] is not None
