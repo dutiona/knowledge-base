@@ -15,6 +15,7 @@ from research_index.papers import (
     get_paper_source_uri,
     get_relationships,
     register_paper,
+    relocate_paper,
     suggest_relationships,
     sync_bibtex,
     _bibtex_key,
@@ -837,3 +838,55 @@ def test_get_paper_resilient_to_broken_abstract_chunk(tmp_path):
 
     papers = get_paper(conn, paper_id=paper_id)
     assert len(papers[0]["chunks"]) >= 1
+
+
+# --- relocate_paper ---
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_relocate_paper(tmp_path):
+    conn = _setup(tmp_path)
+    old_dir = tmp_path / "old"
+    old_dir.mkdir()
+    md = old_dir / "paper.md"
+    md.write_text("Paper content.\n")
+    ingest_file(conn, md)
+
+    result = register_paper(conn, "Movable", source_uri=str(md.resolve()))
+    paper_id = result["paper_id"]
+
+    new_dir = tmp_path / "new"
+    new_dir.mkdir()
+    new_path = new_dir / "paper.md"
+    md.rename(new_path)
+
+    res = relocate_paper(conn, paper_id, str(new_path.resolve()))
+    assert res["old_path"] == str((old_dir / "paper.md").resolve())
+    assert res["new_path"] == str(new_path.resolve())
+
+    # paper_paths updated
+    paths = get_paper_paths(conn, paper_id)
+    assert paths[0]["path"] == str(new_path.resolve())
+    assert paths[0]["content_hash"] is not None
+
+    # chunks.source_uri updated
+    chunks = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (str(new_path.resolve()),)
+    ).fetchall()
+    assert len(chunks) >= 1
+
+    # Old path has no chunks
+    old_chunks = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?",
+        (str((old_dir / "paper.md").resolve()),),
+    ).fetchall()
+    assert len(old_chunks) == 0
+
+
+def test_relocate_paper_no_entry(tmp_path):
+    conn = _setup(tmp_path)
+    pid = register_paper(conn, "No Path Paper")["paper_id"]
+    conn.execute("DELETE FROM paper_paths WHERE paper_id = ?", (pid,))
+    conn.commit()
+    result = relocate_paper(conn, pid, "/new/path")
+    assert "error" in result

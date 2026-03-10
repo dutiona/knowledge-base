@@ -86,6 +86,65 @@ def get_paper_chunks(
     ]
 
 
+def relocate_paper(
+    conn: sqlite3.Connection,
+    paper_id: int,
+    new_path: str,
+    content_hash: str | None = None,
+) -> dict:
+    """Update a paper's filesystem path after a move/rename.
+
+    Updates both paper_paths and chunks.source_uri atomically.
+    Validates: new_path must exist, must not be owned by another paper,
+    and content hash must match if previous hash is known.
+    """
+    new_path = str(Path(new_path).resolve())
+
+    current = conn.execute(
+        "SELECT id, path, content_hash FROM paper_paths "
+        "WHERE paper_id = ? AND is_primary = TRUE LIMIT 1",
+        (paper_id,),
+    ).fetchone()
+    if not current:
+        return {"error": f"No paper_paths entry for paper {paper_id}"}
+
+    old_path = current["path"]
+
+    p = Path(new_path)
+    if not p.exists():
+        return {"error": f"New path does not exist: {new_path}"}
+
+    conflict = conn.execute(
+        "SELECT paper_id FROM paper_paths WHERE path = ? AND paper_id != ?",
+        (new_path, paper_id),
+    ).fetchone()
+    if conflict:
+        return {
+            "error": f"Path already owned by paper {conflict['paper_id']}: {new_path}"
+        }
+
+    if content_hash is None:
+        content_hash = compute_file_hash(p)
+
+    if current["content_hash"] and content_hash != current["content_hash"]:
+        return {
+            "error": "Content hash mismatch — file at new_path has different content",
+            "expected": current["content_hash"],
+            "actual": content_hash,
+        }
+
+    conn.execute(
+        "UPDATE paper_paths SET path = ?, content_hash = ? WHERE id = ?",
+        (new_path, content_hash, current["id"]),
+    )
+    conn.execute(
+        "UPDATE chunks SET source_uri = ? WHERE source_uri = ?",
+        (new_path, old_path),
+    )
+    conn.commit()
+    return {"paper_id": paper_id, "old_path": old_path, "new_path": new_path}
+
+
 def register_paper(
     conn: sqlite3.Connection,
     title: str,
