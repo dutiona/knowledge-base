@@ -9,6 +9,20 @@ import sqlite_vec
 
 DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "research-index" / "research.db"
 EMBED_DIM = 768  # nomic-embed-text
+RELATIONSHIP_TYPES = (
+    "extends",
+    "contradicts",
+    "replicates",
+    "cites",
+    "compares",
+    "applies",
+    "implements",
+)
+
+
+def _relationship_check_constraint() -> str:
+    values = ", ".join(f"'{t}'" for t in RELATIONSHIP_TYPES)
+    return f"CHECK(relation_type IN ({values}))"
 
 
 def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -71,14 +85,15 @@ def _migrate_relationship_types(conn: sqlite3.Connection) -> None:
     if not row or "'applies'" in row[0]:
         return
 
-    conn.executescript("""
+    check = _relationship_check_constraint()
+    conn.executescript(f"""
     PRAGMA foreign_keys = OFF;
     BEGIN;
     CREATE TABLE relationships_new (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         source_paper_id INTEGER NOT NULL REFERENCES papers(id),
         target_paper_id INTEGER NOT NULL REFERENCES papers(id),
-        relation_type TEXT NOT NULL CHECK(relation_type IN ('extends', 'contradicts', 'replicates', 'cites', 'compares', 'applies', 'implements')),
+        relation_type TEXT NOT NULL {check},
         confidence REAL DEFAULT 1.0,
         evidence_chunk_id INTEGER REFERENCES chunks(id),
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -146,7 +161,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         source_paper_id INTEGER NOT NULL REFERENCES papers(id),
         target_paper_id INTEGER NOT NULL REFERENCES papers(id),
-        relation_type TEXT NOT NULL CHECK(relation_type IN ('extends', 'contradicts', 'replicates', 'cites', 'compares', 'applies', 'implements')),
+        relation_type TEXT NOT NULL {_relationship_check_constraint()},
         confidence REAL DEFAULT 1.0,
         evidence_chunk_id INTEGER REFERENCES chunks(id),
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
