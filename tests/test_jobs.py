@@ -30,10 +30,15 @@ def _make_paper(conn):
 
 @pytest.fixture(autouse=True)
 def _reset_worker():
-    """Ensure the global worker is stopped before/after each test."""
+    """Ensure the global worker is stopped before/after each test.
+
+    Also suppress _ensure_worker_running so submit_job doesn't start
+    the global worker — tests that need a worker create their own instance.
+    """
     worker = get_worker()
     worker.reset()
-    yield
+    with patch("research_index.jobs._ensure_worker_running"):
+        yield
     worker.reset()
 
 
@@ -107,14 +112,8 @@ def test_worker_processes_to_completion(tmp_path):
     submit_job(conn, paper_id, "extract_structure")
 
     worker = _JobWorker()
-    with (
-        patch(
-            "research_index.jobs.get_connection",
-            side_effect=lambda db=db_path: get_connection(db),
-        ),
-        patch("research_index.extraction.extract_structure", return_value=fake_result),
-    ):
-        worker.start()
+    with patch("research_index.extraction.extract_structure", return_value=fake_result):
+        worker.start(db_path=db_path)
         # Wait for worker to process
         for _ in range(50):
             time.sleep(0.1)
@@ -136,17 +135,11 @@ def test_worker_handles_failure(tmp_path):
     submit_job(conn, paper_id, "extract_structure")
 
     worker = _JobWorker()
-    with (
-        patch(
-            "research_index.jobs.get_connection",
-            side_effect=lambda db=db_path: get_connection(db),
-        ),
-        patch(
-            "research_index.extraction.extract_structure",
-            side_effect=RuntimeError("LLM down"),
-        ),
+    with patch(
+        "research_index.extraction.extract_structure",
+        side_effect=RuntimeError("LLM down"),
     ):
-        worker.start()
+        worker.start(db_path=db_path)
         for _ in range(50):
             time.sleep(0.1)
             job = get_job(conn, 1)
@@ -175,14 +168,8 @@ def test_progress_callback_updates_row(tmp_path):
     submit_job(conn, paper_id, "extract_structure")
 
     worker = _JobWorker()
-    with (
-        patch(
-            "research_index.jobs.get_connection",
-            side_effect=lambda db=db_path: get_connection(db),
-        ),
-        patch("research_index.extraction.extract_structure", side_effect=fake_extract),
-    ):
-        worker.start()
+    with patch("research_index.extraction.extract_structure", side_effect=fake_extract):
+        worker.start(db_path=db_path)
         for _ in range(50):
             time.sleep(0.1)
             job = get_job(conn, 1)
@@ -213,14 +200,10 @@ def test_sequential_processing(tmp_path):
 
     worker = _JobWorker()
     with (
-        patch(
-            "research_index.jobs.get_connection",
-            side_effect=lambda db=db_path: get_connection(db),
-        ),
         patch("research_index.extraction.extract_structure", side_effect=fake_extract),
         patch("research_index.vision.extract_figures", side_effect=fake_extract),
     ):
-        worker.start()
+        worker.start(db_path=db_path)
         for _ in range(100):
             time.sleep(0.1)
             jobs = list_jobs(conn, status="completed")
@@ -255,14 +238,8 @@ def test_crash_recovery(tmp_path):
     fake_result = {"methods_added": 0}
 
     worker = _JobWorker()
-    with (
-        patch(
-            "research_index.jobs.get_connection",
-            side_effect=lambda db=db_path: get_connection(db),
-        ),
-        patch("research_index.extraction.extract_structure", return_value=fake_result),
-    ):
-        worker.start()
+    with patch("research_index.extraction.extract_structure", return_value=fake_result):
+        worker.start(db_path=db_path)
         for _ in range(50):
             time.sleep(0.1)
             job = get_job(conn, 1)

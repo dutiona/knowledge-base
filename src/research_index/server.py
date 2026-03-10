@@ -651,9 +651,13 @@ def extract_structure_tool(paper_id: int, confirmed: bool = False) -> str:
     if "error" in est:
         return json.dumps(est)
 
-    # Short doc: run inline (fast path)
+    # Short doc: run inline (fast path) — reuse chunks from estimate
     if not est["is_long"]:
-        return json.dumps(extract_structure(conn, paper_id, confirmed=True))
+        return json.dumps(
+            extract_structure(
+                conn, paper_id, confirmed=True, _prefetched_chunks=est["chunks"]
+            )
+        )
 
     # Long doc, not confirmed: ETA warning
     if est["estimated_seconds"] > 120 and not confirmed:
@@ -720,8 +724,9 @@ def extract_figures_tool(
     Renders candidate pages as images, sends them to the configured vision model,
     and stores figure descriptions as searchable 'figure' chunks.
 
-    For long extractions (>2min), returns an ETA warning. Call with confirmed=True
-    to queue a background job. Use get_job_status(job_id) to poll progress.
+    Always queues a background job (figure extraction involves PDF rendering +
+    vision API calls). Returns an ETA warning first; call with confirmed=True
+    to submit the job. Use get_job_status(job_id) to poll progress.
 
     Args:
         paper_id: Paper ID.

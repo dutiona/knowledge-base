@@ -895,6 +895,7 @@ def estimate_extraction_time(conn: sqlite3.Connection, paper_id: int) -> dict:
         "chunk_count": len(chunks),
         "estimated_seconds": estimated_seconds,
         "is_long": total_chars > 8000,
+        "chunks": chunks,
     }
 
 
@@ -903,6 +904,8 @@ def extract_structure(
     paper_id: int,
     confirmed: bool = False,
     on_progress: Callable[[str], None] | None = None,
+    *,
+    _prefetched_chunks: list[dict] | None = None,
 ) -> dict:
     """Extract methods, datasets, and metrics from a paper's chunks using LLM.
 
@@ -914,7 +917,7 @@ def extract_structure(
     if not paper:
         return {"error": f"Paper {paper_id} not found"}
 
-    chunks = _get_paper_chunks(conn, paper_id)
+    chunks = _prefetched_chunks or _get_paper_chunks(conn, paper_id)
     if not chunks:
         return {"error": f"No chunks found for paper {paper_id}"}
 

@@ -7,6 +7,7 @@ import logging
 import sqlite3
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from .db import get_connection, init_schema
@@ -31,6 +32,10 @@ def submit_job(
     returns the existing job_id instead of creating a duplicate.
     """
     params_json = json.dumps(params or {}, sort_keys=True)
+
+    # Extract DB path from connection so the worker uses the same database
+    db_path = _get_db_path(conn)
+
     existing = conn.execute(
         "SELECT id FROM jobs "
         "WHERE paper_id = ? AND job_type = ? AND params = ? "
@@ -38,6 +43,7 @@ def submit_job(
         (paper_id, job_type, params_json),
     ).fetchone()
     if existing:
+        _ensure_worker_running(db_path)
         return existing["id"]
 
     cursor = conn.execute(
@@ -46,7 +52,7 @@ def submit_job(
     )
     conn.commit()
     job_id = cursor.lastrowid
-    _ensure_worker_running()
+    _ensure_worker_running(db_path)
     return job_id
 
 
@@ -93,9 +99,12 @@ class _JobWorker:
         self._event = threading.Event()
         self._lock = threading.Lock()
         self._stop_flag = False
+        self._db_path: Path | None = None
 
-    def start(self) -> None:
+    def start(self, db_path: Path | None = None) -> None:
         with self._lock:
+            if db_path is not None:
+                self._db_path = db_path
             if self._thread is not None and self._thread.is_alive():
                 self._event.set()
                 return
@@ -122,7 +131,8 @@ class _JobWorker:
         self._event.set()
 
     def _run(self) -> None:
-        conn = get_connection()
+        args = (self._db_path,) if self._db_path is not None else ()
+        conn = get_connection(*args)
         init_schema(conn)
         conn.execute("PRAGMA busy_timeout=5000")
 
@@ -231,8 +241,16 @@ class _JobWorker:
 _worker = _JobWorker()
 
 
-def _ensure_worker_running() -> None:
-    _worker.start()
+def _get_db_path(conn: sqlite3.Connection) -> Path | None:
+    """Extract the database file path from a connection."""
+    row = conn.execute("PRAGMA database_list").fetchone()
+    if row and row["file"]:
+        return Path(row["file"])
+    return None
+
+
+def _ensure_worker_running(db_path: Path | None = None) -> None:
+    _worker.start(db_path=db_path)
 
 
 def get_worker() -> _JobWorker:
