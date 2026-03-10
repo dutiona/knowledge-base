@@ -511,31 +511,36 @@ _RENDER_SCRIPT = Path(__file__).parent / "browser" / "render_page.py"
 # ---------------------------------------------------------------------------
 
 
+def _find_venv_python(venv_path: str | Path) -> Path | None:
+    """Locate the Python executable in a venv (cross-platform)."""
+    venv = Path(venv_path)
+    for candidate in (venv / "bin" / "python", venv / "Scripts" / "python.exe"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _get_browser_config(conn: sqlite3.Connection) -> dict | None:
     """Read browser rendering configuration from config table.
 
     Returns a dict with mode/endpoint/venv keys, or None when unconfigured.
     """
-    mode_row = conn.execute(
-        "SELECT value FROM config WHERE key = 'browser_mode'"
-    ).fetchone()
-    if not mode_row:
+    rows = conn.execute(
+        "SELECT key, value FROM config "
+        "WHERE key IN ('browser_mode', 'browser_venv', 'browser_endpoint')"
+    ).fetchall()
+    config_map = {row["key"]: row["value"] for row in rows}
+
+    mode = config_map.get("browser_mode")
+    venv = config_map.get("browser_venv")
+    if not mode or not venv:
         return None
 
-    venv_row = conn.execute(
-        "SELECT value FROM config WHERE key = 'browser_venv'"
-    ).fetchone()
-    if not venv_row:
-        return None
-
-    config: dict = {"mode": mode_row["value"], "venv": venv_row["value"]}
-
-    if mode_row["value"] == "cdp":
-        ep_row = conn.execute(
-            "SELECT value FROM config WHERE key = 'browser_endpoint'"
-        ).fetchone()
-        if ep_row:
-            config["endpoint"] = ep_row["value"]
+    config: dict = {"mode": mode, "venv": venv}
+    if mode == "cdp":
+        endpoint = config_map.get("browser_endpoint")
+        if endpoint:
+            config["endpoint"] = endpoint
 
     return config
 
@@ -573,9 +578,12 @@ def configure_browser(
 
     # Validate venv
     if venv_path:
-        venv_python = Path(venv_path) / "bin" / "python"
-        if not venv_python.exists():
-            return {"error": f"Python not found at {venv_python}"}
+        resolved = Path(venv_path).resolve()
+        if not resolved.is_absolute():
+            return {"error": "venv_path must be an absolute path"}
+        venv_python = _find_venv_python(resolved)
+        if not venv_python:
+            return {"error": f"Python executable not found in venv at {venv_path}"}
 
     # Determine mode
     if cdp_endpoint:
@@ -620,7 +628,15 @@ def _render_with_browser(
     success; tmpdir is cleaned on failure.
     """
     tmpdir = Path(tempfile.mkdtemp(prefix="ri-browser-"))
-    venv_python = str(Path(browser_config["venv"]) / "bin" / "python")
+    venv_python_path = _find_venv_python(browser_config["venv"])
+    if not venv_python_path:
+        logger.warning(
+            "Python executable not found in configured venv: %s",
+            browser_config["venv"],
+        )
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return None
+    venv_python = str(venv_python_path)
 
     cmd = [venv_python, str(_RENDER_SCRIPT), url, str(tmpdir)]
     if browser_config.get("mode") == "cdp" and browser_config.get("endpoint"):

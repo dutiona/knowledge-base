@@ -1,8 +1,12 @@
 """Render a JS-heavy page via Playwright. Outputs HTML + screenshot.
 
-Security: only http/https URLs are accepted (validated by caller).
-Defense-in-depth scheme check included.
-CDP mode uses ephemeral browser context (no shared state).
+Security notes:
+- Only http/https URLs are accepted (validated by caller + defense-in-depth here).
+- CDP mode uses ephemeral browser context (no shared state).
+- SSRF: the browser executes page JS which can issue secondary requests to
+  internal networks. This is an accepted trade-off for an optional, user-configured
+  feature. Network-level controls (Docker network isolation, firewall rules) are
+  the recommended mitigation.
 """
 
 from __future__ import annotations

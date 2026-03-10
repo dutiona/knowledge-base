@@ -1124,9 +1124,20 @@ def test_configure_browser_query_mode(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _make_fake_venv(base: Path) -> Path:
+    """Create a fake venv directory with a python binary stub."""
+    venv = base / "fakevenv"
+    (venv / "bin").mkdir(parents=True, exist_ok=True)
+    py = venv / "bin" / "python"
+    py.write_text("#!/bin/sh\n")
+    py.chmod(0o755)
+    return venv
+
+
 @patch("research_index.ingest.subprocess.run")
 def test_render_with_browser_success(mock_run, tmp_path):
     """Successful render returns html and screenshot_path."""
+    venv = _make_fake_venv(tmp_path)
 
     def _fake_run(cmd, **kwargs):
         # Write output files that the real script would produce
@@ -1137,7 +1148,7 @@ def test_render_with_browser_success(mock_run, tmp_path):
 
     mock_run.side_effect = _fake_run
 
-    config = {"mode": "local", "venv": str(tmp_path / "v")}
+    config = {"mode": "local", "venv": str(venv)}
     result = _render_with_browser("https://example.com", config)
 
     assert result is not None
@@ -1152,21 +1163,23 @@ def test_render_with_browser_success(mock_run, tmp_path):
 
 
 @patch("research_index.ingest.subprocess.run")
-def test_render_with_browser_timeout(mock_run):
+def test_render_with_browser_timeout(mock_run, tmp_path):
     """TimeoutExpired returns None and cleans tmpdir."""
+    venv = _make_fake_venv(tmp_path)
     mock_run.side_effect = subprocess.TimeoutExpired(cmd=["x"], timeout=60)
 
-    config = {"mode": "local", "venv": "/fake/venv"}
+    config = {"mode": "local", "venv": str(venv)}
     result = _render_with_browser("https://example.com", config)
     assert result is None
 
 
 @patch("research_index.ingest.subprocess.run")
-def test_render_with_browser_subprocess_error(mock_run):
+def test_render_with_browser_subprocess_error(mock_run, tmp_path):
     """CalledProcessError returns None."""
+    venv = _make_fake_venv(tmp_path)
     mock_run.side_effect = subprocess.CalledProcessError(1, cmd=["x"])
 
-    config = {"mode": "local", "venv": "/fake/venv"}
+    config = {"mode": "local", "venv": str(venv)}
     result = _render_with_browser("https://example.com", config)
     assert result is None
 
@@ -1174,6 +1187,7 @@ def test_render_with_browser_subprocess_error(mock_run):
 @patch("research_index.ingest.subprocess.run")
 def test_render_with_browser_cdp_mode_args(mock_run, tmp_path):
     """CDP mode includes --cdp flag in subprocess command."""
+    venv = _make_fake_venv(tmp_path)
 
     def _fake_run(cmd, **kwargs):
         out_dir = Path(cmd[3])
@@ -1185,7 +1199,7 @@ def test_render_with_browser_cdp_mode_args(mock_run, tmp_path):
     config = {
         "mode": "cdp",
         "endpoint": "ws://localhost:3000",
-        "venv": str(tmp_path / "v"),
+        "venv": str(venv),
     }
     result = _render_with_browser("https://example.com", config)
 
@@ -1198,6 +1212,13 @@ def test_render_with_browser_cdp_mode_args(mock_run, tmp_path):
         import shutil
 
         shutil.rmtree(result["tmpdir"], ignore_errors=True)
+
+
+def test_render_with_browser_invalid_venv(tmp_path):
+    """Returns None when venv python is not found."""
+    config = {"mode": "local", "venv": str(tmp_path / "nonexistent")}
+    result = _render_with_browser("https://example.com", config)
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
