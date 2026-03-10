@@ -279,14 +279,85 @@ def export_bibtex(
     return "\n\n".join(entries)
 
 
+def _extract_author_year_citations(text: str) -> list[tuple[str, int]]:
+    """Extract (surname, year) pairs from parenthetical and narrative citations.
+
+    Handles:
+      - (Vaswani et al., 2017)
+      - (Vaswani, 2017)
+      - (Vaswani & Shazeer, 2017)
+      - Vaswani et al. (2017)
+      - Vaswani (2017)
+    """
+    patterns = [
+        # Parenthetical: (Surname et al., YYYY) or (Surname, YYYY) or (Surname & Other, YYYY)
+        r"\(([A-Z][a-zA-Z'\-]+)(?:\s+(?:et\s+al\.|&\s+[A-Z][a-zA-Z'\-]+))?,\s*((?:19|20)\d{2})\)",
+        # Narrative: Surname et al. (YYYY) or Surname (YYYY)
+        r"([A-Z][a-zA-Z'\-]+)(?:\s+et\s+al\.)?\s+\(((?:19|20)\d{2})\)",
+    ]
+    results = []
+    for pat in patterns:
+        for m in re.finditer(pat, text):
+            results.append((m.group(1).lower(), int(m.group(2))))
+    return results
+
+
+def _surname_from_author(author: str) -> str:
+    """Extract lowercase surname from 'Last, First' or 'First Last' format."""
+    if "," in author:
+        return author.split(",")[0].strip().lower()
+    parts = author.split()
+    return parts[-1].lower() if parts else ""
+
+
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "and",
+        "or",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "by",
+        "with",
+        "from",
+        "as",
+        "its",
+        "this",
+        "that",
+        "not",
+        "but",
+        "no",
+        "via",
+        "using",
+        "based",
+    }
+)
+
+
 def suggest_relationships(
     conn: sqlite3.Connection,
     paper_id: int,
-) -> list[dict]:
-    """Suggest relationships by matching DOIs and titles from paper chunks."""
+) -> dict:
+    """Suggest citation relationships by matching DOIs, titles, and author+year.
+
+    Returns dict with 'suggestions' (list of candidate relationships) and
+    'unmatched' (list of DOIs found in text that don't match any registered paper).
+    """
+    empty = {"suggestions": [], "unmatched": []}
     paper = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
     if not paper:
-        return []
+        return empty
 
     # Get all chunks for this paper
     chunks = []
@@ -301,12 +372,23 @@ def suggest_relationships(
             ).fetchall()
 
     if not chunks:
-        return []
+        return empty
 
     full_text = " ".join(c["content"] for c in chunks)
     suggestions = []
+    suggested_ids: set[int] = set()
+    unmatched = []
 
-    # Strategy 1: DOI matching
+    # Prefetch existing cites to avoid N+1 queries
+    existing_cites = {
+        row["target_paper_id"]
+        for row in conn.execute(
+            "SELECT target_paper_id FROM relationships WHERE source_paper_id = ? AND relation_type = 'cites'",
+            (paper_id,),
+        ).fetchall()
+    }
+
+    # Strategy 1: DOI matching (highest precision)
     doi_pattern = r"10\.\d{4,}/[^\s,;}\])\"']+"
     found_dois = set(re.findall(doi_pattern, full_text))
     for doi in found_dois:
@@ -316,13 +398,7 @@ def suggest_relationships(
             "SELECT id, title FROM papers WHERE doi = ?", (doi,)
         ).fetchone()
         if match:
-            # Check if relationship already exists
-            existing = conn.execute(
-                """SELECT id FROM relationships
-                   WHERE source_paper_id = ? AND target_paper_id = ? AND relation_type = 'cites'""",
-                (paper_id, match["id"]),
-            ).fetchone()
-            if not existing:
+            if match["id"] not in existing_cites:
                 suggestions.append(
                     {
                         "target_paper_id": match["id"],
@@ -333,36 +409,71 @@ def suggest_relationships(
                         "matched_doi": doi,
                     }
                 )
+                suggested_ids.add(match["id"])
+        else:
+            unmatched.append({"doi": doi})
 
-    # Strategy 2: Title substring matching
+    # Strategy 2: Title word-ratio matching (skip stopwords and short words)
     other_papers = conn.execute(
-        "SELECT id, title FROM papers WHERE id != ?", (paper_id,)
+        "SELECT id, title, authors, year FROM papers WHERE id != ?", (paper_id,)
     ).fetchall()
+    text_words = set(re.findall(r"\b\w+\b", full_text.lower()))
     for other in other_papers:
-        # Skip if already suggested via DOI
-        if any(s["target_paper_id"] == other["id"] for s in suggestions):
+        if other["id"] in suggested_ids or other["id"] in existing_cites:
             continue
-        # Check if other paper's title appears in our text
-        title_words = other["title"].lower().split()
+        title_words = other["title"].split()
         if len(title_words) < 3:
             continue
-        # Require at least 3 consecutive words to match
-        title_lower = other["title"].lower()
-        if title_lower in full_text.lower():
-            existing = conn.execute(
-                """SELECT id FROM relationships
-                   WHERE source_paper_id = ? AND target_paper_id = ? AND relation_type = 'cites'""",
-                (paper_id, other["id"]),
-            ).fetchone()
-            if not existing:
+        # Only count meaningful words (skip stopwords and very short words)
+        meaningful = [
+            w for w in title_words if w.lower() not in _STOPWORDS and len(w) > 2
+        ]
+        if len(meaningful) < 2:
+            continue
+        matched_words = sum(1 for w in meaningful if w.lower() in text_words)
+        match_ratio = matched_words / len(meaningful)
+
+        if match_ratio >= 0.6:
+            # Scale confidence: 0.6 ratio → 0.3, 1.0 ratio → 0.6
+            confidence = round(0.3 + (match_ratio - 0.6) * 0.75, 2)
+            suggestions.append(
+                {
+                    "target_paper_id": other["id"],
+                    "target_title": other["title"],
+                    "relation_type": "cites",
+                    "confidence": confidence,
+                    "match_method": "title_words",
+                }
+            )
+            suggested_ids.add(other["id"])
+
+    # Strategy 3: Author surname + year heuristic
+    author_year_refs = _extract_author_year_citations(full_text)
+    # Group papers by year for O(citations) instead of O(citations × papers)
+    papers_by_year: dict[int, list] = {}
+    for other in other_papers:
+        if other["year"] is not None:
+            papers_by_year.setdefault(other["year"], []).append(other)
+
+    for surname, year in author_year_refs:
+        for other in papers_by_year.get(year, []):
+            if other["id"] in suggested_ids or other["id"] in existing_cites:
+                continue
+            authors = json.loads(other["authors"]) if other["authors"] else []
+            if not authors:
+                continue
+            if any(_surname_from_author(a) == surname for a in authors):
                 suggestions.append(
                     {
                         "target_paper_id": other["id"],
                         "target_title": other["title"],
                         "relation_type": "cites",
-                        "confidence": 0.5,
-                        "match_method": "title",
+                        "confidence": 0.4,
+                        "match_method": "author_year",
+                        "matched_author": surname,
+                        "matched_year": year,
                     }
                 )
+                suggested_ids.add(other["id"])
 
-    return suggestions
+    return {"suggestions": suggestions, "unmatched": unmatched}

@@ -109,6 +109,23 @@ def _migrate_relationship_types(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migrate_papers_fts(conn: sqlite3.Connection) -> None:
+    """Backfill papers_fts for databases created before this index existed."""
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='papers_fts'"
+    ).fetchone()
+    if not row:
+        return
+    count = conn.execute("SELECT count(*) FROM papers_fts").fetchone()[0]
+    if count > 0:
+        return
+    paper_count = conn.execute("SELECT count(*) FROM papers").fetchone()[0]
+    if paper_count == 0:
+        return
+    conn.execute("INSERT INTO papers_fts(rowid, title) SELECT id, title FROM papers")
+    conn.commit()
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(f"""
     CREATE TABLE IF NOT EXISTS chunks (
@@ -167,6 +184,24 @@ def init_schema(conn: sqlite3.Connection) -> None:
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         UNIQUE(source_paper_id, target_paper_id, relation_type)
     );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
+        title,
+        content='papers',
+        content_rowid='id',
+        tokenize='porter unicode61'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS papers_ai AFTER INSERT ON papers BEGIN
+        INSERT INTO papers_fts(rowid, title) VALUES (new.id, new.title);
+    END;
+    CREATE TRIGGER IF NOT EXISTS papers_ad AFTER DELETE ON papers BEGIN
+        INSERT INTO papers_fts(papers_fts, rowid, title) VALUES ('delete', old.id, old.title);
+    END;
+    CREATE TRIGGER IF NOT EXISTS papers_au AFTER UPDATE OF title ON papers BEGIN
+        INSERT INTO papers_fts(papers_fts, rowid, title) VALUES ('delete', old.id, old.title);
+        INSERT INTO papers_fts(rowid, title) VALUES (new.id, new.title);
+    END;
 
     CREATE TABLE IF NOT EXISTS conclusions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -262,3 +297,4 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
     _migrate_source_type_figure(conn)
     _migrate_relationship_types(conn)
+    _migrate_papers_fts(conn)
