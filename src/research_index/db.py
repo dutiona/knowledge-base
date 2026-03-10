@@ -134,22 +134,14 @@ def _migrate_paper_paths(conn: sqlite3.Connection) -> None:
 
     Idempotent: backfills missing entries per-paper (not all-or-nothing).
     """
-    rows = conn.execute("""
-        SELECT p.id as paper_id, c.source_uri
+    conn.execute("""
+        INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary)
+        SELECT p.id, c.source_uri, TRUE
         FROM papers p
         JOIN chunks c ON c.id = p.abstract_chunk_id
         WHERE p.abstract_chunk_id IS NOT NULL
           AND p.id NOT IN (SELECT paper_id FROM paper_paths)
-    """).fetchall()
-
-    if not rows:
-        return
-
-    for row in rows:
-        conn.execute(
-            "INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary) VALUES (?, ?, TRUE)",
-            (row["paper_id"], row["source_uri"]),
-        )
+    """)
     conn.commit()
 
 

@@ -67,19 +67,11 @@ def get_paper_chunks(
     source_uri = get_paper_source_uri(conn, paper_id)
     if not source_uri:
         return []
-    if include_figures:
-        chunks = conn.execute(
-            "SELECT id, content, chunk_index FROM chunks "
-            "WHERE source_uri = ? ORDER BY chunk_index",
-            (source_uri,),
-        ).fetchall()
-    else:
-        chunks = conn.execute(
-            "SELECT id, content, chunk_index FROM chunks "
-            "WHERE source_uri = ? AND source_type != 'figure' "
-            "ORDER BY chunk_index",
-            (source_uri,),
-        ).fetchall()
+    query = "SELECT id, content, chunk_index FROM chunks WHERE source_uri = ?"
+    if not include_figures:
+        query += " AND source_type != 'figure'"
+    query += " ORDER BY chunk_index"
+    chunks = conn.execute(query, (source_uri,)).fetchall()
     return [
         {"id": c["id"], "content": c["content"], "chunk_index": c["chunk_index"]}
         for c in chunks
@@ -189,15 +181,21 @@ def register_paper(
         existing_path = conn.execute(
             "SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)
         ).fetchone()
+        path_conflict = None
         if not existing_path:
             conn.execute(
                 "INSERT INTO paper_paths (paper_id, path, content_hash, is_primary) "
                 "VALUES (?, ?, ?, TRUE)",
                 (cursor.lastrowid, source_uri, file_hash),
             )
+        else:
+            path_conflict = existing_path["paper_id"]
 
     conn.commit()
-    return {"paper_id": cursor.lastrowid, "abstract_chunk_id": abstract_chunk_id}
+    result = {"paper_id": cursor.lastrowid, "abstract_chunk_id": abstract_chunk_id}
+    if source_uri and path_conflict is not None:
+        result["path_conflict"] = path_conflict
+    return result
 
 
 def get_paper(
