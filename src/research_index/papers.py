@@ -2,12 +2,142 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
 from pathlib import Path
 
 from .db import RELATIONSHIP_TYPES
+
+
+def compute_file_hash(path: Path) -> str:
+    """SHA-256 hex digest of file bytes."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(8192), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def get_paper_paths(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
+    """Get all registered paths for a paper."""
+    rows = conn.execute(
+        "SELECT id, path, content_hash, is_primary, added_at "
+        "FROM paper_paths WHERE paper_id = ? ORDER BY is_primary DESC, added_at",
+        (paper_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_paper_source_uri(conn: sqlite3.Connection, paper_id: int) -> str | None:
+    """Get primary source path for a paper via paper_paths.
+
+    Falls back to legacy abstract_chunk_id -> chunks.source_uri
+    if no paper_paths entry exists.
+    """
+    row = conn.execute(
+        "SELECT path FROM paper_paths WHERE paper_id = ? AND is_primary = TRUE LIMIT 1",
+        (paper_id,),
+    ).fetchone()
+    if row:
+        return row["path"]
+
+    # Legacy fallback
+    row = conn.execute(
+        "SELECT source_uri FROM chunks WHERE id = "
+        "(SELECT abstract_chunk_id FROM papers WHERE id = ?)",
+        (paper_id,),
+    ).fetchone()
+    return row["source_uri"] if row else None
+
+
+def get_paper_chunks(
+    conn: sqlite3.Connection,
+    paper_id: int,
+    include_figures: bool = False,
+) -> list[dict]:
+    """Get chunks for a paper via paper_paths.
+
+    Args:
+        include_figures: If True, include figure chunks. Default False
+            (matches extraction.py usage). get_paper passes True to
+            include all chunk types.
+    """
+    source_uri = get_paper_source_uri(conn, paper_id)
+    if not source_uri:
+        return []
+    query = "SELECT id, content, chunk_index FROM chunks WHERE source_uri = ?"
+    if not include_figures:
+        query += " AND source_type != 'figure'"
+    query += " ORDER BY chunk_index"
+    chunks = conn.execute(query, (source_uri,)).fetchall()
+    return [
+        {"id": c["id"], "content": c["content"], "chunk_index": c["chunk_index"]}
+        for c in chunks
+    ]
+
+
+def relocate_paper(
+    conn: sqlite3.Connection,
+    paper_id: int,
+    new_path: str,
+    content_hash: str | None = None,
+) -> dict:
+    """Update a paper's filesystem path after a move/rename.
+
+    Updates both paper_paths and chunks.source_uri atomically.
+    Validates: new_path must exist, must not be owned by another paper,
+    and content hash must match if previous hash is known.
+    """
+    new_path = str(Path(new_path).resolve())
+
+    current = conn.execute(
+        "SELECT id, path, content_hash FROM paper_paths "
+        "WHERE paper_id = ? AND is_primary = TRUE LIMIT 1",
+        (paper_id,),
+    ).fetchone()
+    if not current:
+        return {"error": f"No paper_paths entry for paper {paper_id}"}
+
+    old_path = current["path"]
+
+    p = Path(new_path)
+    if not p.exists():
+        return {"error": f"New path does not exist: {new_path}"}
+
+    conflict = conn.execute(
+        "SELECT paper_id FROM paper_paths WHERE path = ? AND paper_id != ?",
+        (new_path, paper_id),
+    ).fetchone()
+    if conflict:
+        return {
+            "error": f"Path already owned by paper {conflict['paper_id']}: {new_path}"
+        }
+
+    if content_hash is None:
+        try:
+            content_hash = compute_file_hash(p)
+        except OSError as e:
+            return {"error": f"Cannot read file for hashing: {e}"}
+
+    if current["content_hash"] and content_hash != current["content_hash"]:
+        return {
+            "error": "Content hash mismatch — file at new_path has different content",
+            "expected": current["content_hash"],
+            "actual": content_hash,
+        }
+
+    conn.execute(
+        "UPDATE paper_paths SET path = ?, content_hash = ? WHERE id = ?",
+        (new_path, content_hash, current["id"]),
+    )
+    conn.execute(
+        "UPDATE chunks SET source_uri = ? WHERE source_uri = ?",
+        (new_path, old_path),
+    )
+    conn.commit()
+    return {"paper_id": paper_id, "old_path": old_path, "new_path": new_path}
 
 
 def register_paper(
@@ -22,6 +152,10 @@ def register_paper(
 ) -> dict:
     """Register a paper. Optionally link to already-ingested chunks via source_uri."""
     authors_json = json.dumps(authors or [])
+
+    # Canonicalize source_uri before any lookups
+    if source_uri:
+        source_uri = str(Path(source_uri).resolve())
 
     # Link abstract to first chunk from this source_uri if available
     abstract_chunk_id = None
@@ -38,8 +172,36 @@ def register_paper(
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (title, authors_json, year, venue, doi, bibtex, abstract_chunk_id),
     )
+
+    # Populate paper_paths for the new paper
+    if source_uri:
+        file_hash = None
+        p = Path(source_uri)
+        if p.exists():
+            try:
+                file_hash = compute_file_hash(p)
+            except OSError:
+                pass  # Hash is best-effort; paper is still registered
+
+        # Check if path is already owned by another paper
+        existing_path = conn.execute(
+            "SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)
+        ).fetchone()
+        path_conflict = None
+        if not existing_path:
+            conn.execute(
+                "INSERT INTO paper_paths (paper_id, path, content_hash, is_primary) "
+                "VALUES (?, ?, ?, TRUE)",
+                (cursor.lastrowid, source_uri, file_hash),
+            )
+        else:
+            path_conflict = existing_path["paper_id"]
+
     conn.commit()
-    return {"paper_id": cursor.lastrowid, "abstract_chunk_id": abstract_chunk_id}
+    result = {"paper_id": cursor.lastrowid, "abstract_chunk_id": abstract_chunk_id}
+    if source_uri and path_conflict is not None:
+        result["path_conflict"] = path_conflict
+    return result
 
 
 def get_paper(
@@ -74,22 +236,8 @@ def get_paper(
             "added_at": row["added_at"],
         }
 
-        # Fetch related chunks
-        chunks = (
-            conn.execute(
-                """SELECT id, content, chunk_index FROM chunks
-               WHERE source_uri IN (
-                   SELECT source_uri FROM chunks WHERE id = ?
-               ) ORDER BY chunk_index""",
-                (row["abstract_chunk_id"],),
-            ).fetchall()
-            if row["abstract_chunk_id"]
-            else []
-        )
-        paper["chunks"] = [
-            {"id": c["id"], "content": c["content"], "chunk_index": c["chunk_index"]}
-            for c in chunks
-        ]
+        # Fetch related chunks via paper_paths (with legacy fallback)
+        paper["chunks"] = get_paper_chunks(conn, row["id"], include_figures=True)
 
         # Fetch relationships
         rels = conn.execute(
@@ -475,17 +623,14 @@ def suggest_relationships(
     if not paper:
         return empty
 
-    # Get all chunks for this paper
+    # Get all chunks for this paper via paper_paths (with legacy fallback)
+    source_uri = get_paper_source_uri(conn, paper_id)
     chunks = []
-    if paper["abstract_chunk_id"]:
-        source_uri_row = conn.execute(
-            "SELECT source_uri FROM chunks WHERE id = ?", (paper["abstract_chunk_id"],)
-        ).fetchone()
-        if source_uri_row:
-            chunks = conn.execute(
-                "SELECT content FROM chunks WHERE source_uri = ?",
-                (source_uri_row["source_uri"],),
-            ).fetchall()
+    if source_uri:
+        chunks = conn.execute(
+            "SELECT content FROM chunks WHERE source_uri = ?",
+            (source_uri,),
+        ).fetchall()
 
     if not chunks:
         return empty

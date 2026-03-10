@@ -605,17 +605,10 @@ def _vision_call(
 
 
 def _get_paper_source_uri(conn: sqlite3.Connection, paper_id: int) -> str | None:
-    """Resolve the source_uri for a paper via its abstract chunk.
+    """Resolve the source_uri for a paper via paper_paths table."""
+    from .papers import get_paper_source_uri as _papers_get_paper_source_uri
 
-    Query: SELECT source_uri FROM chunks WHERE id =
-           (SELECT abstract_chunk_id FROM papers WHERE id = ?)
-    """
-    row = conn.execute(
-        "SELECT source_uri FROM chunks WHERE id = "
-        "(SELECT abstract_chunk_id FROM papers WHERE id = ?)",
-        (paper_id,),
-    ).fetchone()
-    return row["source_uri"] if row else None
+    return _papers_get_paper_source_uri(conn, paper_id)
 
 
 # ---------------------------------------------------------------------------
