@@ -29,6 +29,7 @@ from .extraction import (
     record_metric,
 )
 from .ingest import (
+    configure_browser,
     ingest_directory,
     ingest_file,
     ingest_url as _ingest_url,
@@ -697,6 +698,49 @@ def configure_omniparser_tool(path: str | None = None) -> str:
     """
     conn = _get_conn()
     return json.dumps(configure_omniparser(conn, path))
+
+
+@mcp.tool()
+def configure_browser_tool(
+    cdp_endpoint: str | None = None,
+    venv_path: str | None = None,
+) -> str:
+    """Configure browser rendering for JS-heavy web pages.
+
+    Enables fallback rendering when trafilatura extracts insufficient content
+    from a URL (< 200 chars). Also captures screenshots for figure extraction
+    via the vision pipeline. Only http/https URLs are rendered.
+
+    Note: browser rendering executes page JavaScript, which can issue secondary
+    requests beyond the original URL. This is an accepted trade-off for an
+    optional feature. Each render uses an ephemeral browser context (no shared state).
+
+    Two modes (both require a venv with ``playwright`` Python client installed):
+    - **CDP (recommended for Docker):** Connect to a running Playwright container.
+      Provide both cdp_endpoint and venv_path.
+    - **Local:** Launch headless Chromium from the venv.
+      Provide venv_path only.
+
+    Local venv setup::
+
+        python -m venv /path/to/venv
+        /path/to/venv/bin/pip install playwright
+        /path/to/venv/bin/playwright install --with-deps chromium
+
+    CDP venv setup (Chromium not needed locally)::
+
+        python -m venv /path/to/venv
+        /path/to/venv/bin/pip install playwright
+
+    Args:
+        cdp_endpoint: WebSocket CDP endpoint (ws:// or wss://). Requires venv_path too.
+        venv_path: Absolute path to Python venv with playwright installed.
+            Pass both as empty string to disable browser rendering.
+    """
+    conn = _get_conn()
+    return json.dumps(
+        configure_browser(conn, cdp_endpoint=cdp_endpoint, venv_path=venv_path)
+    )
 
 
 def main():

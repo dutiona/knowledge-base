@@ -1,10 +1,16 @@
 """Tests for ingest pipeline (embeddings mocked)."""
 
 import json
+import subprocess
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from research_index.ingest import (
+    _extract_web_figures,
+    _get_browser_config,
+    _render_with_browser,
+    configure_browser,
     ingest_file,
     reingest_file,
     ingest_url,
@@ -996,3 +1002,474 @@ def test_reingest_preserves_unrelated_entity_mentions(tmp_path):
         (eid2,),
     ).fetchone()["cnt"]
     assert remaining == 1
+
+
+# ---------------------------------------------------------------------------
+# Browser rendering config tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_browser_config_default(tmp_path):
+    """Returns None when no browser config is set."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    assert _get_browser_config(conn) is None
+
+
+def test_configure_browser_cdp(tmp_path):
+    """CDP mode stores mode, endpoint, and venv."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    venv = tmp_path / "fakevenv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+
+    result = configure_browser(
+        conn, cdp_endpoint="ws://localhost:3000", venv_path=str(venv)
+    )
+    cfg = result["browser"]
+    assert cfg["mode"] == "cdp"
+    assert cfg["endpoint"] == "ws://localhost:3000"
+    assert cfg["venv"] == str(venv)
+
+
+def test_configure_browser_local_venv(tmp_path):
+    """Local mode stores mode and venv, no endpoint."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    venv = tmp_path / "fakevenv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+
+    result = configure_browser(conn, venv_path=str(venv))
+    cfg = result["browser"]
+    assert cfg["mode"] == "local"
+    assert cfg["venv"] == str(venv)
+    assert "endpoint" not in cfg
+
+
+def test_configure_browser_invalid_cdp(tmp_path):
+    """Non-ws:// CDP endpoint returns an error."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    venv = tmp_path / "fakevenv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+
+    result = configure_browser(
+        conn, cdp_endpoint="http://localhost:3000", venv_path=str(venv)
+    )
+    assert "error" in result
+
+
+def test_configure_browser_invalid_venv(tmp_path):
+    """Nonexistent venv path returns an error."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    result = configure_browser(conn, venv_path="/nonexistent/venv")
+    assert "error" in result
+
+
+def test_configure_browser_cdp_without_venv(tmp_path):
+    """CDP endpoint without venv returns an error."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    result = configure_browser(conn, cdp_endpoint="ws://localhost:3000")
+    assert "error" in result
+
+
+def test_configure_browser_disable(tmp_path):
+    """Empty strings clear all browser config."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    venv = tmp_path / "fakevenv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+
+    configure_browser(conn, cdp_endpoint="ws://localhost:3000", venv_path=str(venv))
+    assert _get_browser_config(conn) is not None
+
+    result = configure_browser(conn, cdp_endpoint="", venv_path="")
+    assert result["browser"] is None
+    assert _get_browser_config(conn) is None
+
+
+def test_configure_browser_query_mode(tmp_path):
+    """None args return current config without modifying."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    # Query when unconfigured
+    result = configure_browser(conn)
+    assert result["browser"] is None
+
+    # Configure, then query
+    venv = tmp_path / "fakevenv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+    configure_browser(conn, venv_path=str(venv))
+
+    result = configure_browser(conn)
+    assert result["browser"]["mode"] == "local"
+
+
+# ---------------------------------------------------------------------------
+# Subprocess render tests
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_venv(base: Path) -> Path:
+    """Create a fake venv directory with a python binary stub."""
+    venv = base / "fakevenv"
+    (venv / "bin").mkdir(parents=True, exist_ok=True)
+    py = venv / "bin" / "python"
+    py.write_text("#!/bin/sh\n")
+    py.chmod(0o755)
+    return venv
+
+
+@patch("research_index.ingest.subprocess.run")
+def test_render_with_browser_success(mock_run, tmp_path):
+    """Successful render returns html and screenshot_path."""
+    venv = _make_fake_venv(tmp_path)
+
+    def _fake_run(cmd, **kwargs):
+        # Write output files that the real script would produce
+        out_dir = Path(cmd[3])
+        (out_dir / "page.html").write_text("<html><body>Rendered</body></html>")
+        (out_dir / "screenshot.png").write_bytes(b"PNG_FAKE")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    mock_run.side_effect = _fake_run
+
+    config = {"mode": "local", "venv": str(venv)}
+    result = _render_with_browser("https://example.com", config)
+
+    assert result is not None
+    assert "Rendered" in result["html"]
+    assert result["screenshot_path"].exists()
+    assert result["tmpdir"].exists()
+
+    # Cleanup
+    import shutil
+
+    shutil.rmtree(result["tmpdir"], ignore_errors=True)
+
+
+@patch("research_index.ingest.subprocess.run")
+def test_render_with_browser_timeout(mock_run, tmp_path):
+    """TimeoutExpired returns None and cleans tmpdir."""
+    venv = _make_fake_venv(tmp_path)
+    mock_run.side_effect = subprocess.TimeoutExpired(cmd=["x"], timeout=60)
+
+    config = {"mode": "local", "venv": str(venv)}
+    result = _render_with_browser("https://example.com", config)
+    assert result is None
+
+
+@patch("research_index.ingest.subprocess.run")
+def test_render_with_browser_subprocess_error(mock_run, tmp_path):
+    """CalledProcessError returns None."""
+    venv = _make_fake_venv(tmp_path)
+    mock_run.side_effect = subprocess.CalledProcessError(1, cmd=["x"])
+
+    config = {"mode": "local", "venv": str(venv)}
+    result = _render_with_browser("https://example.com", config)
+    assert result is None
+
+
+@patch("research_index.ingest.subprocess.run")
+def test_render_with_browser_cdp_mode_args(mock_run, tmp_path):
+    """CDP mode includes --cdp flag in subprocess command."""
+    venv = _make_fake_venv(tmp_path)
+
+    def _fake_run(cmd, **kwargs):
+        out_dir = Path(cmd[3])
+        (out_dir / "page.html").write_text("<html>OK</html>")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    mock_run.side_effect = _fake_run
+
+    config = {
+        "mode": "cdp",
+        "endpoint": "ws://localhost:3000",
+        "venv": str(venv),
+    }
+    result = _render_with_browser("https://example.com", config)
+
+    # Verify --cdp flag was passed
+    called_cmd = mock_run.call_args[0][0]
+    assert "--cdp" in called_cmd
+    assert "ws://localhost:3000" in called_cmd
+
+    if result and result.get("tmpdir"):
+        import shutil
+
+        shutil.rmtree(result["tmpdir"], ignore_errors=True)
+
+
+def test_render_with_browser_invalid_venv(tmp_path):
+    """Returns None when venv python is not found."""
+    config = {"mode": "local", "venv": str(tmp_path / "nonexistent")}
+    result = _render_with_browser("https://example.com", config)
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Integration tests (ingest_url with browser fallback)
+# ---------------------------------------------------------------------------
+
+# HTML that trafilatura will extract < 200 chars from (JS-only page)
+_JS_ONLY_HTML = (
+    "<html><head><title>App</title></head><body><div id='app'></div></body></html>"
+)
+
+# HTML with substantial content (> 200 chars) for rendered fallback
+_RENDERED_HTML = (
+    "<html><head><title>Rendered App</title></head><body><article>"
+    + "<p>"
+    + "This is a paragraph of rendered content about transformers. " * 20
+    + "</p>"
+    + "</article></body></html>"
+)
+
+
+def _mock_httpx_js_only(url, **kwargs):
+    """Simulates a JS-only page that trafilatura can't extract from."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.text = _JS_ONLY_HTML
+    resp.raise_for_status = MagicMock()
+    return resp
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.ingest.httpx.get", _mock_httpx_js_only)
+@patch("research_index.ingest._render_with_browser")
+def test_ingest_url_browser_rendered(mock_render, tmp_path):
+    """Browser fallback fires and produces chunks when trafilatura fails."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    # Configure browser
+    venv = tmp_path / "fakevenv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+    configure_browser(conn, venv_path=str(venv))
+
+    tmpdir = tmp_path / "render_out"
+    tmpdir.mkdir()
+    mock_render.return_value = {
+        "html": _RENDERED_HTML,
+        "screenshot_path": None,
+        "tmpdir": tmpdir,
+    }
+
+    result = ingest_url(conn, "https://example.com/spa")
+    assert result["chunks_added"] >= 1
+    assert result["browser_rendered"] is True
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.ingest.httpx.get", _mock_httpx_js_only)
+def test_ingest_url_no_browser_configured(tmp_path):
+    """No browser config → 0 chunks, browser_rendered False."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    result = ingest_url(conn, "https://example.com/spa")
+    assert result["chunks_added"] == 0
+    assert result["browser_rendered"] is False
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.ingest.httpx.get", _mock_httpx_js_only)
+@patch("research_index.ingest._render_with_browser")
+def test_ingest_url_browser_fallback_also_empty(mock_render, tmp_path):
+    """Browser renders but trafilatura still extracts nothing → 0 chunks."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    venv = tmp_path / "fakevenv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+    configure_browser(conn, venv_path=str(venv))
+
+    tmpdir = tmp_path / "render_out"
+    tmpdir.mkdir()
+    mock_render.return_value = {
+        "html": "<html><body></body></html>",
+        "screenshot_path": None,
+        "tmpdir": tmpdir,
+    }
+
+    result = ingest_url(conn, "https://example.com/spa")
+    assert result["chunks_added"] == 0
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.ingest.httpx.get", _mock_httpx_get)
+@patch("research_index.ingest._render_with_browser")
+def test_ingest_url_no_fallback_when_trafilatura_succeeds(mock_render, tmp_path):
+    """When trafilatura extracts >= 200 chars, browser fallback is not called."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    result = ingest_url(conn, "https://example.com/paper")
+    assert result["chunks_added"] >= 1
+    assert result["browser_rendered"] is False
+    mock_render.assert_not_called()
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.ingest.httpx.get", _mock_httpx_js_only)
+@patch("research_index.ingest._render_with_browser")
+def test_ingest_url_browser_fallback_near_empty(mock_render, tmp_path):
+    """Trafilatura < 200 chars, browser renders better content → fallback used."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    venv = tmp_path / "fakevenv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+    configure_browser(conn, venv_path=str(venv))
+
+    tmpdir = tmp_path / "render_out"
+    tmpdir.mkdir()
+    mock_render.return_value = {
+        "html": _RENDERED_HTML,
+        "screenshot_path": None,
+        "tmpdir": tmpdir,
+    }
+
+    result = ingest_url(conn, "https://example.com/spa")
+    assert result["browser_rendered"] is True
+    assert result["chunks_added"] >= 1
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.ingest.httpx.get", _mock_httpx_js_only)
+@patch("research_index.ingest._render_with_browser")
+def test_ingest_url_browser_fallback_tmpdir_cleanup(mock_render, tmp_path):
+    """Tmpdir is cleaned up after browser fallback (both success and exception)."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    venv = tmp_path / "fakevenv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+    configure_browser(conn, venv_path=str(venv))
+
+    tmpdir = tmp_path / "render_out"
+    tmpdir.mkdir()
+    mock_render.return_value = {
+        "html": _RENDERED_HTML,
+        "screenshot_path": None,
+        "tmpdir": tmpdir,
+    }
+
+    ingest_url(conn, "https://example.com/spa")
+    # tmpdir should be cleaned up by the finally block
+    assert not tmpdir.exists()
+
+
+# ---------------------------------------------------------------------------
+# _extract_web_figures tests
+# ---------------------------------------------------------------------------
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.vision._vision_call")
+@patch("research_index.vision._get_vision_config")
+def test_extract_web_figures_success(mock_vision_cfg, mock_vision_call, tmp_path):
+    """Extracts a figure chunk from a screenshot via vision pipeline."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    mock_vision_cfg.return_value = {
+        "base_url": "http://localhost:11434",
+        "model": "llava",
+    }
+    mock_vision_call.return_value = [
+        {
+            "description": "A bar chart comparing model accuracy across benchmarks.",
+            "figure_type": "chart",
+            "title": "Accuracy Comparison",
+        }
+    ]
+
+    # Create a fake screenshot
+    screenshot = tmp_path / "screenshot.png"
+    screenshot.write_bytes(b"\x89PNG\r\n\x1a\nFAKE")
+
+    count = _extract_web_figures(conn, "https://example.com/page", screenshot)
+    assert count == 1
+
+    row = conn.execute(
+        "SELECT content, source_type, source_uri, metadata FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    assert row is not None
+    assert "bar chart" in row["content"]
+    assert row["source_uri"] == "https://example.com/page"
+    meta = json.loads(row["metadata"])
+    assert meta["original_source_type"] == "web"
+    assert meta["figure_type"] == "chart"
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.vision._get_vision_config")
+def test_extract_web_figures_no_vision_config(mock_vision_cfg, tmp_path):
+    """Returns 0 when vision is not configured."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    mock_vision_cfg.side_effect = Exception("not configured")
+
+    screenshot = tmp_path / "screenshot.png"
+    screenshot.write_bytes(b"\x89PNG\r\n\x1a\nFAKE")
+
+    count = _extract_web_figures(conn, "https://example.com/page", screenshot)
+    assert count == 0
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.vision._vision_call")
+@patch("research_index.vision._get_vision_config")
+def test_extract_web_figures_dedup(mock_vision_cfg, mock_vision_call, tmp_path):
+    """Does not duplicate figure chunks on re-ingest."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    mock_vision_cfg.return_value = {
+        "base_url": "http://localhost:11434",
+        "model": "llava",
+    }
+    mock_vision_call.return_value = [
+        {
+            "description": "A diagram of attention mechanism.",
+            "figure_type": "diagram",
+            "title": "Attention",
+        }
+    ]
+
+    screenshot = tmp_path / "screenshot.png"
+    screenshot.write_bytes(b"\x89PNG\r\n\x1a\nFAKE")
+
+    count1 = _extract_web_figures(conn, "https://example.com/page", screenshot)
+    assert count1 == 1
+
+    # Re-ingest: old figures cleaned up, new one inserted (same content → 1 total)
+    count2 = _extract_web_figures(conn, "https://example.com/page", screenshot)
+    assert count2 == 1
+
+    total = conn.execute(
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
+        ("https://example.com/page",),
+    ).fetchone()["cnt"]
+    assert total == 1
