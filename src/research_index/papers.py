@@ -291,9 +291,9 @@ def _extract_author_year_citations(text: str) -> list[tuple[str, int]]:
     """
     patterns = [
         # Parenthetical: (Surname et al., YYYY) or (Surname, YYYY) or (Surname & Other, YYYY)
-        r"\(([A-Z][a-z]+)(?:\s+(?:et\s+al\.|&\s+[A-Z][a-z]+))?,\s*((?:19|20)\d{2})\)",
+        r"\(([A-Z][a-zA-Z'\-]+)(?:\s+(?:et\s+al\.|&\s+[A-Z][a-zA-Z'\-]+))?,\s*((?:19|20)\d{2})\)",
         # Narrative: Surname et al. (YYYY) or Surname (YYYY)
-        r"([A-Z][a-z]+)(?:\s+et\s+al\.)?\s+\(((?:19|20)\d{2})\)",
+        r"([A-Z][a-zA-Z'\-]+)(?:\s+et\s+al\.)?\s+\(((?:19|20)\d{2})\)",
     ]
     results = []
     for pat in patterns:
@@ -417,7 +417,7 @@ def suggest_relationships(
     other_papers = conn.execute(
         "SELECT id, title, authors, year FROM papers WHERE id != ?", (paper_id,)
     ).fetchall()
-    text_lower = full_text.lower()
+    text_words = set(re.findall(r"\b\w+\b", full_text.lower()))
     for other in other_papers:
         if other["id"] in suggested_ids or other["id"] in existing_cites:
             continue
@@ -430,7 +430,7 @@ def suggest_relationships(
         ]
         if len(meaningful) < 2:
             continue
-        matched_words = sum(1 for w in meaningful if w.lower() in text_lower)
+        matched_words = sum(1 for w in meaningful if w.lower() in text_words)
         match_ratio = matched_words / len(meaningful)
 
         if match_ratio >= 0.6:

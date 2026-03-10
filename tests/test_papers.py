@@ -415,3 +415,52 @@ def test_suggest_returns_structured_result(tmp_path):
     assert isinstance(result, dict)
     assert "suggestions" in result
     assert "unmatched" in result
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_suggest_author_year_compound_surname(tmp_path):
+    """Match compound surnames like O'Malley and MacDonald."""
+    conn = _setup(tmp_path)
+
+    md = tmp_path / "citing.md"
+    md.write_text(
+        "Prior work by O'Malley et al. (2020) and (MacDonald, 2019) is relevant.\n"
+    )
+    ingest_file(conn, md)
+
+    p1 = register_paper(conn, "Our Paper", source_uri=str(md.resolve()))["paper_id"]
+    register_paper(conn, "O'Malley Study", ["O'Malley, Sean"], 2020)
+    register_paper(conn, "MacDonald Analysis", ["MacDonald, Ian"], 2019)
+
+    result = suggest_relationships(conn, p1)
+    author_matches = [
+        s for s in result["suggestions"] if s["match_method"] == "author_year"
+    ]
+    matched_titles = {s["target_title"] for s in author_matches}
+    assert "O'Malley Study" in matched_titles
+    assert "MacDonald Analysis" in matched_titles
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_suggest_title_no_substring_false_positive(tmp_path):
+    """Title word matching should not match 'net' inside 'internet'."""
+    conn = _setup(tmp_path)
+
+    md = tmp_path / "citing.md"
+    md.write_text("We studied internet protocols and network architecture.\n")
+    ingest_file(conn, md)
+
+    p1 = register_paper(conn, "Internet Paper", source_uri=str(md.resolve()))[
+        "paper_id"
+    ]
+    # "net" should NOT match via substring of "internet"
+    register_paper(conn, "The Net Effect on Random Systems")
+
+    result = suggest_relationships(conn, p1)
+    title_matches = [
+        s for s in result["suggestions"] if s["match_method"] == "title_words"
+    ]
+    # "net", "effect", "random", "systems" — only "systems" is absent,
+    # but "net" should not match as a word in "internet"
+    false_positives = [s for s in title_matches if "Net Effect" in s["target_title"]]
+    assert len(false_positives) == 0
