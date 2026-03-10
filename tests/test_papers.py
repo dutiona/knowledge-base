@@ -716,11 +716,6 @@ def test_get_paper_paths(tmp_path):
     source_uri = str(md.resolve())
 
     pid = register_paper(conn, "Test", source_uri=source_uri)["paper_id"]
-    conn.execute(
-        "INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary) VALUES (?, ?, TRUE)",
-        (pid, source_uri),
-    )
-    conn.commit()
 
     paths = get_paper_paths(conn, pid)
     assert len(paths) == 1
@@ -752,11 +747,6 @@ def test_get_paper_source_uri(tmp_path):
     source_uri = str(md.resolve())
 
     pid = register_paper(conn, "Test", source_uri=source_uri)["paper_id"]
-    conn.execute(
-        "INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary) VALUES (?, ?, TRUE)",
-        (pid, source_uri),
-    )
-    conn.commit()
 
     assert get_paper_source_uri(conn, pid) == source_uri
 
@@ -786,11 +776,6 @@ def test_get_paper_chunks(tmp_path):
     source_uri = str(md.resolve())
 
     pid = register_paper(conn, "Test", source_uri=source_uri)["paper_id"]
-    conn.execute(
-        "INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary) VALUES (?, ?, TRUE)",
-        (pid, source_uri),
-    )
-    conn.commit()
 
     chunks = get_paper_chunks(conn, pid)
     assert len(chunks) >= 1
@@ -813,6 +798,27 @@ def test_register_paper_creates_paper_path(tmp_path):
     assert paths[0]["path"] == str(md.resolve())
     assert paths[0]["is_primary"] == 1
     assert paths[0]["content_hash"] is not None
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_register_paper_path_conflict_skips_insert(tmp_path):
+    """If source_uri is already owned by another paper, paper_paths insert is skipped."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Shared content.\n")
+    ingest_file(conn, md)
+    source_uri = str(md.resolve())
+
+    p1 = register_paper(conn, "First Paper", source_uri=source_uri)
+    p2 = register_paper(conn, "Second Paper", source_uri=source_uri)
+
+    # First paper owns the path
+    paths1 = get_paper_paths(conn, p1["paper_id"])
+    assert len(paths1) == 1
+
+    # Second paper has no paper_paths entry (conflict skipped)
+    paths2 = get_paper_paths(conn, p2["paper_id"])
+    assert len(paths2) == 0
 
 
 @patch("research_index.ingest.embed", _fake_embed)
