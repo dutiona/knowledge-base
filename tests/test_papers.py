@@ -668,3 +668,32 @@ def test_paper_paths_table_exists(tmp_path):
     assert "paper_id" in row[0]
     assert "content_hash" in row[0]
     assert "is_primary" in row[0]
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_migrate_paper_paths_from_existing(tmp_path):
+    """Migration populates paper_paths from papers with abstract_chunk_id."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Some paper content.\n")
+    ingest_file(conn, md)
+    source_uri = str(md.resolve())
+
+    conn.execute(
+        "INSERT INTO papers (title, abstract_chunk_id) VALUES (?, (SELECT id FROM chunks WHERE source_uri = ? LIMIT 1))",
+        ("Old Paper", source_uri),
+    )
+    conn.commit()
+
+    # Clear paper_paths to simulate pre-migration state
+    conn.execute("DELETE FROM paper_paths")
+    conn.commit()
+
+    from research_index.db import _migrate_paper_paths
+
+    _migrate_paper_paths(conn)
+
+    row = conn.execute("SELECT * FROM paper_paths").fetchone()
+    assert row is not None
+    assert row["path"] == source_uri
+    assert row["is_primary"] == 1

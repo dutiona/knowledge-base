@@ -127,6 +127,29 @@ def _migrate_papers_fts(conn: sqlite3.Connection) -> None:
     if paper_count == 0:
         return
     conn.execute("INSERT INTO papers_fts(rowid, title) SELECT id, title FROM papers")
+
+
+def _migrate_paper_paths(conn: sqlite3.Connection) -> None:
+    """Populate paper_paths from existing paper -> abstract_chunk -> source_uri links.
+
+    Idempotent: backfills missing entries per-paper (not all-or-nothing).
+    """
+    rows = conn.execute("""
+        SELECT p.id as paper_id, c.source_uri
+        FROM papers p
+        JOIN chunks c ON c.id = p.abstract_chunk_id
+        WHERE p.abstract_chunk_id IS NOT NULL
+          AND p.id NOT IN (SELECT paper_id FROM paper_paths)
+    """).fetchall()
+
+    if not rows:
+        return
+
+    for row in rows:
+        conn.execute(
+            "INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary) VALUES (?, ?, TRUE)",
+            (row["paper_id"], row["source_uri"]),
+        )
     conn.commit()
 
 
@@ -331,3 +354,4 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_source_type_figure(conn)
     _migrate_relationship_types(conn)
     _migrate_papers_fts(conn)
+    _migrate_paper_paths(conn)
