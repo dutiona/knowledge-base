@@ -5,8 +5,11 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import sqlite3
+import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -61,6 +64,130 @@ def configure_vision(
         )
     conn.commit()
     return _get_vision_config(conn)
+
+
+def _get_omniparser_config(conn: sqlite3.Connection) -> str | None:
+    """Read omniparser_path from config table. Returns None when unset."""
+    row = conn.execute(
+        "SELECT value FROM config WHERE key = 'omniparser_path'"
+    ).fetchone()
+    return row["value"] if row else None
+
+
+def configure_omniparser(
+    conn: sqlite3.Connection,
+    path: str | None = None,
+) -> dict:
+    """Configure OmniParser for figure enrichment.
+
+    Args:
+        path: None to query, "" to disable, otherwise absolute path to set.
+    """
+    if path is None:
+        return {"omniparser_path": _get_omniparser_config(conn)}
+
+    if path == "":
+        conn.execute("DELETE FROM config WHERE key = 'omniparser_path'")
+        conn.commit()
+        return {"omniparser_path": None}
+
+    omni_dir = Path(path)
+    parse_script = omni_dir / "parse.py"
+    venv_python = omni_dir / ".venv" / "bin" / "python"
+
+    if not parse_script.exists():
+        return {"error": f"parse.py not found at {parse_script}"}
+    if not venv_python.exists():
+        return {"error": f"venv python not found at {venv_python}"}
+
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_path', ?)",
+        (path,),
+    )
+    conn.commit()
+    return {"omniparser_path": path}
+
+
+def _run_omniparser(
+    png_path: Path, omniparser_path: str, timeout: int = 120
+) -> dict | None:
+    """Invoke OmniParser as a subprocess. Returns parsed JSON or None on failure."""
+    venv_python = str(Path(omniparser_path) / ".venv" / "bin" / "python")
+    parse_script = str(Path(omniparser_path) / "parse.py")
+
+    json_fd, json_out = tempfile.mkstemp(suffix=".json")
+    try:
+        # Close the fd so the subprocess can write to it
+        os.close(json_fd)
+        subprocess.run(
+            [venv_python, parse_script, str(png_path), "-j", json_out],
+            timeout=timeout,
+            capture_output=True,
+            check=True,
+        )
+        with open(json_out) as f:
+            return json.load(f)
+    except (
+        subprocess.TimeoutExpired,
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+        OSError,
+    ) as exc:
+        logger.warning("OmniParser failed for %s: %s", png_path, exc)
+        return None
+    finally:
+        Path(json_out).unlink(missing_ok=True)
+
+
+_OMNIPARSER_MAX_APPEND = 500
+_ETA_SECS_PER_PAGE_BASE = 4
+_ETA_SECS_PER_PAGE_OMNIPARSER = 40
+
+
+def _merge_omniparser_elements(figure: dict, elements: list[dict]) -> dict:
+    """Append OmniParser OCR text and icon captions to figure description.
+
+    Deduplicates (case-insensitive), skips content < 2 chars,
+    and caps total appended text at _OMNIPARSER_MAX_APPEND chars.
+    Returns original dict if nothing to merge.
+    """
+    seen: set[str] = set()
+    texts: list[str] = []
+    icons: list[str] = []
+
+    for el in elements:
+        content = (el.get("content") or "").strip()
+        if len(content) < 2:
+            continue
+        key = content.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if el.get("type") == "text":
+            texts.append(content)
+        else:
+            icons.append(content)
+
+    if not texts and not icons:
+        return figure
+
+    parts: list[str] = []
+    budget = _OMNIPARSER_MAX_APPEND
+
+    if texts:
+        line = "Detected text: " + ", ".join(f'"{t}"' for t in texts)
+        if len(line) > budget:
+            line = line[: budget - 1] + "\u2026"
+        parts.append(line)
+        budget -= len(line)
+
+    if icons and budget > 20:
+        line = "Detected elements: " + ", ".join(f'"{i}"' for i in icons)
+        if len(line) > budget:
+            line = line[: budget - 1] + "\u2026"
+        parts.append(line)
+
+    return {**figure, "description": figure["description"] + "\n\n" + "\n".join(parts)}
 
 
 # ---------------------------------------------------------------------------
@@ -338,8 +465,15 @@ def extract_figures(
     else:
         candidate_pages = _heuristic_filter(str(pdf_path))
 
+    # 3b. Read omniparser config (needed for ETA adjustment)
+    omniparser_path = _get_omniparser_config(conn)
+    omniparser_enriched = 0
+
     # 4. ETA gate
-    estimated = len(candidate_pages) * 4
+    per_page = _ETA_SECS_PER_PAGE_BASE + (
+        _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
+    )
+    estimated = len(candidate_pages) * per_page
     if estimated > 120 and not confirmed:
         return {
             "confirm_required": True,
@@ -386,6 +520,42 @@ def extract_figures(
                 pages_failed += 1
                 errors.append(f"Page {page_num}: {exc}")
                 logger.warning("Vision call failed for page %d: %s", page_num, exc)
+
+    # 7b. Optional: enrich with OmniParser
+    if omniparser_path:
+        for page_num, png_bytes in rendered.items():
+            if page_num not in page_results or not page_results[page_num]:
+                continue
+
+            # Write PNG to tempfile for omniparser
+            png_fd, png_tmp = tempfile.mkstemp(suffix=".png")
+            try:
+                os.close(png_fd)
+                Path(png_tmp).write_bytes(png_bytes)
+                omni_result = _run_omniparser(Path(png_tmp), omniparser_path)
+            finally:
+                Path(png_tmp).unlink(missing_ok=True)
+
+            if not omni_result or not omni_result.get("elements"):
+                continue
+
+            figures_on_page = page_results[page_num]
+            omni_elements = omni_result["elements"]
+
+            if len(figures_on_page) == 1:
+                # Single-figure gate: safe to merge into description
+                enriched = _merge_omniparser_elements(figures_on_page[0], omni_elements)
+                if enriched is not figures_on_page[0]:
+                    omniparser_enriched += 1
+                page_results[page_num] = [enriched]
+            else:
+                # Multi-figure: store in metadata only
+                for i, fig in enumerate(figures_on_page):
+                    fig_with_meta = {
+                        **fig,
+                        "_omniparser_elements": omni_elements,
+                    }
+                    figures_on_page[i] = fig_with_meta
 
     # 8. Collect all figure descriptions for batch embedding
     all_figures: list[tuple[int, int, dict]] = []  # (page_num, fig_idx, figure)
@@ -442,15 +612,17 @@ def extract_figures(
                     continue
 
                 chunk_index = 1_000_000 + page_num * 100 + fig_idx
-                metadata = json.dumps(
-                    {
-                        "page": page_num,
-                        "figure_type": figure["figure_type"],
-                        "title": figure["title"],
-                        "entities_mentioned": figure["entities_mentioned"],
-                        "vision_model": model,
-                    }
-                )
+                meta_dict = {
+                    "page": page_num,
+                    "figure_type": figure["figure_type"],
+                    "title": figure["title"],
+                    "entities_mentioned": figure["entities_mentioned"],
+                    "vision_model": model,
+                }
+                # Store omniparser elements in metadata (multi-figure pages)
+                if "_omniparser_elements" in figure:
+                    meta_dict["omniparser_elements"] = figure["_omniparser_elements"]
+                metadata = json.dumps(meta_dict)
 
                 cursor = conn.execute(
                     "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
@@ -487,5 +659,6 @@ def extract_figures(
         "pages_failed": pages_failed,
         "figures_found": len(all_figures),
         "chunks_created": chunks_created,
+        "omniparser_enriched": omniparser_enriched,
         "errors": errors,
     }
