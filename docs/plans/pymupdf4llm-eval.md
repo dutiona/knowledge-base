@@ -64,7 +64,9 @@ Real papers (memento page 0): Title correctly extracted as `# **Memento: Fine-tu
 
 **Does NOT meet ≤2x wall-clock threshold.** The ONNX layout model dominates. ~300MB RSS overhead from onnxruntime + model weights.
 
-Note: The ONNX model loads once per process invocation. In production (MCP server), this would be a one-time cost amortized across multiple ingestions. The per-page marginal cost (~0.3s/page) is more relevant than the total including model load.
+**Caveat — cold-start only:** Each extraction ran in a fresh subprocess (for RSS isolation), so every `to_markdown()` call pays the full ONNX model load cost. These numbers represent cold-start performance. In production (MCP server), the model loads once and is amortized across multiple ingestions. The per-page marginal cost (~0.3s/page) is more relevant but was **not directly measured** by this benchmark. Phase 2 should include a warm-process benchmark.
+
+**Caveat — RSS measurement:** `ru_maxrss` is a Linux-specific peak metric (units: KB on Linux). The before/after delta in a fresh child process is a reasonable proxy for the library's memory footprint, but it is not a precise isolated measurement. Results are Linux-only and should not be compared across platforms.
 
 ### Chunk Quality
 

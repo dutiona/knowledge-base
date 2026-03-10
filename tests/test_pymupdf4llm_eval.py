@@ -12,7 +12,6 @@ from pathlib import Path
 
 import fitz
 import pymupdf4llm
-import pytest
 
 from research_index.ingest import _chunk_text
 
@@ -310,13 +309,10 @@ class TestMarkdownExtractsImageRefs:
 
         # Check for image reference syntax: ![...] or img tag
         has_img_ref = "![" in md or "<img" in md.lower()
-        # Document actual behavior even if assertion fails
-        if not has_img_ref:
-            pytest.skip(
-                f"pymupdf4llm did not produce image references for embedded raster image. "
-                f"This needs investigation for Phase 2.\n"
-                f"Markdown output:\n{md[:1000]}"
-            )
+        assert has_img_ref, (
+            f"pymupdf4llm did not produce image references for embedded raster image "
+            f"with write_images=True.\nMarkdown output:\n{md[:1000]}"
+        )
 
 
 class TestMarkdownHandlesVectorDrawings:
@@ -384,12 +380,10 @@ class TestMarkdownMultiColumnOrder:
         assert pos_a_start != -1, "COLUMN_A_START not found in markdown"
         assert pos_b_start != -1, "COLUMN_B_START not found in markdown"
 
-        if pos_a_start > pos_b_start:
-            pytest.skip(
-                f"pymupdf4llm reads Column B before Column A. "
-                f"Reading order may need post-processing in Phase 2.\n"
-                f"Position A={pos_a_start}, B={pos_b_start}"
-            )
+        assert pos_a_start < pos_b_start, (
+            f"pymupdf4llm reads Column B before Column A. "
+            f"Position A={pos_a_start}, B={pos_b_start}"
+        )
 
     def test_column_text_not_interleaved(self, tmp_path: Path) -> None:
         """Columns should not be interleaved line-by-line."""
@@ -399,16 +393,14 @@ class TestMarkdownMultiColumnOrder:
         pos_a_end = md.find("COLUMN_A_END")
         pos_b_start = md.find("COLUMN_B_START")
 
-        if pos_a_end == -1 or pos_b_start == -1:
-            pytest.skip("Column markers not found — can't test interleaving")
+        assert pos_a_end != -1, "COLUMN_A_END not found in markdown"
+        assert pos_b_start != -1, "COLUMN_B_START not found in markdown"
 
-        # If Column A ends before Column B starts, no interleaving
-        # If not, columns are interleaved
-        if pos_a_end > pos_b_start:
-            pytest.skip(
-                f"Column text appears interleaved. "
-                f"A_END at {pos_a_end}, B_START at {pos_b_start}"
-            )
+        # Column A should end before Column B starts (no interleaving)
+        assert pos_a_end < pos_b_start, (
+            f"Column text appears interleaved. "
+            f"A_END at {pos_a_end}, B_START at {pos_b_start}"
+        )
 
 
 class TestChunkQualityComparison:

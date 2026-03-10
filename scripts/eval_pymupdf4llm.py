@@ -88,6 +88,18 @@ def _measure_in_child(func_name: str, path: str) -> dict:
         p = multiprocessing.Process(target=worker, args=(func_name, path, result_path))
         p.start()
         p.join(timeout=600)
+        if p.is_alive():
+            # Timed out — kill the zombie
+            p.terminate()
+            p.join(timeout=5)
+            if p.is_alive():
+                p.kill()
+                p.join(timeout=5)
+            print(
+                f"  WARNING: {func_name} child timed out and was killed",
+                file=sys.stderr,
+            )
+            return {"text": "", "elapsed_s": 0, "peak_rss_kb": 0}
         if p.exitcode != 0:
             print(
                 f"  WARNING: {func_name} child exited with code {p.exitcode}",
