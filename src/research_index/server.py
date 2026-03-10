@@ -320,7 +320,7 @@ def add_relationship_tool(
     Args:
         source_paper_id: ID of the source paper.
         target_paper_id: ID of the target paper.
-        relation_type: One of: extends, contradicts, replicates, cites, compares.
+        relation_type: One of: extends, contradicts, replicates, cites, compares, applies, implements.
         confidence: Confidence score 0.0-1.0 (default 1.0).
         evidence_chunk_id: Optional chunk ID containing evidence for this relationship.
     """
@@ -347,7 +347,7 @@ def get_relationships_tool(
 
     Args:
         paper_id: Paper ID to query relationships for.
-        relation_type: Filter by type (extends, contradicts, replicates, cites, compares).
+        relation_type: Filter by type (extends, contradicts, replicates, cites, compares, applies, implements).
         direction: 'outgoing', 'incoming', or 'both' (default).
     """
     conn = _get_conn()

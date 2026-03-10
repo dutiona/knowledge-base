@@ -6,6 +6,8 @@ import json
 import re
 import sqlite3
 
+from .db import RELATIONSHIP_TYPES
+
 
 def register_paper(
     conn: sqlite3.Connection,
@@ -72,13 +74,17 @@ def get_paper(
         }
 
         # Fetch related chunks
-        chunks = conn.execute(
-            """SELECT id, content, chunk_index FROM chunks
+        chunks = (
+            conn.execute(
+                """SELECT id, content, chunk_index FROM chunks
                WHERE source_uri IN (
                    SELECT source_uri FROM chunks WHERE id = ?
                ) ORDER BY chunk_index""",
-            (row["abstract_chunk_id"],),
-        ).fetchall() if row["abstract_chunk_id"] else []
+                (row["abstract_chunk_id"],),
+            ).fetchall()
+            if row["abstract_chunk_id"]
+            else []
+        )
         paper["chunks"] = [
             {"id": c["id"], "content": c["content"], "chunk_index": c["chunk_index"]}
             for c in chunks
@@ -102,7 +108,9 @@ def get_paper(
                 "target_paper_id": r["target_paper_id"],
                 "relation_type": r["relation_type"],
                 "confidence": r["confidence"],
-                "direction": "outgoing" if r["source_paper_id"] == row["id"] else "incoming",
+                "direction": "outgoing"
+                if r["source_paper_id"] == row["id"]
+                else "incoming",
                 "related_title": r["related_title"],
             }
             for r in rels
@@ -121,7 +129,7 @@ def add_relationship(
     evidence_chunk_id: int | None = None,
 ) -> dict:
     """Add a typed relationship between two papers. Upserts on conflict."""
-    valid_types = {"extends", "contradicts", "replicates", "cites", "compares"}
+    valid_types = set(RELATIONSHIP_TYPES)
     if relation_type not in valid_types:
         return {"error": f"Invalid relation_type. Must be one of: {valid_types}"}
 
@@ -133,7 +141,13 @@ def add_relationship(
            VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(source_paper_id, target_paper_id, relation_type)
            DO UPDATE SET confidence = excluded.confidence, evidence_chunk_id = excluded.evidence_chunk_id""",
-        (source_paper_id, target_paper_id, relation_type, confidence, evidence_chunk_id),
+        (
+            source_paper_id,
+            target_paper_id,
+            relation_type,
+            confidence,
+            evidence_chunk_id,
+        ),
     )
     conn.commit()
     return {
@@ -298,7 +312,9 @@ def suggest_relationships(
     for doi in found_dois:
         if doi == paper["doi"]:
             continue
-        match = conn.execute("SELECT id, title FROM papers WHERE doi = ?", (doi,)).fetchone()
+        match = conn.execute(
+            "SELECT id, title FROM papers WHERE doi = ?", (doi,)
+        ).fetchone()
         if match:
             # Check if relationship already exists
             existing = conn.execute(
@@ -307,14 +323,16 @@ def suggest_relationships(
                 (paper_id, match["id"]),
             ).fetchone()
             if not existing:
-                suggestions.append({
-                    "target_paper_id": match["id"],
-                    "target_title": match["title"],
-                    "relation_type": "cites",
-                    "confidence": 0.9,
-                    "match_method": "doi",
-                    "matched_doi": doi,
-                })
+                suggestions.append(
+                    {
+                        "target_paper_id": match["id"],
+                        "target_title": match["title"],
+                        "relation_type": "cites",
+                        "confidence": 0.9,
+                        "match_method": "doi",
+                        "matched_doi": doi,
+                    }
+                )
 
     # Strategy 2: Title substring matching
     other_papers = conn.execute(
@@ -337,12 +355,14 @@ def suggest_relationships(
                 (paper_id, other["id"]),
             ).fetchone()
             if not existing:
-                suggestions.append({
-                    "target_paper_id": other["id"],
-                    "target_title": other["title"],
-                    "relation_type": "cites",
-                    "confidence": 0.5,
-                    "match_method": "title",
-                })
+                suggestions.append(
+                    {
+                        "target_paper_id": other["id"],
+                        "target_title": other["title"],
+                        "relation_type": "cites",
+                        "confidence": 0.5,
+                        "match_method": "title",
+                    }
+                )
 
     return suggestions
