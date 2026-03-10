@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import sqlite3
 import subprocess
@@ -117,8 +118,6 @@ def _run_omniparser(
     json_fd, json_out = tempfile.mkstemp(suffix=".json")
     try:
         # Close the fd so the subprocess can write to it
-        import os
-
         os.close(json_fd)
         subprocess.run(
             [venv_python, parse_script, str(png_path), "-j", json_out],
@@ -141,6 +140,8 @@ def _run_omniparser(
 
 
 _OMNIPARSER_MAX_APPEND = 500
+_ETA_SECS_PER_PAGE_BASE = 4
+_ETA_SECS_PER_PAGE_OMNIPARSER = 40
 
 
 def _merge_omniparser_elements(figure: dict, elements: list[dict]) -> dict:
@@ -176,14 +177,14 @@ def _merge_omniparser_elements(figure: dict, elements: list[dict]) -> dict:
     if texts:
         line = "Detected text: " + ", ".join(f'"{t}"' for t in texts)
         if len(line) > budget:
-            line = line[:budget]
+            line = line[: budget - 1] + "\u2026"
         parts.append(line)
         budget -= len(line)
 
     if icons and budget > 20:
         line = "Detected elements: " + ", ".join(f'"{i}"' for i in icons)
         if len(line) > budget:
-            line = line[:budget]
+            line = line[: budget - 1] + "\u2026"
         parts.append(line)
 
     return {**figure, "description": figure["description"] + "\n\n" + "\n".join(parts)}
@@ -469,7 +470,9 @@ def extract_figures(
     omniparser_enriched = 0
 
     # 4. ETA gate
-    per_page = 4 + (40 if omniparser_path else 0)
+    per_page = _ETA_SECS_PER_PAGE_BASE + (
+        _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
+    )
     estimated = len(candidate_pages) * per_page
     if estimated > 120 and not confirmed:
         return {
@@ -527,8 +530,6 @@ def extract_figures(
             # Write PNG to tempfile for omniparser
             png_fd, png_tmp = tempfile.mkstemp(suffix=".png")
             try:
-                import os
-
                 os.close(png_fd)
                 Path(png_tmp).write_bytes(png_bytes)
                 omni_result = _run_omniparser(Path(png_tmp), omniparser_path)
