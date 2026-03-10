@@ -1015,6 +1015,33 @@ def test_extract_figures_full_extraction_deletes_all(mock_vision, mock_embed, tm
     )
 
 
+def test_extract_figures_empty_pages_is_noop(tmp_path):
+    """pages=[] should return immediately without deleting anything (#79)."""
+    from research_index.vision import extract_figures
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0"])
+
+    # Pre-seed a figure chunk to verify it survives
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('fig_hash', 'existing figure', 'figure', "
+        "(SELECT source_uri FROM chunks WHERE source_type='pdf' LIMIT 1), 1000000)",
+    )
+    conn.commit()
+
+    result = extract_figures(conn, paper_id=paper_id, pages=[])
+
+    assert result["pages_processed"] == 0
+    assert result["figures_found"] == 0
+    # The existing figure chunk must NOT have been deleted
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
+        ).fetchone()["c"]
+        == 1
+    )
+
+
 @patch("research_index.vision._embed_with_config")
 @patch("research_index.vision._vision_call")
 def test_extract_figures_per_page_error(mock_vision, mock_embed, tmp_path):
