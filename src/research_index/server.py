@@ -43,7 +43,7 @@ from .papers import (
     suggest_relationships,
 )
 from .search import search
-from .vision import configure_vision, extract_figures
+from .vision import configure_omniparser, configure_vision, extract_figures
 
 mcp = FastMCP(
     "research-index",
@@ -629,6 +629,21 @@ def configure_vision_tool(
     """
     conn = _get_conn()
     return json.dumps(configure_vision(conn, model=model, base_url=base_url))
+
+
+@mcp.tool()
+def configure_omniparser_tool(path: str | None = None) -> str:
+    """Configure OmniParser for figure enrichment.
+
+    OmniParser adds OCR text and icon detection to figure descriptions.
+    Requires a local OmniParser installation with its own venv.
+    This is a local-only tool — the path is executed as a subprocess.
+
+    Args:
+        path: Absolute path to OmniParser directory (None to query, empty string to disable).
+    """
+    conn = _get_conn()
+    return json.dumps(configure_omniparser(conn, path))
 
 
 def main():
