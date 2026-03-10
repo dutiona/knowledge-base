@@ -463,7 +463,7 @@ def export_bibtex_tool(
 
 @mcp.tool()
 def suggest_relationships_tool(paper_id: int) -> str:
-    """Suggest citation relationships by matching DOIs, titles (FTS5), and author+year.
+    """Suggest citation relationships by matching DOIs, title words, and author+year.
 
     Returns suggestions (candidate relationships with confidence scores) and
     unmatched DOIs found in text that don't match any registered paper.

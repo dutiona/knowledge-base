@@ -310,24 +310,46 @@ def _surname_from_author(author: str) -> str:
     return parts[-1].lower() if parts else ""
 
 
-def _has_existing_cites(
-    conn: sqlite3.Connection, source_id: int, target_id: int
-) -> bool:
-    return (
-        conn.execute(
-            """SELECT id FROM relationships
-               WHERE source_paper_id = ? AND target_paper_id = ? AND relation_type = 'cites'""",
-            (source_id, target_id),
-        ).fetchone()
-        is not None
-    )
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "and",
+        "or",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "by",
+        "with",
+        "from",
+        "as",
+        "its",
+        "this",
+        "that",
+        "not",
+        "but",
+        "no",
+        "via",
+        "using",
+        "based",
+    }
+)
 
 
 def suggest_relationships(
     conn: sqlite3.Connection,
     paper_id: int,
 ) -> dict:
-    """Suggest citation relationships by matching DOIs, titles (FTS5), and author+year.
+    """Suggest citation relationships by matching DOIs, titles, and author+year.
 
     Returns dict with 'suggestions' (list of candidate relationships) and
     'unmatched' (list of DOIs found in text that don't match any registered paper).
@@ -357,6 +379,15 @@ def suggest_relationships(
     suggested_ids: set[int] = set()
     unmatched = []
 
+    # Prefetch existing cites to avoid N+1 queries
+    existing_cites = {
+        row["target_paper_id"]
+        for row in conn.execute(
+            "SELECT target_paper_id FROM relationships WHERE source_paper_id = ? AND relation_type = 'cites'",
+            (paper_id,),
+        ).fetchall()
+    }
+
     # Strategy 1: DOI matching (highest precision)
     doi_pattern = r"10\.\d{4,}/[^\s,;}\])\"']+"
     found_dois = set(re.findall(doi_pattern, full_text))
@@ -367,7 +398,7 @@ def suggest_relationships(
             "SELECT id, title FROM papers WHERE doi = ?", (doi,)
         ).fetchone()
         if match:
-            if not _has_existing_cites(conn, paper_id, match["id"]):
+            if match["id"] not in existing_cites:
                 suggestions.append(
                     {
                         "target_paper_id": match["id"],
@@ -382,59 +413,67 @@ def suggest_relationships(
         else:
             unmatched.append({"doi": doi})
 
-    # Strategy 2: Title word-ratio matching
+    # Strategy 2: Title word-ratio matching (skip stopwords and short words)
     other_papers = conn.execute(
         "SELECT id, title, authors, year FROM papers WHERE id != ?", (paper_id,)
     ).fetchall()
     text_lower = full_text.lower()
     for other in other_papers:
-        if other["id"] in suggested_ids:
+        if other["id"] in suggested_ids or other["id"] in existing_cites:
             continue
         title_words = other["title"].split()
         if len(title_words) < 3:
             continue
-        matched_words = sum(1 for w in title_words if w.lower() in text_lower)
-        match_ratio = matched_words / len(title_words)
+        # Only count meaningful words (skip stopwords and very short words)
+        meaningful = [
+            w for w in title_words if w.lower() not in _STOPWORDS and len(w) > 2
+        ]
+        if len(meaningful) < 2:
+            continue
+        matched_words = sum(1 for w in meaningful if w.lower() in text_lower)
+        match_ratio = matched_words / len(meaningful)
 
         if match_ratio >= 0.6:
-            if not _has_existing_cites(conn, paper_id, other["id"]):
-                # Scale confidence: 0.6 ratio → 0.3, 1.0 ratio → 0.6
-                confidence = round(0.3 + (match_ratio - 0.6) * 0.75, 2)
-                suggestions.append(
-                    {
-                        "target_paper_id": other["id"],
-                        "target_title": other["title"],
-                        "relation_type": "cites",
-                        "confidence": confidence,
-                        "match_method": "title_words",
-                    }
-                )
-                suggested_ids.add(other["id"])
+            # Scale confidence: 0.6 ratio → 0.3, 1.0 ratio → 0.6
+            confidence = round(0.3 + (match_ratio - 0.6) * 0.75, 2)
+            suggestions.append(
+                {
+                    "target_paper_id": other["id"],
+                    "target_title": other["title"],
+                    "relation_type": "cites",
+                    "confidence": confidence,
+                    "match_method": "title_words",
+                }
+            )
+            suggested_ids.add(other["id"])
 
     # Strategy 3: Author surname + year heuristic
     author_year_refs = _extract_author_year_citations(full_text)
+    # Group papers by year for O(citations) instead of O(citations × papers)
+    papers_by_year: dict[int, list] = {}
+    for other in other_papers:
+        if other["year"] is not None:
+            papers_by_year.setdefault(other["year"], []).append(other)
+
     for surname, year in author_year_refs:
-        for other in other_papers:
-            if other["id"] in suggested_ids:
-                continue
-            if other["year"] != year:
+        for other in papers_by_year.get(year, []):
+            if other["id"] in suggested_ids or other["id"] in existing_cites:
                 continue
             authors = json.loads(other["authors"]) if other["authors"] else []
             if not authors:
                 continue
             if any(_surname_from_author(a) == surname for a in authors):
-                if not _has_existing_cites(conn, paper_id, other["id"]):
-                    suggestions.append(
-                        {
-                            "target_paper_id": other["id"],
-                            "target_title": other["title"],
-                            "relation_type": "cites",
-                            "confidence": 0.4,
-                            "match_method": "author_year",
-                            "matched_author": surname,
-                            "matched_year": year,
-                        }
-                    )
-                    suggested_ids.add(other["id"])
+                suggestions.append(
+                    {
+                        "target_paper_id": other["id"],
+                        "target_title": other["title"],
+                        "relation_type": "cites",
+                        "confidence": 0.4,
+                        "match_method": "author_year",
+                        "matched_author": surname,
+                        "matched_year": year,
+                    }
+                )
+                suggested_ids.add(other["id"])
 
     return {"suggestions": suggestions, "unmatched": unmatched}
