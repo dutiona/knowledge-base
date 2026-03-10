@@ -2,12 +2,88 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
 from pathlib import Path
 
 from .db import RELATIONSHIP_TYPES
+
+
+def compute_file_hash(path: Path) -> str:
+    """SHA-256 hex digest of file bytes."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(8192), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def get_paper_paths(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
+    """Get all registered paths for a paper."""
+    rows = conn.execute(
+        "SELECT id, path, content_hash, is_primary, added_at "
+        "FROM paper_paths WHERE paper_id = ? ORDER BY is_primary DESC, added_at",
+        (paper_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_paper_source_uri(conn: sqlite3.Connection, paper_id: int) -> str | None:
+    """Get primary source path for a paper via paper_paths.
+
+    Falls back to legacy abstract_chunk_id -> chunks.source_uri
+    if no paper_paths entry exists.
+    """
+    row = conn.execute(
+        "SELECT path FROM paper_paths WHERE paper_id = ? AND is_primary = TRUE LIMIT 1",
+        (paper_id,),
+    ).fetchone()
+    if row:
+        return row["path"]
+
+    # Legacy fallback
+    row = conn.execute(
+        "SELECT source_uri FROM chunks WHERE id = "
+        "(SELECT abstract_chunk_id FROM papers WHERE id = ?)",
+        (paper_id,),
+    ).fetchone()
+    return row["source_uri"] if row else None
+
+
+def get_paper_chunks(
+    conn: sqlite3.Connection,
+    paper_id: int,
+    include_figures: bool = False,
+) -> list[dict]:
+    """Get chunks for a paper via paper_paths.
+
+    Args:
+        include_figures: If True, include figure chunks. Default False
+            (matches extraction.py usage). get_paper passes True to
+            include all chunk types.
+    """
+    source_uri = get_paper_source_uri(conn, paper_id)
+    if not source_uri:
+        return []
+    if include_figures:
+        chunks = conn.execute(
+            "SELECT id, content, chunk_index FROM chunks "
+            "WHERE source_uri = ? ORDER BY chunk_index",
+            (source_uri,),
+        ).fetchall()
+    else:
+        chunks = conn.execute(
+            "SELECT id, content, chunk_index FROM chunks "
+            "WHERE source_uri = ? AND source_type != 'figure' "
+            "ORDER BY chunk_index",
+            (source_uri,),
+        ).fetchall()
+    return [
+        {"id": c["id"], "content": c["content"], "chunk_index": c["chunk_index"]}
+        for c in chunks
+    ]
 
 
 def register_paper(

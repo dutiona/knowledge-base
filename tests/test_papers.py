@@ -1,13 +1,18 @@
 """Tests for paper registration, retrieval, relationships, BibTeX, and suggestions."""
 
+import hashlib
 from unittest.mock import patch
 
 from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from research_index.ingest import ingest_file
 from research_index.papers import (
     add_relationship,
+    compute_file_hash,
     export_bibtex,
     get_paper,
+    get_paper_chunks,
+    get_paper_paths,
+    get_paper_source_uri,
     get_relationships,
     register_paper,
     suggest_relationships,
@@ -697,3 +702,96 @@ def test_migrate_paper_paths_from_existing(tmp_path):
     assert row is not None
     assert row["path"] == source_uri
     assert row["is_primary"] == 1
+
+
+# --- core helpers ---
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_get_paper_paths(tmp_path):
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content.\n")
+    ingest_file(conn, md)
+    source_uri = str(md.resolve())
+
+    pid = register_paper(conn, "Test", source_uri=source_uri)["paper_id"]
+    conn.execute(
+        "INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary) VALUES (?, ?, TRUE)",
+        (pid, source_uri),
+    )
+    conn.commit()
+
+    paths = get_paper_paths(conn, pid)
+    assert len(paths) == 1
+    assert paths[0]["path"] == source_uri
+    assert paths[0]["is_primary"] == 1
+
+
+def test_compute_file_hash(tmp_path):
+    f = tmp_path / "test.pdf"
+    f.write_bytes(b"hello world")
+    h = compute_file_hash(f)
+    assert len(h) == 64
+    assert h == hashlib.sha256(b"hello world").hexdigest()
+
+
+def test_compute_file_hash_large_file(tmp_path):
+    f = tmp_path / "large.bin"
+    f.write_bytes(b"x" * 20000)
+    h = compute_file_hash(f)
+    assert h == hashlib.sha256(b"x" * 20000).hexdigest()
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_get_paper_source_uri(tmp_path):
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content.\n")
+    ingest_file(conn, md)
+    source_uri = str(md.resolve())
+
+    pid = register_paper(conn, "Test", source_uri=source_uri)["paper_id"]
+    conn.execute(
+        "INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary) VALUES (?, ?, TRUE)",
+        (pid, source_uri),
+    )
+    conn.commit()
+
+    assert get_paper_source_uri(conn, pid) == source_uri
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_get_paper_source_uri_fallback(tmp_path):
+    """Falls back to abstract_chunk_id hop when no paper_paths entry."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content.\n")
+    ingest_file(conn, md)
+    source_uri = str(md.resolve())
+
+    pid = register_paper(conn, "Test", source_uri=source_uri)["paper_id"]
+    conn.execute("DELETE FROM paper_paths WHERE paper_id = ?", (pid,))
+    conn.commit()
+
+    assert get_paper_source_uri(conn, pid) == source_uri
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_get_paper_chunks(tmp_path):
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content of the paper.\n")
+    ingest_file(conn, md)
+    source_uri = str(md.resolve())
+
+    pid = register_paper(conn, "Test", source_uri=source_uri)["paper_id"]
+    conn.execute(
+        "INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary) VALUES (?, ?, TRUE)",
+        (pid, source_uri),
+    )
+    conn.commit()
+
+    chunks = get_paper_chunks(conn, pid)
+    assert len(chunks) >= 1
+    assert "Content of the paper" in chunks[0]["content"]
