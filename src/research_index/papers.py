@@ -173,22 +173,8 @@ def get_paper(
             "added_at": row["added_at"],
         }
 
-        # Fetch related chunks
-        chunks = (
-            conn.execute(
-                """SELECT id, content, chunk_index FROM chunks
-               WHERE source_uri IN (
-                   SELECT source_uri FROM chunks WHERE id = ?
-               ) ORDER BY chunk_index""",
-                (row["abstract_chunk_id"],),
-            ).fetchall()
-            if row["abstract_chunk_id"]
-            else []
-        )
-        paper["chunks"] = [
-            {"id": c["id"], "content": c["content"], "chunk_index": c["chunk_index"]}
-            for c in chunks
-        ]
+        # Fetch related chunks via paper_paths (with legacy fallback)
+        paper["chunks"] = get_paper_chunks(conn, row["id"], include_figures=True)
 
         # Fetch relationships
         rels = conn.execute(
@@ -574,17 +560,14 @@ def suggest_relationships(
     if not paper:
         return empty
 
-    # Get all chunks for this paper
+    # Get all chunks for this paper via paper_paths (with legacy fallback)
+    source_uri = get_paper_source_uri(conn, paper_id)
     chunks = []
-    if paper["abstract_chunk_id"]:
-        source_uri_row = conn.execute(
-            "SELECT source_uri FROM chunks WHERE id = ?", (paper["abstract_chunk_id"],)
-        ).fetchone()
-        if source_uri_row:
-            chunks = conn.execute(
-                "SELECT content FROM chunks WHERE source_uri = ?",
-                (source_uri_row["source_uri"],),
-            ).fetchall()
+    if source_uri:
+        chunks = conn.execute(
+            "SELECT content FROM chunks WHERE source_uri = ?",
+            (source_uri,),
+        ).fetchall()
 
     if not chunks:
         return empty

@@ -813,3 +813,21 @@ def test_register_paper_creates_paper_path(tmp_path):
     assert paths[0]["path"] == str(md.resolve())
     assert paths[0]["is_primary"] == 1
     assert paths[0]["content_hash"] is not None
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_get_paper_resilient_to_broken_abstract_chunk(tmp_path):
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Paper content for resilience test.\n")
+    ingest_file(conn, md)
+
+    result = register_paper(conn, "Resilient", source_uri=str(md.resolve()))
+    paper_id = result["paper_id"]
+
+    # Break the abstract_chunk_id link
+    conn.execute("UPDATE papers SET abstract_chunk_id = NULL WHERE id = ?", (paper_id,))
+    conn.commit()
+
+    papers = get_paper(conn, paper_id=paper_id)
+    assert len(papers[0]["chunks"]) >= 1
