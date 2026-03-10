@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from pathlib import Path
 
 
 def register_paper(
@@ -72,13 +73,17 @@ def get_paper(
         }
 
         # Fetch related chunks
-        chunks = conn.execute(
-            """SELECT id, content, chunk_index FROM chunks
+        chunks = (
+            conn.execute(
+                """SELECT id, content, chunk_index FROM chunks
                WHERE source_uri IN (
                    SELECT source_uri FROM chunks WHERE id = ?
                ) ORDER BY chunk_index""",
-            (row["abstract_chunk_id"],),
-        ).fetchall() if row["abstract_chunk_id"] else []
+                (row["abstract_chunk_id"],),
+            ).fetchall()
+            if row["abstract_chunk_id"]
+            else []
+        )
         paper["chunks"] = [
             {"id": c["id"], "content": c["content"], "chunk_index": c["chunk_index"]}
             for c in chunks
@@ -102,7 +107,9 @@ def get_paper(
                 "target_paper_id": r["target_paper_id"],
                 "relation_type": r["relation_type"],
                 "confidence": r["confidence"],
-                "direction": "outgoing" if r["source_paper_id"] == row["id"] else "incoming",
+                "direction": "outgoing"
+                if r["source_paper_id"] == row["id"]
+                else "incoming",
                 "related_title": r["related_title"],
             }
             for r in rels
@@ -121,7 +128,15 @@ def add_relationship(
     evidence_chunk_id: int | None = None,
 ) -> dict:
     """Add a typed relationship between two papers. Upserts on conflict."""
-    valid_types = {"extends", "contradicts", "replicates", "cites", "compares"}
+    valid_types = {
+        "extends",
+        "contradicts",
+        "replicates",
+        "cites",
+        "compares",
+        "applies",
+        "implements",
+    }
     if relation_type not in valid_types:
         return {"error": f"Invalid relation_type. Must be one of: {valid_types}"}
 
@@ -133,7 +148,13 @@ def add_relationship(
            VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(source_paper_id, target_paper_id, relation_type)
            DO UPDATE SET confidence = excluded.confidence, evidence_chunk_id = excluded.evidence_chunk_id""",
-        (source_paper_id, target_paper_id, relation_type, confidence, evidence_chunk_id),
+        (
+            source_paper_id,
+            target_paper_id,
+            relation_type,
+            confidence,
+            evidence_chunk_id,
+        ),
     )
     conn.commit()
     return {
@@ -214,9 +235,33 @@ def _bibtex_key(authors: list[str], year: int | None) -> str:
     return f"{surname}{year or 'nd'}"
 
 
-def _generate_bibtex(paper: dict) -> str:
+def _unique_bibtex_key(
+    authors: list[str], year: int | None, used_keys: set[str]
+) -> str:
+    """Generate a collision-free BibTeX key, appending a/b/c... suffixes."""
+    base = _bibtex_key(authors, year)
+    if base not in used_keys:
+        used_keys.add(base)
+        return base
+    for suffix in "abcdefghijklmnopqrstuvwxyz":
+        candidate = f"{base}{suffix}"
+        if candidate not in used_keys:
+            used_keys.add(candidate)
+            return candidate
+    # Fallback: use numeric suffix
+    i = 2
+    while f"{base}{i}" in used_keys:
+        i += 1
+    candidate = f"{base}{i}"
+    used_keys.add(candidate)
+    return candidate
+
+
+def _generate_bibtex(paper: dict, used_keys: set[str] | None = None) -> str:
     """Generate a BibTeX entry from paper metadata."""
-    key = _bibtex_key(paper["authors"], paper["year"])
+    if used_keys is None:
+        used_keys = set()
+    key = _unique_bibtex_key(paper["authors"], paper["year"], used_keys)
     lines = [f"@article{{{key},"]
     lines.append(f"  title = {{{paper['title']}}},")
     if paper["authors"]:
@@ -231,23 +276,38 @@ def _generate_bibtex(paper: dict) -> str:
     return "\n".join(lines)
 
 
+def _query_papers(
+    conn: sqlite3.Connection,
+    paper_ids: list[int] | None = None,
+    title_pattern: str | None = None,
+) -> list:
+    """Query papers with optional filters. Shared by export and sync."""
+    if paper_ids:
+        placeholders = ",".join("?" * len(paper_ids))
+        return conn.execute(
+            f"SELECT * FROM papers WHERE id IN ({placeholders})", paper_ids
+        ).fetchall()
+    elif title_pattern:
+        return conn.execute(
+            "SELECT * FROM papers WHERE title LIKE ?", (f"%{title_pattern}%",)
+        ).fetchall()
+    else:
+        return conn.execute("SELECT * FROM papers").fetchall()
+
+
 def export_bibtex(
     conn: sqlite3.Connection,
     paper_ids: list[int] | None = None,
     title_pattern: str | None = None,
 ) -> str:
     """Export papers as BibTeX. Filter by IDs or title pattern, or export all."""
-    if paper_ids:
-        placeholders = ",".join("?" * len(paper_ids))
-        rows = conn.execute(
-            f"SELECT * FROM papers WHERE id IN ({placeholders})", paper_ids
-        ).fetchall()
-    elif title_pattern:
-        rows = conn.execute(
-            "SELECT * FROM papers WHERE title LIKE ?", (f"%{title_pattern}%",)
-        ).fetchall()
-    else:
-        rows = conn.execute("SELECT * FROM papers").fetchall()
+    rows = _query_papers(conn, paper_ids, title_pattern)
+
+    # Pre-seed used_keys with all stored BibTeX keys to avoid collisions
+    used_keys: set[str] = set()
+    for row in rows:
+        if row["bibtex"]:
+            used_keys.update(_extract_bibtex_keys(row["bibtex"]))
 
     entries = []
     for row in rows:
@@ -261,8 +321,66 @@ def export_bibtex(
                 "venue": row["venue"],
                 "doi": row["doi"],
             }
-            entries.append(_generate_bibtex(paper))
+            entries.append(_generate_bibtex(paper, used_keys))
     return "\n\n".join(entries)
+
+
+def _extract_bibtex_keys(text: str) -> set[str]:
+    """Extract all BibTeX keys from a .bib file's content."""
+    return set(re.findall(r"@\w+\s*\{\s*([^,\s]+)", text))
+
+
+def sync_bibtex(
+    conn: sqlite3.Connection,
+    output_path: str,
+    paper_ids: list[int] | None = None,
+    title_pattern: str | None = None,
+) -> dict:
+    """Append only new papers to an existing .bib file.
+
+    Reads the file at output_path, extracts existing BibTeX keys,
+    and appends entries for papers whose keys are not yet present.
+    Creates the file if it does not exist.
+    """
+    p = Path(output_path).expanduser().resolve()
+    existing_text = p.read_text(encoding="utf-8") if p.exists() else ""
+    file_keys = _extract_bibtex_keys(existing_text)
+    # Pre-seed all_keys with file keys + stored BibTeX keys from candidates
+    rows = _query_papers(conn, paper_ids, title_pattern)
+    all_keys = set(file_keys)
+    for row in rows:
+        if row["bibtex"]:
+            all_keys.update(_extract_bibtex_keys(row["bibtex"]))
+
+    new_entries = []
+    skipped = 0
+    for row in rows:
+        if row["bibtex"]:
+            # Stored BibTeX: skip if exact key already in file or earlier stored entry
+            entry_keys = _extract_bibtex_keys(row["bibtex"])
+            if entry_keys & file_keys:
+                skipped += 1
+                continue
+            new_entries.append(row["bibtex"])
+        else:
+            paper = {
+                "title": row["title"],
+                "authors": json.loads(row["authors"]),
+                "year": row["year"],
+                "venue": row["venue"],
+                "doi": row["doi"],
+            }
+            # Generate with collision-safe keys — suffixes avoid duplicates
+            entry = _generate_bibtex(paper, all_keys)
+            new_entries.append(entry)
+
+    if new_entries:
+        separator = "\n\n" if existing_text.rstrip() else ""
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(separator + "\n\n".join(new_entries) + "\n")
+
+    return {"appended": len(new_entries), "skipped": skipped, "path": str(p)}
 
 
 def suggest_relationships(
@@ -298,7 +416,9 @@ def suggest_relationships(
     for doi in found_dois:
         if doi == paper["doi"]:
             continue
-        match = conn.execute("SELECT id, title FROM papers WHERE doi = ?", (doi,)).fetchone()
+        match = conn.execute(
+            "SELECT id, title FROM papers WHERE doi = ?", (doi,)
+        ).fetchone()
         if match:
             # Check if relationship already exists
             existing = conn.execute(
@@ -307,14 +427,16 @@ def suggest_relationships(
                 (paper_id, match["id"]),
             ).fetchone()
             if not existing:
-                suggestions.append({
-                    "target_paper_id": match["id"],
-                    "target_title": match["title"],
-                    "relation_type": "cites",
-                    "confidence": 0.9,
-                    "match_method": "doi",
-                    "matched_doi": doi,
-                })
+                suggestions.append(
+                    {
+                        "target_paper_id": match["id"],
+                        "target_title": match["title"],
+                        "relation_type": "cites",
+                        "confidence": 0.9,
+                        "match_method": "doi",
+                        "matched_doi": doi,
+                    }
+                )
 
     # Strategy 2: Title substring matching
     other_papers = conn.execute(
@@ -337,12 +459,14 @@ def suggest_relationships(
                 (paper_id, other["id"]),
             ).fetchone()
             if not existing:
-                suggestions.append({
-                    "target_paper_id": other["id"],
-                    "target_title": other["title"],
-                    "relation_type": "cites",
-                    "confidence": 0.5,
-                    "match_method": "title",
-                })
+                suggestions.append(
+                    {
+                        "target_paper_id": other["id"],
+                        "target_title": other["title"],
+                        "relation_type": "cites",
+                        "confidence": 0.5,
+                        "match_method": "title",
+                    }
+                )
 
     return suggestions
