@@ -39,8 +39,10 @@ from .papers import (
     add_relationship,
     export_bibtex,
     get_paper,
+    get_paper_paths,
     get_relationships,
     register_paper,
+    relocate_paper,
     suggest_relationships,
     sync_bibtex,
 )
@@ -524,6 +526,31 @@ def suggest_relationships_tool(paper_id: int) -> str:
     """
     conn = _get_conn()
     return json.dumps(suggest_relationships(conn, paper_id))
+
+
+@mcp.tool()
+def relocate_paper_tool(paper_id: int, new_path: str) -> str:
+    """Update a paper's filesystem path after moving/renaming the file.
+
+    Updates all internal references so lookups continue to work.
+
+    Args:
+        paper_id: The paper to update.
+        new_path: The new absolute path to the file.
+    """
+    conn = _get_conn()
+    return json.dumps(relocate_paper(conn, paper_id, new_path))
+
+
+@mcp.tool()
+def get_paper_paths_tool(paper_id: int) -> str:
+    """List all registered filesystem paths for a paper.
+
+    Args:
+        paper_id: The paper to look up.
+    """
+    conn = _get_conn()
+    return json.dumps(get_paper_paths(conn, paper_id))
 
 
 @mcp.tool()
