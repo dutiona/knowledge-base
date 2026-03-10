@@ -10,6 +10,7 @@ import re
 import sqlite3
 import subprocess
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -108,14 +109,26 @@ def configure_omniparser(
     return {"omniparser_path": path}
 
 
+# ---------------------------------------------------------------------------
+# Timing & timeout constants
+# ---------------------------------------------------------------------------
+
+_ETA_SECS_PER_PAGE_BASE = 4
+_ETA_SECS_PER_PAGE_OMNIPARSER = 40
+_VISION_CALL_TIMEOUT = 120
+_OMNIPARSER_SUBPROCESS_TIMEOUT = 120
+_TIMING_DRIFT_FACTOR = 2.0
+
+
 def _run_omniparser(
-    png_path: Path, omniparser_path: str, timeout: int = 120
+    png_path: Path, omniparser_path: str, timeout: int = _OMNIPARSER_SUBPROCESS_TIMEOUT
 ) -> dict | None:
     """Invoke OmniParser as a subprocess. Returns parsed JSON or None on failure."""
     venv_python = str(Path(omniparser_path) / ".venv" / "bin" / "python")
     parse_script = str(Path(omniparser_path) / "parse.py")
 
     json_fd, json_out = tempfile.mkstemp(suffix=".json")
+    t0 = time.monotonic()
     try:
         # Close the fd so the subprocess can write to it
         os.close(json_fd)
@@ -126,22 +139,34 @@ def _run_omniparser(
             check=True,
         )
         with open(json_out) as f:
-            return json.load(f)
+            result = json.load(f)
+        elapsed = time.monotonic() - t0
+        logger.info("OmniParser completed for %s in %.1fs", png_path.name, elapsed)
+        if elapsed > _ETA_SECS_PER_PAGE_OMNIPARSER * _TIMING_DRIFT_FACTOR:
+            logger.warning(
+                "OmniParser took %.1fs for %s (expected ~%ds) — "
+                "consider raising _ETA_SECS_PER_PAGE_OMNIPARSER or _OMNIPARSER_SUBPROCESS_TIMEOUT",
+                elapsed,
+                png_path.name,
+                _ETA_SECS_PER_PAGE_OMNIPARSER,
+            )
+        return result
     except (
         subprocess.TimeoutExpired,
         subprocess.CalledProcessError,
         json.JSONDecodeError,
         OSError,
     ) as exc:
-        logger.warning("OmniParser failed for %s: %s", png_path, exc)
+        elapsed = time.monotonic() - t0
+        logger.warning(
+            "OmniParser failed for %s after %.1fs: %s", png_path, elapsed, exc
+        )
         return None
     finally:
         Path(json_out).unlink(missing_ok=True)
 
 
 _OMNIPARSER_MAX_APPEND = 500
-_ETA_SECS_PER_PAGE_BASE = 4
-_ETA_SECS_PER_PAGE_OMNIPARSER = 40
 
 # Minimum gap (as fraction of image height) between element clusters
 # to consider them separate figure regions.
@@ -523,12 +548,22 @@ def _vision_call(
         }
     ]
 
+    t0 = time.monotonic()
     resp = httpx.post(
         f"{base_url}/v1/chat/completions",
         json={"model": model, "messages": messages, "temperature": 0.1},
-        timeout=120,
+        timeout=_VISION_CALL_TIMEOUT,
     )
     resp.raise_for_status()
+    elapsed = time.monotonic() - t0
+    logger.info("Vision call completed in %.1fs", elapsed)
+    if elapsed > _ETA_SECS_PER_PAGE_BASE * _TIMING_DRIFT_FACTOR:
+        logger.warning(
+            "Vision call took %.1fs (expected ~%ds) — "
+            "consider raising _ETA_SECS_PER_PAGE_BASE or _VISION_CALL_TIMEOUT",
+            elapsed,
+            _ETA_SECS_PER_PAGE_BASE,
+        )
 
     body = resp.json()
     try:
@@ -671,7 +706,9 @@ def extract_figures(
     omni_data: dict[
         int, tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]]
     ] = {}
+    omniparser_elapsed = 0.0
     if omniparser_path:
+        t_omni_start = time.monotonic()
         for page_num, png_bytes in rendered.items():
             png_fd, png_tmp = tempfile.mkstemp(suffix=".png")
             try:
@@ -699,6 +736,13 @@ def extract_figures(
                 crops = []
 
             omni_data[page_num] = (omni_result, regions, crops)
+        omniparser_elapsed = time.monotonic() - t_omni_start
+        logger.info(
+            "OmniParser phase: %d pages in %.1fs (%.1fs/page)",
+            len(rendered),
+            omniparser_elapsed,
+            omniparser_elapsed / len(rendered) if rendered else 0,
+        )
 
     # 7. Dispatch vision calls in thread pool (no conn access)
     # For pages with multiple detected regions, send one vision call per crop.
@@ -707,6 +751,7 @@ def extract_figures(
     errors: list[str] = []
     pages_failed = 0
 
+    t_vision_start = time.monotonic()
     with ThreadPoolExecutor(max_workers=4) as executor:
         # Each future maps to (page_num, region_idx) where region_idx is None
         # for full-page calls.
@@ -768,6 +813,14 @@ def extract_figures(
                     fig["_region_idx"] = key
                     merged.append(fig)
             page_results[page_num] = merged
+
+    vision_elapsed = time.monotonic() - t_vision_start
+    logger.info(
+        "Vision phase: %d pages in %.1fs (%.1fs/page wall-clock)",
+        len(rendered),
+        vision_elapsed,
+        vision_elapsed / len(rendered) if rendered else 0,
+    )
 
     # 7b. Enrich with OmniParser text/icon data (post-vision)
     if omniparser_path:
@@ -901,11 +954,28 @@ def extract_figures(
     except OSError as exc:
         logger.warning("Failed to save figure PNGs: %s", exc)
 
-    return {
+    total_elapsed = vision_elapsed + omniparser_elapsed
+    result = {
         "pages_processed": len(page_results),
         "pages_failed": pages_failed,
         "figures_found": len(all_figures),
         "chunks_created": chunks_created,
         "omniparser_enriched": omniparser_enriched,
         "errors": errors,
+        "timing": {
+            "vision_secs": round(vision_elapsed, 1),
+            "omniparser_secs": round(omniparser_elapsed, 1),
+            "total_secs": round(total_elapsed, 1),
+        },
     }
+
+    if total_elapsed > estimated * _TIMING_DRIFT_FACTOR:
+        logger.warning(
+            "Total extraction took %.1fs vs %.0fs estimated (%.1fx) — "
+            "ETA constants may need recalibration",
+            total_elapsed,
+            estimated,
+            total_elapsed / estimated if estimated else 0,
+        )
+
+    return result

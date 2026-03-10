@@ -1538,3 +1538,257 @@ def test_extract_figures_without_omniparser(mock_vision, mock_embed, tmp_path):
         "SELECT content FROM chunks WHERE source_type = 'figure'"
     ).fetchone()
     assert row["content"] == "Architecture diagram"
+
+
+# ---------------------------------------------------------------------------
+# Timing instrumentation tests (#58)
+# ---------------------------------------------------------------------------
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+def test_extract_figures_returns_timing(mock_vision, mock_embed, tmp_path):
+    """extract_figures result includes timing dict with expected keys."""
+    from research_index.vision import extract_figures
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "diagram",
+            "description": "Timing test figure",
+            "title": None,
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.1] * 768]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
+    result = extract_figures(conn, paper_id=paper_id, pages=[0])
+
+    assert "timing" in result
+    timing = result["timing"]
+    assert "vision_secs" in timing
+    assert "omniparser_secs" in timing
+    assert "total_secs" in timing
+    assert isinstance(timing["vision_secs"], float)
+    assert isinstance(timing["omniparser_secs"], float)
+    assert isinstance(timing["total_secs"], float)
+    assert timing["omniparser_secs"] == 0.0  # no omniparser configured
+    assert timing["total_secs"] >= timing["vision_secs"]
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+def test_extract_figures_timing_with_omniparser(mock_vision, mock_embed, tmp_path):
+    """Timing dict includes non-zero omniparser_secs when omniparser is active."""
+    from research_index.vision import extract_figures
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "chart",
+            "description": "OmniParser timing test",
+            "title": None,
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.1] * 768]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
+
+    # Configure omniparser with valid-looking paths
+    omni_dir = tmp_path / "omniparser"
+    omni_dir.mkdir()
+    (omni_dir / "parse.py").write_text("# stub")
+    venv_bin = omni_dir / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\n")
+
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_path', ?)",
+        (str(omni_dir),),
+    )
+    conn.commit()
+
+    # Mock _run_omniparser to return elements (avoid subprocess)
+    with patch("research_index.vision._run_omniparser") as mock_omni:
+        mock_omni.return_value = {
+            "elements": [{"type": "text", "content": "axis label"}]
+        }
+        result = extract_figures(conn, paper_id=paper_id, pages=[0])
+
+    assert result["timing"]["omniparser_secs"] >= 0.0
+    assert result["timing"]["total_secs"] >= result["timing"]["vision_secs"]
+
+
+def test_vision_call_logs_timing(caplog):
+    """_vision_call logs elapsed time at INFO level."""
+    from research_index.vision import _vision_call
+
+    mock_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        [
+                            {
+                                "figure_type": "diagram",
+                                "description": "test",
+                                "title": None,
+                                "entities_mentioned": [],
+                            }
+                        ]
+                    )
+                }
+            }
+        ]
+    }
+
+    with patch("research_index.vision.httpx.post") as mock_post:
+        mock_resp = mock_post.return_value
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json.return_value = mock_response
+
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="research_index.vision"):
+            _vision_call(
+                "fakebase64", "prompt", base_url="http://localhost", model="test"
+            )
+
+    assert any("Vision call completed in" in msg for msg in caplog.messages)
+
+
+def test_vision_call_warns_on_slow_response(caplog):
+    """_vision_call emits WARNING when elapsed exceeds drift threshold."""
+    from research_index.vision import (
+        _ETA_SECS_PER_PAGE_BASE,
+        _TIMING_DRIFT_FACTOR,
+        _vision_call,
+    )
+
+    mock_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        [
+                            {
+                                "figure_type": "diagram",
+                                "description": "test",
+                                "title": None,
+                                "entities_mentioned": [],
+                            }
+                        ]
+                    )
+                }
+            }
+        ]
+    }
+
+    # Simulate a slow response by patching time.monotonic
+    slow_duration = _ETA_SECS_PER_PAGE_BASE * _TIMING_DRIFT_FACTOR + 1
+    call_count = 0
+
+    def fake_monotonic():
+        nonlocal call_count
+        call_count += 1
+        # First call returns 0 (start), second call returns slow_duration (end)
+        return 0.0 if call_count % 2 == 1 else slow_duration
+
+    with (
+        patch("research_index.vision.httpx.post") as mock_post,
+        patch("research_index.vision.time.monotonic", side_effect=fake_monotonic),
+    ):
+        mock_resp = mock_post.return_value
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json.return_value = mock_response
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="research_index.vision"):
+            _vision_call(
+                "fakebase64", "prompt", base_url="http://localhost", model="test"
+            )
+
+    assert any("consider raising" in msg for msg in caplog.messages)
+
+
+def test_run_omniparser_logs_timing(caplog, tmp_path):
+    """_run_omniparser logs elapsed time on success."""
+    from research_index.vision import _run_omniparser
+
+    json_data = json.dumps({"elements": [{"type": "text", "content": "hello"}]})
+
+    def fake_subprocess_run(cmd, **kwargs):
+        # Write the expected JSON to the output file (last arg after -j)
+        json_path = cmd[-1]
+        Path(json_path).write_text(json_data)
+
+    with patch("research_index.vision.subprocess.run", side_effect=fake_subprocess_run):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="research_index.vision"):
+            result = _run_omniparser(Path("/fake.png"), "/fake/omniparser")
+
+    assert result is not None
+    assert any("OmniParser completed for" in msg for msg in caplog.messages)
+
+
+def test_run_omniparser_uses_timeout_constant():
+    """_run_omniparser default timeout matches _OMNIPARSER_SUBPROCESS_TIMEOUT."""
+    import inspect
+
+    from research_index.vision import _OMNIPARSER_SUBPROCESS_TIMEOUT, _run_omniparser
+
+    sig = inspect.signature(_run_omniparser)
+    assert sig.parameters["timeout"].default == _OMNIPARSER_SUBPROCESS_TIMEOUT
+
+
+def test_vision_call_uses_timeout_constant():
+    """_vision_call uses _VISION_CALL_TIMEOUT for the httpx request."""
+    from research_index.vision import _VISION_CALL_TIMEOUT, _vision_call
+
+    mock_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        [
+                            {
+                                "figure_type": "diagram",
+                                "description": "test",
+                                "title": None,
+                                "entities_mentioned": [],
+                            }
+                        ]
+                    )
+                }
+            }
+        ]
+    }
+
+    with patch("research_index.vision.httpx.post") as mock_post:
+        mock_resp = mock_post.return_value
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json.return_value = mock_response
+
+        _vision_call("fakebase64", "prompt", base_url="http://localhost", model="test")
+
+    _, kwargs = mock_post.call_args
+    assert kwargs["timeout"] == _VISION_CALL_TIMEOUT
+
+
+def test_constants_are_consistent():
+    """Timeout constants must be >= ETA constants to avoid premature timeouts."""
+    from research_index.vision import (
+        _ETA_SECS_PER_PAGE_BASE,
+        _ETA_SECS_PER_PAGE_OMNIPARSER,
+        _OMNIPARSER_SUBPROCESS_TIMEOUT,
+        _VISION_CALL_TIMEOUT,
+    )
+
+    assert _VISION_CALL_TIMEOUT >= _ETA_SECS_PER_PAGE_BASE, (
+        f"Vision timeout ({_VISION_CALL_TIMEOUT}s) < ETA ({_ETA_SECS_PER_PAGE_BASE}s)"
+    )
+    assert _OMNIPARSER_SUBPROCESS_TIMEOUT >= _ETA_SECS_PER_PAGE_OMNIPARSER, (
+        f"OmniParser timeout ({_OMNIPARSER_SUBPROCESS_TIMEOUT}s) < ETA ({_ETA_SECS_PER_PAGE_OMNIPARSER}s)"
+    )
