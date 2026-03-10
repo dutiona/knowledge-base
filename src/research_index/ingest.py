@@ -688,19 +688,6 @@ def _extract_web_figures(
     except Exception:
         return 0  # Vision not configured or misconfigured
 
-    # Remove stale figure chunks from a previous ingest of this URL
-    old_fig_ids = [
-        r["id"]
-        for r in conn.execute(
-            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
-            (source_url,),
-        ).fetchall()
-    ]
-    if old_fig_ids:
-        ph = ",".join("?" * len(old_fig_ids))
-        conn.execute(f"DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_fig_ids)
-        conn.execute(f"DELETE FROM chunks WHERE id IN ({ph})", old_fig_ids)
-
     base_url = vision_config["base_url"]
     model = vision_config["model"]
 
@@ -751,6 +738,20 @@ def _extract_web_figures(
         return 0
 
     embeddings = _embed_with_config(conn, texts)
+
+    # Remove stale figure chunks only after all fallible operations succeeded
+    old_fig_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
+            (source_url,),
+        ).fetchall()
+    ]
+    if old_fig_ids:
+        ph = ",".join("?" * len(old_fig_ids))
+        conn.execute(f"DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_fig_ids)
+        conn.execute(f"DELETE FROM chunks WHERE id IN ({ph})", old_fig_ids)
+
     figures_added = 0
 
     for idx, (fig, desc, emb_vec) in enumerate(zip(valid_figures, texts, embeddings)):
