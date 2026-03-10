@@ -298,8 +298,27 @@ def init_schema(conn: sqlite3.Connection) -> None:
         confidence REAL DEFAULT 1.0,
         UNIQUE(entity_id, surface_form, chunk_id)
     );
+
+    CREATE TABLE IF NOT EXISTS paper_paths (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        content_hash TEXT,
+        is_primary BOOLEAN DEFAULT TRUE CHECK(is_primary IN (0, 1)),
+        added_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(path)
+    );
     """)
 
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_paths_paper_id ON paper_paths(paper_id, is_primary)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_paths_hash ON paper_paths(content_hash)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_paths_one_primary ON paper_paths(paper_id) WHERE is_primary = TRUE"
+    )
     conn.execute(
         "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_provider', 'ollama')"
     )

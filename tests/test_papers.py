@@ -654,3 +654,17 @@ def test_suggest_title_no_substring_false_positive(tmp_path):
     # but "net" should not match as a word in "internet"
     false_positives = [s for s in title_matches if "Net Effect" in s["target_title"]]
     assert len(false_positives) == 0
+
+
+# --- paper_paths table ---
+
+
+def test_paper_paths_table_exists(tmp_path):
+    conn = _setup(tmp_path)
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='paper_paths'"
+    ).fetchone()
+    assert row is not None
+    assert "paper_id" in row[0]
+    assert "content_hash" in row[0]
+    assert "is_primary" in row[0]
