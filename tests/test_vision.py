@@ -1189,9 +1189,7 @@ def test_run_omniparser_success(tmp_path):
     def fake_run(cmd, **kwargs):
         # Write JSON to the -j output path
         json_path = cmd[cmd.index("-j") + 1]
-        import json as _json
-
-        Path(json_path).write_text(_json.dumps(omni_elements))
+        Path(json_path).write_text(json.dumps(omni_elements))
         return subprocess.CompletedProcess(cmd, 0)
 
     with patch("research_index.vision.subprocess.run", side_effect=fake_run):
