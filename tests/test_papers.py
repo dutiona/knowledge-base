@@ -271,6 +271,47 @@ def test_sync_bibtex_with_stored_bibtex(tmp_path):
     assert "other2023" in content
 
 
+def test_sync_bibtex_key_collision_across_entries(tmp_path):
+    """Two papers with same surname+year get distinct keys in sync output."""
+    conn = _setup(tmp_path)
+    register_paper(conn, "Paper One", ["Smith, Alice"], 2024)
+    register_paper(conn, "Paper Two", ["Smith, Bob"], 2024)
+
+    bib_file = tmp_path / "refs.bib"
+    result = sync_bibtex(conn, str(bib_file))
+    assert result["appended"] == 2
+
+    content = bib_file.read_text()
+    assert "smith2024," in content
+    assert "smith2024a," in content
+    assert "Paper One" in content
+    assert "Paper Two" in content
+
+
+def test_sync_bibtex_skips_when_base_key_exists(tmp_path):
+    """A paper whose base key is already in the file gets skipped."""
+    conn = _setup(tmp_path)
+    register_paper(conn, "New Smith Paper", ["Smith"], 2024)
+
+    bib_file = tmp_path / "refs.bib"
+    bib_file.write_text("@article{smith2024,\n  title = {Old Smith Paper},\n}\n")
+
+    result = sync_bibtex(conn, str(bib_file))
+    assert result["skipped"] == 1
+    assert result["appended"] == 0
+
+
+def test_export_bibtex_key_collision(tmp_path):
+    """export_bibtex generates distinct keys for same-surname-year papers."""
+    conn = _setup(tmp_path)
+    register_paper(conn, "Paper One", ["Smith, Alice"], 2024)
+    register_paper(conn, "Paper Two", ["Smith, Bob"], 2024)
+
+    bib = export_bibtex(conn)
+    assert "smith2024," in bib
+    assert "smith2024a," in bib
+
+
 def test_sync_bibtex_with_filters(tmp_path):
     conn = _setup(tmp_path)
     register_paper(conn, "Paper A", ["Author A"], 2020)

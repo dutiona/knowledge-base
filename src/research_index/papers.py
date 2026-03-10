@@ -235,9 +235,33 @@ def _bibtex_key(authors: list[str], year: int | None) -> str:
     return f"{surname}{year or 'nd'}"
 
 
-def _generate_bibtex(paper: dict) -> str:
+def _unique_bibtex_key(
+    authors: list[str], year: int | None, used_keys: set[str]
+) -> str:
+    """Generate a collision-free BibTeX key, appending a/b/c... suffixes."""
+    base = _bibtex_key(authors, year)
+    if base not in used_keys:
+        used_keys.add(base)
+        return base
+    for suffix in "abcdefghijklmnopqrstuvwxyz":
+        candidate = f"{base}{suffix}"
+        if candidate not in used_keys:
+            used_keys.add(candidate)
+            return candidate
+    # Fallback: use numeric suffix
+    i = 2
+    while f"{base}{i}" in used_keys:
+        i += 1
+    candidate = f"{base}{i}"
+    used_keys.add(candidate)
+    return candidate
+
+
+def _generate_bibtex(paper: dict, used_keys: set[str] | None = None) -> str:
     """Generate a BibTeX entry from paper metadata."""
-    key = _bibtex_key(paper["authors"], paper["year"])
+    if used_keys is None:
+        used_keys = set()
+    key = _unique_bibtex_key(paper["authors"], paper["year"], used_keys)
     lines = [f"@article{{{key},"]
     lines.append(f"  title = {{{paper['title']}}},")
     if paper["authors"]:
@@ -279,10 +303,12 @@ def export_bibtex(
     """Export papers as BibTeX. Filter by IDs or title pattern, or export all."""
     rows = _query_papers(conn, paper_ids, title_pattern)
 
+    used_keys: set[str] = set()
     entries = []
     for row in rows:
         if row["bibtex"]:
             entries.append(row["bibtex"])
+            used_keys.update(_extract_bibtex_keys(row["bibtex"]))
         else:
             paper = {
                 "title": row["title"],
@@ -291,13 +317,13 @@ def export_bibtex(
                 "venue": row["venue"],
                 "doi": row["doi"],
             }
-            entries.append(_generate_bibtex(paper))
+            entries.append(_generate_bibtex(paper, used_keys))
     return "\n\n".join(entries)
 
 
 def _extract_bibtex_keys(text: str) -> set[str]:
     """Extract all BibTeX keys from a .bib file's content."""
-    return set(re.findall(r"@\w+\{([^,\s]+)", text))
+    return set(re.findall(r"@\w+\s*\{\s*([^,\s]+)", text))
 
 
 def sync_bibtex(
@@ -314,7 +340,9 @@ def sync_bibtex(
     """
     p = Path(output_path).expanduser().resolve()
     existing_text = p.read_text(encoding="utf-8") if p.exists() else ""
-    existing_keys = _extract_bibtex_keys(existing_text)
+    file_keys = _extract_bibtex_keys(existing_text)
+    # Track all keys (file + newly generated) for collision avoidance
+    all_keys = set(file_keys)
 
     # Get all candidate entries
     rows = _query_papers(conn, paper_ids, title_pattern)
@@ -322,20 +350,28 @@ def sync_bibtex(
     skipped = 0
     for row in rows:
         if row["bibtex"]:
-            entry = row["bibtex"]
+            entry_keys = _extract_bibtex_keys(row["bibtex"])
+            if entry_keys & file_keys:
+                skipped += 1
+                continue
+            all_keys.update(entry_keys)
+            new_entries.append(row["bibtex"])
         else:
+            # Skip if base key was already in the original file
+            authors = json.loads(row["authors"])
+            base_key = _bibtex_key(authors, row["year"])
+            if base_key in file_keys:
+                skipped += 1
+                continue
             paper = {
                 "title": row["title"],
-                "authors": json.loads(row["authors"]),
+                "authors": authors,
                 "year": row["year"],
                 "venue": row["venue"],
                 "doi": row["doi"],
             }
-            entry = _generate_bibtex(paper)
-        entry_keys = _extract_bibtex_keys(entry)
-        if entry_keys & existing_keys:
-            skipped += 1
-        else:
+            # Generate with collision-safe keys across all keys
+            entry = _generate_bibtex(paper, all_keys)
             new_entries.append(entry)
 
     if new_entries:
