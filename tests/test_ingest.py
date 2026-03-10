@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 
 from research_index.db import EMBED_DIM, get_connection, init_schema
 from research_index.ingest import (
+    _extract_web_figures,
     _get_browser_config,
     _render_with_browser,
     configure_browser,
@@ -1355,3 +1356,99 @@ def test_ingest_url_browser_fallback_tmpdir_cleanup(mock_render, tmp_path):
     ingest_url(conn, "https://example.com/spa")
     # tmpdir should be cleaned up by the finally block
     assert not tmpdir.exists()
+
+
+# ---------------------------------------------------------------------------
+# _extract_web_figures tests
+# ---------------------------------------------------------------------------
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.vision._vision_call")
+@patch("research_index.vision._get_vision_config")
+def test_extract_web_figures_success(mock_vision_cfg, mock_vision_call, tmp_path):
+    """Extracts a figure chunk from a screenshot via vision pipeline."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    mock_vision_cfg.return_value = {
+        "base_url": "http://localhost:11434",
+        "model": "llava",
+    }
+    mock_vision_call.return_value = [
+        {
+            "description": "A bar chart comparing model accuracy across benchmarks.",
+            "figure_type": "chart",
+            "title": "Accuracy Comparison",
+        }
+    ]
+
+    # Create a fake screenshot
+    screenshot = tmp_path / "screenshot.png"
+    screenshot.write_bytes(b"\x89PNG\r\n\x1a\nFAKE")
+
+    count = _extract_web_figures(conn, "https://example.com/page", screenshot)
+    assert count == 1
+
+    row = conn.execute(
+        "SELECT content, source_type, source_uri, metadata FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    assert row is not None
+    assert "bar chart" in row["content"]
+    assert row["source_uri"] == "https://example.com/page"
+    meta = json.loads(row["metadata"])
+    assert meta["original_source_type"] == "web"
+    assert meta["figure_type"] == "chart"
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.vision._get_vision_config")
+def test_extract_web_figures_no_vision_config(mock_vision_cfg, tmp_path):
+    """Returns 0 when vision is not configured."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    mock_vision_cfg.side_effect = Exception("not configured")
+
+    screenshot = tmp_path / "screenshot.png"
+    screenshot.write_bytes(b"\x89PNG\r\n\x1a\nFAKE")
+
+    count = _extract_web_figures(conn, "https://example.com/page", screenshot)
+    assert count == 0
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+@patch("research_index.vision._vision_call")
+@patch("research_index.vision._get_vision_config")
+def test_extract_web_figures_dedup(mock_vision_cfg, mock_vision_call, tmp_path):
+    """Does not duplicate figure chunks on re-ingest."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    mock_vision_cfg.return_value = {
+        "base_url": "http://localhost:11434",
+        "model": "llava",
+    }
+    mock_vision_call.return_value = [
+        {
+            "description": "A diagram of attention mechanism.",
+            "figure_type": "diagram",
+            "title": "Attention",
+        }
+    ]
+
+    screenshot = tmp_path / "screenshot.png"
+    screenshot.write_bytes(b"\x89PNG\r\n\x1a\nFAKE")
+
+    count1 = _extract_web_figures(conn, "https://example.com/page", screenshot)
+    assert count1 == 1
+
+    # Re-ingest: old figures cleaned up, new one inserted (same content → 1 total)
+    count2 = _extract_web_figures(conn, "https://example.com/page", screenshot)
+    assert count2 == 1
+
+    total = conn.execute(
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
+        ("https://example.com/page",),
+    ).fetchone()["cnt"]
+    assert total == 1

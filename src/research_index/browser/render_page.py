@@ -37,25 +37,26 @@ def main() -> None:
         else:
             browser = p.chromium.launch(headless=True)
 
-        # Ephemeral context: no shared cookies/cache/service-workers
-        context = browser.new_context()
         try:
-            page = context.new_page()
-            page.goto(args.url, wait_until="load", timeout=30_000)
-            # Brief settle wait for JS to finish rendering after load event
-            page.wait_for_timeout(2_000)
+            # Ephemeral context: no shared cookies/cache/service-workers
+            context = browser.new_context()
+            try:
+                page = context.new_page()
+                page.goto(args.url, wait_until="load", timeout=30_000)
+                # Brief settle wait for JS to finish rendering after load event
+                page.wait_for_timeout(2_000)
 
-            # 1. Rendered HTML
-            (out / "page.html").write_text(page.content(), encoding="utf-8")
+                # 1. Rendered HTML
+                (out / "page.html").write_text(page.content(), encoding="utf-8")
 
-            # 2. Full-page screenshot (capped height to bound memory/size)
-            page.screenshot(
-                path=str(out / "screenshot.png"),
-                full_page=True,
-                clip={"x": 0, "y": 0, "width": 1280, "height": 8000},
-            )
+                # 2. Screenshot (clip caps height to bound memory on long pages)
+                page.screenshot(
+                    path=str(out / "screenshot.png"),
+                    clip={"x": 0, "y": 0, "width": 1280, "height": 8000},
+                )
+            finally:
+                context.close()
         finally:
-            context.close()
             if not args.cdp:
                 browser.close()
 

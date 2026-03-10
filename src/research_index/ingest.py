@@ -500,6 +500,9 @@ def reingest_file(
 _BROWSER_FALLBACK_MIN_CHARS = 200
 """Below this character count, trafilatura output is likely boilerplate/nav-only."""
 
+_WEB_FIGURE_CHUNK_INDEX_START = 1_000_000
+"""Chunk index offset for web figure chunks (avoids collision with text chunks)."""
+
 _RENDER_SCRIPT = Path(__file__).parent / "browser" / "render_page.py"
 
 
@@ -685,6 +688,19 @@ def _extract_web_figures(
     except Exception:
         return 0  # Vision not configured or misconfigured
 
+    # Remove stale figure chunks from a previous ingest of this URL
+    old_fig_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
+            (source_url,),
+        ).fetchall()
+    ]
+    if old_fig_ids:
+        ph = ",".join("?" * len(old_fig_ids))
+        conn.execute(f"DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_fig_ids)
+        conn.execute(f"DELETE FROM chunks WHERE id IN ({ph})", old_fig_ids)
+
     base_url = vision_config["base_url"]
     model = vision_config["model"]
 
@@ -755,7 +771,7 @@ def _extract_web_figures(
             }
         )
 
-        chunk_index = 1_000_000 + idx
+        chunk_index = _WEB_FIGURE_CHUNK_INDEX_START + idx
         cursor = conn.execute(
             """INSERT INTO chunks (content_hash, content, source_type, source_uri,
                chunk_index, metadata)
@@ -769,6 +785,8 @@ def _extract_web_figures(
         )
         figures_added += 1
 
+    if figures_added:
+        conn.commit()
     return figures_added
 
 
