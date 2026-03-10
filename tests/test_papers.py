@@ -29,9 +29,12 @@ def _setup(tmp_path):
 
 # --- register_paper / get_paper ---
 
+
 def test_register_and_get_paper(tmp_path):
     conn = _setup(tmp_path)
-    result = register_paper(conn, "Attention Is All You Need", ["Vaswani, A."], 2017, "NeurIPS")
+    result = register_paper(
+        conn, "Attention Is All You Need", ["Vaswani, A."], 2017, "NeurIPS"
+    )
     assert "paper_id" in result
 
     papers = get_paper(conn, paper_id=result["paper_id"])
@@ -82,6 +85,7 @@ def test_get_paper_no_match(tmp_path):
 
 
 # --- add_relationship / get_relationships ---
+
 
 def test_add_and_get_relationship(tmp_path):
     conn = _setup(tmp_path)
@@ -154,6 +158,7 @@ def test_relationship_with_evidence(tmp_path):
 
 # --- BibTeX export ---
 
+
 def test_bibtex_key():
     assert _bibtex_key(["Vaswani, A."], 2017) == "vaswani2017"
     assert _bibtex_key(["John Smith"], 2023) == "smith2023"
@@ -162,7 +167,9 @@ def test_bibtex_key():
 
 def test_export_bibtex_generated(tmp_path):
     conn = _setup(tmp_path)
-    register_paper(conn, "Attention Is All You Need", ["Vaswani"], 2017, "NeurIPS", "10.1234/att")
+    register_paper(
+        conn, "Attention Is All You Need", ["Vaswani"], 2017, "NeurIPS", "10.1234/att"
+    )
 
     bib = export_bibtex(conn)
     assert "@article{" in bib
@@ -202,6 +209,7 @@ def test_export_bibtex_filter_by_title(tmp_path):
 
 # --- suggest_relationships ---
 
+
 @patch("research_index.ingest.embed", _fake_embed)
 def test_suggest_relationships_by_doi(tmp_path):
     conn = _setup(tmp_path)
@@ -216,10 +224,10 @@ def test_suggest_relationships_by_doi(tmp_path):
     # Register the target paper with matching DOI
     register_paper(conn, "Target Paper", doi="10.1234/target")
 
-    suggestions = suggest_relationships(conn, p1)
-    assert len(suggestions) >= 1
-    assert suggestions[0]["match_method"] == "doi"
-    assert suggestions[0]["target_title"] == "Target Paper"
+    result = suggest_relationships(conn, p1)
+    assert len(result["suggestions"]) >= 1
+    assert result["suggestions"][0]["match_method"] == "doi"
+    assert result["suggestions"][0]["target_title"] == "Target Paper"
 
 
 @patch("research_index.ingest.embed", _fake_embed)
@@ -230,12 +238,15 @@ def test_suggest_relationships_by_title(tmp_path):
     md.write_text("We extend Attention Is All You Need with sparse patterns.\n")
     ingest_file(conn, md)
 
-    p1 = register_paper(conn, "Sparse Attention", source_uri=str(md.resolve()))["paper_id"]
+    p1 = register_paper(conn, "Sparse Attention", source_uri=str(md.resolve()))[
+        "paper_id"
+    ]
     register_paper(conn, "Attention Is All You Need")
 
-    suggestions = suggest_relationships(conn, p1)
-    assert len(suggestions) >= 1
-    assert suggestions[0]["match_method"] == "title"
+    result = suggest_relationships(conn, p1)
+    # Exact substring should now match via FTS5 as title_fts
+    assert len(result["suggestions"]) >= 1
+    assert result["suggestions"][0]["match_method"] == "title_fts"
 
 
 @patch("research_index.ingest.embed", _fake_embed)
@@ -250,8 +261,8 @@ def test_suggest_skips_existing_relationships(tmp_path):
     p2 = register_paper(conn, "Paper B", doi="10.1234/existing")["paper_id"]
     add_relationship(conn, p1, p2, "cites")
 
-    suggestions = suggest_relationships(conn, p1)
-    assert len(suggestions) == 0
+    result = suggest_relationships(conn, p1)
+    assert len(result["suggestions"]) == 0
 
 
 def test_relationship_invalid_direction(tmp_path):
@@ -276,5 +287,131 @@ def test_relationship_confidence_range(tmp_path):
 def test_suggest_no_chunks(tmp_path):
     conn = _setup(tmp_path)
     p1 = register_paper(conn, "Lonely Paper")["paper_id"]
-    suggestions = suggest_relationships(conn, p1)
-    assert suggestions == []
+    result = suggest_relationships(conn, p1)
+    assert result == {"suggestions": [], "unmatched": []}
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_suggest_title_fts5_fuzzy_match(tmp_path):
+    """FTS5 should match even when title words appear in different order or with extra words."""
+    conn = _setup(tmp_path)
+
+    md = tmp_path / "citing.md"
+    # Text mentions the title words but not as an exact substring
+    md.write_text(
+        "We build on residual learning techniques for deep image recognition tasks.\n"
+    )
+    ingest_file(conn, md)
+
+    p1 = register_paper(conn, "Our Method", source_uri=str(md.resolve()))["paper_id"]
+    register_paper(conn, "Deep Residual Learning for Image Recognition")
+
+    result = suggest_relationships(conn, p1)
+    title_matches = [
+        s for s in result["suggestions"] if s["match_method"] == "title_fts"
+    ]
+    assert len(title_matches) >= 1
+    assert (
+        title_matches[0]["target_title"]
+        == "Deep Residual Learning for Image Recognition"
+    )
+    assert 0.3 <= title_matches[0]["confidence"] <= 0.7
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_suggest_title_fts5_short_title_skipped(tmp_path):
+    """Titles with fewer than 3 words should not be FTS5-matched (too ambiguous)."""
+    conn = _setup(tmp_path)
+
+    md = tmp_path / "citing.md"
+    md.write_text("We study attention mechanisms in deep learning.\n")
+    ingest_file(conn, md)
+
+    p1 = register_paper(conn, "Our Paper", source_uri=str(md.resolve()))["paper_id"]
+    register_paper(conn, "Deep Learning")  # 2-word title
+
+    result = suggest_relationships(conn, p1)
+    title_matches = [
+        s for s in result["suggestions"] if s["match_method"] == "title_fts"
+    ]
+    assert len(title_matches) == 0
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_suggest_author_year_parenthetical(tmp_path):
+    """Match '(Vaswani et al., 2017)' style citations."""
+    conn = _setup(tmp_path)
+
+    md = tmp_path / "citing.md"
+    md.write_text(
+        "The transformer architecture (Vaswani et al., 2017) revolutionized NLP.\n"
+    )
+    ingest_file(conn, md)
+
+    p1 = register_paper(conn, "Our NLP Paper", source_uri=str(md.resolve()))["paper_id"]
+    register_paper(
+        conn, "Attention Is All You Need", ["Vaswani, A.", "Shazeer, N."], 2017
+    )
+
+    result = suggest_relationships(conn, p1)
+    author_matches = [
+        s for s in result["suggestions"] if s["match_method"] == "author_year"
+    ]
+    assert len(author_matches) >= 1
+    assert author_matches[0]["target_title"] == "Attention Is All You Need"
+    assert 0.3 <= author_matches[0]["confidence"] <= 0.6
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_suggest_author_year_narrative(tmp_path):
+    """Match 'Vaswani et al. (2017)' narrative style citations."""
+    conn = _setup(tmp_path)
+
+    md = tmp_path / "citing.md"
+    md.write_text("Vaswani et al. (2017) introduced the transformer architecture.\n")
+    ingest_file(conn, md)
+
+    p1 = register_paper(conn, "Follow-up Paper", source_uri=str(md.resolve()))[
+        "paper_id"
+    ]
+    register_paper(conn, "Attention Is All You Need", ["Vaswani, A."], 2017)
+
+    result = suggest_relationships(conn, p1)
+    author_matches = [
+        s for s in result["suggestions"] if s["match_method"] == "author_year"
+    ]
+    assert len(author_matches) >= 1
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_suggest_unmatched_dois_reported(tmp_path):
+    """DOIs that don't match any registered paper should appear in unmatched."""
+    conn = _setup(tmp_path)
+
+    md = tmp_path / "citing.md"
+    md.write_text("We cite 10.1234/known and 10.5678/unknown in our work.\n")
+    ingest_file(conn, md)
+
+    p1 = register_paper(conn, "Citing Paper", source_uri=str(md.resolve()))["paper_id"]
+    register_paper(conn, "Known Paper", doi="10.1234/known")
+
+    result = suggest_relationships(conn, p1)
+    # result is now a dict with 'suggestions' and 'unmatched'
+    assert any(u["doi"] == "10.5678/unknown" for u in result["unmatched"])
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_suggest_returns_structured_result(tmp_path):
+    """suggest_relationships should return a dict with 'suggestions' and 'unmatched' keys."""
+    conn = _setup(tmp_path)
+
+    md = tmp_path / "citing.md"
+    md.write_text("Some text referencing 10.9999/orphan in passing.\n")
+    ingest_file(conn, md)
+
+    p1 = register_paper(conn, "Paper X", source_uri=str(md.resolve()))["paper_id"]
+
+    result = suggest_relationships(conn, p1)
+    assert isinstance(result, dict)
+    assert "suggestions" in result
+    assert "unmatched" in result
