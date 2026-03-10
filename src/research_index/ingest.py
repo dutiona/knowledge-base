@@ -5,9 +5,13 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import logging
 import re
+import shutil
 import sqlite3
 import struct
+import subprocess
+import tempfile
 from pathlib import Path
 
 import fitz  # pymupdf
@@ -17,6 +21,8 @@ import trafilatura
 from .db import EMBED_DIM
 from .embed_swap import get_embed_config
 from .embeddings import embed
+
+logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1000  # characters
 CHUNK_OVERLAP = 200
@@ -491,6 +497,281 @@ def reingest_file(
     }
 
 
+_BROWSER_FALLBACK_MIN_CHARS = 200
+"""Below this character count, trafilatura output is likely boilerplate/nav-only."""
+
+_RENDER_SCRIPT = Path(__file__).parent / "browser" / "render_page.py"
+
+
+# ---------------------------------------------------------------------------
+# Browser rendering configuration
+# ---------------------------------------------------------------------------
+
+
+def _get_browser_config(conn: sqlite3.Connection) -> dict | None:
+    """Read browser rendering configuration from config table.
+
+    Returns a dict with mode/endpoint/venv keys, or None when unconfigured.
+    """
+    mode_row = conn.execute(
+        "SELECT value FROM config WHERE key = 'browser_mode'"
+    ).fetchone()
+    if not mode_row:
+        return None
+
+    venv_row = conn.execute(
+        "SELECT value FROM config WHERE key = 'browser_venv'"
+    ).fetchone()
+    if not venv_row:
+        return None
+
+    config: dict = {"mode": mode_row["value"], "venv": venv_row["value"]}
+
+    if mode_row["value"] == "cdp":
+        ep_row = conn.execute(
+            "SELECT value FROM config WHERE key = 'browser_endpoint'"
+        ).fetchone()
+        if ep_row:
+            config["endpoint"] = ep_row["value"]
+
+    return config
+
+
+def configure_browser(
+    conn: sqlite3.Connection,
+    cdp_endpoint: str | None = None,
+    venv_path: str | None = None,
+) -> dict:
+    """Configure browser rendering for JS-heavy web pages.
+
+    Args:
+        cdp_endpoint: WebSocket CDP endpoint (ws:// or wss://).
+                      Requires venv_path too.
+        venv_path: Absolute path to Python venv with playwright installed.
+        Pass both as empty string to disable.  Both None to query.
+    """
+    # Query mode
+    if cdp_endpoint is None and venv_path is None:
+        cfg = _get_browser_config(conn)
+        return {"browser": cfg}
+
+    # Disable mode
+    if cdp_endpoint == "" and venv_path == "":
+        for key in ("browser_mode", "browser_endpoint", "browser_venv"):
+            conn.execute("DELETE FROM config WHERE key = ?", (key,))
+        conn.commit()
+        return {"browser": None}
+
+    # CDP without venv is an error
+    if cdp_endpoint and not venv_path:
+        return {
+            "error": "venv_path is required (playwright Python client must be installed)"
+        }
+
+    # Validate venv
+    if venv_path:
+        venv_python = Path(venv_path) / "bin" / "python"
+        if not venv_python.exists():
+            return {"error": f"Python not found at {venv_python}"}
+
+    # Determine mode
+    if cdp_endpoint:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(cdp_endpoint)
+        if parsed.scheme not in ("ws", "wss"):
+            return {
+                "error": f"CDP endpoint must use ws:// or wss://, got {parsed.scheme}://"
+            }
+        mode = "cdp"
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('browser_endpoint', ?)",
+            (cdp_endpoint,),
+        )
+    else:
+        mode = "local"
+        # Clear any stale CDP endpoint
+        conn.execute("DELETE FROM config WHERE key = 'browser_endpoint'")
+
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('browser_mode', ?)",
+        (mode,),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('browser_venv', ?)",
+        (venv_path,),
+    )
+    conn.commit()
+    return {"browser": _get_browser_config(conn)}
+
+
+def _render_with_browser(
+    url: str,
+    browser_config: dict,
+    timeout: int = 60,
+) -> dict | None:
+    """Render a URL via Playwright subprocess.
+
+    Returns ``{"html": str, "screenshot_path": Path, "tmpdir": Path}``
+    on success, or ``None`` on failure.  Caller owns tmpdir cleanup on
+    success; tmpdir is cleaned on failure.
+    """
+    tmpdir = Path(tempfile.mkdtemp(prefix="ri-browser-"))
+    venv_python = str(Path(browser_config["venv"]) / "bin" / "python")
+
+    cmd = [venv_python, str(_RENDER_SCRIPT), url, str(tmpdir)]
+    if browser_config.get("mode") == "cdp" and browser_config.get("endpoint"):
+        cmd.extend(["--cdp", browser_config["endpoint"]])
+
+    try:
+        subprocess.run(
+            cmd,
+            timeout=timeout,
+            capture_output=True,
+            check=True,
+        )
+    except (
+        subprocess.TimeoutExpired,
+        subprocess.CalledProcessError,
+        OSError,
+    ) as exc:
+        logger.warning("Browser rendering failed for %s: %s", url, exc)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return None
+
+    html_path = tmpdir / "page.html"
+    screenshot_path = tmpdir / "screenshot.png"
+
+    if not html_path.exists():
+        logger.warning("Browser produced no HTML for %s", url)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return None
+
+    html = html_path.read_text(encoding="utf-8")
+    return {
+        "html": html,
+        "screenshot_path": screenshot_path if screenshot_path.exists() else None,
+        "tmpdir": tmpdir,
+    }
+
+
+def _extract_web_figures(
+    conn: sqlite3.Connection,
+    source_url: str,
+    screenshot_path: Path,
+) -> int:
+    """Extract figures from a browser-rendered web page screenshot.
+
+    Feeds the screenshot through the existing vision pipeline:
+    - Vision model describes the page screenshot
+    - OmniParser segments into text/icon regions (if configured)
+    Stores as figure chunks with ``source_type='figure'`` and metadata
+    indicating web origin.  Returns number of figures added.
+
+    Returns 0 if vision is not configured or on any failure.
+    """
+    import base64
+
+    from .vision import (
+        _get_omniparser_config,
+        _get_vision_config,
+        _merge_omniparser_elements,
+        _run_omniparser,
+        _vision_call,
+    )
+
+    try:
+        vision_config = _get_vision_config(conn)
+    except Exception:
+        return 0  # Vision not configured or misconfigured
+
+    base_url = vision_config["base_url"]
+    model = vision_config["model"]
+
+    # Describe the screenshot via the vision model
+    png_bytes = screenshot_path.read_bytes()
+    b64 = base64.b64encode(png_bytes).decode("ascii")
+
+    prompt = (
+        "Describe this web page screenshot. Identify any figures, diagrams, "
+        "charts, or schematics visible. Respond with a JSON list of objects "
+        'with keys: "description", "figure_type", "title".'
+    )
+
+    try:
+        figures = _vision_call(b64, prompt, base_url=base_url, model=model)
+    except Exception:
+        logger.warning(
+            "Vision call failed for web screenshot %s", source_url, exc_info=True
+        )
+        return 0
+
+    if not figures:
+        return 0
+
+    # Optional: OmniParser enrichment
+    omniparser_path = _get_omniparser_config(conn)
+    omni_elements: list[dict] | None = None
+    if omniparser_path:
+        omni_result = _run_omniparser(screenshot_path, omniparser_path)
+        if omni_result and omni_result.get("elements"):
+            omni_elements = omni_result["elements"]
+
+    # Embed and store figure chunks
+    texts: list[str] = []
+    valid_figures: list[dict] = []
+    for fig in figures:
+        desc = fig.get("description", "")
+        if not desc:
+            continue
+        # Enrich with OmniParser if available and single figure
+        if omni_elements and len(figures) == 1:
+            enriched = _merge_omniparser_elements(fig, omni_elements)
+            desc = enriched.get("description", desc)
+        texts.append(desc)
+        valid_figures.append(fig)
+
+    if not texts:
+        return 0
+
+    embeddings = _embed_with_config(conn, texts)
+    figures_added = 0
+
+    for idx, (fig, desc, emb_vec) in enumerate(zip(valid_figures, texts, embeddings)):
+        chunk_hash = _content_hash(desc)
+        existing = conn.execute(
+            "SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)
+        ).fetchone()
+        if existing:
+            continue
+
+        meta_json = json.dumps(
+            {
+                "figure_type": fig.get("figure_type", "web_screenshot"),
+                "title": fig.get("title", ""),
+                "original_source_type": "web",
+                "source_url": source_url,
+                "vision_model": model,
+            }
+        )
+
+        chunk_index = 1_000_000 + idx
+        cursor = conn.execute(
+            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
+               chunk_index, metadata)
+               VALUES (?, ?, 'figure', ?, ?, ?)""",
+            (chunk_hash, desc, source_url, chunk_index, meta_json),
+        )
+        chunk_id = cursor.lastrowid
+        conn.execute(
+            "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
+            (chunk_id, _serialize_f32(emb_vec), chunk_id),
+        )
+        figures_added += 1
+
+    return figures_added
+
+
 def ingest_url(
     conn: sqlite3.Connection,
     url: str,
@@ -498,6 +779,7 @@ def ingest_url(
     """Fetch a web page, extract content, and ingest as chunks.
 
     Uses trafilatura for content extraction (strips boilerplate, extracts main content).
+    Falls back to browser rendering when trafilatura extracts insufficient content.
     """
     from urllib.parse import urlparse
 
@@ -520,24 +802,65 @@ def ingest_url(
     if metadata and metadata.title:
         extracted_title = metadata.title
 
+    browser_rendered = False
+    figures_extracted = 0
+
+    # Browser fallback: if trafilatura got insufficient content, try rendering
+    if len(text.strip()) < _BROWSER_FALLBACK_MIN_CHARS:
+        browser_config = _get_browser_config(conn)
+        if browser_config:
+            render_result = _render_with_browser(url, browser_config)
+            if render_result:
+                try:
+                    rendered_text = (
+                        trafilatura.extract(
+                            render_result["html"],
+                            include_links=False,
+                            include_tables=True,
+                        )
+                        or ""
+                    )
+                    meta2 = trafilatura.extract_metadata(render_result["html"])
+                    if meta2 and meta2.title and not extracted_title:
+                        extracted_title = meta2.title
+                    # Only use rendered content if it's actually better
+                    if len(rendered_text.strip()) > len(text.strip()):
+                        text = rendered_text
+                        browser_rendered = True
+
+                    # Extract figures from screenshot (isolated from text ingest)
+                    screenshot = render_result.get("screenshot_path")
+                    if screenshot and screenshot.exists():
+                        try:
+                            figures_extracted = _extract_web_figures(
+                                conn, url, screenshot
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Figure extraction failed for %s",
+                                url,
+                                exc_info=True,
+                            )
+                            figures_extracted = 0
+                finally:
+                    tmpdir = render_result.get("tmpdir")
+                    if tmpdir:
+                        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    _base_result: dict = {
+        "url": url,
+        "source_uri": url,
+        "source_type": "web",
+        "browser_rendered": browser_rendered,
+        "figures_extracted": figures_extracted,
+    }
+
     if not text.strip():
-        return {
-            "url": url,
-            "chunks_added": 0,
-            "chunks_skipped": 0,
-            "source_uri": url,
-            "source_type": "web",
-        }
+        return {**_base_result, "chunks_added": 0, "chunks_skipped": 0}
 
     chunks = _chunk_text(text)
     if not chunks:
-        return {
-            "url": url,
-            "chunks_added": 0,
-            "chunks_skipped": 0,
-            "source_uri": url,
-            "source_type": "web",
-        }
+        return {**_base_result, "chunks_added": 0, "chunks_skipped": 0}
 
     # Compute content hashes, skip duplicates
     new_chunks = []
@@ -554,13 +877,7 @@ def ingest_url(
         new_chunks.append((i, chunk, h))
 
     if not new_chunks:
-        return {
-            "url": url,
-            "chunks_added": 0,
-            "chunks_skipped": skipped,
-            "source_uri": url,
-            "source_type": "web",
-        }
+        return {**_base_result, "chunks_added": 0, "chunks_skipped": skipped}
 
     texts_to_embed = [c[1] for c in new_chunks]
     embeddings = _embed_with_config(conn, texts_to_embed)
@@ -579,11 +896,9 @@ def ingest_url(
 
     conn.commit()
     return {
-        "url": url,
+        **_base_result,
         "chunks_added": len(new_chunks),
         "chunks_skipped": skipped,
-        "source_uri": url,
-        "source_type": "web",
         "title": extracted_title,
     }
 
