@@ -277,7 +277,22 @@ def ingest_file(
             new_chunks.append((i, chunk, h, "{}"))
 
     if not new_chunks:
-        return {"file": str(path), "chunks_added": 0, "chunks_skipped": skipped}
+        result = {"file": str(path), "chunks_added": 0, "chunks_skipped": skipped}
+        if skipped > 0:
+            from .papers import compute_file_hash
+
+            try:
+                file_hash = compute_file_hash(path)
+            except OSError:
+                file_hash = None
+            if file_hash:
+                existing_paper = conn.execute(
+                    "SELECT paper_id FROM paper_paths WHERE content_hash = ?",
+                    (file_hash,),
+                ).fetchone()
+                if existing_paper:
+                    result["duplicate_of_paper_id"] = existing_paper["paper_id"]
+        return result
 
     # Embed all new chunks using configured model
     texts_to_embed = [c[1] for c in new_chunks]
@@ -487,6 +502,16 @@ def reingest_file(
                             (nc["id"], entity["id"]),
                         )
                         break
+
+    # Update paper_paths content_hash if entry exists
+    if path.exists():
+        from .papers import compute_file_hash
+
+        new_hash = compute_file_hash(path)
+        conn.execute(
+            "UPDATE paper_paths SET content_hash = ? WHERE path = ?",
+            (new_hash, source_uri),
+        )
 
     conn.commit()
     return {

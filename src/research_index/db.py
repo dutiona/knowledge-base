@@ -127,6 +127,21 @@ def _migrate_papers_fts(conn: sqlite3.Connection) -> None:
     if paper_count == 0:
         return
     conn.execute("INSERT INTO papers_fts(rowid, title) SELECT id, title FROM papers")
+
+
+def _migrate_paper_paths(conn: sqlite3.Connection) -> None:
+    """Populate paper_paths from existing paper -> abstract_chunk -> source_uri links.
+
+    Idempotent: backfills missing entries per-paper (not all-or-nothing).
+    """
+    conn.execute("""
+        INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary)
+        SELECT p.id, c.source_uri, TRUE
+        FROM papers p
+        JOIN chunks c ON c.id = p.abstract_chunk_id
+        WHERE p.abstract_chunk_id IS NOT NULL
+          AND p.id NOT IN (SELECT paper_id FROM paper_paths)
+    """)
     conn.commit()
 
 
@@ -298,8 +313,27 @@ def init_schema(conn: sqlite3.Connection) -> None:
         confidence REAL DEFAULT 1.0,
         UNIQUE(entity_id, surface_form, chunk_id)
     );
+
+    CREATE TABLE IF NOT EXISTS paper_paths (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        content_hash TEXT,
+        is_primary BOOLEAN DEFAULT TRUE CHECK(is_primary IN (0, 1)),
+        added_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(path)
+    );
     """)
 
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_paths_paper_id ON paper_paths(paper_id, is_primary)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paper_paths_hash ON paper_paths(content_hash)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_paths_one_primary ON paper_paths(paper_id) WHERE is_primary = TRUE"
+    )
     conn.execute(
         "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_provider', 'ollama')"
     )
@@ -312,3 +346,4 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_source_type_figure(conn)
     _migrate_relationship_types(conn)
     _migrate_papers_fts(conn)
+    _migrate_paper_paths(conn)
