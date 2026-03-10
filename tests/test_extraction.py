@@ -508,8 +508,10 @@ def test_extract_structure_fast_path_short_doc(tmp_path):
 
 
 @patch("research_index.ingest.embed", _fake_embed)
-def test_extract_structure_eta_gate_long_doc(tmp_path):
-    """Long docs return warning + ETA when not confirmed."""
+def test_estimate_extraction_time_long_doc(tmp_path):
+    """estimate_extraction_time reports is_long for large documents."""
+    from research_index.extraction import estimate_extraction_time
+
     conn = _setup(tmp_path)
     md = tmp_path / "long.md"
     md.write_text(
@@ -518,10 +520,10 @@ def test_extract_structure_eta_gate_long_doc(tmp_path):
     ingest_file(conn, md)
     p = register_paper(conn, "Long Paper", source_uri=str(md.resolve()))["paper_id"]
 
-    result = extract_structure(conn, p, confirmed=False)
-    assert result.get("confirm_required") is True
-    assert "estimated_seconds" in result
-    assert "warning" in result
+    est = estimate_extraction_time(conn, p)
+    assert est["is_long"] is True
+    assert "estimated_seconds" in est
+    assert est["chunk_count"] > 0
 
 
 @patch("research_index.ingest.embed", _fake_embed)

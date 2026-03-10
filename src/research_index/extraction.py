@@ -895,7 +895,6 @@ def estimate_extraction_time(conn: sqlite3.Connection, paper_id: int) -> dict:
         "chunk_count": len(chunks),
         "estimated_seconds": estimated_seconds,
         "is_long": total_chars > 8000,
-        "_chunks": chunks,  # reused by extract_structure to avoid refetch
     }
 
 
@@ -909,29 +908,21 @@ def extract_structure(
 
     For short documents (<8000 chars), uses a single LLM call.
     For long documents, uses map-reduce with entity resolution.
-    Long documents require confirmation if estimated time > 2 minutes.
+    The caller (tool layer) is responsible for ETA confirmation flow.
     """
-    est = estimate_extraction_time(conn, paper_id)
-    if "error" in est:
-        return est
+    paper = conn.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    if not paper:
+        return {"error": f"Paper {paper_id} not found"}
 
-    chunks = est.pop("_chunks")
+    chunks = _get_paper_chunks(conn, paper_id)
+    if not chunks:
+        return {"error": f"No chunks found for paper {paper_id}"}
+
+    total_chars = sum(len(c["content"]) for c in chunks)
 
     # Fast path: short document
-    if not est["is_long"]:
+    if total_chars <= 8000:
         return _extract_single_pass(conn, paper_id, chunks)
-
-    # Long document: ETA gate
-    if est["estimated_seconds"] > 120 and not confirmed:
-        return {
-            "warning": (
-                f"Extraction will take ~{est['estimated_seconds'] // 60}min "
-                f"for {est['chunk_count']} chunks"
-            ),
-            "estimated_seconds": est["estimated_seconds"],
-            "chunk_count": est["chunk_count"],
-            "confirm_required": True,
-        }
 
     return _extract_map_reduce(conn, paper_id, chunks, on_progress=on_progress)
 
