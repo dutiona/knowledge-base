@@ -21,6 +21,7 @@ research-index = "research_index.server:main"
 
 [dependency-groups]
 dev = [
+    "pymupdf4llm>=0.0.17",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.15.5",
