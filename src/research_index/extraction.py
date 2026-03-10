@@ -8,6 +8,7 @@ import re
 import sqlite3
 import time
 from collections import defaultdict
+from collections.abc import Callable
 
 import httpx
 
@@ -772,7 +773,10 @@ def _extract_single_pass(
 
 
 def _extract_map_reduce(
-    conn: sqlite3.Connection, paper_id: int, chunks: list[dict]
+    conn: sqlite3.Connection,
+    paper_id: int,
+    chunks: list[dict],
+    on_progress: Callable[[str], None] | None = None,
 ) -> dict:
     """Map-reduce path for long documents."""
     # Phase 1: Map
@@ -814,6 +818,9 @@ def _extract_map_reduce(
                 elapsed,
             )
 
+        if on_progress:
+            on_progress(f"chunk {i + 1}/{len(chunks)}")
+
         if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
             avg = total_elapsed / (i + 1)
             remaining = avg * (len(chunks) - i - 1)
@@ -836,6 +843,8 @@ def _extract_map_reduce(
         len(map_results),
         total_elapsed,
     )
+    if on_progress:
+        on_progress("resolving entities...")
     logger.info("Starting entity resolution...")
     resolve_start = time.monotonic()
     try:
@@ -853,6 +862,8 @@ def _extract_map_reduce(
     )
 
     # Phase 3: Store
+    if on_progress:
+        on_progress("storing results...")
     result = _store_resolved(conn, paper_id, map_results, resolution)
     result["paper_id"] = paper_id
     result["chunks_processed"] = len(map_results)
@@ -863,20 +874,13 @@ def _extract_map_reduce(
     return result
 
 
-def extract_structure(
-    conn: sqlite3.Connection,
-    paper_id: int,
-    confirmed: bool = False,
-) -> dict:
-    """Extract methods, datasets, and metrics from a paper's chunks using LLM.
+def estimate_extraction_time(conn: sqlite3.Connection, paper_id: int) -> dict:
+    """Estimate extraction time for a paper without running it.
 
-    For short documents (<8000 chars), uses a single LLM call.
-    For long documents, uses map-reduce with entity resolution.
-    Long documents require confirmation if estimated time > 2 minutes.
+    Returns dict with total_chars, chunk_count, estimated_seconds, is_long.
+    Returns {"error": ...} if paper or chunks not found.
     """
-    paper = conn.execute(
-        "SELECT id, title FROM papers WHERE id = ?", (paper_id,)
-    ).fetchone()
+    paper = conn.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone()
     if not paper:
         return {"error": f"Paper {paper_id} not found"}
 
@@ -885,22 +889,50 @@ def extract_structure(
         return {"error": f"No chunks found for paper {paper_id}"}
 
     total_chars = sum(len(c["content"]) for c in chunks)
+    estimated_seconds = len(chunks) * AVG_SECONDS_PER_CHUNK
+    return {
+        "total_chars": total_chars,
+        "chunk_count": len(chunks),
+        "estimated_seconds": estimated_seconds,
+        "is_long": total_chars > 8000,
+    }
+
+
+def extract_structure(
+    conn: sqlite3.Connection,
+    paper_id: int,
+    confirmed: bool = False,
+    on_progress: Callable[[str], None] | None = None,
+) -> dict:
+    """Extract methods, datasets, and metrics from a paper's chunks using LLM.
+
+    For short documents (<8000 chars), uses a single LLM call.
+    For long documents, uses map-reduce with entity resolution.
+    Long documents require confirmation if estimated time > 2 minutes.
+    """
+    est = estimate_extraction_time(conn, paper_id)
+    if "error" in est:
+        return est
+
+    chunks = _get_paper_chunks(conn, paper_id)
 
     # Fast path: short document
-    if total_chars <= 8000:
+    if not est["is_long"]:
         return _extract_single_pass(conn, paper_id, chunks)
 
     # Long document: ETA gate
-    estimated_seconds = len(chunks) * AVG_SECONDS_PER_CHUNK
-    if estimated_seconds > 120 and not confirmed:
+    if est["estimated_seconds"] > 120 and not confirmed:
         return {
-            "warning": f"Extraction will take ~{estimated_seconds // 60}min for {len(chunks)} chunks",
-            "estimated_seconds": estimated_seconds,
-            "chunk_count": len(chunks),
+            "warning": (
+                f"Extraction will take ~{est['estimated_seconds'] // 60}min "
+                f"for {est['chunk_count']} chunks"
+            ),
+            "estimated_seconds": est["estimated_seconds"],
+            "chunk_count": est["chunk_count"],
             "confirm_required": True,
         }
 
-    return _extract_map_reduce(conn, paper_id, chunks)
+    return _extract_map_reduce(conn, paper_id, chunks, on_progress=on_progress)
 
 
 def configure_llm(
