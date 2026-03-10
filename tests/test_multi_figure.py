@@ -4,6 +4,7 @@ import io
 import pytest
 from PIL import Image
 
+from research_index.db import DEFAULT_EMBED_DIM
 from research_index.vision import (
     _cluster_bboxes,
     _crop_regions,
@@ -315,7 +316,9 @@ class TestMultiFigureIntegration:
 
         monkeypatch.setattr(vision, "_vision_call", fake_vision_call)
         monkeypatch.setattr(
-            vision, "_embed_with_config", lambda conn, texts: [[0.0] * 768] * len(texts)
+            vision,
+            "_embed_with_config",
+            lambda conn, texts: [[0.0] * DEFAULT_EMBED_DIM] * len(texts),
         )
 
         result = vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
@@ -363,7 +366,9 @@ class TestMultiFigureIntegration:
 
         monkeypatch.setattr(vision, "_vision_call", fake_vision_call)
         monkeypatch.setattr(
-            vision, "_embed_with_config", lambda conn, texts: [[0.0] * 768] * len(texts)
+            vision,
+            "_embed_with_config",
+            lambda conn, texts: [[0.0] * DEFAULT_EMBED_DIM] * len(texts),
         )
 
         result = vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
@@ -407,7 +412,9 @@ class TestMultiFigureIntegration:
 
         monkeypatch.setattr(vision, "_vision_call", fake_vision_call)
         monkeypatch.setattr(
-            vision, "_embed_with_config", lambda conn, texts: [[0.0] * 768] * len(texts)
+            vision,
+            "_embed_with_config",
+            lambda conn, texts: [[0.0] * DEFAULT_EMBED_DIM] * len(texts),
         )
 
         vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
@@ -442,7 +449,9 @@ class TestMultiFigureIntegration:
 
         monkeypatch.setattr(vision, "_vision_call", fake_vision_call)
         monkeypatch.setattr(
-            vision, "_embed_with_config", lambda conn, texts: [[0.0] * 768] * len(texts)
+            vision,
+            "_embed_with_config",
+            lambda conn, texts: [[0.0] * DEFAULT_EMBED_DIM] * len(texts),
         )
 
         result = vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)

@@ -14,7 +14,6 @@ import fitz  # pymupdf
 import httpx
 import trafilatura
 
-from .db import EMBED_DIM
 from .embed_swap import get_embed_config
 from .embeddings import embed
 

@@ -1,4 +1,4 @@
-"""Embedding client for Ollama nomic-embed-text.
+"""Embedding client for Ollama.
 
 Auto-detects Ollama URL: OLLAMA_HOST env > WSL2 Windows host > localhost.
 Works on both WSL2 (Windows host Ollama) and baremetal Linux (local Ollama).
@@ -11,7 +11,7 @@ import subprocess
 
 import httpx
 
-from .db import EMBED_DIM
+from .db import DEFAULT_EMBED_DIM
 
 _OLLAMA_URL: str | None = None
 
@@ -32,7 +32,9 @@ def _get_ollama_url() -> str:
         try:
             result = subprocess.run(
                 ["ip", "route", "show", "default"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             gateway = result.stdout.split()[2]
             url = f"http://{gateway}:11434"
@@ -50,10 +52,10 @@ def _get_ollama_url() -> str:
 
 def embed(
     texts: list[str],
-    model: str = "nomic-embed-text",
+    model: str = "bge-m3",
     expected_dim: int | None = None,
 ) -> list[list[float]]:
-    dim = expected_dim if expected_dim is not None else EMBED_DIM
+    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
     url = _get_ollama_url()
     results = []
     # Batch in groups of 32
@@ -74,5 +76,5 @@ def embed(
     return results
 
 
-def embed_single(text: str, model: str = "nomic-embed-text") -> list[float]:
+def embed_single(text: str, model: str = "bge-m3") -> list[float]:
     return embed([text], model)[0]

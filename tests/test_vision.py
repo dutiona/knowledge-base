@@ -4,7 +4,7 @@ import pytest
 import sqlite3
 from pathlib import Path
 
-from research_index.db import get_connection, init_schema, EMBED_DIM
+from research_index.db import get_connection, init_schema, DEFAULT_EMBED_DIM
 
 
 OLD_SCHEMA_SQL = f"""
@@ -38,7 +38,7 @@ CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
 END;
 
 CREATE VIRTUAL TABLE chunks_vec USING vec0(
-    embedding float[{EMBED_DIM}],
+    embedding float[{DEFAULT_EMBED_DIM}],
     +chunk_id INTEGER
 );
 
@@ -691,7 +691,7 @@ def test_extract_figures_end_to_end(mock_vision, mock_embed, tmp_path):
         }
     ]
     mock_vision.return_value = mock_figures
-    mock_embed.return_value = [[0.1] * 768]
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
 
     conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
 
@@ -741,7 +741,7 @@ def test_extract_figures_idempotent(mock_vision, mock_embed, tmp_path):
         }
     ]
     mock_vision.return_value = mock_figures
-    mock_embed.return_value = [[0.2] * 768]
+    mock_embed.return_value = [[0.2] * DEFAULT_EMBED_DIM]
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
@@ -795,7 +795,7 @@ def test_extract_figures_idempotent_with_fk_references(
         }
     ]
     mock_vision.return_value = mock_figures
-    mock_embed.return_value = [[0.1] * 768]
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
@@ -886,7 +886,7 @@ def test_extract_figures_pages_hint(mock_vision, mock_embed, tmp_path):
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.3] * 768]
+    mock_embed.return_value = [[0.3] * DEFAULT_EMBED_DIM]
 
     conn, paper_id, _ = _setup_paper_with_pdf(
         tmp_path, ["Page 0 text", "Page 1 text", "Page 2 text"]
@@ -925,7 +925,7 @@ def test_extract_figures_per_page_error(mock_vision, mock_embed, tmp_path):
         raise RuntimeError("Vision API timeout")
 
     mock_vision.side_effect = side_effect
-    mock_embed.return_value = [[0.4] * 768]
+    mock_embed.return_value = [[0.4] * DEFAULT_EMBED_DIM]
 
     conn, paper_id, _ = _setup_paper_with_pdf(
         tmp_path, ["Page 0 with Figure 1: test", "Page 1 with Figure 2: test"]
@@ -1011,7 +1011,7 @@ def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path)
             "entities_mentioned": [],
         },
     ]
-    mock_embed.return_value = [[0.1] * 768, [0.2] * 768]
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM, [0.2] * DEFAULT_EMBED_DIM]
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
@@ -1386,7 +1386,7 @@ def test_extract_figures_with_omniparser_single_figure(
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * 768]
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
     mock_omni.return_value = _OMNI_ELEMENTS
 
     conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
@@ -1442,7 +1442,7 @@ def test_extract_figures_with_omniparser_multi_figure(
             "entities_mentioned": [],
         },
     ]
-    mock_embed.return_value = [[0.1] * 768, [0.2] * 768]
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM, [0.2] * DEFAULT_EMBED_DIM]
     mock_omni.return_value = _OMNI_ELEMENTS
 
     conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
@@ -1488,7 +1488,7 @@ def test_extract_figures_omniparser_failure_graceful(
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * 768]
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
     mock_omni.return_value = None  # omniparser failed
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
@@ -1523,7 +1523,7 @@ def test_extract_figures_without_omniparser(mock_vision, mock_embed, tmp_path):
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * 768]
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
@@ -1559,7 +1559,7 @@ def test_extract_figures_returns_timing(mock_vision, mock_embed, tmp_path):
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * 768]
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
     result = extract_figures(conn, paper_id=paper_id, pages=[0])
@@ -1590,7 +1590,7 @@ def test_extract_figures_timing_with_omniparser(mock_vision, mock_embed, tmp_pat
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * 768]
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 

@@ -4,7 +4,7 @@ import json
 import logging
 from unittest.mock import patch
 
-from research_index.db import EMBED_DIM, get_connection, init_schema
+from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 import pytest
 
 from research_index.extraction import (
@@ -33,8 +33,8 @@ from research_index.ingest import ingest_file
 from research_index.papers import register_paper
 
 
-def _fake_embed(texts, model="nomic-embed-text", expected_dim=None):
-    dim = expected_dim if expected_dim is not None else EMBED_DIM
+def _fake_embed(texts, model="bge-m3", expected_dim=None):
+    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 
 
