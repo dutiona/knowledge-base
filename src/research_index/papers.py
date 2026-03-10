@@ -382,18 +382,17 @@ def suggest_relationships(
         else:
             unmatched.append({"doi": doi})
 
-    # Strategy 2: Title FTS5 matching
+    # Strategy 2: Title word-ratio matching
     other_papers = conn.execute(
-        "SELECT id, title FROM papers WHERE id != ?", (paper_id,)
+        "SELECT id, title, authors, year FROM papers WHERE id != ?", (paper_id,)
     ).fetchall()
+    text_lower = full_text.lower()
     for other in other_papers:
         if other["id"] in suggested_ids:
             continue
         title_words = other["title"].split()
         if len(title_words) < 3:
             continue
-        # Count how many title words appear in the citing paper's text
-        text_lower = full_text.lower()
         matched_words = sum(1 for w in title_words if w.lower() in text_lower)
         match_ratio = matched_words / len(title_words)
 
@@ -418,15 +417,11 @@ def suggest_relationships(
         for other in other_papers:
             if other["id"] in suggested_ids:
                 continue
-            other_full = conn.execute(
-                "SELECT authors, year FROM papers WHERE id = ?", (other["id"],)
-            ).fetchone()
-            if not other_full or other_full["year"] != year:
+            if other["year"] != year:
                 continue
-            authors = json.loads(other_full["authors"]) if other_full["authors"] else []
+            authors = json.loads(other["authors"]) if other["authors"] else []
             if not authors:
                 continue
-            # Check if any author's surname matches
             if any(_surname_from_author(a) == surname for a in authors):
                 if not _has_existing_cites(conn, paper_id, other["id"]):
                     suggestions.append(
