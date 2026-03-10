@@ -1350,7 +1350,7 @@ _OMNI_ELEMENTS = {
         {
             "id": 0,
             "type": "text",
-            "bbox": [0, 0, 0.5, 0.1],
+            "bbox": [0.1, 0.1, 0.5, 0.2],
             "content": "X-axis label",
             "interactivity": False,
             "source": "ocr",
@@ -1358,7 +1358,7 @@ _OMNI_ELEMENTS = {
         {
             "id": 1,
             "type": "icon",
-            "bbox": [0.5, 0.5, 0.7, 0.7],
+            "bbox": [0.5, 0.15, 0.7, 0.25],
             "content": "data point",
             "interactivity": False,
             "source": "yolo",

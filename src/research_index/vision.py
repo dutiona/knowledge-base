@@ -143,6 +143,150 @@ _OMNIPARSER_MAX_APPEND = 500
 _ETA_SECS_PER_PAGE_BASE = 4
 _ETA_SECS_PER_PAGE_OMNIPARSER = 40
 
+# Minimum gap (as fraction of image height) between element clusters
+# to consider them separate figure regions.
+_CLUSTER_GAP_THRESHOLD = 0.08
+# Padding (as fraction of region dimension) added around cropped regions.
+_CROP_PADDING = 0.02
+
+
+def _cluster_bboxes(
+    elements: list[dict],
+    image_size: dict,
+    *,
+    gap_threshold: float = _CLUSTER_GAP_THRESHOLD,
+) -> list[tuple[float, float, float, float]]:
+    """Cluster OmniParser element bboxes into spatial regions.
+
+    Uses 1-D gap analysis on the y-axis midpoints: sort elements by vertical
+    center, then split wherever the gap exceeds *gap_threshold* (fraction of
+    image height).  Each cluster is then bounded by the union of its elements'
+    bboxes, giving one (x1, y1, x2, y2) region per cluster (ratios 0-1).
+
+    Returns a list of region bboxes.  A single-element list means the page has
+    one contiguous region (no splitting needed).
+    """
+    bboxes = []
+    for el in elements:
+        bbox = el.get("bbox")
+        if not bbox or len(bbox) != 4:
+            continue
+        x1, y1, x2, y2 = bbox
+        # Normalise order
+        if x1 > x2:
+            x1, x2 = x2, x1
+        if y1 > y2:
+            y1, y2 = y2, y1
+        bboxes.append((x1, y1, x2, y2))
+
+    if len(bboxes) < 2:
+        return [(0.0, 0.0, 1.0, 1.0)]
+
+    # Sort by vertical midpoint
+    bboxes.sort(key=lambda b: (b[1] + b[3]) / 2)
+
+    # 1-D gap splitting on y-axis
+    clusters: list[list[tuple[float, float, float, float]]] = [[bboxes[0]]]
+    for prev, cur in zip(bboxes, bboxes[1:]):
+        prev_bottom = prev[3]
+        cur_top = cur[1]
+        gap = cur_top - prev_bottom
+        if gap >= gap_threshold:
+            clusters.append([cur])
+        else:
+            clusters[-1].append(cur)
+
+    # Also try x-axis splitting within each y-cluster
+    # (handles side-by-side layouts and 2x2 grids)
+    final_clusters: list[list[tuple[float, float, float, float]]] = []
+    for cluster in clusters:
+        sub = _split_cluster_x(cluster, gap_threshold)
+        final_clusters.extend(sub)
+
+    if len(final_clusters) < 2:
+        return [(0.0, 0.0, 1.0, 1.0)]
+
+    # Compute bounding box per cluster
+    regions = []
+    for cluster in final_clusters:
+        rx1 = min(b[0] for b in cluster)
+        ry1 = min(b[1] for b in cluster)
+        rx2 = max(b[2] for b in cluster)
+        ry2 = max(b[3] for b in cluster)
+        regions.append((rx1, ry1, rx2, ry2))
+
+    return regions
+
+
+def _split_cluster_x(
+    cluster: list[tuple[float, float, float, float]],
+    gap_threshold: float,
+) -> list[list[tuple[float, float, float, float]]]:
+    """Try to split a cluster along the x-axis (for side-by-side figures)."""
+    if len(cluster) < 2:
+        return [cluster]
+
+    cluster_x = sorted(cluster, key=lambda b: (b[0] + b[2]) / 2)
+    sub_clusters: list[list[tuple[float, float, float, float]]] = [[cluster_x[0]]]
+    for prev, cur in zip(cluster_x, cluster_x[1:]):
+        prev_right = prev[2]
+        cur_left = cur[0]
+        gap = cur_left - prev_right
+        if gap >= gap_threshold:
+            sub_clusters.append([cur])
+        else:
+            sub_clusters[-1].append(cur)
+
+    return sub_clusters
+
+
+def _crop_regions(
+    png_bytes: bytes,
+    regions: list[tuple[float, float, float, float]],
+    image_size: dict,
+    *,
+    padding: float = _CROP_PADDING,
+) -> list[bytes]:
+    """Crop a PNG image into sub-region PNGs based on ratio-bboxes.
+
+    Args:
+        png_bytes: Full-page PNG.
+        regions: List of (x1, y1, x2, y2) in ratio coordinates (0-1).
+        image_size: Dict with 'width' and 'height' keys (pixels).
+        padding: Fractional padding to add around each crop.
+
+    Returns:
+        List of PNG bytes, one per region.
+    """
+    import io
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(png_bytes))
+    w, h = img.size
+
+    crops = []
+    for x1, y1, x2, y2 in regions:
+        # Convert ratios to pixels
+        px1 = int(x1 * w)
+        py1 = int(y1 * h)
+        px2 = int(x2 * w)
+        py2 = int(y2 * h)
+
+        # Add padding
+        pad_x = int((px2 - px1) * padding)
+        pad_y = int((py2 - py1) * padding)
+        px1 = max(0, px1 - pad_x)
+        py1 = max(0, py1 - pad_y)
+        px2 = min(w, px2 + pad_x)
+        py2 = min(h, py2 + pad_y)
+
+        cropped = img.crop((px1, py1, px2, py2))
+        buf = io.BytesIO()
+        cropped.save(buf, format="PNG")
+        crops.append(buf.getvalue())
+
+    return crops
+
 
 def _merge_omniparser_elements(figure: dict, elements: list[dict]) -> dict:
     """Append OmniParser OCR text and icon captions to figure description.
@@ -497,37 +641,13 @@ def extract_figures(
     base_url = config["base_url"]
     model = config["model"]
 
-    # 7. Dispatch vision calls in thread pool (no conn access)
-    page_results: dict[int, list[dict]] = {}
-    errors: list[str] = []
-    pages_failed = 0
-
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        future_to_page = {}
-        for page_num, png_bytes in rendered.items():
-            b64 = base64.b64encode(png_bytes).decode("ascii")
-            future = executor.submit(
-                _vision_call, b64, _VISION_PROMPT, base_url=base_url, model=model
-            )
-            future_to_page[future] = page_num
-
-        for future in as_completed(future_to_page):
-            page_num = future_to_page[future]
-            try:
-                figures = future.result()
-                page_results[page_num] = figures
-            except Exception as exc:
-                pages_failed += 1
-                errors.append(f"Page {page_num}: {exc}")
-                logger.warning("Vision call failed for page %d: %s", page_num, exc)
-
-    # 7b. Optional: enrich with OmniParser
+    # 6b. Run OmniParser BEFORE vision calls to detect multi-figure layouts
+    # Maps page_num -> (omni_result, regions, crops)
+    omni_data: dict[
+        int, tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]]
+    ] = {}
     if omniparser_path:
         for page_num, png_bytes in rendered.items():
-            if page_num not in page_results or not page_results[page_num]:
-                continue
-
-            # Write PNG to tempfile for omniparser
             png_fd, png_tmp = tempfile.mkstemp(suffix=".png")
             try:
                 os.close(png_fd)
@@ -536,6 +656,99 @@ def extract_figures(
             finally:
                 Path(png_tmp).unlink(missing_ok=True)
 
+            if not omni_result or not omni_result.get("elements"):
+                omni_data[page_num] = (omni_result, [(0.0, 0.0, 1.0, 1.0)], [])
+                continue
+
+            image_size = omni_result.get("image_size", {})
+            regions = _cluster_bboxes(omni_result["elements"], image_size)
+
+            if len(regions) > 1:
+                crops = _crop_regions(png_bytes, regions, image_size)
+                logger.info(
+                    "Page %d: OmniParser detected %d figure regions, cropping",
+                    page_num,
+                    len(regions),
+                )
+            else:
+                crops = []
+
+            omni_data[page_num] = (omni_result, regions, crops)
+
+    # 7. Dispatch vision calls in thread pool (no conn access)
+    # For pages with multiple detected regions, send one vision call per crop.
+    # For pages with single region (or no OmniParser), send the full page.
+    page_results: dict[int, list[dict]] = {}
+    errors: list[str] = []
+    pages_failed = 0
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        # Each future maps to (page_num, region_idx) where region_idx is None
+        # for full-page calls.
+        future_to_key: dict = {}
+
+        for page_num, png_bytes in rendered.items():
+            _, regions, crops = omni_data.get(
+                page_num, (None, [(0.0, 0.0, 1.0, 1.0)], [])
+            )
+
+            if len(crops) > 1:
+                # Multi-region: send each crop separately
+                for region_idx, crop_bytes in enumerate(crops):
+                    b64 = base64.b64encode(crop_bytes).decode("ascii")
+                    future = executor.submit(
+                        _vision_call,
+                        b64,
+                        _VISION_PROMPT,
+                        base_url=base_url,
+                        model=model,
+                    )
+                    future_to_key[future] = (page_num, region_idx)
+            else:
+                # Single region or no OmniParser: send full page
+                b64 = base64.b64encode(png_bytes).decode("ascii")
+                future = executor.submit(
+                    _vision_call,
+                    b64,
+                    _VISION_PROMPT,
+                    base_url=base_url,
+                    model=model,
+                )
+                future_to_key[future] = (page_num, None)
+
+        # Collect results, grouping by page
+        page_figures_by_region: dict[int, dict[int | None, list[dict]]] = {}
+
+        for future in as_completed(future_to_key):
+            page_num, region_idx = future_to_key[future]
+            try:
+                figures = future.result()
+                page_figures_by_region.setdefault(page_num, {})[region_idx] = figures
+            except Exception as exc:
+                pages_failed += 1
+                errors.append(f"Page {page_num} region {region_idx}: {exc}")
+                logger.warning(
+                    "Vision call failed for page %d region %s: %s",
+                    page_num,
+                    region_idx,
+                    exc,
+                )
+
+        # Flatten: merge all regions for each page into a single list
+        for page_num, region_map in page_figures_by_region.items():
+            merged: list[dict] = []
+            for key in sorted(region_map, key=lambda k: (k is None, k)):
+                merged.extend(region_map[key])
+            page_results[page_num] = merged
+
+    # 7b. Enrich with OmniParser text/icon data (post-vision)
+    if omniparser_path:
+        for page_num in page_results:
+            if not page_results[page_num]:
+                continue
+            omni_result, regions, crops = omni_data.get(
+                page_num, (None, [(0.0, 0.0, 1.0, 1.0)], [])
+            )
             if not omni_result or not omni_result.get("elements"):
                 continue
 
@@ -549,13 +762,12 @@ def extract_figures(
                     omniparser_enriched += 1
                 page_results[page_num] = [enriched]
             else:
-                # Multi-figure: store in metadata only
+                # Multi-figure: store elements in metadata only
                 for i, fig in enumerate(figures_on_page):
-                    fig_with_meta = {
+                    figures_on_page[i] = {
                         **fig,
                         "_omniparser_elements": omni_elements,
                     }
-                    figures_on_page[i] = fig_with_meta
 
     # 8. Collect all figure descriptions for batch embedding
     all_figures: list[tuple[int, int, dict]] = []  # (page_num, fig_idx, figure)
