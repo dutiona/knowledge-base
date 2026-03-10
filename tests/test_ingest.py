@@ -3,7 +3,7 @@
 import json
 from unittest.mock import patch, MagicMock
 
-from research_index.db import EMBED_DIM, get_connection, init_schema
+from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from research_index.ingest import (
     ingest_file,
     reingest_file,
@@ -21,8 +21,8 @@ from research_index.conclusions import record_conclusion, get_conclusions
 from research_index.extraction import record_method, record_dataset, record_metric
 
 
-def _fake_embed(texts, model="nomic-embed-text", expected_dim=None):
-    dim = expected_dim if expected_dim is not None else EMBED_DIM
+def _fake_embed(texts, model="bge-m3", expected_dim=None):
+    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 
 

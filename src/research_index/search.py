@@ -6,7 +6,6 @@ import sqlite3
 import struct
 from dataclasses import dataclass
 
-from .db import EMBED_DIM
 from .embed_swap import get_embed_config
 from .embeddings import embed_single
 
@@ -26,7 +25,9 @@ def _serialize_f32(vec: list[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
 
 
-def _fts_search(conn: sqlite3.Connection, query: str, limit: int) -> list[tuple[int, float]]:
+def _fts_search(
+    conn: sqlite3.Connection, query: str, limit: int
+) -> list[tuple[int, float]]:
     """BM25 full-text search. Returns (chunk_id, bm25_score) pairs."""
     rows = conn.execute(
         """
@@ -113,10 +114,14 @@ def search(
         merged = _rrf_merge(fts_results, vec_results)
         match_type = "hybrid"
     elif fts_results:
-        merged = [(cid, 1.0 / (60 + rank + 1)) for rank, (cid, _) in enumerate(fts_results)]
+        merged = [
+            (cid, 1.0 / (60 + rank + 1)) for rank, (cid, _) in enumerate(fts_results)
+        ]
         match_type = "fts"
     elif vec_results:
-        merged = [(cid, 1.0 / (60 + rank + 1)) for rank, (cid, _) in enumerate(vec_results)]
+        merged = [
+            (cid, 1.0 / (60 + rank + 1)) for rank, (cid, _) in enumerate(vec_results)
+        ]
         match_type = "vec"
     else:
         return []

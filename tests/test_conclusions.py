@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from research_index.db import EMBED_DIM, get_connection, init_schema
+from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from research_index.ingest import ingest_file
 from research_index.conclusions import (
     get_conclusion_chain,
@@ -12,8 +12,8 @@ from research_index.conclusions import (
 )
 
 
-def _fake_embed(texts, model="nomic-embed-text", expected_dim=None):
-    dim = expected_dim if expected_dim is not None else EMBED_DIM
+def _fake_embed(texts, model="bge-m3", expected_dim=None):
+    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 
 
@@ -26,14 +26,19 @@ def _setup(tmp_path):
 
 # --- record_conclusion ---
 
+
 def test_record_conclusion_basic(tmp_path):
     conn = _setup(tmp_path)
-    result = record_conclusion(conn, "Transformers outperform RNNs on translation tasks", 0.9)
+    result = record_conclusion(
+        conn, "Transformers outperform RNNs on translation tasks", 0.9
+    )
     assert "conclusion_id" in result
 
     conclusions = get_conclusions(conn)
     assert len(conclusions) == 1
-    assert conclusions[0]["claim"] == "Transformers outperform RNNs on translation tasks"
+    assert (
+        conclusions[0]["claim"] == "Transformers outperform RNNs on translation tasks"
+    )
     assert conclusions[0]["confidence"] == 0.9
 
 
@@ -66,6 +71,7 @@ def test_record_conclusion_invalid_chunk_ids(tmp_path):
 
 # --- get_conclusions ---
 
+
 def test_get_conclusions_keyword_filter(tmp_path):
     conn = _setup(tmp_path)
     record_conclusion(conn, "Attention improves accuracy")
@@ -87,6 +93,7 @@ def test_get_conclusions_confidence_filter(tmp_path):
 
 
 # --- supersede_conclusion ---
+
 
 def test_supersede_conclusion(tmp_path):
     conn = _setup(tmp_path)
@@ -133,11 +140,16 @@ def test_supersede_nonexistent(tmp_path):
 
 # --- get_conclusion_chain ---
 
+
 def test_conclusion_chain(tmp_path):
     conn = _setup(tmp_path)
     r1 = record_conclusion(conn, "V1: initial observation", 0.5)
-    r2 = supersede_conclusion(conn, r1["conclusion_id"], "V2: refined with more data", 0.7)
-    r3 = supersede_conclusion(conn, r2["new_conclusion_id"], "V3: confirmed by replication", 0.95)
+    r2 = supersede_conclusion(
+        conn, r1["conclusion_id"], "V2: refined with more data", 0.7
+    )
+    r3 = supersede_conclusion(
+        conn, r2["new_conclusion_id"], "V3: confirmed by replication", 0.95
+    )
 
     chain = get_conclusion_chain(conn, r1["conclusion_id"])
     assert len(chain) == 3

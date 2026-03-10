@@ -4,7 +4,7 @@ import sqlite3
 import json
 import struct
 
-from research_index.db import get_connection, init_schema, EMBED_DIM
+from research_index.db import get_connection, init_schema, DEFAULT_EMBED_DIM
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
@@ -58,7 +58,7 @@ def test_vec_insert_and_query(tmp_path):
     chunk_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     # Insert embedding
-    fake_emb = [0.1] * EMBED_DIM
+    fake_emb = [0.1] * DEFAULT_EMBED_DIM
     conn.execute(
         "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
         (chunk_id, _serialize_f32(fake_emb), chunk_id),

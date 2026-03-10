@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from research_index.db import EMBED_DIM, get_connection, init_schema
+from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from research_index.embed_swap import get_embed_config, re_embed
 from research_index.ingest import ingest_file
 
@@ -10,8 +10,8 @@ from research_index.ingest import ingest_file
 NEW_DIM = 384
 
 
-def _fake_embed(texts, model="nomic-embed-text", expected_dim=None):
-    dim = expected_dim if expected_dim is not None else EMBED_DIM
+def _fake_embed(texts, model="bge-m3", expected_dim=None):
+    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 
 
@@ -30,8 +30,8 @@ def _setup(tmp_path):
 def test_get_embed_config(tmp_path):
     conn = _setup(tmp_path)
     config = get_embed_config(conn)
-    assert config["model"] == "nomic-embed-text"
-    assert config["dim"] == EMBED_DIM
+    assert config["model"] == "bge-m3"
+    assert config["dim"] == DEFAULT_EMBED_DIM
 
 
 @patch("research_index.ingest.embed", _fake_embed)
@@ -72,12 +72,16 @@ def test_re_embed_preserves_chunk_ids(tmp_path):
     md.write_text("Content to re-embed.\n")
     ingest_file(conn, md)
 
-    chunk_ids_before = [r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()]
+    chunk_ids_before = [
+        r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()
+    ]
 
     with patch("research_index.embed_swap.embed", _fake_embed_new):
         re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
-    chunk_ids_after = [r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()]
+    chunk_ids_after = [
+        r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()
+    ]
     assert chunk_ids_before == chunk_ids_after
 
 

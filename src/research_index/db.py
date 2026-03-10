@@ -8,7 +8,11 @@ from pathlib import Path
 import sqlite_vec
 
 DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "research-index" / "research.db"
-EMBED_DIM = 768  # nomic-embed-text
+# Bootstrap defaults for fresh databases. Existing databases read from the
+# config table — these constants are only used during initial schema creation.
+DEFAULT_EMBED_MODEL = "bge-m3"
+DEFAULT_EMBED_DIM = 1024
+
 RELATIONSHIP_TYPES = (
     "extends",
     "contradicts",
@@ -127,6 +131,33 @@ def _migrate_papers_fts(conn: sqlite3.Connection) -> None:
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
+    # --- Create config table first so we can read embed_dim before chunks_vec ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    existing = conn.execute(
+        "SELECT value FROM config WHERE key = 'embed_model'"
+    ).fetchone()
+    if not existing:
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES ('embed_model', ?)",
+            (DEFAULT_EMBED_MODEL,),
+        )
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES ('embed_dim', ?)",
+            (str(DEFAULT_EMBED_DIM),),
+        )
+        conn.commit()
+
+    # Read the configured dimension (handles both fresh and existing DBs)
+    dim_row = conn.execute(
+        "SELECT value FROM config WHERE key = 'embed_dim'"
+    ).fetchone()
+    embed_dim = int(dim_row["value"]) if dim_row else DEFAULT_EMBED_DIM
+
     conn.executescript(f"""
     CREATE TABLE IF NOT EXISTS chunks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,7 +189,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     END;
 
     CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
-        embedding float[{EMBED_DIM}],
+        embedding float[{embed_dim}],
         +chunk_id INTEGER
     );
 
@@ -267,24 +298,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         confidence REAL DEFAULT 1.0,
         UNIQUE(entity_id, surface_form, chunk_id)
     );
-
-    CREATE TABLE IF NOT EXISTS config (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-    );
     """)
-
-    # Initialize default config if not set
-    existing = conn.execute(
-        "SELECT value FROM config WHERE key = 'embed_model'"
-    ).fetchone()
-    if not existing:
-        conn.execute(
-            "INSERT INTO config (key, value) VALUES ('embed_model', 'nomic-embed-text')"
-        )
-        conn.execute(
-            "INSERT INTO config (key, value) VALUES ('embed_dim', ?)", (str(EMBED_DIM),)
-        )
 
     conn.execute(
         "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_provider', 'ollama')"
