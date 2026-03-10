@@ -866,9 +866,21 @@ def extract_figures(
     # 10. Atomic transaction: delete old, insert new (main thread)
     # Always delete old figure chunks (even if no new figures found — ensures idempotency)
     chunks_created = 0
-    fig_chunk_subquery = (
-        "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')"
-    )
+    # Scope DELETE to only the requested pages' chunk_index ranges (#79).
+    # When pages=None (full extraction), delete all figure chunks (original behavior).
+    if pages is not None:
+        page_range_clauses = " OR ".join(
+            f"(chunk_index >= {1_000_000 + p * 100} AND chunk_index < {1_000_000 + (p + 1) * 100})"
+            for p in candidate_pages
+        )
+        fig_chunk_subquery = (
+            f"(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'"
+            f" AND ({page_range_clauses}))"
+        )
+    else:
+        fig_chunk_subquery = (
+            "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')"
+        )
     try:
         # Clean up FK references before deleting figure chunks (#53)
         conn.execute(
@@ -888,7 +900,7 @@ def extract_figures(
             (source_uri,),
         )
         conn.execute(
-            "DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
+            f"DELETE FROM chunks WHERE id IN {fig_chunk_subquery}",
             (source_uri,),
         )
 

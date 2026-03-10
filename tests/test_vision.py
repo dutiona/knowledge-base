@@ -907,6 +907,116 @@ def test_extract_figures_pages_hint(mock_vision, mock_embed, tmp_path):
 
 @patch("research_index.vision._embed_with_config")
 @patch("research_index.vision._vision_call")
+def test_extract_figures_scoped_delete_preserves_other_pages(
+    mock_vision, mock_embed, tmp_path
+):
+    """Re-extracting a subset of pages must NOT delete figures from other pages (#79)."""
+    from research_index.vision import extract_figures
+
+    fig_page0 = [
+        {
+            "figure_type": "diagram",
+            "description": "Architecture on page 0",
+            "title": "Fig 1",
+            "entities_mentioned": [],
+        }
+    ]
+    fig_page2 = [
+        {
+            "figure_type": "chart",
+            "description": "Results chart on page 2",
+            "title": "Fig 3",
+            "entities_mentioned": [],
+        }
+    ]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0", "Page 1", "Page 2"])
+
+    # Extract page 0
+    mock_vision.return_value = fig_page0
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
+    extract_figures(conn, paper_id=paper_id, pages=[0])
+
+    # Extract page 2
+    mock_vision.return_value = fig_page2
+    mock_embed.return_value = [[0.2] * DEFAULT_EMBED_DIM]
+    extract_figures(conn, paper_id=paper_id, pages=[2])
+
+    # Both pages should have figure chunks
+    rows = conn.execute(
+        "SELECT chunk_index, content FROM chunks WHERE source_type = 'figure' ORDER BY chunk_index"
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["chunk_index"] == 1_000_000 + 0 * 100 + 0  # page 0
+    assert rows[1]["chunk_index"] == 1_000_000 + 2 * 100 + 0  # page 2
+
+    # Re-extract page 0 with different content — page 2 must survive
+    fig_page0_v2 = [
+        {
+            "figure_type": "diagram",
+            "description": "Updated architecture on page 0 v2",
+            "title": "Fig 1 updated",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_vision.return_value = fig_page0_v2
+    mock_embed.return_value = [[0.3] * DEFAULT_EMBED_DIM]
+    extract_figures(conn, paper_id=paper_id, pages=[0])
+
+    rows = conn.execute(
+        "SELECT chunk_index, content FROM chunks WHERE source_type = 'figure' ORDER BY chunk_index"
+    ).fetchall()
+    assert len(rows) == 2, (
+        f"Expected 2 figure chunks, got {len(rows)}: page 2 was destroyed"
+    )
+    assert rows[0]["chunk_index"] == 1_000_000 + 0 * 100 + 0
+    assert "v2" in rows[0]["content"]
+    assert rows[1]["chunk_index"] == 1_000_000 + 2 * 100 + 0
+    assert "page 2" in rows[1]["content"].lower()
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+def test_extract_figures_full_extraction_deletes_all(mock_vision, mock_embed, tmp_path):
+    """Full extraction (pages=None) should delete all figure chunks (original behavior)."""
+    from research_index.vision import extract_figures
+
+    fig = [
+        {
+            "figure_type": "diagram",
+            "description": "Some figure",
+            "title": "Fig",
+            "entities_mentioned": [],
+        }
+    ]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0", "Page 1"])
+
+    # Extract page 0 only
+    mock_vision.return_value = fig
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
+    extract_figures(conn, paper_id=paper_id, pages=[0])
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
+        ).fetchone()["c"]
+        == 1
+    )
+
+    # Full extraction (pages=None) — should wipe page 0's figure even if heuristic
+    # only processes page 0 again (the DELETE is unscoped)
+    mock_vision.return_value = []  # no figures found
+    extract_figures(conn, paper_id=paper_id, pages=None)
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
+        ).fetchone()["c"]
+        == 0
+    )
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
 def test_extract_figures_per_page_error(mock_vision, mock_embed, tmp_path):
     """One page fails, others succeed."""
     from research_index.vision import extract_figures
