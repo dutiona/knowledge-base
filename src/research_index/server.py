@@ -41,6 +41,7 @@ from .papers import (
     get_relationships,
     register_paper,
     suggest_relationships,
+    sync_bibtex,
 )
 from .search import search
 from .vision import configure_omniparser, configure_vision, extract_figures
@@ -58,6 +59,29 @@ mcp = FastMCP(
         "Use 'suggest_relationships_tool' to auto-detect citations."
     ),
 )
+
+_ALLOWED_BIB_EXTENSIONS = {".bib", ".bibtex"}
+
+
+def _validate_bib_path(output_path: str) -> Path:
+    """Validate that output_path is a safe .bib file location.
+
+    Raises ValueError if the path has an unsafe extension or resolves
+    outside the user's home directory or current working directory.
+    """
+    p = Path(output_path).expanduser().resolve()
+    if p.suffix.lower() not in _ALLOWED_BIB_EXTENSIONS:
+        raise ValueError(
+            f"output_path must have a .bib or .bibtex extension, got: {p.suffix!r}"
+        )
+    home = Path.home().resolve()
+    cwd = Path.cwd().resolve()
+    if not (str(p).startswith(str(home)) or str(p).startswith(str(cwd))):
+        raise ValueError(
+            f"output_path must be under home ({home}) or cwd ({cwd}), got: {p}"
+        )
+    return p
+
 
 _local = threading.local()
 _schema_lock = threading.Lock()
@@ -452,13 +476,39 @@ def export_bibtex_tool(
     bibtex = export_bibtex(conn, paper_ids, title_pattern)
     if output_path:
         try:
+            _validate_bib_path(output_path)
             p = Path(output_path).expanduser().resolve()
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(bibtex, encoding="utf-8")
             return json.dumps({"written_to": str(p), "entries": bibtex.count("@")})
-        except OSError as e:
-            return json.dumps({"error": f"Failed to write {output_path}: {e}"})
+        except (OSError, ValueError) as e:
+            return json.dumps({"error": str(e)})
     return json.dumps({"bibtex": bibtex, "entries": bibtex.count("@")})
+
+
+@mcp.tool()
+def sync_bibtex_tool(
+    output_path: str,
+    paper_ids: list[int] | None = None,
+    title_pattern: str | None = None,
+) -> str:
+    """Append only new papers to an existing .bib file, skipping duplicates.
+
+    Args:
+        output_path: Path to the .bib file (created if it doesn't exist).
+        paper_ids: Sync specific papers by ID.
+        title_pattern: Sync papers matching title substring.
+    """
+    try:
+        _validate_bib_path(output_path)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    conn = _get_conn()
+    try:
+        result = sync_bibtex(conn, output_path, paper_ids, title_pattern)
+        return json.dumps(result)
+    except OSError as e:
+        return json.dumps({"error": f"Failed to sync {output_path}: {e}"})
 
 
 @mcp.tool()
