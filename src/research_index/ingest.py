@@ -488,6 +488,16 @@ def reingest_file(
                         )
                         break
 
+    # Update paper_paths content_hash if entry exists
+    if path.exists():
+        from .papers import compute_file_hash
+
+        new_hash = compute_file_hash(path)
+        conn.execute(
+            "UPDATE paper_paths SET content_hash = ? WHERE path = ?",
+            (new_hash, source_uri),
+        )
+
     conn.commit()
     return {
         "file": source_uri,
