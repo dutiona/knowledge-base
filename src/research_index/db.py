@@ -323,6 +323,22 @@ def init_schema(conn: sqlite3.Connection) -> None:
         added_at TEXT NOT NULL DEFAULT (datetime('now')),
         UNIQUE(path)
     );
+
+    CREATE TABLE IF NOT EXISTS jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+        job_type TEXT NOT NULL CHECK(job_type IN ('extract_structure', 'extract_figures')),
+        params TEXT NOT NULL DEFAULT '{{}}',
+        status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'running', 'completed', 'failed')),
+        progress TEXT,
+        result TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        started_at TEXT,
+        completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
     """)
 
     conn.execute(

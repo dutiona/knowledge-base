@@ -19,6 +19,7 @@ from .embed_swap import get_embed_config, re_embed
 from .extraction import (
     compare_papers,
     configure_llm,
+    estimate_extraction_time,
     extract_structure,
     get_datasets,
     get_entities,
@@ -28,6 +29,7 @@ from .extraction import (
     record_method,
     record_metric,
 )
+from .jobs import get_job, list_jobs as _list_jobs, submit_job
 from .ingest import (
     configure_browser,
     ingest_directory,
@@ -47,7 +49,7 @@ from .papers import (
     sync_bibtex,
 )
 from .search import search
-from .vision import configure_omniparser, configure_vision, extract_figures
+from .vision import configure_omniparser, configure_vision, estimate_figures_time
 
 mcp = FastMCP(
     "research-index",
@@ -242,6 +244,12 @@ def status() -> str:
 
     db_size_bytes = DEFAULT_DB_PATH.stat().st_size if DEFAULT_DB_PATH.exists() else 0
 
+    job_counts = {}
+    for row in conn.execute(
+        "SELECT status, COUNT(*) as count FROM jobs GROUP BY status"
+    ).fetchall():
+        job_counts[row["status"]] = row["count"]
+
     return json.dumps(
         {
             "total_chunks": total,
@@ -252,6 +260,7 @@ def status() -> str:
             "methods": method_count,
             "datasets": dataset_count,
             "metrics": metric_count,
+            "jobs": job_counts,
             "embed_config": get_embed_config(conn),
             "recent_ingestions": [
                 {
@@ -629,15 +638,51 @@ def compare_papers_tool(paper_ids: list[int]) -> str:
 def extract_structure_tool(paper_id: int, confirmed: bool = False) -> str:
     """Extract methods, datasets, and metrics from a paper using LLM.
 
-    For short papers, runs instantly. For long papers (>2min estimated),
-    returns a warning with ETA — call again with confirmed=True to proceed.
+    For short papers, runs inline. For long papers (>2min estimated),
+    returns a warning with ETA — call again with confirmed=True to queue
+    a background job. Use get_job_status(job_id) to poll progress.
 
     Args:
         paper_id: Paper ID to extract structure from.
         confirmed: Set True to skip the ETA warning for long documents.
     """
     conn = _get_conn()
-    return json.dumps(extract_structure(conn, paper_id, confirmed=confirmed))
+    est = estimate_extraction_time(conn, paper_id)
+    if "error" in est:
+        return json.dumps(est)
+
+    # Short doc: run inline (fast path) — reuse chunks from estimate
+    if not est["is_long"]:
+        return json.dumps(
+            extract_structure(
+                conn, paper_id, confirmed=True, _prefetched_chunks=est["chunks"]
+            )
+        )
+
+    # Long doc, not confirmed: ETA warning
+    if est["estimated_seconds"] > 120 and not confirmed:
+        return json.dumps(
+            {
+                "warning": (
+                    f"Extraction will take ~{est['estimated_seconds'] // 60}min "
+                    f"for {est['chunk_count']} chunks"
+                ),
+                "estimated_seconds": est["estimated_seconds"],
+                "chunk_count": est["chunk_count"],
+                "confirm_required": True,
+            }
+        )
+
+    # Long doc, confirmed: submit background job
+    job_id = submit_job(conn, paper_id, "extract_structure")
+    return json.dumps(
+        {
+            "deferred": True,
+            "job_id": job_id,
+            "status": "pending",
+            "message": "Use get_job_status(job_id) to poll progress.",
+        }
+    )
 
 
 @mcp.tool()
@@ -679,6 +724,10 @@ def extract_figures_tool(
     Renders candidate pages as images, sends them to the configured vision model,
     and stores figure descriptions as searchable 'figure' chunks.
 
+    Always queues a background job (figure extraction involves PDF rendering +
+    vision API calls). Returns an ETA warning first; call with confirmed=True
+    to submit the job. Use get_job_status(job_id) to poll progress.
+
     Args:
         paper_id: Paper ID.
         pages: 1-based page numbers to process (optional, auto-detects if omitted).
@@ -692,8 +741,30 @@ def extract_figures_tool(
         if invalid:
             return json.dumps({"error": f"Pages must be >= 1 (got {invalid})"})
         pages_0 = [p - 1 for p in pages]
+
+    est = estimate_figures_time(conn, paper_id, pages=pages_0)
+    if "error" in est:
+        return json.dumps(est)
+
+    # ETA gate
+    if est["estimated_seconds"] > 120 and not confirmed:
+        return json.dumps(
+            {
+                "confirm_required": True,
+                "estimated_seconds": est["estimated_seconds"],
+                "candidate_pages": est["candidate_pages"],
+            }
+        )
+
+    # Submit background job
+    job_id = submit_job(conn, paper_id, "extract_figures", {"pages": pages_0})
     return json.dumps(
-        extract_figures(conn, paper_id, pages=pages_0, confirmed=confirmed)
+        {
+            "deferred": True,
+            "job_id": job_id,
+            "status": "pending",
+            "message": "Use get_job_status(job_id) to poll progress.",
+        }
     )
 
 
@@ -768,6 +839,32 @@ def configure_browser_tool(
     return json.dumps(
         configure_browser(conn, cdp_endpoint=cdp_endpoint, venv_path=venv_path)
     )
+
+
+@mcp.tool()
+def get_job_status_tool(job_id: int) -> str:
+    """Get the status and progress of a background extraction job.
+
+    Args:
+        job_id: Job ID returned by extract_structure_tool or extract_figures_tool.
+    """
+    conn = _get_conn()
+    job = get_job(conn, job_id)
+    if job is None:
+        return json.dumps({"error": f"Job {job_id} not found"})
+    return json.dumps(job)
+
+
+@mcp.tool()
+def list_jobs_tool(status: str | None = None, paper_id: int | None = None) -> str:
+    """List background extraction jobs.
+
+    Args:
+        status: Filter by status: pending, running, completed, failed.
+        paper_id: Filter by paper ID.
+    """
+    conn = _get_conn()
+    return json.dumps(_list_jobs(conn, status=status, paper_id=paper_id))
 
 
 def main():
