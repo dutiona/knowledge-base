@@ -213,12 +213,13 @@ def test_export_bibtex_filter_by_title(tmp_path):
 
 def test_sync_bibtex_appends_new(tmp_path):
     conn = _setup(tmp_path)
-    register_paper(conn, "Paper A", ["Author A"], 2020)
+    custom = "@article{papera2020,\n  title = {Paper A},\n  year = {2020},\n}"
+    register_paper(conn, "Paper A", bibtex=custom)
     register_paper(conn, "Paper B", ["Author B"], 2021)
 
     bib_file = tmp_path / "refs.bib"
-    # Pre-populate with Paper A's entry (key matches _bibtex_key(["Author A"], 2020) = "a2020")
-    bib_file.write_text("@article{a2020,\n  title = {Paper A},\n}\n")
+    # Pre-populate with Paper A's stored entry
+    bib_file.write_text("@article{papera2020,\n  title = {Paper A},\n}\n")
 
     result = sync_bibtex(conn, str(bib_file))
     assert result["appended"] == 1
@@ -229,12 +230,14 @@ def test_sync_bibtex_appends_new(tmp_path):
     assert "Paper B" in content
 
 
-def test_sync_bibtex_no_duplicates(tmp_path):
+def test_sync_bibtex_no_duplicates_stored(tmp_path):
+    """Stored BibTeX entry with matching key is skipped."""
     conn = _setup(tmp_path)
-    register_paper(conn, "Paper A", ["Author A"], 2020)
+    custom = "@article{custom2024,\n  title = {Custom},\n  year = {2024},\n}"
+    register_paper(conn, "Custom Paper", bibtex=custom)
 
     bib_file = tmp_path / "refs.bib"
-    bib_file.write_text("@article{a2020,\n  title = {Paper A},\n}\n")
+    bib_file.write_text("@article{custom2024,\n  title = {Custom},\n}\n")
 
     result = sync_bibtex(conn, str(bib_file))
     assert result["appended"] == 0
@@ -288,8 +291,8 @@ def test_sync_bibtex_key_collision_across_entries(tmp_path):
     assert "Paper Two" in content
 
 
-def test_sync_bibtex_skips_when_base_key_exists(tmp_path):
-    """A paper whose base key is already in the file gets skipped."""
+def test_sync_bibtex_different_paper_same_base_key(tmp_path):
+    """A different paper with the same base key gets a suffixed key, not skipped."""
     conn = _setup(tmp_path)
     register_paper(conn, "New Smith Paper", ["Smith"], 2024)
 
@@ -297,8 +300,12 @@ def test_sync_bibtex_skips_when_base_key_exists(tmp_path):
     bib_file.write_text("@article{smith2024,\n  title = {Old Smith Paper},\n}\n")
 
     result = sync_bibtex(conn, str(bib_file))
-    assert result["skipped"] == 1
-    assert result["appended"] == 0
+    assert result["appended"] == 1
+    assert result["skipped"] == 0
+
+    content = bib_file.read_text()
+    assert "smith2024a," in content
+    assert "New Smith Paper" in content
 
 
 def test_export_bibtex_key_collision(tmp_path):
@@ -310,6 +317,18 @@ def test_export_bibtex_key_collision(tmp_path):
     bib = export_bibtex(conn)
     assert "smith2024," in bib
     assert "smith2024a," in bib
+
+
+def test_export_bibtex_stored_vs_generated_collision(tmp_path):
+    """Stored BibTeX key doesn't collide with generated key."""
+    conn = _setup(tmp_path)
+    custom = "@article{smith2024,\n  title = {Stored Smith},\n  year = {2024},\n}"
+    register_paper(conn, "Stored Smith", bibtex=custom)
+    register_paper(conn, "Generated Smith", ["Smith, Alice"], 2024)
+
+    bib = export_bibtex(conn)
+    assert "smith2024," in bib  # stored entry
+    assert "smith2024a," in bib  # generated avoids collision
 
 
 def test_sync_bibtex_with_filters(tmp_path):

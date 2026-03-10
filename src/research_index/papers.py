@@ -303,12 +303,16 @@ def export_bibtex(
     """Export papers as BibTeX. Filter by IDs or title pattern, or export all."""
     rows = _query_papers(conn, paper_ids, title_pattern)
 
+    # Pre-seed used_keys with all stored BibTeX keys to avoid collisions
     used_keys: set[str] = set()
+    for row in rows:
+        if row["bibtex"]:
+            used_keys.update(_extract_bibtex_keys(row["bibtex"]))
+
     entries = []
     for row in rows:
         if row["bibtex"]:
             entries.append(row["bibtex"])
-            used_keys.update(_extract_bibtex_keys(row["bibtex"]))
         else:
             paper = {
                 "title": row["title"],
@@ -350,6 +354,7 @@ def sync_bibtex(
     skipped = 0
     for row in rows:
         if row["bibtex"]:
+            # Stored BibTeX: skip only if exact key already in file
             entry_keys = _extract_bibtex_keys(row["bibtex"])
             if entry_keys & file_keys:
                 skipped += 1
@@ -357,20 +362,14 @@ def sync_bibtex(
             all_keys.update(entry_keys)
             new_entries.append(row["bibtex"])
         else:
-            # Skip if base key was already in the original file
-            authors = json.loads(row["authors"])
-            base_key = _bibtex_key(authors, row["year"])
-            if base_key in file_keys:
-                skipped += 1
-                continue
             paper = {
                 "title": row["title"],
-                "authors": authors,
+                "authors": json.loads(row["authors"]),
                 "year": row["year"],
                 "venue": row["venue"],
                 "doi": row["doi"],
             }
-            # Generate with collision-safe keys across all keys
+            # Generate with collision-safe keys — suffixes avoid duplicates
             entry = _generate_bibtex(paper, all_keys)
             new_entries.append(entry)
 
