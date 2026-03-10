@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from pathlib import Path
 
 
 def register_paper(
@@ -251,23 +252,32 @@ def _generate_bibtex(paper: dict) -> str:
     return "\n".join(lines)
 
 
+def _query_papers(
+    conn: sqlite3.Connection,
+    paper_ids: list[int] | None = None,
+    title_pattern: str | None = None,
+) -> list:
+    """Query papers with optional filters. Shared by export and sync."""
+    if paper_ids:
+        placeholders = ",".join("?" * len(paper_ids))
+        return conn.execute(
+            f"SELECT * FROM papers WHERE id IN ({placeholders})", paper_ids
+        ).fetchall()
+    elif title_pattern:
+        return conn.execute(
+            "SELECT * FROM papers WHERE title LIKE ?", (f"%{title_pattern}%",)
+        ).fetchall()
+    else:
+        return conn.execute("SELECT * FROM papers").fetchall()
+
+
 def export_bibtex(
     conn: sqlite3.Connection,
     paper_ids: list[int] | None = None,
     title_pattern: str | None = None,
 ) -> str:
     """Export papers as BibTeX. Filter by IDs or title pattern, or export all."""
-    if paper_ids:
-        placeholders = ",".join("?" * len(paper_ids))
-        rows = conn.execute(
-            f"SELECT * FROM papers WHERE id IN ({placeholders})", paper_ids
-        ).fetchall()
-    elif title_pattern:
-        rows = conn.execute(
-            "SELECT * FROM papers WHERE title LIKE ?", (f"%{title_pattern}%",)
-        ).fetchall()
-    else:
-        rows = conn.execute("SELECT * FROM papers").fetchall()
+    rows = _query_papers(conn, paper_ids, title_pattern)
 
     entries = []
     for row in rows:
@@ -283,6 +293,58 @@ def export_bibtex(
             }
             entries.append(_generate_bibtex(paper))
     return "\n\n".join(entries)
+
+
+def _extract_bibtex_keys(text: str) -> set[str]:
+    """Extract all BibTeX keys from a .bib file's content."""
+    return set(re.findall(r"@\w+\{([^,\s]+)", text))
+
+
+def sync_bibtex(
+    conn: sqlite3.Connection,
+    output_path: str,
+    paper_ids: list[int] | None = None,
+    title_pattern: str | None = None,
+) -> dict:
+    """Append only new papers to an existing .bib file.
+
+    Reads the file at output_path, extracts existing BibTeX keys,
+    and appends entries for papers whose keys are not yet present.
+    Creates the file if it does not exist.
+    """
+    p = Path(output_path).expanduser().resolve()
+    existing_text = p.read_text(encoding="utf-8") if p.exists() else ""
+    existing_keys = _extract_bibtex_keys(existing_text)
+
+    # Get all candidate entries
+    rows = _query_papers(conn, paper_ids, title_pattern)
+    new_entries = []
+    skipped = 0
+    for row in rows:
+        if row["bibtex"]:
+            entry = row["bibtex"]
+        else:
+            paper = {
+                "title": row["title"],
+                "authors": json.loads(row["authors"]),
+                "year": row["year"],
+                "venue": row["venue"],
+                "doi": row["doi"],
+            }
+            entry = _generate_bibtex(paper)
+        entry_keys = _extract_bibtex_keys(entry)
+        if entry_keys & existing_keys:
+            skipped += 1
+        else:
+            new_entries.append(entry)
+
+    if new_entries:
+        separator = "\n\n" if existing_text.rstrip() else ""
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(separator + "\n\n".join(new_entries) + "\n")
+
+    return {"appended": len(new_entries), "skipped": skipped, "path": str(p)}
 
 
 def suggest_relationships(

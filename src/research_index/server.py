@@ -41,6 +41,7 @@ from .papers import (
     get_relationships,
     register_paper,
     suggest_relationships,
+    sync_bibtex,
 )
 from .search import search
 from .vision import configure_omniparser, configure_vision, extract_figures
@@ -459,6 +460,31 @@ def export_bibtex_tool(
         except OSError as e:
             return json.dumps({"error": f"Failed to write {output_path}: {e}"})
     return json.dumps({"bibtex": bibtex, "entries": bibtex.count("@")})
+
+
+@mcp.tool()
+def sync_bibtex_tool(
+    output_path: str,
+    paper_ids: list[int] | None = None,
+    title_pattern: str | None = None,
+) -> str:
+    """Append only new papers to an existing .bib file, skipping duplicates.
+
+    Reads the .bib file, identifies existing BibTeX keys, and appends
+    only entries whose keys are not already present. Creates the file
+    if it does not exist.
+
+    Args:
+        output_path: Path to the .bib file to sync.
+        paper_ids: Optional list of paper IDs to sync (default: all).
+        title_pattern: Optional title substring filter.
+    """
+    conn = _get_conn()
+    try:
+        result = sync_bibtex(conn, output_path, paper_ids, title_pattern)
+        return json.dumps(result)
+    except OSError as e:
+        return json.dumps({"error": f"Failed to sync {output_path}: {e}"})
 
 
 @mcp.tool()

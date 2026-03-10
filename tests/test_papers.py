@@ -11,6 +11,7 @@ from research_index.papers import (
     get_relationships,
     register_paper,
     suggest_relationships,
+    sync_bibtex,
     _bibtex_key,
 )
 
@@ -29,9 +30,12 @@ def _setup(tmp_path):
 
 # --- register_paper / get_paper ---
 
+
 def test_register_and_get_paper(tmp_path):
     conn = _setup(tmp_path)
-    result = register_paper(conn, "Attention Is All You Need", ["Vaswani, A."], 2017, "NeurIPS")
+    result = register_paper(
+        conn, "Attention Is All You Need", ["Vaswani, A."], 2017, "NeurIPS"
+    )
     assert "paper_id" in result
 
     papers = get_paper(conn, paper_id=result["paper_id"])
@@ -82,6 +86,7 @@ def test_get_paper_no_match(tmp_path):
 
 
 # --- add_relationship / get_relationships ---
+
 
 def test_add_and_get_relationship(tmp_path):
     conn = _setup(tmp_path)
@@ -154,6 +159,7 @@ def test_relationship_with_evidence(tmp_path):
 
 # --- BibTeX export ---
 
+
 def test_bibtex_key():
     assert _bibtex_key(["Vaswani, A."], 2017) == "vaswani2017"
     assert _bibtex_key(["John Smith"], 2023) == "smith2023"
@@ -162,7 +168,9 @@ def test_bibtex_key():
 
 def test_export_bibtex_generated(tmp_path):
     conn = _setup(tmp_path)
-    register_paper(conn, "Attention Is All You Need", ["Vaswani"], 2017, "NeurIPS", "10.1234/att")
+    register_paper(
+        conn, "Attention Is All You Need", ["Vaswani"], 2017, "NeurIPS", "10.1234/att"
+    )
 
     bib = export_bibtex(conn)
     assert "@article{" in bib
@@ -200,7 +208,87 @@ def test_export_bibtex_filter_by_title(tmp_path):
     assert "Reinforcement" not in bib
 
 
+# --- sync_bibtex ---
+
+
+def test_sync_bibtex_appends_new(tmp_path):
+    conn = _setup(tmp_path)
+    register_paper(conn, "Paper A", ["Author A"], 2020)
+    register_paper(conn, "Paper B", ["Author B"], 2021)
+
+    bib_file = tmp_path / "refs.bib"
+    # Pre-populate with Paper A's entry (key matches _bibtex_key(["Author A"], 2020) = "a2020")
+    bib_file.write_text("@article{a2020,\n  title = {Paper A},\n}\n")
+
+    result = sync_bibtex(conn, str(bib_file))
+    assert result["appended"] == 1
+    assert result["skipped"] == 1
+
+    content = bib_file.read_text()
+    assert "Paper A" in content
+    assert "Paper B" in content
+
+
+def test_sync_bibtex_no_duplicates(tmp_path):
+    conn = _setup(tmp_path)
+    register_paper(conn, "Paper A", ["Author A"], 2020)
+
+    bib_file = tmp_path / "refs.bib"
+    bib_file.write_text("@article{a2020,\n  title = {Paper A},\n}\n")
+
+    result = sync_bibtex(conn, str(bib_file))
+    assert result["appended"] == 0
+    assert result["skipped"] == 1
+
+
+def test_sync_bibtex_creates_file(tmp_path):
+    conn = _setup(tmp_path)
+    register_paper(conn, "Paper A", ["Author A"], 2020)
+
+    bib_file = tmp_path / "new_refs.bib"
+    assert not bib_file.exists()
+
+    result = sync_bibtex(conn, str(bib_file))
+    assert result["appended"] == 1
+    assert result["skipped"] == 0
+    assert bib_file.exists()
+    assert "Paper A" in bib_file.read_text()
+
+
+def test_sync_bibtex_with_stored_bibtex(tmp_path):
+    conn = _setup(tmp_path)
+    custom = "@inproceedings{custom2024,\n  title = {Custom},\n  year = {2024},\n}"
+    register_paper(conn, "Custom Paper", bibtex=custom)
+
+    bib_file = tmp_path / "refs.bib"
+    bib_file.write_text("@article{other2023,\n  title = {Other},\n}\n")
+
+    result = sync_bibtex(conn, str(bib_file))
+    assert result["appended"] == 1
+
+    content = bib_file.read_text()
+    assert "custom2024" in content
+    assert "other2023" in content
+
+
+def test_sync_bibtex_with_filters(tmp_path):
+    conn = _setup(tmp_path)
+    register_paper(conn, "Paper A", ["Author A"], 2020)
+    register_paper(conn, "Paper B", ["Author B"], 2021)
+
+    bib_file = tmp_path / "refs.bib"
+    bib_file.write_text("")
+
+    result = sync_bibtex(conn, str(bib_file), title_pattern="Paper A")
+    assert result["appended"] == 1
+
+    content = bib_file.read_text()
+    assert "Paper A" in content
+    assert "Paper B" not in content
+
+
 # --- suggest_relationships ---
+
 
 @patch("research_index.ingest.embed", _fake_embed)
 def test_suggest_relationships_by_doi(tmp_path):
@@ -230,7 +318,9 @@ def test_suggest_relationships_by_title(tmp_path):
     md.write_text("We extend Attention Is All You Need with sparse patterns.\n")
     ingest_file(conn, md)
 
-    p1 = register_paper(conn, "Sparse Attention", source_uri=str(md.resolve()))["paper_id"]
+    p1 = register_paper(conn, "Sparse Attention", source_uri=str(md.resolve()))[
+        "paper_id"
+    ]
     register_paper(conn, "Attention Is All You Need")
 
     suggestions = suggest_relationships(conn, p1)
