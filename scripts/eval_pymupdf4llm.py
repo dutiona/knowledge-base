@@ -89,6 +89,10 @@ def _measure_in_child(func_name: str, path: str) -> dict:
         p.start()
         p.join(timeout=600)
         if p.exitcode != 0:
+            print(
+                f"  WARNING: {func_name} child exited with code {p.exitcode}",
+                file=sys.stderr,
+            )
             return {"text": "", "elapsed_s": 0, "peak_rss_kb": 0}
         with open(result_path, encoding="utf-8") as f:
             return json.load(f)
