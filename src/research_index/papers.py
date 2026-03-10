@@ -6,6 +6,8 @@ import json
 import re
 import sqlite3
 
+from .db import RELATIONSHIP_TYPES
+
 
 def register_paper(
     conn: sqlite3.Connection,
@@ -127,15 +129,7 @@ def add_relationship(
     evidence_chunk_id: int | None = None,
 ) -> dict:
     """Add a typed relationship between two papers. Upserts on conflict."""
-    valid_types = {
-        "extends",
-        "contradicts",
-        "replicates",
-        "cites",
-        "compares",
-        "applies",
-        "implements",
-    }
+    valid_types = set(RELATIONSHIP_TYPES)
     if relation_type not in valid_types:
         return {"error": f"Invalid relation_type. Must be one of: {valid_types}"}
 
