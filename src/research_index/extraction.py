@@ -649,25 +649,10 @@ AVG_SECONDS_PER_CHUNK = 4
 
 
 def _get_paper_chunks(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
-    """Get chunks for a paper via its source_uri."""
-    # Find source_uri from the paper's linked chunks
-    row = conn.execute(
-        "SELECT source_uri FROM chunks WHERE id = (SELECT abstract_chunk_id FROM papers WHERE id = ?)",
-        (paper_id,),
-    ).fetchone()
-    if row:
-        source_uri = row["source_uri"]
-    else:
-        source_uri = None
+    """Get chunks for a paper via paper_paths."""
+    from .papers import get_paper_chunks as _papers_get_paper_chunks
 
-    if not source_uri:
-        return []
-
-    chunks = conn.execute(
-        "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
-        (source_uri,),
-    ).fetchall()
-    return [{"id": c["id"], "content": c["content"]} for c in chunks]
+    return _papers_get_paper_chunks(conn, paper_id)
 
 
 def _extract_single_pass(
