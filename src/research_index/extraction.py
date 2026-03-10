@@ -649,10 +649,10 @@ AVG_SECONDS_PER_CHUNK = 4
 
 
 def _get_paper_chunks(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
-    """Get chunks for a paper via paper_paths."""
+    """Get chunks for a paper via paper_paths (includes all chunk types)."""
     from .papers import get_paper_chunks as _papers_get_paper_chunks
 
-    return _papers_get_paper_chunks(conn, paper_id)
+    return _papers_get_paper_chunks(conn, paper_id, include_figures=True)
 
 
 def _extract_single_pass(

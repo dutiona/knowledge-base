@@ -116,7 +116,10 @@ def relocate_paper(
         }
 
     if content_hash is None:
-        content_hash = compute_file_hash(p)
+        try:
+            content_hash = compute_file_hash(p)
+        except OSError as e:
+            return {"error": f"Cannot read file for hashing: {e}"}
 
     if current["content_hash"] and content_hash != current["content_hash"]:
         return {
@@ -175,7 +178,10 @@ def register_paper(
         file_hash = None
         p = Path(source_uri)
         if p.exists():
-            file_hash = compute_file_hash(p)
+            try:
+                file_hash = compute_file_hash(p)
+            except OSError:
+                pass  # Hash is best-effort; paper is still registered
 
         # Check if path is already owned by another paper
         existing_path = conn.execute(

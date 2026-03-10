@@ -281,13 +281,17 @@ def ingest_file(
         if skipped > 0:
             from .papers import compute_file_hash
 
-            file_hash = compute_file_hash(path)
-            existing_paper = conn.execute(
-                "SELECT paper_id FROM paper_paths WHERE content_hash = ?",
-                (file_hash,),
-            ).fetchone()
-            if existing_paper:
-                result["duplicate_of_paper_id"] = existing_paper["paper_id"]
+            try:
+                file_hash = compute_file_hash(path)
+            except OSError:
+                file_hash = None
+            if file_hash:
+                existing_paper = conn.execute(
+                    "SELECT paper_id FROM paper_paths WHERE content_hash = ?",
+                    (file_hash,),
+                ).fetchone()
+                if existing_paper:
+                    result["duplicate_of_paper_id"] = existing_paper["paper_id"]
         return result
 
     # Embed all new chunks using configured model
