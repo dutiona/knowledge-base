@@ -246,7 +246,7 @@ def test_suggest_relationships_by_title(tmp_path):
     result = suggest_relationships(conn, p1)
     # Exact substring should now match via FTS5 as title_fts
     assert len(result["suggestions"]) >= 1
-    assert result["suggestions"][0]["match_method"] == "title_fts"
+    assert result["suggestions"][0]["match_method"] == "title_words"
 
 
 @patch("research_index.ingest.embed", _fake_embed)
@@ -308,7 +308,7 @@ def test_suggest_title_fts5_fuzzy_match(tmp_path):
 
     result = suggest_relationships(conn, p1)
     title_matches = [
-        s for s in result["suggestions"] if s["match_method"] == "title_fts"
+        s for s in result["suggestions"] if s["match_method"] == "title_words"
     ]
     assert len(title_matches) >= 1
     assert (
@@ -332,7 +332,7 @@ def test_suggest_title_fts5_short_title_skipped(tmp_path):
 
     result = suggest_relationships(conn, p1)
     title_matches = [
-        s for s in result["suggestions"] if s["match_method"] == "title_fts"
+        s for s in result["suggestions"] if s["match_method"] == "title_words"
     ]
     assert len(title_matches) == 0
 

@@ -406,7 +406,7 @@ def suggest_relationships(
                         "target_title": other["title"],
                         "relation_type": "cites",
                         "confidence": confidence,
-                        "match_method": "title_fts",
+                        "match_method": "title_words",
                     }
                 )
                 suggested_ids.add(other["id"])
