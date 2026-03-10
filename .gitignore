@@ -28,6 +28,9 @@ wheels/
 # Lock file
 uv.lock
 
+# Eval output
+tmp/
+
 .claude
 .serena
 .worktrees
