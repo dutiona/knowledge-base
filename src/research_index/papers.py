@@ -99,6 +99,10 @@ def register_paper(
     """Register a paper. Optionally link to already-ingested chunks via source_uri."""
     authors_json = json.dumps(authors or [])
 
+    # Canonicalize source_uri before any lookups
+    if source_uri:
+        source_uri = str(Path(source_uri).resolve())
+
     # Link abstract to first chunk from this source_uri if available
     abstract_chunk_id = None
     if source_uri:
@@ -114,6 +118,25 @@ def register_paper(
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (title, authors_json, year, venue, doi, bibtex, abstract_chunk_id),
     )
+
+    # Populate paper_paths for the new paper
+    if source_uri:
+        file_hash = None
+        p = Path(source_uri)
+        if p.exists():
+            file_hash = compute_file_hash(p)
+
+        # Check if path is already owned by another paper
+        existing_path = conn.execute(
+            "SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)
+        ).fetchone()
+        if not existing_path:
+            conn.execute(
+                "INSERT INTO paper_paths (paper_id, path, content_hash, is_primary) "
+                "VALUES (?, ?, ?, TRUE)",
+                (cursor.lastrowid, source_uri, file_hash),
+            )
+
     conn.commit()
     return {"paper_id": cursor.lastrowid, "abstract_chunk_id": abstract_chunk_id}
 

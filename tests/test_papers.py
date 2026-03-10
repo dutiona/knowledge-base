@@ -795,3 +795,21 @@ def test_get_paper_chunks(tmp_path):
     chunks = get_paper_chunks(conn, pid)
     assert len(chunks) >= 1
     assert "Content of the paper" in chunks[0]["content"]
+
+
+# --- register_paper populates paper_paths ---
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_register_paper_creates_paper_path(tmp_path):
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Abstract.\n")
+    ingest_file(conn, md)
+
+    result = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))
+    paths = get_paper_paths(conn, result["paper_id"])
+    assert len(paths) == 1
+    assert paths[0]["path"] == str(md.resolve())
+    assert paths[0]["is_primary"] == 1
+    assert paths[0]["content_hash"] is not None
