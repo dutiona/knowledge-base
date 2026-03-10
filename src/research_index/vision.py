@@ -645,6 +645,8 @@ def extract_figures(
 
     # 3. Determine candidate pages
     if pages is not None:
+        if not pages:
+            return {"pages_processed": 0, "figures_found": 0, "chunks_created": 0}
         doc = fitz.open(str(pdf_path))
         total_pages = len(doc)
         doc.close()
@@ -866,31 +868,54 @@ def extract_figures(
     # 10. Atomic transaction: delete old, insert new (main thread)
     # Always delete old figure chunks (even if no new figures found — ensures idempotency)
     chunks_created = 0
-    fig_chunk_subquery = (
-        "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')"
-    )
+    # Scope DELETE to only the requested pages' chunk_index ranges (#79).
+    # When pages=None (full extraction), delete all figure chunks (original behavior).
+    if pages is not None and candidate_pages:
+        page_clauses = []
+        page_params: list[int] = []
+        for p in candidate_pages:
+            page_clauses.append("(chunk_index >= ? AND chunk_index < ?)")
+            page_params.extend([1_000_000 + p * 100, 1_000_000 + (p + 1) * 100])
+        page_filter = f" AND ({' OR '.join(page_clauses)})"
+        fig_chunk_subquery = (
+            f"(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'"
+            f"{page_filter})"
+        )
+        fig_delete_params: tuple = (source_uri, *page_params)
+    else:
+        fig_chunk_subquery = (
+            "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')"
+        )
+        fig_delete_params = (source_uri,)
     try:
         # Clean up FK references before deleting figure chunks (#53)
         conn.execute(
             f"DELETE FROM entity_mentions WHERE chunk_id IN {fig_chunk_subquery}",
-            (source_uri,),
+            fig_delete_params,
         )
         conn.execute(
             f"UPDATE methods SET chunk_id = NULL WHERE chunk_id IN {fig_chunk_subquery}",
-            (source_uri,),
+            fig_delete_params,
         )
         conn.execute(
             f"UPDATE datasets SET chunk_id = NULL WHERE chunk_id IN {fig_chunk_subquery}",
-            (source_uri,),
+            fig_delete_params,
         )
         conn.execute(
             f"DELETE FROM chunks_vec WHERE chunk_id IN {fig_chunk_subquery}",
-            (source_uri,),
+            fig_delete_params,
         )
-        conn.execute(
-            "DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
-            (source_uri,),
-        )
+        if pages is not None and candidate_pages:
+            conn.execute(
+                f"DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'"
+                f"{page_filter}",
+                (source_uri, *page_params),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
+                (source_uri,),
+            )
 
         if all_figures:
             for i, (page_num, fig_idx, figure) in enumerate(all_figures):
