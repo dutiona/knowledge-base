@@ -132,11 +132,19 @@ def _pages_for_range(start: int, end: int, page_map: dict[int, int]) -> list[int
     """Look up which pages a char range [start, end) spans."""
     if not page_map:
         return []
+    import bisect
+
     offsets = sorted(page_map.keys())
     pages: list[int] = []
-    for i, off in enumerate(offsets):
+    idx = bisect.bisect_right(offsets, start) - 1
+    if idx < 0:
+        idx = 0
+    for i in range(idx, len(offsets)):
+        off = offsets[i]
+        if off >= end:
+            break
         next_off = offsets[i + 1] if i + 1 < len(offsets) else float("inf")
-        if off < end and next_off > start:
+        if next_off > start:
             pages.append(page_map[off])
     return pages
 
@@ -248,50 +256,63 @@ def _chunk_markdown(
                 result.append((sanitized, pages))
             continue
 
-        # Oversized section — split carefully
-        # Extract heading line
+        # Oversized section — split carefully, preserving document order
         lines = section_text.split("\n")
         heading_line = lines[0] if level is not None else ""
+        body_lines = lines[1:] if heading_line else lines
+        sec_pages = _pages_for_range(sec_offset, sec_offset + len(section_text), pm)
 
-        # Find table blocks (atomic, never split)
-        table_blocks: list[str] = []
-        non_table_lines: list[str] = []
+        # Walk lines in order, alternating between prose and table segments
+        segments: list[tuple[str, str]] = []  # (type, text)
+        prose_buf: list[str] = []
+        table_buf: list[str] = []
         in_table = False
-        current_table: list[str] = []
 
-        for line in lines[1:] if heading_line else lines:
+        def _flush_prose() -> None:
+            if prose_buf:
+                segments.append(("prose", "\n".join(prose_buf)))
+                prose_buf.clear()
+
+        def _flush_table() -> None:
+            if table_buf:
+                segments.append(("table", "\n".join(table_buf)))
+                table_buf.clear()
+
+        for line in body_lines:
             if _TABLE_LINE_RE.match(line):
                 if not in_table:
+                    _flush_prose()
                     in_table = True
-                    current_table = []
-                current_table.append(line)
+                table_buf.append(line)
             else:
                 if in_table:
-                    table_blocks.append("\n".join(current_table))
+                    _flush_table()
                     in_table = False
-                    current_table = []
-                non_table_lines.append(line)
-        if in_table:
-            table_blocks.append("\n".join(current_table))
+                prose_buf.append(line)
+        _flush_prose()
+        _flush_table()
 
-        # Emit table blocks as-is (oversized is acceptable)
-        for tb in table_blocks:
-            table_text = f"{heading_line}\n{tb}" if heading_line else tb
-            sanitized = _sanitize_image_refs(table_text.strip(), image_dir)
-            pages = _pages_for_range(sec_offset, sec_offset + len(section_text), pm)
-            result.append((sanitized, pages))
-
-        # Sub-chunk non-table text
-        non_table_text = "\n".join(non_table_lines)
-        if non_table_text.strip():
-            sub_chunks = _chunk_text(non_table_text, max_chunk_size, overlap)
-            for i_sc, sc in enumerate(sub_chunks):
-                # Prepend heading to the first sub-chunk only
-                if i_sc == 0 and heading_line:
-                    sc = f"{heading_line}\n{sc}"
-                sanitized = _sanitize_image_refs(sc.strip(), image_dir)
-                pages = _pages_for_range(sec_offset, sec_offset + len(section_text), pm)
-                result.append((sanitized, pages))
+        heading_emitted = False
+        for seg_type, seg_text in segments:
+            if seg_type == "table":
+                table_text = (
+                    f"{heading_line}\n{seg_text}"
+                    if heading_line and not heading_emitted
+                    else seg_text
+                )
+                heading_emitted = True
+                sanitized = _sanitize_image_refs(table_text.strip(), image_dir)
+                result.append((sanitized, sec_pages))
+            else:
+                if not seg_text.strip():
+                    continue
+                sub_chunks = _chunk_text(seg_text, max_chunk_size, overlap)
+                for i_sc, sc in enumerate(sub_chunks):
+                    if i_sc == 0 and heading_line and not heading_emitted:
+                        sc = f"{heading_line}\n{sc}"
+                        heading_emitted = True
+                    sanitized = _sanitize_image_refs(sc.strip(), image_dir)
+                    result.append((sanitized, sec_pages))
 
     # Flush remaining buffer
     _flush_buffer()
@@ -315,7 +336,11 @@ def _extract_pdf_text(path: Path) -> str:
 
 def _pdf_image_dir(path: Path) -> Path:
     """Content-hash keyed directory for extracted images."""
-    file_hash = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(8192):
+            h.update(chunk)
+    file_hash = h.hexdigest()[:16]
     sanitized = re.sub(r"[^\w\-.]", "_", path.stem)[:64]
     return (
         Path.home()
@@ -505,7 +530,7 @@ def ingest_file(
         md_chunks = _chunk_markdown(
             text,
             page_map=page_map,
-            image_dir=_pdf_image_dir(path) if page_map else None,
+            image_dir=image_dir if page_map else None,
         )
         if not md_chunks:
             return {"file": str(path), "chunks_added": 0, "chunks_skipped": 0}
@@ -717,7 +742,7 @@ def reingest_file(
         md_chunks = _chunk_markdown(
             text,
             page_map=page_map,
-            image_dir=_pdf_image_dir(path) if page_map else None,
+            image_dir=image_dir if page_map else None,
         )
         if not md_chunks:
             conn.commit()

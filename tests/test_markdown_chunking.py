@@ -110,6 +110,23 @@ def test_chunk_markdown_page_provenance():
     assert 1 in result[1][1], f"Second chunk should be on page 1, got {result[1][1]}"
 
 
+def test_chunk_markdown_oversized_preserves_order():
+    """In oversized sections, prose→table→prose order is preserved."""
+    intro = "Intro text. " * 100  # ~1200 chars, oversized
+    table = "\n| A | B |\n| --- | --- |\n| 1 | 2 |\n"
+    outro = "Outro text. " * 100  # ~1200 chars
+    text = f"## Results\n{intro}{table}{outro}"
+    result = _chunk_markdown(text, max_chunk_size=1000)
+
+    # Find which chunks have what
+    intro_idx = next(i for i, (c, _) in enumerate(result) if "Intro text" in c)
+    table_idx = next(i for i, (c, _) in enumerate(result) if "| A | B |" in c)
+    outro_idx = next(i for i, (c, _) in enumerate(result) if "Outro text" in c)
+    assert intro_idx < table_idx < outro_idx, (
+        f"Expected intro({intro_idx}) < table({table_idx}) < outro({outro_idx})"
+    )
+
+
 def test_chunk_markdown_empty_input():
     """Empty text produces no chunks."""
     assert _chunk_markdown("") == []
