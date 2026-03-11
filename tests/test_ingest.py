@@ -1549,11 +1549,11 @@ def _make_mock_pymupdf4llm(pages_data):
 
 _SIMPLE_PAGES = [
     {
-        "metadata": {"page": 0},
+        "metadata": {"page_number": 1},
         "text": "## Introduction\nThis paper presents a novel approach.\n",
     },
     {
-        "metadata": {"page": 1},
+        "metadata": {"page_number": 2},
         "text": "## Methods\nWe used a transformer architecture.\n",
     },
 ]
@@ -1575,8 +1575,8 @@ def test_extract_pdf_markdown_basic(tmp_path):
     assert "## Methods" in text
     # page_map should have two entries
     assert len(page_map) == 2
-    assert 0 in page_map.values()
     assert 1 in page_map.values()
+    assert 2 in page_map.values()
 
 
 @patch("research_index.ingest.embed", _fake_embed)
