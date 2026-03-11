@@ -7,8 +7,10 @@ from unittest.mock import patch, MagicMock
 
 from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from research_index.ingest import (
+    _extract_pdf_markdown,
     _extract_web_figures,
     _get_browser_config,
+    _pdf_image_dir,
     _render_with_browser,
     configure_browser,
     ingest_file,
@@ -1503,6 +1505,7 @@ def test_extract_web_figures_dedup(mock_vision_cfg, mock_vision_call, tmp_path):
     ).fetchone()["cnt"]
     assert total == 1
 
+
 # --- duplicate detection by content hash (issue #59, task 10) ---
 
 
@@ -1529,3 +1532,205 @@ def test_ingest_detects_duplicate_by_hash(tmp_path):
     assert result["chunks_added"] == 0
     assert result["chunks_skipped"] >= 1
     assert result["duplicate_of_paper_id"] is not None
+
+
+# ---------------------------------------------------------------------------
+# PDF markdown extraction tests (Phase 2, issue #60)
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_pymupdf4llm(pages_data):
+    """Create a mock pymupdf4llm module that returns given pages_data."""
+    mock_mod = MagicMock()
+    mock_mod.__version__ = "1.27.2.1"
+    mock_mod.to_markdown.return_value = pages_data
+    return mock_mod
+
+
+_SIMPLE_PAGES = [
+    {
+        "metadata": {"page": 0},
+        "text": "## Introduction\nThis paper presents a novel approach.\n",
+    },
+    {
+        "metadata": {"page": 1},
+        "text": "## Methods\nWe used a transformer architecture.\n",
+    },
+]
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_extract_pdf_markdown_basic(tmp_path):
+    """Mock pymupdf4llm returns structured markdown with page map."""
+    import sys
+
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+
+    mock_mod = _make_mock_pymupdf4llm(_SIMPLE_PAGES)
+    with patch.dict(sys.modules, {"pymupdf4llm": mock_mod}):
+        text, page_map = _extract_pdf_markdown(pdf)
+
+    assert "## Introduction" in text
+    assert "## Methods" in text
+    # page_map should have two entries
+    assert len(page_map) == 2
+    assert 0 in page_map.values()
+    assert 1 in page_map.values()
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_extract_pdf_markdown_with_images(tmp_path):
+    """image_dir is created and passed to to_markdown."""
+    import sys
+
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    image_dir = tmp_path / "images"
+
+    mock_mod = _make_mock_pymupdf4llm(_SIMPLE_PAGES)
+    with patch.dict(sys.modules, {"pymupdf4llm": mock_mod}):
+        text, page_map = _extract_pdf_markdown(pdf, image_dir=image_dir)
+
+    assert image_dir.exists()
+    # Verify to_markdown was called with write_images=True
+    call_kwargs = mock_mod.to_markdown.call_args
+    assert call_kwargs[1]["write_images"] is True
+    assert call_kwargs[1]["image_path"] == str(image_dir)
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_extract_pdf_markdown_fallback_on_import_error(tmp_path):
+    """Falls back to flat extraction when pymupdf4llm is unavailable."""
+    import sys
+
+    pdf = tmp_path / "test.pdf"
+    # Create a minimal valid PDF so fitz.open works
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Hello fallback world")
+    doc.save(str(pdf))
+    doc.close()
+
+    # Remove pymupdf4llm from sys.modules to trigger ImportError
+    saved = sys.modules.pop("pymupdf4llm", None)
+    try:
+        with patch.dict(sys.modules, {"pymupdf4llm": None}):
+            text, page_map = _extract_pdf_markdown(pdf)
+    finally:
+        if saved is not None:
+            sys.modules["pymupdf4llm"] = saved
+
+    assert "Hello fallback world" in text
+    assert page_map == {}
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_ingest_pdf_uses_markdown_chunks(tmp_path):
+    """End-to-end: ingest a PDF → chunks have markdown structure + metadata."""
+    import sys
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+
+    mock_mod = _make_mock_pymupdf4llm(_SIMPLE_PAGES)
+    with patch.dict(sys.modules, {"pymupdf4llm": mock_mod}):
+        result = ingest_file(conn, pdf, source_type="pdf")
+
+    assert result["chunks_added"] >= 1
+
+    rows = conn.execute(
+        "SELECT content, metadata FROM chunks WHERE source_type = 'pdf'"
+    ).fetchall()
+    assert len(rows) >= 1
+    # At least one chunk should start with a heading
+    assert any(r["content"].startswith("##") for r in rows)
+    # Metadata should contain extractor tag
+    for r in rows:
+        meta = json.loads(r["metadata"])
+        assert "extractor" in meta
+        assert meta["extractor"].startswith("pymupdf4llm")
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_reingest_pdf_uses_markdown(tmp_path):
+    """Reingest produces markdown-aware chunks for PDFs."""
+    import sys
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+
+    mock_mod = _make_mock_pymupdf4llm(_SIMPLE_PAGES)
+    with patch.dict(sys.modules, {"pymupdf4llm": mock_mod}):
+        ingest_file(conn, pdf, source_type="pdf")
+        result = reingest_file(conn, pdf)
+
+    assert result["chunks_added"] >= 1
+    assert result["chunks_deleted"] >= 1
+
+    rows = conn.execute(
+        "SELECT metadata FROM chunks WHERE source_type = 'pdf'"
+    ).fetchall()
+    for r in rows:
+        meta = json.loads(r["metadata"])
+        assert "extractor" in meta
+
+
+@patch("research_index.ingest.embed", _fake_embed)
+def test_pdf_chunk_metadata_extractor(tmp_path):
+    """PDF chunk metadata includes extractor version and page numbers."""
+    import sys
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+
+    mock_mod = _make_mock_pymupdf4llm(_SIMPLE_PAGES)
+    with patch.dict(sys.modules, {"pymupdf4llm": mock_mod}):
+        ingest_file(conn, pdf, source_type="pdf")
+
+    rows = conn.execute(
+        "SELECT metadata FROM chunks WHERE source_type = 'pdf'"
+    ).fetchall()
+    assert len(rows) >= 1
+    for r in rows:
+        meta = json.loads(r["metadata"])
+        assert meta["extractor"] == "pymupdf4llm@1.27.2.1"
+        assert "pages" in meta
+        assert isinstance(meta["pages"], list)
+
+
+def test_pdf_image_dir_content_hash(tmp_path):
+    """_pdf_image_dir uses content hash, so different content → different dirs."""
+    pdf_a = tmp_path / "paper.pdf"
+    pdf_a.write_bytes(b"%PDF content A")
+    pdf_b = tmp_path / "paper2.pdf"
+    pdf_b.write_bytes(b"%PDF content B")
+
+    dir_a = _pdf_image_dir(pdf_a)
+    dir_b = _pdf_image_dir(pdf_b)
+    assert dir_a != dir_b
+
+    # Same content, different filename → same hash prefix
+    pdf_c = tmp_path / "copy.pdf"
+    pdf_c.write_bytes(b"%PDF content A")
+    dir_c = _pdf_image_dir(pdf_c)
+    # Hash part should match but stem differs
+    assert dir_a.parent.name != dir_c.parent.name  # different stems
+    # But both contain the same hash substring
+    hash_a = dir_a.parent.name.split("_")[-1]
+    hash_c = dir_c.parent.name.split("_")[-1]
+    assert hash_a == hash_c
