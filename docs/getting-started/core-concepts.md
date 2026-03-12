@@ -103,7 +103,7 @@ Finds conceptually related content even without keyword overlap.
 RRF score is:
 
 ```
-score = sum(1 / (k + rank + 1))  for each list containing the result
+score = sum(1 / (k + rank))  for each list containing the result, rank is 1-based
 ```
 
 where `k = 60` (smoothing constant). The search over-fetches 3x the requested

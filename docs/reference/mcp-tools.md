@@ -20,7 +20,7 @@ Ingest a file or directory into the research index.
 **Returns (file):**
 
 ```json
-{ "chunks_added": 12, "chunks_skipped": 0, "source_uri": "/path/to/file.pdf" }
+{ "file": "/path/to/file.pdf", "chunks_added": 12, "chunks_skipped": 0 }
 ```
 
 **Returns (directory):**
@@ -30,7 +30,9 @@ Ingest a file or directory into the research index.
   "files_processed": 3,
   "chunks_added": 42,
   "chunks_skipped": 0,
-  "details": [{ "chunks_added": 12, "chunks_skipped": 0, "source_uri": "..." }]
+  "details": [
+    { "file": "/path/to/file.pdf", "chunks_added": 12, "chunks_skipped": 0 }
+  ]
 }
 ```
 
@@ -45,13 +47,17 @@ Force re-ingest of a previously ingested file. Deletes old chunks and inserts ne
 | `path`        | `str`         | yes      | --                   | Absolute path to the file to re-ingest                                              |
 | `source_type` | `str \| None` | no       | `None` (auto-detect) | Override auto-detection. One of: `pdf`, `markdown`, `code`, `web`, `note`, `figure` |
 
-**Returns:** Same structure as `ingest` (single file).
+**Returns:**
+
+```json
+{ "file": "/path/to/file.pdf", "chunks_deleted": 8, "chunks_added": 12 }
+```
 
 ### ingest_url
 
 Ingest a web page by URL. Fetches the page, extracts main content, and indexes it.
 
-Uses content-hash dedup -- unchanged pages are skipped on re-ingest. To force re-ingest, use the `reingest` tool with the URL as path.
+Uses content-hash dedup -- unchanged pages are skipped on re-ingest.
 
 | Parameter | Type  | Required | Default | Description                 |
 | --------- | ----- | -------- | ------- | --------------------------- |
@@ -61,13 +67,18 @@ Uses content-hash dedup -- unchanged pages are skipped on re-ingest. To force re
 
 ```json
 {
+  "url": "https://example.com/page",
+  "source_uri": "https://example.com/page",
+  "source_type": "web",
+  "browser_rendered": false,
+  "figures_extracted": 0,
   "chunks_added": 5,
   "chunks_skipped": 0,
-  "source_uri": "https://example.com/page"
+  "title": "Example Page Title"
 }
 ```
 
-Falls back to browser rendering (if configured) when trafilatura extracts insufficient content (< 200 chars).
+Falls back to browser rendering (if configured) when trafilatura extracts insufficient content (< 200 chars). When browser rendering is active, figures may also be extracted from a viewport screenshot.
 
 ---
 

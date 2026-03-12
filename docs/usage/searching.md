@@ -45,7 +45,7 @@ Semantic search only. Embeds the query and finds the nearest neighbors by cosine
 
 ## Reciprocal Rank Fusion (RRF)
 
-RRF merges ranked lists without requiring score normalization. For each result at rank `r`, its RRF contribution is `1 / (k + r + 1)` where `k = 60`. Results appearing in both FTS and vec lists accumulate scores from both, pushing them higher in the merged ranking.
+RRF merges ranked lists without requiring score normalization. For each result at 1-based rank `r`, its RRF contribution is `1 / (k + r)` where `k = 60`. Results appearing in both FTS and vec lists accumulate scores from both, pushing them higher in the merged ranking.
 
 If only one leg returns results (e.g., FTS query syntax error causes FTS to return nothing), the other leg's results are used directly with RRF-style scoring.
 
