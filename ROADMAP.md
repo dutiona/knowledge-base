@@ -2,7 +2,7 @@
 
 > Last updated: 2026-03-12
 
-27 open issues across 6 workstreams. This document establishes priority, ordering,
+29 open issues across 6 workstreams. This document establishes priority, ordering,
 dependency chains, and parallelism opportunities.
 
 ## Issue Index
@@ -25,7 +25,9 @@ dependency chains, and parallelism opportunities.
 | 106 | stage-2 reranking in hybrid search                   | Search      | 2     |
 | 105 | auto-relationship discovery via similarity           | Search      | 2     |
 | 15  | parallelize map phase LLM calls                      | Search      | 2     |
+| 110 | pymupdf4llm Phase 3: narrow vision pipeline scope    | Ingest      | 2     |
 | 82  | extract inline images from web pages                 | Ingest      | 2     |
+| 111 | pymupdf4llm Phase 4: hybrid enrichment               | Ingest      | 3     |
 | 63  | document watch/sync for auto-re-ingestion            | Ingest      | 3     |
 | 64  | workspace/project tagging for chunk isolation        | Ingest      | 3     |
 | 108 | OCR preprocessing for scanned documents              | Ingest      | 4     |
@@ -107,9 +109,10 @@ measured, project renamed.
                     │                        │
                     └── #100 (dual chunking) ┘
 
-#105 (auto-relationships) ─── independent
-#15 (parallel LLM calls) ─── independent
-#82 (web page images)     ─── independent
+#110 (vision Phase 3)        ─── depends on PR #89 (Phase 2)
+#105 (auto-relationships)    ─── independent
+#15 (parallel LLM calls)    ─── independent
+#82 (web page images)        ─── independent
 ```
 
 **Dependency chain:**
@@ -122,10 +125,16 @@ measured, project renamed.
 - **#106 (reranking) depends on #99** — reranking across multiple embedding
   spaces requires the multi-space query layer to exist first.
 
+**pymupdf4llm chain:**
+
+- **#110 (Phase 3)** depends on PR #89 / #88 (Phase 2) from Phase 0. Once Phase
+  2 lands and extracted images are on disk, Phase 3 narrows the vision pipeline
+  to process only those images instead of full-page renders.
+
 **Parallelism:**
 
-- #105 (auto-relationships), #15 (parallel LLM), and #82 (web images) are fully
-  independent of the embedding work and of each other.
+- #105 (auto-relationships), #15 (parallel LLM), #82 (web images), and #110
+  (vision Phase 3) are fully independent of the embedding work and of each other.
 - #99 and #100 can be developed in parallel.
 
 **Exit criteria:** Multiple embedding models coexist, Matryoshka truncation
@@ -141,6 +150,7 @@ works, search quality measurably improves via reranking.
 #102 (hook-based memory integration) ──▶ #103 (wisdom→knowledge)
                                     ──▶ #104 (memory→wisdom)
 
+#111 (vision Phase 4)       ─── depends on #110 (Phase 3)
 #94 (int8/bit quantization) ─── independent (builds on #99)
 #63 (document watch/sync)   ─── independent
 #64 (workspace tagging)     ─── independent
@@ -159,6 +169,11 @@ works, search quality measurably improves via reranking.
 - #94 builds on Phase 2's #99 but is otherwise independent.
 - #63 (watch/sync) and #64 (workspace tagging) are ingest improvements
   independent of the integration work.
+
+**Vision pipeline chain:**
+
+- **#111 (Phase 4)** depends on #110 (Phase 3). Hybrid enrichment combines
+  pymupdf4llm structure + vision LLM semantic descriptions + OmniParser OCR.
 
 **External dependency:** #102, #103, #104 all require `memory-engine` to expose
 an MCP server. If memory-engine isn't ready, these issues are blocked.
@@ -215,7 +230,8 @@ PR #89 ──────┐
 #16 ─────────┘                   │                              #94 (needs #99)      #12
                                  ├─ #105                        #63                  #65
                                  ├─ #15                         #64                  #80
-                                 └─ #82
+                                 ├─ #82                         #111 (needs #110)
+                                 └─ #110 (needs PR #89)
 ```
 
 ---
