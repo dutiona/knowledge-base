@@ -49,7 +49,7 @@ def _batched_execute(
     for i in range(0, len(ids), _SQL_BATCH_SIZE):
         batch = ids[i : i + _SQL_BATCH_SIZE]
         placeholders = ",".join("?" * len(batch))
-        params = (extra_params or []) + batch
+        params = list(extra_params or []) + list(batch)
         conn.execute(sql_template.format(ph=placeholders), params)
 
 
