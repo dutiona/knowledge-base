@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 _CAPTION_RE = re.compile(r"(?:Figure|Fig\.|Table)\s+\d+", re.IGNORECASE)
 
+# Figure chunk_index encoding: 1_000_000 + page_num * FIGS_PER_PAGE + fig_idx
+_FIGURE_BASE = 1_000_000
+_FIGS_PER_PAGE = 100
+
 
 # ---------------------------------------------------------------------------
 # Step 1: Config
@@ -935,7 +939,12 @@ def extract_figures(
         page_params: list[int] = []
         for p in candidate_pages:
             page_clauses.append("(chunk_index >= ? AND chunk_index < ?)")
-            page_params.extend([1_000_000 + p * 100, 1_000_000 + (p + 1) * 100])
+            page_params.extend(
+                [
+                    _FIGURE_BASE + p * _FIGS_PER_PAGE,
+                    _FIGURE_BASE + (p + 1) * _FIGS_PER_PAGE,
+                ]
+            )
         page_filter = f" AND ({' OR '.join(page_clauses)})"
         fig_chunk_subquery = (
             f"(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'"
@@ -989,7 +998,18 @@ def extract_figures(
                 if existing:
                     continue
 
-                chunk_index = 1_000_000 + page_num * 100 + fig_idx
+                if fig_idx >= _FIGS_PER_PAGE:
+                    logger.warning(
+                        "Page %d has %d+ figures; capping chunk_index at %d "
+                        "(fig_idx=%d exceeds slot size %d)",
+                        page_num,
+                        fig_idx + 1,
+                        _FIGS_PER_PAGE - 1,
+                        fig_idx,
+                        _FIGS_PER_PAGE,
+                    )
+                    fig_idx = _FIGS_PER_PAGE - 1
+                chunk_index = _FIGURE_BASE + page_num * _FIGS_PER_PAGE + fig_idx
                 meta_dict = {
                     "page": page_num,
                     "figure_type": figure["figure_type"],
