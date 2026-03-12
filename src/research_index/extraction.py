@@ -930,6 +930,77 @@ def extract_structure(
     return _extract_map_reduce(conn, paper_id, chunks, on_progress=on_progress)
 
 
+def _sanitize_url(url: str) -> str:
+    """Strip query parameters and userinfo from a URL for safe logging."""
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(url)
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.hostname + (f":{parsed.port}" if parsed.port else ""),
+            parsed.path,
+            "",
+            "",
+            "",
+        )
+    )
+
+
+_CONNECTIVITY_TIMEOUT = 3
+
+
+def _test_llm_connectivity(
+    provider: str, base_url: str, api_key: str | None = None
+) -> dict:
+    """Probe LLM endpoint reachability. Returns advisory status, never raises."""
+    safe_url = _sanitize_url(base_url)
+    try:
+        if provider == "ollama":
+            resp = httpx.get(f"{base_url}/api/tags", timeout=_CONNECTIVITY_TIMEOUT)
+            resp.raise_for_status()
+        else:
+            headers: dict[str, str] = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            resp = httpx.get(
+                f"{base_url}/v1/models",
+                headers=headers,
+                timeout=_CONNECTIVITY_TIMEOUT,
+            )
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    # Some providers don't implement /v1/models — fall back
+                    fallback = httpx.get(
+                        f"{base_url}/v1/chat/completions",
+                        headers=headers,
+                        timeout=_CONNECTIVITY_TIMEOUT,
+                    )
+                    # Any non-connection response (even 405) means server is reachable
+                    if fallback.status_code in (401, 403):
+                        raise  # re-raise as auth failure
+                else:
+                    raise
+        return {"reachable": True}
+    except httpx.ConnectError:
+        warning = f"Cannot connect to {safe_url}"
+    except httpx.TimeoutException:
+        warning = f"Connection timed out to {safe_url} ({_CONNECTIVITY_TIMEOUT}s)"
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (401, 403):
+            warning = "Authentication failed \u2014 check api_key"
+        else:
+            warning = f"Server returned HTTP {exc.response.status_code}"
+    except Exception as exc:
+        warning = f"Connectivity test failed: {type(exc).__name__}"
+    logger.warning(
+        "LLM connectivity test failed for %s at %s: %s", provider, safe_url, warning
+    )
+    return {"reachable": False, "warning": warning}
+
+
 def configure_llm(
     conn: sqlite3.Connection,
     provider: str = "ollama",
@@ -981,8 +1052,12 @@ def configure_llm(
         conn.execute("DELETE FROM config WHERE key = 'llm_api_key'")
     conn.commit()
     cfg = _get_llm_config(conn)
+    connectivity = _test_llm_connectivity(
+        cfg["provider"], cfg["base_url"], cfg.get("api_key")
+    )
     # Redact sensitive fields from response
     cfg.pop("api_key", None)
+    cfg.update(connectivity)
     return cfg
 
 
