@@ -117,17 +117,279 @@ def _chunk_text(
     return chunks
 
 
+_HEADING_RE = re.compile(r"^(#{1,6}) ", re.MULTILINE)
+_TABLE_LINE_RE = re.compile(r"^\|.*\|", re.MULTILINE)
+_IMAGE_REF_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+
+
+def _heading_level(section: str) -> int | None:
+    """Return heading level (1-6) of a section's first line, or None."""
+    m = _HEADING_RE.match(section)
+    return len(m.group(1)) if m else None
+
+
+def _pages_for_range(start: int, end: int, page_map: dict[int, int]) -> list[int]:
+    """Look up which pages a char range [start, end) spans."""
+    if not page_map:
+        return []
+    import bisect
+
+    offsets = sorted(page_map.keys())
+    pages: list[int] = []
+    idx = bisect.bisect_right(offsets, start) - 1
+    if idx < 0:
+        idx = 0
+    for i in range(idx, len(offsets)):
+        off = offsets[i]
+        if off >= end:
+            break
+        next_off = offsets[i + 1] if i + 1 < len(offsets) else float("inf")
+        if next_off > start:
+            pages.append(page_map[off])
+    return pages
+
+
+def _sanitize_image_refs(text: str, image_dir: Path | None = None) -> str:
+    """Replace absolute image paths with basenames in ![](…) refs."""
+
+    def _replace(m: re.Match) -> str:
+        alt, path_str = m.group(1), m.group(2)
+        basename = Path(path_str).name
+        if image_dir and not (image_dir / basename).exists():
+            return m.group(0)  # keep original if file not found
+        return f"![{alt}]({basename})"
+
+    return _IMAGE_REF_RE.sub(_replace, text)
+
+
+def _chunk_markdown(
+    text: str,
+    max_chunk_size: int = CHUNK_SIZE,
+    overlap: int = CHUNK_OVERLAP,
+    page_map: dict[int, int] | None = None,
+    image_dir: Path | None = None,
+) -> list[tuple[str, list[int]]]:
+    """Split markdown into chunks respecting structure boundaries.
+
+    Returns list of (chunk_text, page_numbers).
+    """
+    if not text.strip():
+        return []
+
+    # Split on heading boundaries, keeping the heading with its section
+    raw_sections = _HEADING_RE.split(text)
+    # re.split with a group produces: [pre, hashes1, rest1, hashes2, rest2, ...]
+    # Reconstruct sections
+    sections: list[tuple[str, int]] = []  # (section_text, char_offset)
+    offset = 0
+
+    if raw_sections:
+        # First element is text before the first heading (preamble)
+        preamble = raw_sections[0]
+        if preamble.strip():
+            sections.append((preamble, 0))
+        offset = len(preamble)
+
+        # Pairs: (hashes, rest_of_section)
+        i = 1
+        while i < len(raw_sections) - 1:
+            hashes = raw_sections[i]
+            rest = raw_sections[i + 1]
+            section_text = hashes + " " + rest
+            sections.append((section_text, offset))
+            offset += len(section_text)
+            i += 2
+
+    if not sections:
+        # No headings at all — fall back to _chunk_text
+        chunks = _chunk_text(text, max_chunk_size, overlap)
+        pm = page_map or {}
+        return [
+            (_sanitize_image_refs(c, image_dir), _pages_for_range(0, len(text), pm))
+            for c in chunks
+        ]
+
+    # Process sections: handle tables, oversized, and merging
+    result: list[tuple[str, list[int]]] = []
+    merge_buffer = ""
+    merge_offset = 0
+    merge_level: int | None = None
+    pm = page_map or {}
+
+    def _flush_buffer() -> None:
+        nonlocal merge_buffer, merge_offset, merge_level
+        if merge_buffer.strip():
+            sanitized = _sanitize_image_refs(merge_buffer.strip(), image_dir)
+            pages = _pages_for_range(merge_offset, merge_offset + len(merge_buffer), pm)
+            result.append((sanitized, pages))
+        merge_buffer = ""
+        merge_level = None
+
+    for section_text, sec_offset in sections:
+        level = _heading_level(section_text)
+
+        # Check if this section should merge into the buffer
+        if (
+            merge_buffer
+            and len(merge_buffer) + len(section_text) <= max_chunk_size
+            and level is not None
+            and merge_level is not None
+            and level > merge_level  # strictly deeper
+        ):
+            merge_buffer += section_text
+            continue
+
+        # Flush previous buffer if non-empty
+        if merge_buffer:
+            _flush_buffer()
+
+        # Check if section fits in one chunk
+        if len(section_text) <= max_chunk_size:
+            # Start new merge buffer if section is tiny
+            if len(section_text) < max_chunk_size // 4:
+                merge_buffer = section_text
+                merge_offset = sec_offset
+                merge_level = level
+            else:
+                sanitized = _sanitize_image_refs(section_text.strip(), image_dir)
+                pages = _pages_for_range(sec_offset, sec_offset + len(section_text), pm)
+                result.append((sanitized, pages))
+            continue
+
+        # Oversized section — split carefully, preserving document order
+        lines = section_text.split("\n")
+        heading_line = lines[0] if level is not None else ""
+        body_lines = lines[1:] if heading_line else lines
+        sec_pages = _pages_for_range(sec_offset, sec_offset + len(section_text), pm)
+
+        # Walk lines in order, alternating between prose and table segments
+        segments: list[tuple[str, str]] = []  # (type, text)
+        prose_buf: list[str] = []
+        table_buf: list[str] = []
+        in_table = False
+
+        def _flush_prose() -> None:
+            if prose_buf:
+                segments.append(("prose", "\n".join(prose_buf)))
+                prose_buf.clear()
+
+        def _flush_table() -> None:
+            if table_buf:
+                segments.append(("table", "\n".join(table_buf)))
+                table_buf.clear()
+
+        for line in body_lines:
+            if _TABLE_LINE_RE.match(line):
+                if not in_table:
+                    _flush_prose()
+                    in_table = True
+                table_buf.append(line)
+            else:
+                if in_table:
+                    _flush_table()
+                    in_table = False
+                prose_buf.append(line)
+        _flush_prose()
+        _flush_table()
+
+        heading_emitted = False
+        for seg_type, seg_text in segments:
+            if seg_type == "table":
+                table_text = (
+                    f"{heading_line}\n{seg_text}"
+                    if heading_line and not heading_emitted
+                    else seg_text
+                )
+                heading_emitted = True
+                sanitized = _sanitize_image_refs(table_text.strip(), image_dir)
+                result.append((sanitized, sec_pages))
+            else:
+                if not seg_text.strip():
+                    continue
+                sub_chunks = _chunk_text(seg_text, max_chunk_size, overlap)
+                for i_sc, sc in enumerate(sub_chunks):
+                    if i_sc == 0 and heading_line and not heading_emitted:
+                        sc = f"{heading_line}\n{sc}"
+                        heading_emitted = True
+                    sanitized = _sanitize_image_refs(sc.strip(), image_dir)
+                    result.append((sanitized, sec_pages))
+
+    # Flush remaining buffer
+    _flush_buffer()
+
+    return result
+
+
 def _serialize_f32(vec: list[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
 
 
 def _extract_pdf_text(path: Path) -> str:
+    """Flat text extraction — fallback when pymupdf4llm is unavailable."""
     doc = fitz.open(str(path))
     pages = []
     for page in doc:
         pages.append(page.get_text())
     doc.close()
     return "\n\n".join(pages)
+
+
+def _pdf_image_dir(path: Path) -> Path:
+    """Content-hash keyed directory for extracted images."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(8192):
+            h.update(chunk)
+    file_hash = h.hexdigest()[:16]
+    sanitized = re.sub(r"[^\w\-.]", "_", path.stem)[:64]
+    return (
+        Path.home()
+        / ".local"
+        / "share"
+        / "research-index"
+        / "figures"
+        / f"{sanitized}_{file_hash}"
+        / "extracted"
+    )
+
+
+def _extract_pdf_markdown(
+    path: Path, image_dir: Path | None = None
+) -> tuple[str, dict[int, int]]:
+    """Extract structured markdown from a PDF using pymupdf4llm.
+
+    Returns (markdown_text, page_map) where page_map maps char offsets
+    in the returned string to page numbers. Falls back to
+    _extract_pdf_text() on ImportError or RuntimeError.
+    """
+    try:
+        import pymupdf4llm
+    except ImportError:
+        logger.warning("pymupdf4llm not available, falling back to flat extraction")
+        return _extract_pdf_text(path), {}
+    try:
+        if image_dir:
+            image_dir.mkdir(parents=True, exist_ok=True)
+        pages = pymupdf4llm.to_markdown(
+            str(path),
+            write_images=image_dir is not None,
+            image_path=str(image_dir) if image_dir else "",
+            image_format="png",
+            page_chunks=True,
+            force_text=True,
+        )
+        page_map: dict[int, int] = {}
+        offset = 0
+        texts = []
+        for p in pages:
+            page_num = p["metadata"]["page"]
+            page_map[offset] = page_num
+            texts.append(p["text"])
+            offset += len(p["text"]) + 2  # +2 for "\n\n" separator
+        return "\n\n".join(texts), page_map
+    except (RuntimeError, OSError) as exc:
+        logger.warning("pymupdf4llm failed (%s), falling back to flat extraction", exc)
+        return _extract_pdf_text(path), {}
 
 
 def _extract_markdown_text(path: Path) -> str:
@@ -231,9 +493,13 @@ def ingest_file(
         source_type = _detect_source_type(path)
 
     if source_type == "pdf":
-        text = _extract_pdf_text(path)
+        image_dir = _pdf_image_dir(path)
+        if image_dir.exists():
+            shutil.rmtree(image_dir)
+        text, page_map = _extract_pdf_markdown(path, image_dir=image_dir)
     else:
         text = _extract_markdown_text(path)
+        page_map = {}
 
     # Try AST-aware chunking for Python files
     ast_chunks = None
@@ -259,6 +525,38 @@ def ingest_file(
                 "end_line": ac["end_line"],
             }
             new_chunks.append((i, ac["text"], h, json.dumps(meta)))
+    elif source_type == "pdf":
+        # Markdown-aware chunking for PDFs
+        md_chunks = _chunk_markdown(
+            text,
+            page_map=page_map,
+            image_dir=image_dir if page_map else None,
+        )
+        if not md_chunks:
+            return {"file": str(path), "chunks_added": 0, "chunks_skipped": 0}
+        new_chunks = []
+        skipped = 0
+        # Build extractor version string
+        try:
+            import pymupdf4llm
+
+            extractor_tag = f"pymupdf4llm@{pymupdf4llm.__version__}"
+        except (ImportError, AttributeError):
+            extractor_tag = "pymupdf4llm"
+        for i, (chunk_text, chunk_pages) in enumerate(md_chunks):
+            h = _content_hash(chunk_text)
+            existing = conn.execute(
+                "SELECT id FROM chunks WHERE content_hash = ?", (h,)
+            ).fetchone()
+            if existing:
+                skipped += 1
+                continue
+            # Collect verified image basenames from chunk text
+            images = [Path(m.group(2)).name for m in _IMAGE_REF_RE.finditer(chunk_text)]
+            meta = {"extractor": extractor_tag, "pages": chunk_pages}
+            if images:
+                meta["images"] = images
+            new_chunks.append((i, chunk_text, h, json.dumps(meta)))
     else:
         # Fixed-size chunking path
         fixed_chunks = _chunk_text(text)
@@ -415,9 +713,13 @@ def reingest_file(
         source_type = _detect_source_type(path)
 
     if source_type == "pdf":
-        text = _extract_pdf_text(path)
+        image_dir = _pdf_image_dir(path)
+        if image_dir.exists():
+            shutil.rmtree(image_dir)
+        text, page_map = _extract_pdf_markdown(path, image_dir=image_dir)
     else:
         text = _extract_markdown_text(path)
+        page_map = {}
 
     # Try AST-aware chunking for Python files
     ast_chunks = None
@@ -436,6 +738,34 @@ def reingest_file(
                 }
             )
             insert_items.append((i, ac["text"], _content_hash(ac["text"]), meta))
+    elif source_type == "pdf":
+        md_chunks = _chunk_markdown(
+            text,
+            page_map=page_map,
+            image_dir=image_dir if page_map else None,
+        )
+        if not md_chunks:
+            conn.commit()
+            return {
+                "file": source_uri,
+                "chunks_deleted": len(old_ids),
+                "chunks_added": 0,
+            }
+        try:
+            import pymupdf4llm
+
+            extractor_tag = f"pymupdf4llm@{pymupdf4llm.__version__}"
+        except (ImportError, AttributeError):
+            extractor_tag = "pymupdf4llm"
+        insert_items = []
+        for i, (chunk_text, chunk_pages) in enumerate(md_chunks):
+            images = [Path(m.group(2)).name for m in _IMAGE_REF_RE.finditer(chunk_text)]
+            meta: dict = {"extractor": extractor_tag, "pages": chunk_pages}
+            if images:
+                meta["images"] = images
+            insert_items.append(
+                (i, chunk_text, _content_hash(chunk_text), json.dumps(meta))
+            )
     else:
         fixed_chunks = _chunk_text(text)
         if not fixed_chunks:
