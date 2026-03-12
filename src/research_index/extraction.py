@@ -934,17 +934,13 @@ def _sanitize_url(url: str) -> str:
     """Strip query parameters and userinfo from a URL for safe logging."""
     from urllib.parse import urlparse, urlunparse
 
-    parsed = urlparse(url)
-    return urlunparse(
-        (
-            parsed.scheme,
-            parsed.hostname + (f":{parsed.port}" if parsed.port else ""),
-            parsed.path,
-            "",
-            "",
-            "",
-        )
-    )
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or parsed.netloc or url
+        port = f":{parsed.port}" if parsed.port else ""
+        return urlunparse((parsed.scheme, f"{host}{port}", parsed.path, "", "", ""))
+    except Exception:
+        return url
 
 
 _CONNECTIVITY_TIMEOUT = 3
@@ -978,9 +974,13 @@ def _test_llm_connectivity(
                         headers=headers,
                         timeout=_CONNECTIVITY_TIMEOUT,
                     )
-                    # Any non-connection response (even 405) means server is reachable
+                    # Any non-connection response (even 405) means reachable
                     if fallback.status_code in (401, 403):
-                        raise  # re-raise as auth failure
+                        raise httpx.HTTPStatusError(
+                            f"HTTP {fallback.status_code}",
+                            request=fallback.request,
+                            response=fallback,
+                        )
                 else:
                     raise
         return {"reachable": True}

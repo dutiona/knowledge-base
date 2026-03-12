@@ -779,6 +779,50 @@ def test_configure_llm_connectivity_generic_exception(mock_get, tmp_path):
     assert "RuntimeError" in result["warning"]
 
 
+@patch(
+    "research_index.extraction.httpx.get",
+    side_effect=httpx.ConnectError("refused"),
+)
+def test_configure_llm_connectivity_malformed_url(mock_get, tmp_path):
+    """Unusual base_url: _sanitize_url doesn't crash, warning still works."""
+    conn = _setup(tmp_path)
+    # URL with valid scheme (passes validation) but unusual format
+    result = configure_llm(
+        conn, provider="ollama", base_url="http://user:pass@host:11434?token=secret"
+    )
+    assert result["reachable"] is False
+    assert "warning" in result
+    # Verify URL sanitization: no query params or userinfo in warning
+    assert "secret" not in result["warning"]
+    assert "pass" not in result["warning"]
+
+
+def test_configure_llm_connectivity_openai_fallback_auth(tmp_path):
+    """OpenAI 404 on /v1/models + 401 on fallback: warning mentions auth."""
+    call_count = {"n": 0}
+
+    def _mock_get_fallback(*args, **kwargs):
+        call_count["n"] += 1
+        url = args[0]
+        if "/v1/models" in url:
+            # Return 404 response — raise_for_status() will trigger inner handler
+            return httpx.Response(404, request=httpx.Request("GET", url))
+        # fallback /v1/chat/completions returns 401
+        return httpx.Response(401, request=httpx.Request("GET", url))
+
+    conn = _setup(tmp_path)
+    with patch("research_index.extraction.httpx.get", _mock_get_fallback):
+        result = configure_llm(
+            conn,
+            provider="openai_compat",
+            base_url="http://localhost:1234",
+            api_key="sk-bad",
+        )
+    assert result["reachable"] is False
+    assert "auth" in result["warning"].lower() or "Authentication" in result["warning"]
+    assert call_count["n"] == 2  # both endpoints were tried
+
+
 @patch("research_index.ingest.embed", _fake_embed)
 def test_get_entities(tmp_path):
     conn = _setup(tmp_path)
