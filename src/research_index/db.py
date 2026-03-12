@@ -29,6 +29,44 @@ def _relationship_check_constraint() -> str:
     return f"CHECK(relation_type IN ({values}))"
 
 
+# SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999.
+# We use 900 to leave headroom for other parameters in the same statement.
+_SQL_BATCH_SIZE = 900
+
+
+def _batched_execute(
+    conn: sqlite3.Connection,
+    sql_template: str,
+    ids: list,
+    extra_params: list | None = None,
+) -> None:
+    """Execute a SQL statement with an IN clause in batches.
+
+    sql_template must contain a single ``{ph}`` placeholder where the
+    ``IN (?,?,...)`` list will be substituted.  extra_params (if given)
+    are prepended to each batch's parameter list.
+    """
+    for i in range(0, len(ids), _SQL_BATCH_SIZE):
+        batch = ids[i : i + _SQL_BATCH_SIZE]
+        placeholders = ",".join("?" * len(batch))
+        params = (extra_params or []) + batch
+        conn.execute(sql_template.format(ph=placeholders), params)
+
+
+def _batched_select(
+    conn: sqlite3.Connection, sql_template: str, ids: list
+) -> list[sqlite3.Row]:
+    """Execute a SELECT with an IN clause in batches, returning all rows."""
+    results: list[sqlite3.Row] = []
+    for i in range(0, len(ids), _SQL_BATCH_SIZE):
+        batch = ids[i : i + _SQL_BATCH_SIZE]
+        placeholders = ",".join("?" * len(batch))
+        results.extend(
+            conn.execute(sql_template.format(ph=placeholders), batch).fetchall()
+        )
+    return results
+
+
 def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
