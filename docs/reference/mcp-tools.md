@@ -139,7 +139,7 @@ Get index statistics: chunk counts by type, recent ingestions, DB size.
   "embed_config": { "model": "bge-m3", "dim": 1024 },
   "recent_ingestions": [],
   "db_size_mb": 42.5,
-  "db_path": "/home/user/.local/share/knowledge-base/research.db"
+  "db_path": "/home/user/.local/share/knowledge-base/knowledge.db"
 }
 ```
 

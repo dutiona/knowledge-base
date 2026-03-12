@@ -134,7 +134,7 @@ The server uses three mechanisms for thread safety:
 
 ## Design Choices
 
-**Single SQLite file.** The entire index lives in one file (`~/.local/share/knowledge-base/research.db`). Zero configuration, trivially portable, no external database process.
+**Single SQLite file.** The entire index lives in one file (`~/.local/share/knowledge-base/knowledge.db`). Zero configuration, trivially portable, no external database process.
 
 **Content-hash deduplication.** Each chunk is hashed (truncated SHA-256) before insertion. On normal `ingest`, unchanged chunks are skipped. On `reingest`, all old chunks are deleted and replaced regardless of hash -- this is a force operation.
 

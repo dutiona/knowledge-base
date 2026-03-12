@@ -149,7 +149,7 @@ uv run pytest tests/ -q
 
 ## Database
 
-The index is stored at `~/.local/share/knowledge-base/research.db` by default. Tables:
+The index is stored at `~/.local/share/knowledge-base/knowledge.db` by default. Tables:
 
 - `chunks` — document content with content-hash deduplication
 - `chunks_fts` — FTS5 full-text index (auto-synced via triggers)

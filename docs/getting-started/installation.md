@@ -82,7 +82,7 @@ defined in `pyproject.toml` and maps to `knowledge_base.server:main`.
 The SQLite database is created automatically at:
 
 ```
-~/.local/share/knowledge-base/research.db
+~/.local/share/knowledge-base/knowledge.db
 ```
 
 No manual setup required. The schema is initialized on first connection.
