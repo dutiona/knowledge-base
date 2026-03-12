@@ -27,7 +27,7 @@ _CAPTION_RE = re.compile(r"(?:Figure|Fig\.|Table)\s+\d+", re.IGNORECASE)
 
 # Figure chunk_index encoding: 1_000_000 + page_num * FIGS_PER_PAGE + fig_idx
 _FIGURE_BASE = 1_000_000
-_FIGS_PER_PAGE = 100
+_FIGS_PER_PAGE = 1_000
 
 
 # ---------------------------------------------------------------------------
