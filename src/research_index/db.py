@@ -157,13 +157,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
         "SELECT value FROM config WHERE key = 'embed_model'"
     ).fetchone()
     if not existing:
-        conn.execute(
-            "INSERT INTO config (key, value) VALUES ('embed_model', ?)",
-            (DEFAULT_EMBED_MODEL,),
-        )
-        conn.execute(
-            "INSERT INTO config (key, value) VALUES ('embed_dim', ?)",
-            (str(DEFAULT_EMBED_DIM),),
+        conn.executemany(
+            "INSERT INTO config (key, value) VALUES (?, ?)",
+            [
+                ("embed_model", DEFAULT_EMBED_MODEL),
+                ("embed_dim", str(DEFAULT_EMBED_DIM)),
+            ],
         )
         conn.commit()
 
