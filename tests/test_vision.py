@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from research_index.db import get_connection, init_schema, DEFAULT_EMBED_DIM
+from research_index.vision import _FIGURE_BASE, _FIGS_PER_PAGE
 
 
 OLD_SCHEMA_SQL = f"""
@@ -710,7 +711,7 @@ def test_extract_figures_end_to_end(mock_vision, mock_embed, tmp_path):
 
     row = rows[0]
     assert row["source_uri"] == pdf_path
-    assert row["chunk_index"] >= 1_000_000
+    assert row["chunk_index"] >= _FIGURE_BASE
 
     meta = json.loads(row["metadata"])
     assert meta["page"] == 0
@@ -902,7 +903,7 @@ def test_extract_figures_pages_hint(mock_vision, mock_embed, tmp_path):
     row = conn.execute(
         "SELECT chunk_index FROM chunks WHERE source_type = 'figure'"
     ).fetchone()
-    assert row["chunk_index"] == 1_000_000 + 1 * 100 + 0
+    assert row["chunk_index"] == _FIGURE_BASE + 1 * _FIGS_PER_PAGE + 0
 
 
 @patch("research_index.vision._embed_with_config")
@@ -947,8 +948,8 @@ def test_extract_figures_scoped_delete_preserves_other_pages(
         "SELECT chunk_index, content FROM chunks WHERE source_type = 'figure' ORDER BY chunk_index"
     ).fetchall()
     assert len(rows) == 2
-    assert rows[0]["chunk_index"] == 1_000_000 + 0 * 100 + 0  # page 0
-    assert rows[1]["chunk_index"] == 1_000_000 + 2 * 100 + 0  # page 2
+    assert rows[0]["chunk_index"] == _FIGURE_BASE + 0 * _FIGS_PER_PAGE + 0  # page 0
+    assert rows[1]["chunk_index"] == _FIGURE_BASE + 2 * _FIGS_PER_PAGE + 0  # page 2
 
     # Re-extract page 0 with different content — page 2 must survive
     fig_page0_v2 = [
@@ -969,10 +970,58 @@ def test_extract_figures_scoped_delete_preserves_other_pages(
     assert len(rows) == 2, (
         f"Expected 2 figure chunks, got {len(rows)}: page 2 was destroyed"
     )
-    assert rows[0]["chunk_index"] == 1_000_000 + 0 * 100 + 0
+    assert rows[0]["chunk_index"] == _FIGURE_BASE + 0 * _FIGS_PER_PAGE + 0
     assert "v2" in rows[0]["content"]
-    assert rows[1]["chunk_index"] == 1_000_000 + 2 * 100 + 0
+    assert rows[1]["chunk_index"] == _FIGURE_BASE + 2 * _FIGS_PER_PAGE + 0
     assert "page 2" in rows[1]["content"].lower()
+
+
+@patch("research_index.vision._embed_with_config")
+@patch("research_index.vision._vision_call")
+def test_extract_figures_fig_idx_overflow_capped(
+    mock_vision, mock_embed, tmp_path, caplog
+):
+    """fig_idx >= _FIGS_PER_PAGE is capped at _FIGS_PER_PAGE-1 with a warning (#85)."""
+    from research_index.vision import extract_figures
+
+    # Generate more figures than the slot size allows
+    overflow_count = _FIGS_PER_PAGE + 5
+    figures = [
+        {
+            "figure_type": "diagram",
+            "description": f"Figure {i}",
+            "title": f"Fig {i}",
+            "entities_mentioned": [],
+        }
+        for i in range(overflow_count)
+    ]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Dense page"])
+
+    mock_vision.return_value = figures
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM] * overflow_count
+
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="research_index.vision"):
+        extract_figures(conn, paper_id=paper_id, pages=[0])
+
+    # Warning should fire for each overflow figure
+    overflow_warnings = [
+        r for r in caplog.records if "capping chunk_index" in r.message
+    ]
+    assert len(overflow_warnings) == 5
+
+    # All chunk_index values must stay within page 0's slot
+    rows = conn.execute(
+        "SELECT chunk_index FROM chunks WHERE source_type = 'figure' ORDER BY chunk_index"
+    ).fetchall()
+    for row in rows:
+        assert (
+            _FIGURE_BASE + 0 * _FIGS_PER_PAGE
+            <= row["chunk_index"]
+            < _FIGURE_BASE + 1 * _FIGS_PER_PAGE
+        ), f"chunk_index {row['chunk_index']} overflows page 0 slot"
 
 
 @patch("research_index.vision._embed_with_config")
