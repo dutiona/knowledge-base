@@ -382,7 +382,7 @@ def _extract_pdf_markdown(
         offset = 0
         texts = []
         for p in pages:
-            page_num = p["metadata"]["page_number"]
+            page_num = p["metadata"]["page"]
             page_map[offset] = page_num
             texts.append(p["text"])
             offset += len(p["text"]) + 2  # +2 for "\n\n" separator

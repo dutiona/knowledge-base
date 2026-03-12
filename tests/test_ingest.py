@@ -1549,11 +1549,11 @@ def _make_mock_pymupdf4llm(pages_data):
 
 _SIMPLE_PAGES = [
     {
-        "metadata": {"page_number": 1},
+        "metadata": {"page": 1},
         "text": "## Introduction\nThis paper presents a novel approach.\n",
     },
     {
-        "metadata": {"page_number": 2},
+        "metadata": {"page": 2},
         "text": "## Methods\nWe used a transformer architecture.\n",
     },
 ]
