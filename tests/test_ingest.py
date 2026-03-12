@@ -612,7 +612,7 @@ def test_reingest_idempotent_content(tmp_path):
 
 
 @patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.ingest._SQL_BATCH_SIZE", 2)
+@patch("research_index.db._SQL_BATCH_SIZE", 2)
 def test_reingest_batches_in_clauses(tmp_path):
     """reingest_file works when old chunk count exceeds _SQL_BATCH_SIZE.
 

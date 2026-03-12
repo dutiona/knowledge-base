@@ -18,6 +18,7 @@ import fitz  # pymupdf
 import httpx
 import trafilatura
 
+from .db import _batched_execute, _batched_select
 from .embed_swap import get_embed_config
 from .embeddings import embed
 
@@ -27,43 +28,6 @@ CHUNK_SIZE = 1000  # characters
 CHUNK_OVERLAP = 200
 
 _ALLOWED_URL_SCHEMES = {"http", "https"}
-
-# SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999.
-# We use 900 to leave headroom for other parameters in the same statement.
-_SQL_BATCH_SIZE = 900
-
-
-def _batched_execute(
-    conn: sqlite3.Connection,
-    sql_template: str,
-    ids: list,
-    extra_params: list | None = None,
-) -> None:
-    """Execute a SQL statement with an IN clause in batches.
-
-    sql_template must contain a single ``{ph}`` placeholder where the
-    ``IN (?,?,...)`` list will be substituted.  extra_params (if given)
-    are prepended to each batch's parameter list.
-    """
-    for i in range(0, len(ids), _SQL_BATCH_SIZE):
-        batch = ids[i : i + _SQL_BATCH_SIZE]
-        placeholders = ",".join("?" * len(batch))
-        params = (extra_params or []) + batch
-        conn.execute(sql_template.format(ph=placeholders), params)
-
-
-def _batched_select(
-    conn: sqlite3.Connection, sql_template: str, ids: list
-) -> list[sqlite3.Row]:
-    """Execute a SELECT with an IN clause in batches, returning all rows."""
-    results: list[sqlite3.Row] = []
-    for i in range(0, len(ids), _SQL_BATCH_SIZE):
-        batch = ids[i : i + _SQL_BATCH_SIZE]
-        placeholders = ",".join("?" * len(batch))
-        results.extend(
-            conn.execute(sql_template.format(ph=placeholders), batch).fetchall()
-        )
-    return results
 
 
 def _detect_source_type(path: Path) -> str:
@@ -1118,9 +1082,10 @@ def _extract_web_figures(
         ).fetchall()
     ]
     if old_fig_ids:
-        ph = ",".join("?" * len(old_fig_ids))
-        conn.execute(f"DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_fig_ids)
-        conn.execute(f"DELETE FROM chunks WHERE id IN ({ph})", old_fig_ids)
+        _batched_execute(
+            conn, "DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_fig_ids
+        )
+        _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_fig_ids)
 
     figures_added = 0
 
