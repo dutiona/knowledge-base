@@ -19,6 +19,9 @@ wheels/
 .vscode/
 .history/
 
+# Sphinx build output
+docs/_build
+
 # OS
 .DS_Store
 
