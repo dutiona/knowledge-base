@@ -42,26 +42,18 @@ dependency chains, and parallelism opportunities.
 
 ---
 
-## Phase 0 — Finish Pending Work
+## Phase 0 — Finish Pending Work ✔
 
 **Goal:** Land in-flight PRs, fix known bugs, clean up tech debt.
 
-```
-PR #89 (pymupdf4llm Phase 2)  ─── review & merge ──▶  close #88
-#85 (chunk_index overflow)     ─── bugfix
-#78, #46, #45                  ─── small refactors (parallel)
-#16 (LLM connectivity test)   ─── small feature
-```
+**All items complete:**
 
-**All items are independent — can be done in parallel.**
-
-- **PR #89** is the only open PR. Checks pass. Needs review and merge.
-- **#85** is a latent bug in figure chunk encoding — fix before it causes data
-  corruption.
-- **#78, #46, #45** are small SQL refactors. Low risk, mechanical.
-- **#16** is a quality-of-life improvement for LLM configuration.
-
-**Exit criteria:** Zero open PRs, zero known bugs, clean refactor backlog.
+- ~~PR #89~~ merged → closed #88
+- ~~#85~~ fixed (PR #112)
+- ~~#78~~ done (PR #118)
+- ~~#46~~ done (PR #114)
+- ~~#45~~ done (PR #116)
+- ~~#16~~ done (PR #115)
 
 ---
 
@@ -84,7 +76,7 @@ and config — it's a natural point to also update all docs.
 
 1. **#71 first** — Write comprehensive docs against the current codebase. This
    forces a full audit of the API surface, which will surface inconsistencies
-   worth fixing before the rename.
+   worth fixing before the rename. **(in progress)**
 2. **#101 second** — Rename everything in one atomic PR. The docs written in step
    1 get updated as part of the rename.
 
@@ -253,10 +245,4 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 
 ## Quick Wins (< 1 session each)
 
-For when you have 30 minutes and want to make progress:
-
-- **#78** — executemany refactor (mechanical, ~20 lines)
-- **#46** — move SQL helpers (cut-paste + imports)
-- **#45** — .replace() swap (find-replace)
-- **#16** — connectivity test (small function + test)
-- **#85** — chunk_index encoding fix (known scope)
+All previous quick wins have been completed in Phase 0.
