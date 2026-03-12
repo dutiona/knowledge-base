@@ -345,8 +345,9 @@ def _extract_pdf_markdown(
         page_map: dict[int, int] = {}
         offset = 0
         texts = []
-        for p in pages:
-            page_num = p["metadata"]["page"]
+        for pno, p in enumerate(pages):
+            meta = p.get("metadata", {})
+            page_num = meta.get("page_number") or meta.get("page") or pno + 1
             page_map[offset] = page_num
             texts.append(p["text"])
             offset += len(p["text"]) + 2  # +2 for "\n\n" separator
