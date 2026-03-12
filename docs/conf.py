@@ -1,6 +1,6 @@
-"""Sphinx configuration for research-index documentation."""
+"""Sphinx configuration for knowledge-base documentation."""
 
-project = "research-index"
+project = "knowledge-base"
 author = "Michael Roynard"
 release = "0.1.0"
 

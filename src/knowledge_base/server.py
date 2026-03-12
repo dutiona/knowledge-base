@@ -1,4 +1,4 @@
-"""FastMCP server exposing research-index tools."""
+"""FastMCP server exposing knowledge-base tools."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ from .search import search
 from .vision import configure_omniparser, configure_vision, estimate_figures_time
 
 mcp = FastMCP(
-    "research-index",
+    "knowledge-base",
     instructions=(
         "Hybrid semantic search over research papers, code, and notes. "
         "Use 'search' to find relevant content by concept or keyword. "
@@ -109,7 +109,7 @@ def _get_conn():
 
 @mcp.tool()
 def ingest(path: str, source_type: str | None = None) -> str:
-    """Ingest a file or directory into the research index.
+    """Ingest a file or directory into the knowledge base.
 
     Args:
         path: Absolute path to a file or directory.
@@ -179,7 +179,7 @@ def search_index(
     source_type: str | None = None,
     mode: str = "hybrid",
 ) -> str:
-    """Search the research index using hybrid semantic + keyword search.
+    """Search the knowledge base using hybrid semantic + keyword search.
 
     Args:
         query: Natural language search query.

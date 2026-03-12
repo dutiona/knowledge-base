@@ -1,4 +1,4 @@
-# research-index
+# knowledge-base
 
 Hybrid semantic search MCP server for research papers, code, and notes. Ingests documents into a local SQLite database with FTS5 full-text search and sqlite-vec vector similarity, then exposes them as MCP tools for AI assistants.
 
@@ -51,15 +51,15 @@ Hybrid semantic search MCP server for research papers, code, and notes. Ingests 
 ### Install
 
 ```bash
-git clone https://github.com/dutiona/research-index.git
-cd research-index
+git clone https://github.com/dutiona/knowledge-base.git
+cd knowledge-base
 uv sync
 ```
 
 ### Run the server
 
 ```bash
-uv run research-index
+uv run knowledge-base
 ```
 
 Or register as an MCP server in your client's config (e.g. Claude Code `settings.json`):
@@ -67,13 +67,13 @@ Or register as an MCP server in your client's config (e.g. Claude Code `settings
 ```json
 {
   "mcpServers": {
-    "research-index": {
+    "knowledge-base": {
       "command": "uv",
       "args": [
         "run",
         "--directory",
-        "/path/to/research-index",
-        "research-index"
+        "/path/to/knowledge-base",
+        "knowledge-base"
       ]
     }
   }
@@ -149,7 +149,7 @@ uv run pytest tests/ -q
 
 ## Database
 
-The index is stored at `~/.local/share/research-index/research.db` by default. Tables:
+The index is stored at `~/.local/share/knowledge-base/research.db` by default. Tables:
 
 - `chunks` — document content with content-hash deduplication
 - `chunks_fts` — FTS5 full-text index (auto-synced via triggers)

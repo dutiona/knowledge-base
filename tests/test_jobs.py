@@ -6,15 +6,15 @@ from unittest.mock import patch
 
 import pytest
 
-from research_index.db import get_connection, init_schema
-from research_index.jobs import (
+from knowledge_base.db import get_connection, init_schema
+from knowledge_base.jobs import (
     _JobWorker,
     get_job,
     get_worker,
     list_jobs,
     submit_job,
 )
-from research_index.papers import register_paper
+from knowledge_base.papers import register_paper
 
 
 def _setup(tmp_path):
@@ -37,7 +37,7 @@ def _reset_worker():
     """
     worker = get_worker()
     worker.reset()
-    with patch("research_index.jobs._ensure_worker_running"):
+    with patch("knowledge_base.jobs._ensure_worker_running"):
         yield
     worker.reset()
 
@@ -112,7 +112,7 @@ def test_worker_processes_to_completion(tmp_path):
     submit_job(conn, paper_id, "extract_structure")
 
     worker = _JobWorker()
-    with patch("research_index.extraction.extract_structure", return_value=fake_result):
+    with patch("knowledge_base.extraction.extract_structure", return_value=fake_result):
         worker.start(db_path=db_path)
         # Wait for worker to process
         for _ in range(50):
@@ -136,7 +136,7 @@ def test_worker_handles_failure(tmp_path):
 
     worker = _JobWorker()
     with patch(
-        "research_index.extraction.extract_structure",
+        "knowledge_base.extraction.extract_structure",
         side_effect=RuntimeError("LLM down"),
     ):
         worker.start(db_path=db_path)
@@ -168,7 +168,7 @@ def test_progress_callback_updates_row(tmp_path):
     submit_job(conn, paper_id, "extract_structure")
 
     worker = _JobWorker()
-    with patch("research_index.extraction.extract_structure", side_effect=fake_extract):
+    with patch("knowledge_base.extraction.extract_structure", side_effect=fake_extract):
         worker.start(db_path=db_path)
         for _ in range(50):
             time.sleep(0.1)
@@ -200,8 +200,8 @@ def test_sequential_processing(tmp_path):
 
     worker = _JobWorker()
     with (
-        patch("research_index.extraction.extract_structure", side_effect=fake_extract),
-        patch("research_index.vision.extract_figures", side_effect=fake_extract),
+        patch("knowledge_base.extraction.extract_structure", side_effect=fake_extract),
+        patch("knowledge_base.vision.extract_figures", side_effect=fake_extract),
     ):
         worker.start(db_path=db_path)
         for _ in range(100):
@@ -238,7 +238,7 @@ def test_crash_recovery(tmp_path):
     fake_result = {"methods_added": 0}
 
     worker = _JobWorker()
-    with patch("research_index.extraction.extract_structure", return_value=fake_result):
+    with patch("knowledge_base.extraction.extract_structure", return_value=fake_result):
         worker.start(db_path=db_path)
         for _ in range(50):
             time.sleep(0.1)

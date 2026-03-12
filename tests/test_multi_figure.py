@@ -4,8 +4,8 @@ import io
 import pytest
 from PIL import Image
 
-from research_index.db import DEFAULT_EMBED_DIM
-from research_index.vision import (
+from knowledge_base.db import DEFAULT_EMBED_DIM
+from knowledge_base.vision import (
     _cluster_bboxes,
     _crop_regions,
     _elements_in_region,
@@ -227,7 +227,7 @@ class TestMultiFigureIntegration:
     def _db_and_pdf(self, tmp_path):
         """Set up a minimal DB and a 2-page PDF with dummy content."""
         import fitz
-        from research_index.db import get_connection, init_schema
+        from knowledge_base.db import get_connection, init_schema
 
         # Create a simple PDF
         pdf_path = tmp_path / "test.pdf"
@@ -262,7 +262,7 @@ class TestMultiFigureIntegration:
 
     def test_multi_region_sends_multiple_vision_calls(self, _db_and_pdf, monkeypatch):
         """When OmniParser detects 2 regions, vision is called twice (once per crop)."""
-        from research_index import vision
+        from knowledge_base import vision
 
         conn, pdf_path = _db_and_pdf
 
@@ -345,7 +345,7 @@ class TestMultiFigureIntegration:
 
     def test_no_omniparser_falls_back_to_full_page(self, _db_and_pdf, monkeypatch):
         """Without OmniParser, pipeline sends full page (original behavior)."""
-        from research_index import vision
+        from knowledge_base import vision
 
         conn, pdf_path = _db_and_pdf
 
@@ -378,7 +378,7 @@ class TestMultiFigureIntegration:
 
     def test_single_cluster_sends_full_page(self, _db_and_pdf, monkeypatch):
         """When OmniParser finds elements but they form a single cluster, send full page."""
-        from research_index import vision
+        from knowledge_base import vision
 
         conn, pdf_path = _db_and_pdf
 
@@ -423,7 +423,7 @@ class TestMultiFigureIntegration:
 
     def test_omniparser_failure_falls_back(self, _db_and_pdf, monkeypatch):
         """When OmniParser fails (returns None), pipeline falls back to full page."""
-        from research_index import vision
+        from knowledge_base import vision
 
         conn, pdf_path = _db_and_pdf
 

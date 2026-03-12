@@ -5,8 +5,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
-from research_index.ingest import (
+from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.ingest import (
     _extract_pdf_markdown,
     _extract_web_figures,
     _get_browser_config,
@@ -19,15 +19,15 @@ from research_index.ingest import (
     _chunk_text,
     _chunk_python_ast,
 )
-from research_index.papers import (
+from knowledge_base.papers import (
     register_paper,
     get_paper,
     get_paper_paths,
     add_relationship,
     get_relationships,
 )
-from research_index.conclusions import record_conclusion, get_conclusions
-from research_index.extraction import record_method, record_dataset, record_metric
+from knowledge_base.conclusions import record_conclusion, get_conclusions
+from knowledge_base.extraction import record_method, record_dataset, record_metric
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None):
@@ -54,7 +54,7 @@ def test_chunk_text_empty():
     assert _chunk_text("   ") == []
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_markdown_file(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -76,7 +76,7 @@ def test_ingest_markdown_file(tmp_path):
     assert len(rows) >= 1
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_dedup(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -96,7 +96,7 @@ def test_ingest_dedup(tmp_path):
 # --- reingest_file ---
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_updates_paper_paths_hash(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -124,7 +124,7 @@ def test_reingest_updates_paper_paths_hash(tmp_path):
     assert new_hash is not None
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_replaces_chunks(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -156,7 +156,7 @@ def test_reingest_replaces_chunks(tmp_path):
     assert any("reinforcement" in r["content"] for r in rows)
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_updates_fts(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -182,7 +182,7 @@ def test_reingest_updates_fts(tmp_path):
     assert len(new_matches) >= 1
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_cleans_vec_table(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -203,7 +203,7 @@ def test_reingest_cleans_vec_table(tmp_path):
     assert new_vec_count == old_vec_count
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_paper_abstract_chunk(tmp_path):
     """After reingest, abstract_chunk_id should point to the new first chunk."""
     db_path = tmp_path / "test.db"
@@ -239,7 +239,7 @@ def test_reingest_relinks_paper_abstract_chunk(tmp_path):
     assert chunk["chunk_index"] == 0
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_multiple_papers_same_source(tmp_path):
     """Multiple papers linked to same source should all get relinked."""
     db_path = tmp_path / "test.db"
@@ -267,7 +267,7 @@ def test_reingest_relinks_multiple_papers_same_source(tmp_path):
     assert papers_a[0]["abstract_chunk_id"] == papers_b[0]["abstract_chunk_id"]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_does_not_relink_unrelated_papers(tmp_path):
     """Papers linked to a different source should not be affected."""
     db_path = tmp_path / "test.db"
@@ -295,7 +295,7 @@ def test_reingest_does_not_relink_unrelated_papers(tmp_path):
     assert papers_b[0]["abstract_chunk_id"] == old_b_chunk
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_nullifies_relationship_evidence(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -318,7 +318,7 @@ def test_reingest_nullifies_relationship_evidence(tmp_path):
     assert rels[0]["evidence_chunk_id"] is None
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_cleans_conclusion_chunk_refs(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -340,7 +340,7 @@ def test_reingest_cleans_conclusion_chunk_refs(tmp_path):
     assert chunk_id not in conclusions[0]["source_chunk_ids"]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_method_by_name_search(tmp_path):
     """After reingest, method.chunk_id should point to the new chunk containing the method name."""
     db_path = tmp_path / "test.db"
@@ -395,7 +395,7 @@ def test_reingest_relinks_method_by_name_search(tmp_path):
     assert "TransformerXL" in new_chunk["content"]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_dataset_by_name_search(tmp_path):
     """After reingest, dataset.chunk_id should point to the new chunk containing the dataset name."""
     db_path = tmp_path / "test.db"
@@ -435,7 +435,7 @@ def test_reingest_relinks_dataset_by_name_search(tmp_path):
     assert row["chunk_id"] != old_chunk_id
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_metric_by_name_search(tmp_path):
     """After reingest, metric.chunk_id should point to the new chunk containing the metric name."""
     db_path = tmp_path / "test.db"
@@ -475,7 +475,7 @@ def test_reingest_relinks_metric_by_name_search(tmp_path):
     assert row["chunk_id"] != old_chunk_id
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_entity_at_chunk_index_zero(tmp_path):
     """Entities linked to chunk_index=0 should be re-linked to the new first chunk."""
     db_path = tmp_path / "test.db"
@@ -508,7 +508,7 @@ def test_reingest_relinks_entity_at_chunk_index_zero(tmp_path):
     assert row["chunk_id"] != old_chunk_id
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_leaves_null_when_no_name_match(tmp_path):
     """If the entity name doesn't appear in any new chunk, chunk_id stays NULL."""
     db_path = tmp_path / "test.db"
@@ -540,7 +540,7 @@ def test_reingest_leaves_null_when_no_name_match(tmp_path):
     )
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_does_not_relink_unrelated_entities(tmp_path):
     """Entities from other papers should not be affected by reingest."""
     db_path = tmp_path / "test.db"
@@ -576,7 +576,7 @@ def test_reingest_does_not_relink_unrelated_entities(tmp_path):
     assert row["chunk_id"] == old_b_chunk_id, "Unrelated entity should not be affected"
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_nonexistent_source(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -589,7 +589,7 @@ def test_reingest_nonexistent_source(tmp_path):
     assert result["error"] is not None
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_idempotent_content(tmp_path):
     """Reingest same content = delete old + insert new (same result)."""
     db_path = tmp_path / "test.db"
@@ -611,8 +611,8 @@ def test_reingest_idempotent_content(tmp_path):
 # --- reingest batching (issue #40) ---
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.db._SQL_BATCH_SIZE", 2)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.db._SQL_BATCH_SIZE", 2)
 def test_reingest_batches_in_clauses(tmp_path):
     """reingest_file works when old chunk count exceeds _SQL_BATCH_SIZE.
 
@@ -753,8 +753,8 @@ def _mock_httpx_get(url, **kwargs):
     return resp
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.ingest.httpx.get", _mock_httpx_get)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.httpx.get", _mock_httpx_get)
 def test_ingest_url_basic(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -771,8 +771,8 @@ def test_ingest_url_basic(tmp_path):
     assert all(r["source_type"] == "web" for r in rows)
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.ingest.httpx.get", _mock_httpx_get)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.httpx.get", _mock_httpx_get)
 def test_ingest_url_dedup(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -786,8 +786,8 @@ def test_ingest_url_dedup(tmp_path):
     assert r2["chunks_skipped"] >= 1
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.ingest.httpx.get", _mock_httpx_get)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.httpx.get", _mock_httpx_get)
 def test_ingest_url_stores_title_in_metadata(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -800,7 +800,7 @@ def test_ingest_url_stores_title_in_metadata(tmp_path):
     assert "title" in meta
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_url_http_error(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -811,7 +811,7 @@ def test_ingest_url_http_error(tmp_path):
 
         raise httpx.HTTPError("Connection refused")
 
-    with patch("research_index.ingest.httpx.get", _mock_get_error):
+    with patch("knowledge_base.ingest.httpx.get", _mock_get_error):
         result = ingest_url(conn, "https://example.com/down")
     assert "error" in result
 
@@ -828,7 +828,7 @@ def test_ingest_url_rejects_non_http_schemes(tmp_path):
     assert "error" in result
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_url_no_content(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -841,7 +841,7 @@ def test_ingest_url_no_content(tmp_path):
         resp.raise_for_status = MagicMock()
         return resp
 
-    with patch("research_index.ingest.httpx.get", _mock_get_empty):
+    with patch("knowledge_base.ingest.httpx.get", _mock_get_empty):
         result = ingest_url(conn, "https://example.com/empty")
     assert result["chunks_added"] == 0
 
@@ -915,7 +915,7 @@ def test_chunk_python_ast_module_level():
     assert "CONSTANT = 42" in module_chunk["text"]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_python_file_uses_ast(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -966,7 +966,7 @@ def _create_entity_with_mention(conn, paper_id, canonical_name, chunk_id, surfac
     return entity_id
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_deletes_entity_mentions(tmp_path):
     """reingest_file must delete entity_mentions referencing old chunks."""
     db_path = tmp_path / "test.db"
@@ -996,7 +996,7 @@ def test_reingest_deletes_entity_mentions(tmp_path):
     assert remaining == 0
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_preserves_unrelated_entity_mentions(tmp_path):
     """reingest_file must not delete entity_mentions for other source files."""
     db_path = tmp_path / "test.db"
@@ -1165,7 +1165,7 @@ def _make_fake_venv(base: Path) -> Path:
     return venv
 
 
-@patch("research_index.ingest.subprocess.run")
+@patch("knowledge_base.ingest.subprocess.run")
 def test_render_with_browser_success(mock_run, tmp_path):
     """Successful render returns html and screenshot_path."""
     venv = _make_fake_venv(tmp_path)
@@ -1193,7 +1193,7 @@ def test_render_with_browser_success(mock_run, tmp_path):
     shutil.rmtree(result["tmpdir"], ignore_errors=True)
 
 
-@patch("research_index.ingest.subprocess.run")
+@patch("knowledge_base.ingest.subprocess.run")
 def test_render_with_browser_timeout(mock_run, tmp_path):
     """TimeoutExpired returns None and cleans tmpdir."""
     venv = _make_fake_venv(tmp_path)
@@ -1204,7 +1204,7 @@ def test_render_with_browser_timeout(mock_run, tmp_path):
     assert result is None
 
 
-@patch("research_index.ingest.subprocess.run")
+@patch("knowledge_base.ingest.subprocess.run")
 def test_render_with_browser_subprocess_error(mock_run, tmp_path):
     """CalledProcessError returns None."""
     venv = _make_fake_venv(tmp_path)
@@ -1215,7 +1215,7 @@ def test_render_with_browser_subprocess_error(mock_run, tmp_path):
     assert result is None
 
 
-@patch("research_index.ingest.subprocess.run")
+@patch("knowledge_base.ingest.subprocess.run")
 def test_render_with_browser_cdp_mode_args(mock_run, tmp_path):
     """CDP mode includes --cdp flag in subprocess command."""
     venv = _make_fake_venv(tmp_path)
@@ -1280,9 +1280,9 @@ def _mock_httpx_js_only(url, **kwargs):
     return resp
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.ingest.httpx.get", _mock_httpx_js_only)
-@patch("research_index.ingest._render_with_browser")
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.httpx.get", _mock_httpx_js_only)
+@patch("knowledge_base.ingest._render_with_browser")
 def test_ingest_url_browser_rendered(mock_render, tmp_path):
     """Browser fallback fires and produces chunks when trafilatura fails."""
     conn = get_connection(tmp_path / "test.db")
@@ -1307,8 +1307,8 @@ def test_ingest_url_browser_rendered(mock_render, tmp_path):
     assert result["browser_rendered"] is True
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.ingest.httpx.get", _mock_httpx_js_only)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.httpx.get", _mock_httpx_js_only)
 def test_ingest_url_no_browser_configured(tmp_path):
     """No browser config → 0 chunks, browser_rendered False."""
     conn = get_connection(tmp_path / "test.db")
@@ -1319,9 +1319,9 @@ def test_ingest_url_no_browser_configured(tmp_path):
     assert result["browser_rendered"] is False
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.ingest.httpx.get", _mock_httpx_js_only)
-@patch("research_index.ingest._render_with_browser")
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.httpx.get", _mock_httpx_js_only)
+@patch("knowledge_base.ingest._render_with_browser")
 def test_ingest_url_browser_fallback_also_empty(mock_render, tmp_path):
     """Browser renders but trafilatura still extracts nothing → 0 chunks."""
     conn = get_connection(tmp_path / "test.db")
@@ -1344,9 +1344,9 @@ def test_ingest_url_browser_fallback_also_empty(mock_render, tmp_path):
     assert result["chunks_added"] == 0
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.ingest.httpx.get", _mock_httpx_get)
-@patch("research_index.ingest._render_with_browser")
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.httpx.get", _mock_httpx_get)
+@patch("knowledge_base.ingest._render_with_browser")
 def test_ingest_url_no_fallback_when_trafilatura_succeeds(mock_render, tmp_path):
     """When trafilatura extracts >= 200 chars, browser fallback is not called."""
     conn = get_connection(tmp_path / "test.db")
@@ -1358,9 +1358,9 @@ def test_ingest_url_no_fallback_when_trafilatura_succeeds(mock_render, tmp_path)
     mock_render.assert_not_called()
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.ingest.httpx.get", _mock_httpx_js_only)
-@patch("research_index.ingest._render_with_browser")
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.httpx.get", _mock_httpx_js_only)
+@patch("knowledge_base.ingest._render_with_browser")
 def test_ingest_url_browser_fallback_near_empty(mock_render, tmp_path):
     """Trafilatura < 200 chars, browser renders better content → fallback used."""
     conn = get_connection(tmp_path / "test.db")
@@ -1384,9 +1384,9 @@ def test_ingest_url_browser_fallback_near_empty(mock_render, tmp_path):
     assert result["chunks_added"] >= 1
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.ingest.httpx.get", _mock_httpx_js_only)
-@patch("research_index.ingest._render_with_browser")
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.httpx.get", _mock_httpx_js_only)
+@patch("knowledge_base.ingest._render_with_browser")
 def test_ingest_url_browser_fallback_tmpdir_cleanup(mock_render, tmp_path):
     """Tmpdir is cleaned up after browser fallback (both success and exception)."""
     conn = get_connection(tmp_path / "test.db")
@@ -1415,9 +1415,9 @@ def test_ingest_url_browser_fallback_tmpdir_cleanup(mock_render, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.vision._vision_call")
-@patch("research_index.vision._get_vision_config")
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
 def test_extract_web_figures_success(mock_vision_cfg, mock_vision_call, tmp_path):
     """Extracts a figure chunk from a screenshot via vision pipeline."""
     conn = get_connection(tmp_path / "test.db")
@@ -1453,8 +1453,8 @@ def test_extract_web_figures_success(mock_vision_cfg, mock_vision_call, tmp_path
     assert meta["figure_type"] == "chart"
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.vision._get_vision_config")
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._get_vision_config")
 def test_extract_web_figures_no_vision_config(mock_vision_cfg, tmp_path):
     """Returns 0 when vision is not configured."""
     conn = get_connection(tmp_path / "test.db")
@@ -1469,9 +1469,9 @@ def test_extract_web_figures_no_vision_config(mock_vision_cfg, tmp_path):
     assert count == 0
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.vision._vision_call")
-@patch("research_index.vision._get_vision_config")
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
 def test_extract_web_figures_dedup(mock_vision_cfg, mock_vision_call, tmp_path):
     """Does not duplicate figure chunks on re-ingest."""
     conn = get_connection(tmp_path / "test.db")
@@ -1509,7 +1509,7 @@ def test_extract_web_figures_dedup(mock_vision_cfg, mock_vision_call, tmp_path):
 # --- duplicate detection by content hash (issue #59, task 10) ---
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_detects_duplicate_by_hash(tmp_path):
     """If a file with same content hash exists under a different path, return info."""
     db_path = tmp_path / "test.db"
@@ -1559,7 +1559,7 @@ _SIMPLE_PAGES = [
 ]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_pdf_markdown_basic(tmp_path):
     """Mock pymupdf4llm returns structured markdown with page map."""
     import sys
@@ -1579,7 +1579,7 @@ def test_extract_pdf_markdown_basic(tmp_path):
     assert 2 in page_map.values()
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_pdf_markdown_with_images(tmp_path):
     """image_dir is created and passed to to_markdown."""
     import sys
@@ -1599,7 +1599,7 @@ def test_extract_pdf_markdown_with_images(tmp_path):
     assert call_kwargs[1]["image_path"] == str(image_dir)
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_pdf_markdown_fallback_on_import_error(tmp_path):
     """Falls back to flat extraction when pymupdf4llm is unavailable."""
     import sys
@@ -1627,7 +1627,7 @@ def test_extract_pdf_markdown_fallback_on_import_error(tmp_path):
     assert page_map == {}
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_pdf_uses_markdown_chunks(tmp_path):
     """End-to-end: ingest a PDF → chunks have markdown structure + metadata."""
     import sys
@@ -1658,7 +1658,7 @@ def test_ingest_pdf_uses_markdown_chunks(tmp_path):
         assert meta["extractor"].startswith("pymupdf4llm")
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_pdf_uses_markdown(tmp_path):
     """Reingest produces markdown-aware chunks for PDFs."""
     import sys
@@ -1686,7 +1686,7 @@ def test_reingest_pdf_uses_markdown(tmp_path):
         assert "extractor" in meta
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_pdf_chunk_metadata_extractor(tmp_path):
     """PDF chunk metadata includes extractor version and page numbers."""
     import sys

@@ -68,17 +68,17 @@ dependency chains, and parallelism opportunities.
 ```
 
 **Sequential dependency:** Documentation should be written first, then the rename
-applied. Writing docs for `research_index` and immediately renaming to
+applied. Writing docs for `knowledge_base` and immediately renaming to
 `knowledge_base` doubles the work. But the rename touches every import, test,
 and config — it's a natural point to also update all docs.
 
 **Recommended order:**
 
-1. **#71 first** — Write comprehensive docs against the current codebase. This
+1. ~~**#71 first**~~ — Write comprehensive docs against the current codebase. This
    forces a full audit of the API surface, which will surface inconsistencies
-   worth fixing before the rename. **(in progress)**
+   worth fixing before the rename. **(done — PR #120, partial: docs workstream only)**
 2. **#101 second** — Rename everything in one atomic PR. The docs written in step
-   1 get updated as part of the rename.
+   1 get updated as part of the rename. **(in progress)**
 
 **Why documentation before features:** Every subsequent phase adds complexity.
 Documenting the current state creates a baseline that makes future changes

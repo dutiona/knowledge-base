@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Set up Sphinx + MyST documentation infrastructure and write all core documentation pages for the research-index project (partial implementation of issue #71 — documentation workstream only). Also update ROADMAP.md to mark Phase 0 complete. This PR does NOT close #71; follow-up PRs for typing and API reference are required before #71 can be closed and Phase 1 exit criteria met.
+**Goal:** Set up Sphinx + MyST documentation infrastructure and write all core documentation pages for the knowledge-base project (partial implementation of issue #71 — documentation workstream only). Also update ROADMAP.md to mark Phase 0 complete. This PR does NOT close #71; follow-up PRs for typing and API reference are required before #71 can be closed and Phase 1 exit criteria met.
 
 **Architecture:** Sphinx with MyST-Parser for markdown-native docs. Auto-build validates all pages compile. No deployment — just the content + config. Each doc page is a standalone MyST markdown file organized by audience (getting-started, usage, design, reference).
 
@@ -64,7 +64,7 @@ docs = [
 
 - [ ] **Step 2: Install docs deps and verify**
 
-Run: `cd /home/mroynard/dev/research-index/.worktrees/docs-71 && uv sync --group docs`
+Run: `cd /home/mroynard/dev/knowledge-base/.worktrees/docs-71 && uv sync --group docs`
 Expected: Dependencies install successfully
 
 - [ ] **Step 3: Commit**
@@ -83,9 +83,9 @@ git commit -m "docs: add Sphinx + MyST documentation dependencies"
 - [ ] **Step 1: Write docs/conf.py**
 
 ```python
-"""Sphinx configuration for research-index documentation."""
+"""Sphinx configuration for knowledge-base documentation."""
 
-project = "research-index"
+project = "knowledge-base"
 author = "Michael Roynard"
 release = "0.1.0"
 
@@ -123,7 +123,7 @@ Key decisions:
 
 - [ ] **Step 2: Verify Sphinx can find the config**
 
-Run: `cd /home/mroynard/dev/research-index/.worktrees/docs-71 && uv run --group docs sphinx-build -b html docs docs/_build 2>&1 | tail -5`
+Run: `cd /home/mroynard/dev/knowledge-base/.worktrees/docs-71 && uv run --group docs sphinx-build -b html docs docs/_build 2>&1 | tail -5`
 Expected: Build completes (warnings about missing index.md are OK at this stage)
 
 ### Task 3: Create docs landing page
@@ -136,12 +136,12 @@ Expected: Build completes (warnings about missing index.md are OK at this stage)
 
 The landing page should:
 
-- State what research-index is (one paragraph)
+- State what knowledge-base is (one paragraph)
 - Link to getting-started, usage, design, and reference sections
 - Use a MyST toctree directive to organize navigation
 
 ````markdown
-# research-index
+# knowledge-base
 
 Hybrid semantic search MCP server for research papers, code, and notes. Ingests
 documents into a local SQLite database with FTS5 full-text search and sqlite-vec
@@ -249,7 +249,7 @@ mkdir -p docs/getting-started docs/usage docs/design docs/reference
 
 - [ ] **Step 2: Verify Sphinx builds with index.md**
 
-Run: `cd /home/mroynard/dev/research-index/.worktrees/docs-71 && uv run --group docs sphinx-build -b html docs docs/_build 2>&1 | tail -10`
+Run: `cd /home/mroynard/dev/knowledge-base/.worktrees/docs-71 && uv run --group docs sphinx-build -b html docs docs/_build 2>&1 | tail -10`
 Expected: Build runs (warnings about missing referenced files are expected — we'll create them next)
 
 - [ ] **Step 3: Add \_build to .gitignore if not already present**
@@ -286,8 +286,8 @@ Must cover:
   - WSL2 note: Ollama runs on Windows host, accessed via `OLLAMA_HOST`
 - **Clone + install:**
   ```bash
-  git clone https://github.com/dutiona/research-index.git
-  cd research-index
+  git clone https://github.com/dutiona/knowledge-base.git
+  cd knowledge-base
   uv sync
   ```
 - **MCP client registration:** JSON config snippet for Claude Code
@@ -675,7 +675,7 @@ git commit -m "docs: add usage guides and architecture overview"
 
 - [ ] **Step 1: Run full Sphinx build**
 
-Run: `cd /home/mroynard/dev/research-index/.worktrees/docs-71 && uv run --group docs sphinx-build -W -b html docs docs/_build 2>&1 | tail -20`
+Run: `cd /home/mroynard/dev/knowledge-base/.worktrees/docs-71 && uv run --group docs sphinx-build -W -b html docs docs/_build 2>&1 | tail -20`
 
 The `-W` flag treats warnings as errors. Fix any broken cross-references or toctree issues.
 
@@ -683,7 +683,7 @@ Expected: Clean build with 0 warnings.
 
 - [ ] **Step 2: Run existing tests to confirm no regressions**
 
-Run: `cd /home/mroynard/dev/research-index/.worktrees/docs-71 && PYTHONPATH=src pytest tests/ -q --tb=short 2>&1 | tail -5`
+Run: `cd /home/mroynard/dev/knowledge-base/.worktrees/docs-71 && PYTHONPATH=src pytest tests/ -q --tb=short 2>&1 | tail -5`
 
 Expected: All tests pass (223+ tests). No regressions from docs-only changes.
 

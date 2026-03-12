@@ -310,7 +310,7 @@ def _pdf_image_dir(path: Path) -> Path:
         Path.home()
         / ".local"
         / "share"
-        / "research-index"
+        / "knowledge-base"
         / "figures"
         / f"{sanitized}_{file_hash}"
         / "extracted"

@@ -407,7 +407,7 @@ def _generate_bibtex(
     key = _unique_bibtex_key(paper["authors"], paper["year"], used_keys)
     lines = []
     if paper_id is not None:
-        lines.append(f"% research-index-id: {paper_id}")
+        lines.append(f"% knowledge-base-id: {paper_id}")
     lines.append(f"@article{{{key},")
     lines.append(f"  title = {{{paper['title']}}},")
     if paper["authors"]:
@@ -521,7 +521,7 @@ def sync_bibtex(
         else:
             # Idempotency: skip if this paper's ID marker is in the file
             paper_id = row["id"]
-            if f"% research-index-id: {paper_id}" in existing_text:
+            if f"% knowledge-base-id: {paper_id}" in existing_text:
                 skipped += 1
                 continue
             paper = {
