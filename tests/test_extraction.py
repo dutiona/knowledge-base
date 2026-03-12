@@ -4,6 +4,8 @@ import json
 import logging
 from unittest.mock import patch
 
+import httpx
+
 from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 import pytest
 
@@ -43,6 +45,19 @@ def _setup(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
     return conn
+
+
+def _mock_get_ok(*args, **kwargs):
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {}
+
+    return FakeResp()
 
 
 # --- record_method / get_methods ---
@@ -572,6 +587,7 @@ def test_extract_structure_map_reduce_confirmed(tmp_path):
     assert result["methods_added"] >= 1
 
 
+@patch("research_index.extraction.httpx.get", _mock_get_ok)
 def test_configure_llm(tmp_path):
     conn = _setup(tmp_path)
 
@@ -592,6 +608,7 @@ def test_configure_llm(tmp_path):
     assert cfg["api_key"] == "sk-test-123"  # But stored correctly
 
 
+@patch("research_index.extraction.httpx.get", _mock_get_ok)
 def test_configure_llm_switch_to_ollama_clears_stale(tmp_path):
     """Switching from openai_compat to ollama clears stale base_url and api_key."""
     conn = _setup(tmp_path)
@@ -616,6 +633,7 @@ def test_configure_llm_switch_to_ollama_clears_stale(tmp_path):
     assert cfg["base_url"] != "http://192.168.1.41:1234"
 
 
+@patch("research_index.extraction.httpx.get", _mock_get_ok)
 def test_configure_llm_remote_ollama_preserves_base_url(tmp_path):
     """Explicitly setting base_url for ollama (remote) is preserved."""
     conn = _setup(tmp_path)
@@ -628,6 +646,181 @@ def test_configure_llm_remote_ollama_preserves_base_url(tmp_path):
     cfg = _get_llm_config(conn)
     assert cfg["provider"] == "ollama"
     assert cfg["base_url"] == "http://remote-ollama:11434"
+
+
+# --- configure_llm connectivity tests ---
+
+
+@patch("research_index.extraction.httpx.get", _mock_get_ok)
+def test_configure_llm_connectivity_ollama_reachable(tmp_path):
+    """Ollama reachable: reachable=True, no warning."""
+    conn = _setup(tmp_path)
+    result = configure_llm(conn, provider="ollama", base_url="http://localhost:11434")
+    assert result["reachable"] is True
+    assert "warning" not in result
+
+
+@patch(
+    "research_index.extraction.httpx.get",
+    side_effect=httpx.ConnectError("Connection refused"),
+)
+def test_configure_llm_connectivity_ollama_unreachable(mock_get, tmp_path):
+    """Ollama unreachable: reachable=False, warning present, config still saved."""
+    conn = _setup(tmp_path)
+    result = configure_llm(conn, provider="ollama", base_url="http://localhost:11434")
+    assert result["reachable"] is False
+    assert "warning" in result
+    assert "Cannot connect" in result["warning"]
+    # Config must still be persisted
+    cfg = _get_llm_config(conn)
+    assert cfg["provider"] == "ollama"
+    assert cfg["base_url"] == "http://localhost:11434"
+
+
+@patch("research_index.extraction.httpx.get", _mock_get_ok)
+@patch(
+    "research_index.extraction._get_ollama_url",
+    return_value="http://auto-detected:11434",
+)
+def test_configure_llm_connectivity_ollama_default_url(mock_url, tmp_path):
+    """No base_url param: probe uses auto-detected Ollama URL."""
+    conn = _setup(tmp_path)
+    result = configure_llm(conn, provider="ollama", model="qwen3.5:27b")
+    assert result["reachable"] is True
+    assert result["base_url"] == "http://auto-detected:11434"
+
+
+def test_configure_llm_connectivity_openai_reachable(tmp_path):
+    """OpenAI-compat reachable: reachable=True, auth header sent."""
+    captured_headers = {}
+
+    def _mock_get_capture(*args, **kwargs):
+        captured_headers.update(kwargs.get("headers", {}))
+
+        class FakeResp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+        return FakeResp()
+
+    conn = _setup(tmp_path)
+    with patch("research_index.extraction.httpx.get", _mock_get_capture):
+        result = configure_llm(
+            conn,
+            provider="openai_compat",
+            base_url="http://localhost:1234",
+            api_key="sk-test",
+        )
+    assert result["reachable"] is True
+    assert captured_headers.get("Authorization") == "Bearer sk-test"
+
+
+def test_configure_llm_connectivity_openai_auth_failure(tmp_path):
+    """OpenAI-compat 401: reachable=False, warning mentions auth."""
+
+    def _mock_get_401(*args, **kwargs):
+        resp = httpx.Response(401, request=httpx.Request("GET", args[0]))
+        raise httpx.HTTPStatusError("401", request=resp.request, response=resp)
+
+    conn = _setup(tmp_path)
+    with patch("research_index.extraction.httpx.get", _mock_get_401):
+        result = configure_llm(
+            conn,
+            provider="openai_compat",
+            base_url="http://localhost:1234",
+            api_key="sk-bad",
+        )
+    assert result["reachable"] is False
+    assert "auth" in result["warning"].lower() or "Authentication" in result["warning"]
+
+
+@patch(
+    "research_index.extraction.httpx.get",
+    side_effect=httpx.ReadTimeout("timed out"),
+)
+def test_configure_llm_connectivity_timeout(mock_get, tmp_path):
+    """Timeout: reachable=False, warning mentions timeout."""
+    conn = _setup(tmp_path)
+    result = configure_llm(conn, provider="ollama", base_url="http://localhost:11434")
+    assert result["reachable"] is False
+    assert (
+        "timed out" in result["warning"].lower()
+        or "timeout" in result["warning"].lower()
+    )
+
+
+def test_configure_llm_connectivity_server_error(tmp_path):
+    """Server 500: reachable=False, warning mentions HTTP status."""
+
+    def _mock_get_500(*args, **kwargs):
+        resp = httpx.Response(500, request=httpx.Request("GET", args[0]))
+        raise httpx.HTTPStatusError("500", request=resp.request, response=resp)
+
+    conn = _setup(tmp_path)
+    with patch("research_index.extraction.httpx.get", _mock_get_500):
+        result = configure_llm(
+            conn, provider="ollama", base_url="http://localhost:11434"
+        )
+    assert result["reachable"] is False
+    assert "500" in result["warning"]
+
+
+@patch(
+    "research_index.extraction.httpx.get",
+    side_effect=RuntimeError("unexpected"),
+)
+def test_configure_llm_connectivity_generic_exception(mock_get, tmp_path):
+    """Generic exception: reachable=False, warning present, no exception escapes."""
+    conn = _setup(tmp_path)
+    result = configure_llm(conn, provider="ollama", base_url="http://localhost:11434")
+    assert result["reachable"] is False
+    assert "RuntimeError" in result["warning"]
+
+
+@patch(
+    "research_index.extraction.httpx.get",
+    side_effect=httpx.ConnectError("refused"),
+)
+def test_configure_llm_connectivity_malformed_url(mock_get, tmp_path):
+    """Unusual base_url: _sanitize_url doesn't crash, warning still works."""
+    conn = _setup(tmp_path)
+    # URL with valid scheme (passes validation) but unusual format
+    result = configure_llm(
+        conn, provider="ollama", base_url="http://user:pass@host:11434?token=secret"
+    )
+    assert result["reachable"] is False
+    assert "warning" in result
+    # Verify URL sanitization: no query params or userinfo in warning
+    assert "secret" not in result["warning"]
+    assert "pass" not in result["warning"]
+
+
+def test_configure_llm_connectivity_openai_fallback_auth(tmp_path):
+    """OpenAI 404 on /v1/models + 401 on fallback: warning mentions auth."""
+    call_count = {"n": 0}
+
+    def _mock_get_fallback(*args, **kwargs):
+        call_count["n"] += 1
+        url = args[0]
+        if "/v1/models" in url:
+            # Return 404 response — raise_for_status() will trigger inner handler
+            return httpx.Response(404, request=httpx.Request("GET", url))
+        # fallback /v1/chat/completions returns 401
+        return httpx.Response(401, request=httpx.Request("GET", url))
+
+    conn = _setup(tmp_path)
+    with patch("research_index.extraction.httpx.get", _mock_get_fallback):
+        result = configure_llm(
+            conn,
+            provider="openai_compat",
+            base_url="http://localhost:1234",
+            api_key="sk-bad",
+        )
+    assert result["reachable"] is False
+    assert "auth" in result["warning"].lower() or "Authentication" in result["warning"]
+    assert call_count["n"] == 2  # both endpoints were tried
 
 
 @patch("research_index.ingest.embed", _fake_embed)
@@ -786,6 +979,7 @@ def test_llm_call_ollama_sends_system_directive(tmp_path):
     assert "JSON" in captured["system"]
 
 
+@patch("research_index.extraction.httpx.get", _mock_get_ok)
 def test_llm_call_openai_sends_system_message(tmp_path):
     """_llm_call sends system message for openai_compat provider."""
     conn = _setup(tmp_path)
