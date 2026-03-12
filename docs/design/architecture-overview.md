@@ -2,7 +2,7 @@
 
 ## High-Level Architecture
 
-```mermaid
+```{mermaid}
 graph LR
     Client["MCP Client<br/>(Claude, IDE)"] -->|stdio| Server["FastMCP Server<br/>server.py"]
     Server --> Ingest["ingest.py"]
@@ -62,7 +62,7 @@ graph LR
 
 ### Ingestion
 
-```mermaid
+```{mermaid}
 flowchart TD
     Input["File / URL / Directory"] --> Detect{"Detect type"}
     Detect -->|PDF| PyMuPDF4LLM["pymupdf4llm<br/>header-aware markdown"]
@@ -89,7 +89,7 @@ flowchart TD
 
 ### Search
 
-```mermaid
+```{mermaid}
 flowchart TD
     Query["Query string"] --> Mode{"Mode?"}
 
@@ -107,7 +107,7 @@ flowchart TD
 
 ### Structured Extraction
 
-```mermaid
+```{mermaid}
 flowchart TD
     Paper["paper_id"] --> Chunks["Fetch paper chunks<br/>via paper_paths"]
     Chunks --> Size{"Total chars<br/>> 8000?"}
