@@ -77,8 +77,8 @@ and config — it's a natural point to also update all docs.
 1. ~~**#71 first**~~ — Write comprehensive docs against the current codebase. This
    forces a full audit of the API surface, which will surface inconsistencies
    worth fixing before the rename. **(done — PR #120, partial: docs workstream only)**
-2. **#101 second** — Rename everything in one atomic PR. The docs written in step
-   1 get updated as part of the rename. **(in progress)**
+2. ~~**#101 second**~~ — Rename everything in one atomic PR. The docs written in step
+   1 get updated as part of the rename. **(done — PR #123, squash merged)**
 
 **Why documentation before features:** Every subsequent phase adds complexity.
 Documenting the current state creates a baseline that makes future changes
