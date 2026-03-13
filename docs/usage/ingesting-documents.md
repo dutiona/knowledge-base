@@ -8,7 +8,7 @@ Use the `ingest` tool with a path to a PDF file. PDFs are processed through pymu
 { "name": "ingest", "arguments": { "path": "/home/user/papers/attention.pdf" } }
 ```
 
-Page numbers are tracked per chunk and stored in chunk metadata. Extracted images are saved to `~/.local/share/research-index/figures/<stem>_<hash>/extracted/`.
+Page numbers are tracked per chunk and stored in chunk metadata. Extracted images are saved to `~/.local/share/knowledge-base/figures/<stem>_<hash>/extracted/`.
 
 If pymupdf4llm is not installed, ingestion falls back to flat text extraction via PyMuPDF (`fitz`), which loses structural information.
 

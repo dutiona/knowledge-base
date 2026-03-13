@@ -4,8 +4,8 @@ import pytest
 import sqlite3
 from pathlib import Path
 
-from research_index.db import get_connection, init_schema, DEFAULT_EMBED_DIM
-from research_index.vision import _FIGURE_BASE, _FIGS_PER_PAGE
+from knowledge_base.db import get_connection, init_schema, DEFAULT_EMBED_DIM
+from knowledge_base.vision import _FIGURE_BASE, _FIGS_PER_PAGE
 
 
 OLD_SCHEMA_SQL = f"""
@@ -224,7 +224,7 @@ def test_migration_preserves_existing_data(tmp_path):
 
 def test_get_vision_config_defaults(tmp_path):
     """Defaults returned when no vision config rows exist."""
-    from research_index.vision import _get_vision_config
+    from knowledge_base.vision import _get_vision_config
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -248,7 +248,7 @@ def test_get_vision_config_defaults(tmp_path):
     ],
 )
 def test_get_vision_config_strips_v1(tmp_path, input_url, expected):
-    from research_index.vision import _get_vision_config
+    from knowledge_base.vision import _get_vision_config
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -264,7 +264,7 @@ def test_get_vision_config_strips_v1(tmp_path, input_url, expected):
 
 def test_configure_vision_roundtrip(tmp_path):
     """Set values, read them back."""
-    from research_index.vision import _get_vision_config, configure_vision
+    from knowledge_base.vision import _get_vision_config, configure_vision
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -288,7 +288,7 @@ def test_configure_vision_roundtrip(tmp_path):
 
 def test_validate_figure_valid():
     """Full valid input passes through."""
-    from research_index.vision import _validate_figure
+    from knowledge_base.vision import _validate_figure
 
     obj = {
         "figure_type": "diagram",
@@ -306,7 +306,7 @@ def test_validate_figure_valid():
 
 def test_validate_figure_coerces_optionals():
     """Missing title/entities get defaults."""
-    from research_index.vision import _validate_figure
+    from knowledge_base.vision import _validate_figure
 
     obj = {"figure_type": "chart", "description": "Loss curves"}
     result = _validate_figure(obj)
@@ -317,7 +317,7 @@ def test_validate_figure_coerces_optionals():
 
 def test_validate_figure_rejects_empty_description():
     """Empty description returns None."""
-    from research_index.vision import _validate_figure
+    from knowledge_base.vision import _validate_figure
 
     result = _validate_figure({"figure_type": "chart", "description": ""})
     assert result is None
@@ -325,7 +325,7 @@ def test_validate_figure_rejects_empty_description():
 
 def test_validate_figure_rejects_missing_type():
     """Missing figure_type returns None."""
-    from research_index.vision import _validate_figure
+    from knowledge_base.vision import _validate_figure
 
     result = _validate_figure({"description": "something"})
     assert result is None
@@ -352,7 +352,7 @@ def _make_test_pdf(path, pages_text: list[str]) -> str:
 
 def test_render_page_valid_png(tmp_path):
     """Render page 0 and check PNG header."""
-    from research_index.vision import _render_page
+    from knowledge_base.vision import _render_page
 
     pdf_path = _make_test_pdf(tmp_path / "test.pdf", ["Hello World"])
     png_bytes = _render_page(pdf_path, 0)
@@ -361,7 +361,7 @@ def test_render_page_valid_png(tmp_path):
 
 def test_render_page_out_of_range(tmp_path):
     """Out-of-range page raises IndexError."""
-    from research_index.vision import _render_page
+    from knowledge_base.vision import _render_page
 
     pdf_path = _make_test_pdf(tmp_path / "test.pdf", ["Only page"])
     with pytest.raises(IndexError):
@@ -375,7 +375,7 @@ def test_render_page_out_of_range(tmp_path):
 
 def test_heuristic_filter_caption_cues(tmp_path):
     """Page with 'Figure 1: Test' is selected, plain text pages are not."""
-    from research_index.vision import _heuristic_filter
+    from knowledge_base.vision import _heuristic_filter
 
     pdf_path = _make_test_pdf(
         tmp_path / "test.pdf",
@@ -389,7 +389,7 @@ def test_heuristic_filter_caption_cues(tmp_path):
 
 def test_heuristic_filter_fallback_all_pages(tmp_path):
     """All-text PDF with no signals returns all pages."""
-    from research_index.vision import _heuristic_filter
+    from knowledge_base.vision import _heuristic_filter
 
     pdf_path = _make_test_pdf(
         tmp_path / "test.pdf",
@@ -406,7 +406,7 @@ def test_heuristic_filter_fallback_all_pages(tmp_path):
 
 def test_get_paper_source_uri_found(tmp_path):
     """Paper with abstract_chunk_id resolves to source_uri."""
-    from research_index.vision import _get_paper_source_uri
+    from knowledge_base.vision import _get_paper_source_uri
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -434,7 +434,7 @@ def test_get_paper_source_uri_found(tmp_path):
 
 def test_get_paper_source_uri_not_found(tmp_path):
     """Paper without abstract_chunk_id returns None."""
-    from research_index.vision import _get_paper_source_uri
+    from knowledge_base.vision import _get_paper_source_uri
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -471,7 +471,7 @@ def _mock_httpx_response(content: str, status_code: int = 200) -> MagicMock:
 
 def test_vision_call_parses_valid_response():
     """Valid JSON array response is parsed and validated."""
-    from research_index.vision import _vision_call
+    from knowledge_base.vision import _vision_call
 
     figures = [
         {
@@ -483,7 +483,7 @@ def test_vision_call_parses_valid_response():
     ]
     mock_resp = _mock_httpx_response(json.dumps(figures))
 
-    with patch("research_index.vision.httpx.post", return_value=mock_resp) as mock_post:
+    with patch("knowledge_base.vision.httpx.post", return_value=mock_resp) as mock_post:
         result = _vision_call(
             "base64data",
             "prompt",
@@ -507,7 +507,7 @@ def test_vision_call_parses_valid_response():
 
 def test_vision_call_strips_markdown_fences():
     """Response wrapped in ```json ... ``` is parsed correctly."""
-    from research_index.vision import _vision_call
+    from knowledge_base.vision import _vision_call
 
     figures = [
         {
@@ -520,7 +520,7 @@ def test_vision_call_strips_markdown_fences():
     content = f"```json\n{json.dumps(figures)}\n```"
     mock_resp = _mock_httpx_response(content)
 
-    with patch("research_index.vision.httpx.post", return_value=mock_resp):
+    with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
         result = _vision_call(
             "base64data", "prompt", base_url="http://localhost:11434", model="test"
         )
@@ -531,7 +531,7 @@ def test_vision_call_strips_markdown_fences():
 
 def test_vision_call_filters_invalid_figures():
     """Mix of valid and invalid objects: only valid ones returned."""
-    from research_index.vision import _vision_call
+    from knowledge_base.vision import _vision_call
 
     figures = [
         {"figure_type": "diagram", "description": "Valid figure"},
@@ -541,7 +541,7 @@ def test_vision_call_filters_invalid_figures():
     ]
     mock_resp = _mock_httpx_response(json.dumps(figures))
 
-    with patch("research_index.vision.httpx.post", return_value=mock_resp):
+    with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
         result = _vision_call(
             "base64data", "prompt", base_url="http://localhost:11434", model="test"
         )
@@ -553,13 +553,13 @@ def test_vision_call_filters_invalid_figures():
 
 def test_vision_call_unwraps_dict_wrapper():
     """Response as {"figures": [...]} is unwrapped."""
-    from research_index.vision import _vision_call
+    from knowledge_base.vision import _vision_call
 
     figures = [{"figure_type": "photo", "description": "A photograph"}]
     wrapper = {"figures": figures}
     mock_resp = _mock_httpx_response(json.dumps(wrapper))
 
-    with patch("research_index.vision.httpx.post", return_value=mock_resp):
+    with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
         result = _vision_call(
             "base64data", "prompt", base_url="http://localhost:11434", model="test"
         )
@@ -570,14 +570,14 @@ def test_vision_call_unwraps_dict_wrapper():
 
 def test_vision_call_malformed_response():
     """Malformed API response (missing choices key) raises ValueError."""
-    from research_index.vision import _vision_call
+    from knowledge_base.vision import _vision_call
 
     resp = MagicMock()
     resp.status_code = 200
     resp.json.return_value = {"error": "something went wrong"}
     resp.raise_for_status = MagicMock()
 
-    with patch("research_index.vision.httpx.post", return_value=resp):
+    with patch("knowledge_base.vision.httpx.post", return_value=resp):
         with pytest.raises(ValueError, match="Malformed vision API response"):
             _vision_call(
                 "base64data",
@@ -589,7 +589,7 @@ def test_vision_call_malformed_response():
 
 def test_vision_call_skips_non_dict_items():
     """Non-dict items in the response list are silently skipped."""
-    from research_index.vision import _vision_call
+    from knowledge_base.vision import _vision_call
 
     mixed = [
         {"figure_type": "diagram", "description": "Valid figure"},
@@ -600,7 +600,7 @@ def test_vision_call_skips_non_dict_items():
     ]
     mock_resp = _mock_httpx_response(json.dumps(mixed))
 
-    with patch("research_index.vision.httpx.post", return_value=mock_resp):
+    with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
         result = _vision_call(
             "base64data", "prompt", base_url="http://localhost:11434", model="test"
         )
@@ -652,7 +652,7 @@ def _setup_paper_with_pdf(tmp_path, pages_text: list[str] | None = None):
 
 def test_extract_figures_paper_not_found(tmp_path):
     """Nonexistent paper_id returns error dict."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -665,7 +665,7 @@ def test_extract_figures_paper_not_found(tmp_path):
 
 def test_extract_figures_eta_gate(tmp_path):
     """Many candidate pages + not confirmed returns confirm_required."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     # Create a PDF with 50 pages — all will be candidates (fallback: all pages)
     pages_text = [f"Page {i}" for i in range(50)]
@@ -677,11 +677,11 @@ def test_extract_figures_eta_gate(tmp_path):
     assert result["candidate_pages"] == 50
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_end_to_end(mock_vision, mock_embed, tmp_path):
     """Full run: mock vision + embed, verify chunks created correctly."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     mock_figures = [
         {
@@ -727,11 +727,11 @@ def test_extract_figures_end_to_end(mock_vision, mock_embed, tmp_path):
     assert len(vec_rows) == 1
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_idempotent(mock_vision, mock_embed, tmp_path):
     """Running twice replaces old chunks, no duplicates."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     mock_figures = [
         {
@@ -778,14 +778,14 @@ def test_extract_figures_idempotent(mock_vision, mock_embed, tmp_path):
     assert "v2" in row["content"]
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_idempotent_with_fk_references(
     mock_vision, mock_embed, tmp_path
 ):
     """Re-extracting figures when entity_mentions/methods/datasets reference
     figure chunk IDs must not raise FOREIGN KEY constraint error (#53)."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     mock_figures = [
         {
@@ -873,11 +873,11 @@ def test_extract_figures_idempotent_with_fk_references(
     assert dataset["chunk_id"] is None
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_pages_hint(mock_vision, mock_embed, tmp_path):
     """Passing specific pages processes only those pages."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     mock_vision.return_value = [
         {
@@ -906,13 +906,13 @@ def test_extract_figures_pages_hint(mock_vision, mock_embed, tmp_path):
     assert row["chunk_index"] == _FIGURE_BASE + 1 * _FIGS_PER_PAGE + 0
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_scoped_delete_preserves_other_pages(
     mock_vision, mock_embed, tmp_path
 ):
     """Re-extracting a subset of pages must NOT delete figures from other pages (#79)."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     fig_page0 = [
         {
@@ -976,13 +976,13 @@ def test_extract_figures_scoped_delete_preserves_other_pages(
     assert "page 2" in rows[1]["content"].lower()
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_fig_idx_overflow_capped(
     mock_vision, mock_embed, tmp_path, caplog
 ):
     """fig_idx >= _FIGS_PER_PAGE is capped at _FIGS_PER_PAGE-1 with a warning (#85)."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     # Generate more figures than the slot size allows
     overflow_count = _FIGS_PER_PAGE + 5
@@ -1003,7 +1003,7 @@ def test_extract_figures_fig_idx_overflow_capped(
 
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="research_index.vision"):
+    with caplog.at_level(logging.WARNING, logger="knowledge_base.vision"):
         extract_figures(conn, paper_id=paper_id, pages=[0])
 
     # Warning should fire for each overflow figure
@@ -1024,11 +1024,11 @@ def test_extract_figures_fig_idx_overflow_capped(
         ), f"chunk_index {row['chunk_index']} overflows page 0 slot"
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_full_extraction_deletes_all(mock_vision, mock_embed, tmp_path):
     """Full extraction (pages=None) should delete all figure chunks (original behavior)."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     fig = [
         {
@@ -1066,7 +1066,7 @@ def test_extract_figures_full_extraction_deletes_all(mock_vision, mock_embed, tm
 
 def test_extract_figures_empty_pages_is_noop(tmp_path):
     """pages=[] should return immediately without deleting anything (#79)."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0"])
 
@@ -1091,11 +1091,11 @@ def test_extract_figures_empty_pages_is_noop(tmp_path):
     )
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_per_page_error(mock_vision, mock_embed, tmp_path):
     """One page fails, others succeed."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     def side_effect(b64, prompt, *, base_url, model):
         # We can't easily tell which page from b64, so fail on second call
@@ -1132,7 +1132,7 @@ def test_extract_figures_per_page_error(mock_vision, mock_embed, tmp_path):
 
 def test_extract_figures_page_out_of_range(tmp_path):
     """Passing a 0-indexed page >= total_pages returns error dict."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0 text", "Page 1 text"])
 
@@ -1154,15 +1154,15 @@ def test_extract_figures_zero_indexed_boundary(tmp_path):
     MCP pages=[1] -> internal pages=[0] (valid for any document).
     MCP pages=[N+1] where N=total_pages -> internal pages=[N] (out of range).
     """
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     # 3-page document: valid 0-indexed pages are 0, 1, 2
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0", "Page 1", "Page 2"])
 
     # Page 2 (0-indexed, last page) should NOT error
     # It will fail at vision call (no mock), but should not return page-range error
-    with patch("research_index.vision._vision_call", return_value=[]):
-        with patch("research_index.vision._embed_with_config", return_value=[]):
+    with patch("knowledge_base.vision._vision_call", return_value=[]):
+        with patch("knowledge_base.vision._embed_with_config", return_value=[]):
             result = extract_figures(conn, paper_id=paper_id, pages=[2])
     assert "error" not in result
 
@@ -1177,11 +1177,11 @@ def test_extract_figures_zero_indexed_boundary(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path):
     """If _serialize_f32 fails mid-insert, the transaction is rolled back."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     mock_vision.return_value = [
         {
@@ -1203,7 +1203,7 @@ def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path)
 
     call_count = 0
     original_serialize = __import__(
-        "research_index.vision", fromlist=["_serialize_f32"]
+        "knowledge_base.vision", fromlist=["_serialize_f32"]
     )._serialize_f32
 
     def failing_serialize(vec):
@@ -1213,7 +1213,7 @@ def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path)
             raise RuntimeError("Simulated serialization failure")
         return original_serialize(vec)
 
-    with patch("research_index.vision._serialize_f32", side_effect=failing_serialize):
+    with patch("knowledge_base.vision._serialize_f32", side_effect=failing_serialize):
         with pytest.raises(RuntimeError, match="Simulated serialization failure"):
             extract_figures(conn, paper_id=paper_id, pages=[0])
 
@@ -1232,12 +1232,12 @@ def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path)
 # ---------------------------------------------------------------------------
 
 
-@patch("research_index.server.submit_job")
-@patch("research_index.server.estimate_figures_time")
-@patch("research_index.server._get_conn")
+@patch("knowledge_base.server.submit_job")
+@patch("knowledge_base.server.estimate_figures_time")
+@patch("knowledge_base.server._get_conn")
 def test_mcp_tool_page_conversion(mock_get_conn, mock_eft, mock_submit):
     """extract_figures_tool converts 1-based pages to 0-based and submits a job."""
-    from research_index.server import extract_figures_tool
+    from knowledge_base.server import extract_figures_tool
 
     mock_get_conn.return_value = MagicMock()
     mock_eft.return_value = {
@@ -1262,10 +1262,10 @@ def test_mcp_tool_page_conversion(mock_get_conn, mock_eft, mock_submit):
     assert submit_args[0][3] == {"pages": [0, 4, 9]}
 
 
-@patch("research_index.server._get_conn")
+@patch("knowledge_base.server._get_conn")
 def test_mcp_tool_rejects_zero_and_negative_pages(mock_get_conn):
     """extract_figures_tool rejects pages <= 0."""
-    from research_index.server import extract_figures_tool
+    from knowledge_base.server import extract_figures_tool
 
     mock_get_conn.return_value = MagicMock()
 
@@ -1285,7 +1285,7 @@ def test_mcp_tool_rejects_zero_and_negative_pages(mock_get_conn):
 
 def test_get_omniparser_config_default(tmp_path):
     """Returns None when no omniparser_path is configured."""
-    from research_index.vision import _get_omniparser_config
+    from knowledge_base.vision import _get_omniparser_config
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -1296,7 +1296,7 @@ def test_get_omniparser_config_default(tmp_path):
 
 def test_configure_omniparser_valid(tmp_path):
     """Set a valid path, read it back."""
-    from research_index.vision import _get_omniparser_config, configure_omniparser
+    from knowledge_base.vision import _get_omniparser_config, configure_omniparser
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -1320,7 +1320,7 @@ def test_configure_omniparser_valid(tmp_path):
 
 def test_configure_omniparser_invalid_path(tmp_path):
     """Rejects nonexistent path."""
-    from research_index.vision import configure_omniparser
+    from knowledge_base.vision import configure_omniparser
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -1332,7 +1332,7 @@ def test_configure_omniparser_invalid_path(tmp_path):
 
 def test_configure_omniparser_disable(tmp_path):
     """Empty string clears the config."""
-    from research_index.vision import _get_omniparser_config, configure_omniparser
+    from knowledge_base.vision import _get_omniparser_config, configure_omniparser
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -1363,7 +1363,7 @@ import subprocess
 
 def test_run_omniparser_success(tmp_path):
     """Mock subprocess returns valid JSON; verify parsed output."""
-    from research_index.vision import _run_omniparser
+    from knowledge_base.vision import _run_omniparser
 
     omni_elements = {
         "elements": [
@@ -1389,7 +1389,7 @@ def test_run_omniparser_success(tmp_path):
         Path(json_path).write_text(json.dumps(omni_elements))
         return subprocess.CompletedProcess(cmd, 0)
 
-    with patch("research_index.vision.subprocess.run", side_effect=fake_run):
+    with patch("knowledge_base.vision.subprocess.run", side_effect=fake_run):
         result = _run_omniparser(png_path, str(tmp_path))
 
     assert result is not None
@@ -1399,10 +1399,10 @@ def test_run_omniparser_success(tmp_path):
 
 def test_run_omniparser_timeout():
     """TimeoutExpired returns None."""
-    from research_index.vision import _run_omniparser
+    from knowledge_base.vision import _run_omniparser
 
     with patch(
-        "research_index.vision.subprocess.run",
+        "knowledge_base.vision.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="test", timeout=120),
     ):
         result = _run_omniparser(Path("/fake.png"), "/fake/omniparser")
@@ -1412,10 +1412,10 @@ def test_run_omniparser_timeout():
 
 def test_run_omniparser_subprocess_error():
     """CalledProcessError returns None."""
-    from research_index.vision import _run_omniparser
+    from knowledge_base.vision import _run_omniparser
 
     with patch(
-        "research_index.vision.subprocess.run",
+        "knowledge_base.vision.subprocess.run",
         side_effect=subprocess.CalledProcessError(1, cmd="test"),
     ):
         result = _run_omniparser(Path("/fake.png"), "/fake/omniparser")
@@ -1425,14 +1425,14 @@ def test_run_omniparser_subprocess_error():
 
 def test_run_omniparser_malformed_json(tmp_path):
     """Valid subprocess but invalid JSON output returns None."""
-    from research_index.vision import _run_omniparser
+    from knowledge_base.vision import _run_omniparser
 
     def fake_run(cmd, **kwargs):
         json_path = cmd[cmd.index("-j") + 1]
         Path(json_path).write_text("not valid json {{{")
         return subprocess.CompletedProcess(cmd, 0)
 
-    with patch("research_index.vision.subprocess.run", side_effect=fake_run):
+    with patch("knowledge_base.vision.subprocess.run", side_effect=fake_run):
         result = _run_omniparser(Path("/fake.png"), str(tmp_path))
 
     assert result is None
@@ -1445,7 +1445,7 @@ def test_run_omniparser_malformed_json(tmp_path):
 
 def test_merge_omniparser_elements_text_and_icons():
     """Both text and icon elements are appended to description."""
-    from research_index.vision import _merge_omniparser_elements
+    from knowledge_base.vision import _merge_omniparser_elements
 
     figure = {"figure_type": "chart", "description": "A bar chart"}
     elements = [
@@ -1463,7 +1463,7 @@ def test_merge_omniparser_elements_text_and_icons():
 
 def test_merge_omniparser_elements_text_only():
     """Only text elements present."""
-    from research_index.vision import _merge_omniparser_elements
+    from knowledge_base.vision import _merge_omniparser_elements
 
     figure = {"figure_type": "table", "description": "Results table"}
     elements = [
@@ -1478,7 +1478,7 @@ def test_merge_omniparser_elements_text_only():
 
 def test_merge_omniparser_elements_empty():
     """No elements — description unchanged, same dict returned."""
-    from research_index.vision import _merge_omniparser_elements
+    from knowledge_base.vision import _merge_omniparser_elements
 
     figure = {"figure_type": "diagram", "description": "Original"}
     result = _merge_omniparser_elements(figure, [])
@@ -1487,7 +1487,7 @@ def test_merge_omniparser_elements_empty():
 
 def test_merge_omniparser_elements_empty_content():
     """Elements with null/empty/short content are skipped."""
-    from research_index.vision import _merge_omniparser_elements
+    from knowledge_base.vision import _merge_omniparser_elements
 
     figure = {"figure_type": "chart", "description": "Original"}
     elements = [
@@ -1503,7 +1503,7 @@ def test_merge_omniparser_elements_empty_content():
 
 def test_merge_omniparser_elements_dedup():
     """Duplicate content strings are deduplicated (case-insensitive)."""
-    from research_index.vision import _merge_omniparser_elements
+    from knowledge_base.vision import _merge_omniparser_elements
 
     figure = {"figure_type": "chart", "description": "Chart"}
     elements = [
@@ -1522,7 +1522,7 @@ def test_merge_omniparser_elements_dedup():
 
 def test_merge_omniparser_elements_size_cap():
     """Total appended text is capped at 500 chars."""
-    from research_index.vision import _merge_omniparser_elements
+    from knowledge_base.vision import _merge_omniparser_elements
 
     figure = {"figure_type": "chart", "description": "Chart"}
     # 100 elements with 10-char content = 1000+ chars without cap
@@ -1566,14 +1566,14 @@ _OMNI_ELEMENTS = {
 }
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
-@patch("research_index.vision._run_omniparser")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._run_omniparser")
 def test_extract_figures_with_omniparser_single_figure(
     mock_omni, mock_vision, mock_embed, tmp_path
 ):
     """Single figure on page: omniparser elements merged into description."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     mock_vision.return_value = [
         {
@@ -1616,14 +1616,14 @@ def test_extract_figures_with_omniparser_single_figure(
     assert "data point" in row["content"]
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
-@patch("research_index.vision._run_omniparser")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._run_omniparser")
 def test_extract_figures_with_omniparser_multi_figure(
     mock_omni, mock_vision, mock_embed, tmp_path
 ):
     """Multiple figures on page: omniparser stored in metadata only, not in description."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     mock_vision.return_value = [
         {
@@ -1668,14 +1668,14 @@ def test_extract_figures_with_omniparser_multi_figure(
         assert len(meta["omniparser_elements"]) == 2
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
-@patch("research_index.vision._run_omniparser")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._run_omniparser")
 def test_extract_figures_omniparser_failure_graceful(
     mock_omni, mock_vision, mock_embed, tmp_path
 ):
     """Omniparser fails: figures still created with LLM-only description."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     mock_vision.return_value = [
         {
@@ -1706,11 +1706,11 @@ def test_extract_figures_omniparser_failure_graceful(
     assert row["content"] == "Original caption only"
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_without_omniparser(mock_vision, mock_embed, tmp_path):
     """Omniparser not configured: no subprocess calls, identical behavior."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     mock_vision.return_value = [
         {
@@ -1742,11 +1742,11 @@ def test_extract_figures_without_omniparser(mock_vision, mock_embed, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_returns_timing(mock_vision, mock_embed, tmp_path):
     """extract_figures result includes timing dict with expected keys."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     mock_vision.return_value = [
         {
@@ -1773,11 +1773,11 @@ def test_extract_figures_returns_timing(mock_vision, mock_embed, tmp_path):
     assert timing["total_secs"] >= timing["vision_secs"]
 
 
-@patch("research_index.vision._embed_with_config")
-@patch("research_index.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_timing_with_omniparser(mock_vision, mock_embed, tmp_path):
     """Timing dict includes non-zero omniparser_secs when omniparser is active."""
-    from research_index.vision import extract_figures
+    from knowledge_base.vision import extract_figures
 
     mock_vision.return_value = [
         {
@@ -1806,7 +1806,7 @@ def test_extract_figures_timing_with_omniparser(mock_vision, mock_embed, tmp_pat
     conn.commit()
 
     # Mock _run_omniparser to return elements (avoid subprocess)
-    with patch("research_index.vision._run_omniparser") as mock_omni:
+    with patch("knowledge_base.vision._run_omniparser") as mock_omni:
         mock_omni.return_value = {
             "elements": [{"type": "text", "content": "axis label"}]
         }
@@ -1818,7 +1818,7 @@ def test_extract_figures_timing_with_omniparser(mock_vision, mock_embed, tmp_pat
 
 def test_vision_call_logs_timing(caplog):
     """_vision_call logs elapsed time at INFO level."""
-    from research_index.vision import _vision_call
+    from knowledge_base.vision import _vision_call
 
     mock_response = {
         "choices": [
@@ -1839,14 +1839,14 @@ def test_vision_call_logs_timing(caplog):
         ]
     }
 
-    with patch("research_index.vision.httpx.post") as mock_post:
+    with patch("knowledge_base.vision.httpx.post") as mock_post:
         mock_resp = mock_post.return_value
         mock_resp.raise_for_status = lambda: None
         mock_resp.json.return_value = mock_response
 
         import logging
 
-        with caplog.at_level(logging.INFO, logger="research_index.vision"):
+        with caplog.at_level(logging.INFO, logger="knowledge_base.vision"):
             _vision_call(
                 "fakebase64", "prompt", base_url="http://localhost", model="test"
             )
@@ -1856,7 +1856,7 @@ def test_vision_call_logs_timing(caplog):
 
 def test_vision_call_warns_on_slow_response(caplog):
     """_vision_call emits WARNING when elapsed exceeds drift threshold."""
-    from research_index.vision import (
+    from knowledge_base.vision import (
         _ETA_SECS_PER_PAGE_BASE,
         _TIMING_DRIFT_FACTOR,
         _vision_call,
@@ -1892,8 +1892,8 @@ def test_vision_call_warns_on_slow_response(caplog):
         return 0.0 if call_count % 2 == 1 else slow_duration
 
     with (
-        patch("research_index.vision.httpx.post") as mock_post,
-        patch("research_index.vision.time.monotonic", side_effect=fake_monotonic),
+        patch("knowledge_base.vision.httpx.post") as mock_post,
+        patch("knowledge_base.vision.time.monotonic", side_effect=fake_monotonic),
     ):
         mock_resp = mock_post.return_value
         mock_resp.raise_for_status = lambda: None
@@ -1901,7 +1901,7 @@ def test_vision_call_warns_on_slow_response(caplog):
 
         import logging
 
-        with caplog.at_level(logging.WARNING, logger="research_index.vision"):
+        with caplog.at_level(logging.WARNING, logger="knowledge_base.vision"):
             _vision_call(
                 "fakebase64", "prompt", base_url="http://localhost", model="test"
             )
@@ -1911,7 +1911,7 @@ def test_vision_call_warns_on_slow_response(caplog):
 
 def test_run_omniparser_logs_timing(caplog, tmp_path):
     """_run_omniparser logs elapsed time on success."""
-    from research_index.vision import _run_omniparser
+    from knowledge_base.vision import _run_omniparser
 
     json_data = json.dumps({"elements": [{"type": "text", "content": "hello"}]})
 
@@ -1920,10 +1920,10 @@ def test_run_omniparser_logs_timing(caplog, tmp_path):
         json_path = cmd[-1]
         Path(json_path).write_text(json_data)
 
-    with patch("research_index.vision.subprocess.run", side_effect=fake_subprocess_run):
+    with patch("knowledge_base.vision.subprocess.run", side_effect=fake_subprocess_run):
         import logging
 
-        with caplog.at_level(logging.INFO, logger="research_index.vision"):
+        with caplog.at_level(logging.INFO, logger="knowledge_base.vision"):
             result = _run_omniparser(Path("/fake.png"), "/fake/omniparser")
 
     assert result is not None
@@ -1934,7 +1934,7 @@ def test_run_omniparser_uses_timeout_constant():
     """_run_omniparser default timeout matches _OMNIPARSER_SUBPROCESS_TIMEOUT."""
     import inspect
 
-    from research_index.vision import _OMNIPARSER_SUBPROCESS_TIMEOUT, _run_omniparser
+    from knowledge_base.vision import _OMNIPARSER_SUBPROCESS_TIMEOUT, _run_omniparser
 
     sig = inspect.signature(_run_omniparser)
     assert sig.parameters["timeout"].default == _OMNIPARSER_SUBPROCESS_TIMEOUT
@@ -1942,7 +1942,7 @@ def test_run_omniparser_uses_timeout_constant():
 
 def test_vision_call_uses_timeout_constant():
     """_vision_call uses _VISION_CALL_TIMEOUT for the httpx request."""
-    from research_index.vision import _VISION_CALL_TIMEOUT, _vision_call
+    from knowledge_base.vision import _VISION_CALL_TIMEOUT, _vision_call
 
     mock_response = {
         "choices": [
@@ -1963,7 +1963,7 @@ def test_vision_call_uses_timeout_constant():
         ]
     }
 
-    with patch("research_index.vision.httpx.post") as mock_post:
+    with patch("knowledge_base.vision.httpx.post") as mock_post:
         mock_resp = mock_post.return_value
         mock_resp.raise_for_status = lambda: None
         mock_resp.json.return_value = mock_response
@@ -1976,7 +1976,7 @@ def test_vision_call_uses_timeout_constant():
 
 def test_constants_are_consistent():
     """Timeout constants must be >= ETA constants to avoid premature timeouts."""
-    from research_index.vision import (
+    from knowledge_base.vision import (
         _ETA_SECS_PER_PAGE_BASE,
         _ETA_SECS_PER_PAGE_OMNIPARSER,
         _OMNIPARSER_SUBPROCESS_TIMEOUT,

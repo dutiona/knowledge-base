@@ -15,7 +15,7 @@ from pathlib import Path
 import fitz
 import pytest
 
-from research_index.ingest import _extract_pdf_markdown, _extract_pdf_text
+from knowledge_base.ingest import _extract_pdf_markdown, _extract_pdf_text
 
 # ---------------------------------------------------------------------------
 # Synthetic PDF builders (adapted from test_pymupdf4llm_eval.py)

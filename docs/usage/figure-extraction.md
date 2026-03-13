@@ -14,7 +14,7 @@ Figure extraction renders PDF pages as images and sends them to a vision model f
 
 5. **Enrichment** -- For single-figure pages, OmniParser detected text and icons are appended to the figure description (capped at 500 chars). For multi-figure pages, elements are filtered to each figure's spatial region.
 
-6. **Storage** -- Figure descriptions are embedded and stored as chunks with `source_type='figure'`. Old figure chunks for the same pages are deleted first (idempotent). Rendered PNGs are saved to `~/.local/share/research-index/figures/<paper_id>/`.
+6. **Storage** -- Figure descriptions are embedded and stored as chunks with `source_type='figure'`. Old figure chunks for the same pages are deleted first (idempotent). Rendered PNGs are saved to `~/.local/share/knowledge-base/figures/<paper_id>/`.
 
 ## Vision Model Configuration
 

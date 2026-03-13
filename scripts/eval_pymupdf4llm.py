@@ -25,7 +25,7 @@ import pymupdf4llm
 
 # Reuse chunking from the main codebase
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from research_index.ingest import _chunk_text  # noqa: E402
+from knowledge_base.ingest import _chunk_text  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixed extraction config

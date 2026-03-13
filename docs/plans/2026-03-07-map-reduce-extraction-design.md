@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-07
 **Status**: Approved
-**Related issues**: [#12](https://github.com/dutiona/research-index/issues/12) (neo4j migration), [#13](https://github.com/dutiona/research-index/issues/13) (deferred queue)
+**Related issues**: [#12](https://github.com/dutiona/knowledge-base/issues/12) (neo4j migration), [#13](https://github.com/dutiona/knowledge-base/issues/13) (deferred queue)
 
 ## Problem
 
@@ -314,9 +314,9 @@ Returns:
 
 | File                               | Change                                                                                                                                        |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/research_index/db.py`         | Add `entities` + `entity_mentions` tables, default LLM config                                                                                 |
-| `src/research_index/extraction.py` | Replace `_llm_extract` with `_llm_call`, add map-reduce pipeline, entity resolution, fast path, ETA gate, error handling, idempotency cleanup |
-| `src/research_index/server.py`     | Add `configure_llm_tool`, `get_entities_tool`; update `extract_structure_tool` with `confirmed` param                                         |
+| `src/knowledge_base/db.py`         | Add `entities` + `entity_mentions` tables, default LLM config                                                                                 |
+| `src/knowledge_base/extraction.py` | Replace `_llm_extract` with `_llm_call`, add map-reduce pipeline, entity resolution, fast path, ETA gate, error handling, idempotency cleanup |
+| `src/knowledge_base/server.py`     | Add `configure_llm_tool`, `get_entities_tool`; update `extract_structure_tool` with `confirmed` param                                         |
 | `tests/test_extraction.py`         | Tests for map-reduce, entity resolution, fast path, ETA gate, partial failures, idempotency, LLM config                                       |
 
 ## Out of scope (tracked separately)

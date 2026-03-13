@@ -1,7 +1,7 @@
 # The Four-Layer Cognitive Architecture for Tooled LLMs
 
 > Origin: Brainstorming session analyzing NornicDB's memory model, the Reddit
-> re-embedding post (r/Rag), and our own stack (research-index + memory-engine).
+> re-embedding post (r/Rag), and our own stack (knowledge-base + memory-engine).
 > Date: 2026-03-12
 
 ## Core Thesis
@@ -49,7 +49,7 @@ Knowledge base state:
   - Both claims remain queryable. Neither decayed.
 ```
 
-**Materialization:** `research-index` — papers, chunks, entities, relationships,
+**Materialization:** `knowledge-base` — papers, chunks, entities, relationships,
 conclusions, datasets, methods, metrics. SQLite + sqlite-vec + FTS5.
 
 ---
@@ -148,7 +148,7 @@ Model with nothing (just weights = wisdom):
 Model with full stack:
   -> Checks memory: "user is researching transformer efficiency"
   -> Applies wisdom: "linear attention is O(n), relevant to user's focus"
-  -> Queries knowledge: research-index search("linear attention")
+  -> Queries knowledge: knowledge-base search("linear attention")
   -> Synthesizes answer with context the naked model couldn't have
 ```
 
@@ -171,7 +171,7 @@ Not a system you build — it's what the model _does_.
               |   KNOWLEDGE     |  |    MEMORY     |  |   WISDOM     |
               |   (shared)      |  |  (per-agent)  |  |  (durable)   |
               |                 |  |               |  |              |
-              | research-index  |  | memory-engine |  | weights +    |
+              | knowledge-base  |  | memory-engine |  | weights +    |
               |                 |  |               |  | CLAUDE.md +  |
               |                 |  |               |  | skills       |
               +---------+-------+  +---+-------+---+  +------^------+
@@ -337,7 +337,7 @@ Theory without implementation is philosophy. Here's the concrete mapping.
 |  Claude Opus 4.6 + MCP tool graph + planning                        |
 |                                                                      |
 |  Tools:                                                              |
-|  +-- research-index MCP server ............ (knowledge)              |
+|  +-- knowledge-base MCP server ............ (knowledge)              |
 |  +-- memory-engine ........................ (memory) [planned MCP]   |
 |  +-- serena ............................... (code analysis)          |
 |  +-- context7 ............................. (library docs)           |
@@ -353,7 +353,7 @@ Theory without implementation is philosophy. Here's the concrete mapping.
   +------v-----------+   +--------v--------+   +----------v----------+
   |    KNOWLEDGE     |   |     MEMORY      |   |      WISDOM         |
   |                  |   |                 |   |                     |
-  | research-index   |   | memory-engine   |   | Model weights       |
+  | knowledge-base   |   | memory-engine   |   | Model weights       |
   |                  |   |                 |   | (frozen)            |
   | SQLite +         |   | SQLite +        |   |                     |
   | sqlite-vec       |   | Rust core       |   | CLAUDE.md           |
@@ -422,7 +422,7 @@ vector search, memory management, and a temporal ledger in one runtime.
 
 ### Feature Comparison
 
-| Feature                  | NornicDB                          | research-index                          |
+| Feature                  | NornicDB                          | knowledge-base                          |
 | ------------------------ | --------------------------------- | --------------------------------------- |
 | **Language**             | Go                                | Python                                  |
 | **Vector storage**       | Built-in HNSW                     | sqlite-vec (vec0)                       |
@@ -465,7 +465,7 @@ graph poisons the well.
 Our stack handles this correctly by decorrelating:
 
 - **memory-engine** owns decay (Ebbinghaus forgetting, dream-cycle consolidation)
-- **research-index** owns persistence (append-only with supersession, no decay)
+- **knowledge-base** owns persistence (append-only with supersession, no decay)
 
 ---
 
@@ -847,7 +847,7 @@ system. The JSONL logs are an untapped goldmine — see Bootstrapping Strategy.
 
 | Aspect               | NornicDB              | claude-memory-mcp | Claudest                      | OpenClaw                 | Our Stack                             |
 | -------------------- | --------------------- | ----------------- | ----------------------------- | ------------------------ | ------------------------------------- |
-| **Knowledge layer**  | Graph DB (but decays) | Graph + vectors   | None                          | None (Markdown)          | research-index (sqlite-vec + FTS5)    |
+| **Knowledge layer**  | Graph DB (but decays) | Graph + vectors   | None                          | None (Markdown)          | knowledge-base (sqlite-vec + FTS5)    |
 | **Memory layer**     | Same as knowledge     | Same as knowledge | SQLite + FTS5                 | Markdown files           | memory-engine (Rust, temporal, decay) |
 | **Wisdom layer**     | None                  | None              | extract-learnings → CLAUDE.md | SOUL.md + AGENTS.md      | CLAUDE.md + skills + feedback files   |
 | **Intelligence**     | N/A (database)        | ReAct via MCP     | N/A (plugin)                  | ReAct + heartbeat        | Model + MCP tool graph                |

@@ -1043,7 +1043,7 @@ def extract_figures(
 
     # 11. Save PNGs to disk (best effort, outside transaction)
     figures_dir = (
-        Path.home() / ".local" / "share" / "research-index" / "figures" / str(paper_id)
+        Path.home() / ".local" / "share" / "knowledge-base" / "figures" / str(paper_id)
     )
     try:
         figures_dir.mkdir(parents=True, exist_ok=True)

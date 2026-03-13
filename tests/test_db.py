@@ -4,7 +4,7 @@ import sqlite3
 import json
 import struct
 
-from research_index.db import get_connection, init_schema, DEFAULT_EMBED_DIM
+from knowledge_base.db import get_connection, init_schema, DEFAULT_EMBED_DIM
 
 
 def _serialize_f32(vec: list[float]) -> bytes:

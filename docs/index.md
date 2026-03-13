@@ -1,4 +1,4 @@
-# research-index
+# knowledge-base
 
 Hybrid semantic search MCP server for research papers, code, and notes. Ingests
 documents into a local SQLite database with FTS5 full-text search and sqlite-vec

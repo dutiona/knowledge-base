@@ -66,7 +66,7 @@ Returns:
 { "appended": 3, "skipped": 2, "path": "/home/user/papers/refs.bib" }
 ```
 
-Sync reads the existing file and extracts all BibTeX keys (e.g., `vaswani2017`). Papers whose key already appears in the file are skipped. For generated entries (no stored raw BibTeX), a `% research-index-id: <id>` comment is inserted above the entry; sync checks for this marker to avoid duplicating generated entries.
+Sync reads the existing file and extracts all BibTeX keys (e.g., `vaswani2017`). Papers whose key already appears in the file are skipped. For generated entries (no stored raw BibTeX), a `% knowledge-base-id: <id>` comment is inserted above the entry; sync checks for this marker to avoid duplicating generated entries.
 
 The file is created if it does not exist.
 

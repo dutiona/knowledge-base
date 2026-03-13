@@ -3,16 +3,16 @@
 import threading
 from functools import partial
 
-from research_index.db import get_connection
-from research_index.server import _get_conn
+from knowledge_base.db import get_connection
+from knowledge_base.server import _get_conn
 
 
 def _patch_conn(monkeypatch, tmp_path):
     """Reset thread-local and schema state, redirect get_connection to a temp DB."""
-    monkeypatch.setattr("research_index.server._local", threading.local())
-    monkeypatch.setattr("research_index.server._schema_ready", False)
+    monkeypatch.setattr("knowledge_base.server._local", threading.local())
+    monkeypatch.setattr("knowledge_base.server._schema_ready", False)
     monkeypatch.setattr(
-        "research_index.server.get_connection",
+        "knowledge_base.server.get_connection",
         partial(get_connection, tmp_path / "test.db"),
     )
 

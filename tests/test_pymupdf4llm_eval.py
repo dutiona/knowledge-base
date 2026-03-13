@@ -13,7 +13,7 @@ from pathlib import Path
 import fitz
 import pymupdf4llm
 
-from research_index.ingest import _chunk_text
+from knowledge_base.ingest import _chunk_text
 
 # ---------------------------------------------------------------------------
 # Fixed extraction config — pinned kwargs for reproducibility

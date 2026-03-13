@@ -2,9 +2,9 @@
 
 from unittest.mock import patch
 
-from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
-from research_index.ingest import ingest_file
-from research_index.conclusions import (
+from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.ingest import ingest_file
+from knowledge_base.conclusions import (
     get_conclusion_chain,
     get_conclusions,
     record_conclusion,
@@ -42,7 +42,7 @@ def test_record_conclusion_basic(tmp_path):
     assert conclusions[0]["confidence"] == 0.9
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_record_conclusion_with_evidence(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "evidence.md"
