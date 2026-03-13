@@ -1,7 +1,7 @@
 # Vision-Augmented Figure Extraction
 
 **Date**: 2026-03-07
-**Issue**: https://github.com/dutiona/research-index/issues/20
+**Issue**: https://github.com/dutiona/knowledge-base/issues/20
 **Status**: Draft (R2 — post Codex+Gemini review)
 
 ## Problem
@@ -55,7 +55,7 @@ for each figure:
 ── commit ──
     |
     v
-save page PNGs to ~/.local/share/research-index/figures/{paper_id}/
+save page PNGs to ~/.local/share/knowledge-base/figures/{paper_id}/
 ```
 
 ## New Module: `vision.py`
@@ -172,7 +172,7 @@ Content-hash deduplication applies. Embedded via same pipeline as text chunks.
 
 ## PNG Storage
 
-- Path: `~/.local/share/research-index/figures/{paper_id}/page_{N}.png`
+- Path: `~/.local/share/knowledge-base/figures/{paper_id}/page_{N}.png`
 - One PNG per rendered page (not per figure)
 - Created after successful vision call (best effort, outside transaction)
 

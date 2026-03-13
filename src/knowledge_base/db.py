@@ -7,7 +7,7 @@ from pathlib import Path
 
 import sqlite_vec
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "research-index" / "research.db"
+DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "knowledge-base" / "knowledge.db"
 # Bootstrap defaults for fresh databases. Existing databases read from the
 # config table — these constants are only used during initial schema creation.
 DEFAULT_EMBED_MODEL = "bge-m3"

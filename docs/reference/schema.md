@@ -2,7 +2,7 @@
 
 SQLite database with {term}`FTS5` full-text search, {term}`sqlite-vec` vector similarity, and {term}`WAL mode`.
 
-Default location: `~/.local/share/research-index/research.db`
+Default location: `~/.local/share/knowledge-base/knowledge.db`
 
 ## ER Diagram
 

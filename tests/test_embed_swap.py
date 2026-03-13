@@ -2,9 +2,9 @@
 
 from unittest.mock import patch
 
-from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
-from research_index.embed_swap import get_embed_config, re_embed
-from research_index.ingest import ingest_file
+from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.embed_swap import get_embed_config, re_embed
+from knowledge_base.ingest import ingest_file
 
 
 NEW_DIM = 384
@@ -34,7 +34,7 @@ def test_get_embed_config(tmp_path):
     assert config["dim"] == DEFAULT_EMBED_DIM
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_re_embed_changes_model(tmp_path):
     conn = _setup(tmp_path)
 
@@ -47,7 +47,7 @@ def test_re_embed_changes_model(tmp_path):
     assert old_count >= 1
 
     # Re-embed with new model
-    with patch("research_index.embed_swap.embed", _fake_embed_new):
+    with patch("knowledge_base.embed_swap.embed", _fake_embed_new):
         result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     assert result["chunks_processed"] == old_count
@@ -64,7 +64,7 @@ def test_re_embed_changes_model(tmp_path):
     assert new_count == old_count
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_re_embed_preserves_chunk_ids(tmp_path):
     conn = _setup(tmp_path)
 
@@ -76,7 +76,7 @@ def test_re_embed_preserves_chunk_ids(tmp_path):
         r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()
     ]
 
-    with patch("research_index.embed_swap.embed", _fake_embed_new):
+    with patch("knowledge_base.embed_swap.embed", _fake_embed_new):
         re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     chunk_ids_after = [
@@ -85,11 +85,11 @@ def test_re_embed_preserves_chunk_ids(tmp_path):
     assert chunk_ids_before == chunk_ids_after
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_re_embed_empty_db(tmp_path):
     conn = _setup(tmp_path)
 
-    with patch("research_index.embed_swap.embed", _fake_embed_new):
+    with patch("knowledge_base.embed_swap.embed", _fake_embed_new):
         result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     assert result["chunks_processed"] == 0

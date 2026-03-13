@@ -2,9 +2,9 @@
 
 from unittest.mock import patch
 
-from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
-from research_index.ingest import ingest_file
-from research_index.search import search, _rrf_merge
+from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.ingest import ingest_file
+from knowledge_base.search import search, _rrf_merge
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None):
@@ -28,8 +28,8 @@ def test_rrf_merge():
     assert 2 in ids[:2]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
 def test_search_fts_mode(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -44,8 +44,8 @@ def test_search_fts_mode(tmp_path):
     assert "attention" in results[0].content.lower()
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
 def test_search_vec_mode(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -59,8 +59,8 @@ def test_search_vec_mode(tmp_path):
     assert len(results) >= 1
 
 
-@patch("research_index.ingest.embed", _fake_embed)
-@patch("research_index.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
 def test_search_source_type_filter(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)

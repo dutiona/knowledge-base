@@ -3,9 +3,9 @@
 import hashlib
 from unittest.mock import patch
 
-from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
-from research_index.ingest import ingest_file
-from research_index.papers import (
+from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.ingest import ingest_file
+from knowledge_base.papers import (
     add_relationship,
     compute_file_hash,
     export_bibtex,
@@ -69,7 +69,7 @@ def test_get_paper_by_title_pattern(tmp_path):
     assert "Residual" in papers[0]["title"]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_register_paper_links_chunks(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
@@ -146,7 +146,7 @@ def test_relationship_direction_filter(tmp_path):
     assert len(incoming_p2) == 1
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_relationship_with_evidence(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "evidence.md"
@@ -406,7 +406,7 @@ def test_sync_bibtex_with_filters(tmp_path):
 # --- suggest_relationships ---
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_suggest_relationships_by_doi(tmp_path):
     conn = _setup(tmp_path)
 
@@ -426,7 +426,7 @@ def test_suggest_relationships_by_doi(tmp_path):
     assert result["suggestions"][0]["target_title"] == "Target Paper"
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_suggest_relationships_by_title(tmp_path):
     conn = _setup(tmp_path)
 
@@ -445,7 +445,7 @@ def test_suggest_relationships_by_title(tmp_path):
     assert result["suggestions"][0]["match_method"] == "title_words"
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_suggest_skips_existing_relationships(tmp_path):
     conn = _setup(tmp_path)
 
@@ -487,7 +487,7 @@ def test_suggest_no_chunks(tmp_path):
     assert result == {"suggestions": [], "unmatched": []}
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_suggest_title_fts5_fuzzy_match(tmp_path):
     """FTS5 should match even when title words appear in different order or with extra words."""
     conn = _setup(tmp_path)
@@ -514,7 +514,7 @@ def test_suggest_title_fts5_fuzzy_match(tmp_path):
     assert 0.3 <= title_matches[0]["confidence"] <= 0.7
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_suggest_title_fts5_short_title_skipped(tmp_path):
     """Titles with fewer than 3 words should not be FTS5-matched (too ambiguous)."""
     conn = _setup(tmp_path)
@@ -533,7 +533,7 @@ def test_suggest_title_fts5_short_title_skipped(tmp_path):
     assert len(title_matches) == 0
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_suggest_author_year_parenthetical(tmp_path):
     """Match '(Vaswani et al., 2017)' style citations."""
     conn = _setup(tmp_path)
@@ -558,7 +558,7 @@ def test_suggest_author_year_parenthetical(tmp_path):
     assert 0.3 <= author_matches[0]["confidence"] <= 0.6
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_suggest_author_year_narrative(tmp_path):
     """Match 'Vaswani et al. (2017)' narrative style citations."""
     conn = _setup(tmp_path)
@@ -579,7 +579,7 @@ def test_suggest_author_year_narrative(tmp_path):
     assert len(author_matches) >= 1
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_suggest_unmatched_dois_reported(tmp_path):
     """DOIs that don't match any registered paper should appear in unmatched."""
     conn = _setup(tmp_path)
@@ -596,7 +596,7 @@ def test_suggest_unmatched_dois_reported(tmp_path):
     assert any(u["doi"] == "10.5678/unknown" for u in result["unmatched"])
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_suggest_returns_structured_result(tmp_path):
     """suggest_relationships should return a dict with 'suggestions' and 'unmatched' keys."""
     conn = _setup(tmp_path)
@@ -613,7 +613,7 @@ def test_suggest_returns_structured_result(tmp_path):
     assert "unmatched" in result
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_suggest_author_year_compound_surname(tmp_path):
     """Match compound surnames like O'Malley and MacDonald."""
     conn = _setup(tmp_path)
@@ -637,7 +637,7 @@ def test_suggest_author_year_compound_surname(tmp_path):
     assert "MacDonald Analysis" in matched_titles
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_suggest_title_no_substring_false_positive(tmp_path):
     """Title word matching should not match 'net' inside 'internet'."""
     conn = _setup(tmp_path)
@@ -676,7 +676,7 @@ def test_paper_paths_table_exists(tmp_path):
     assert "is_primary" in row[0]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_migrate_paper_paths_from_existing(tmp_path):
     """Migration populates paper_paths from papers with abstract_chunk_id."""
     conn = _setup(tmp_path)
@@ -695,7 +695,7 @@ def test_migrate_paper_paths_from_existing(tmp_path):
     conn.execute("DELETE FROM paper_paths")
     conn.commit()
 
-    from research_index.db import _migrate_paper_paths
+    from knowledge_base.db import _migrate_paper_paths
 
     _migrate_paper_paths(conn)
 
@@ -708,7 +708,7 @@ def test_migrate_paper_paths_from_existing(tmp_path):
 # --- core helpers ---
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_get_paper_paths(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
@@ -739,7 +739,7 @@ def test_compute_file_hash_large_file(tmp_path):
     assert h == hashlib.sha256(b"x" * 20000).hexdigest()
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_get_paper_source_uri(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
@@ -752,7 +752,7 @@ def test_get_paper_source_uri(tmp_path):
     assert get_paper_source_uri(conn, pid) == source_uri
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_get_paper_source_uri_fallback(tmp_path):
     """Falls back to abstract_chunk_id hop when no paper_paths entry."""
     conn = _setup(tmp_path)
@@ -768,7 +768,7 @@ def test_get_paper_source_uri_fallback(tmp_path):
     assert get_paper_source_uri(conn, pid) == source_uri
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_get_paper_chunks(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
@@ -786,7 +786,7 @@ def test_get_paper_chunks(tmp_path):
 # --- register_paper populates paper_paths ---
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_register_paper_creates_paper_path(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
@@ -801,7 +801,7 @@ def test_register_paper_creates_paper_path(tmp_path):
     assert paths[0]["content_hash"] is not None
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_register_paper_path_conflict_skips_insert(tmp_path):
     """If source_uri is already owned by another paper, paper_paths insert is skipped."""
     conn = _setup(tmp_path)
@@ -822,7 +822,7 @@ def test_register_paper_path_conflict_skips_insert(tmp_path):
     assert len(paths2) == 0
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_get_paper_resilient_to_broken_abstract_chunk(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
@@ -843,7 +843,7 @@ def test_get_paper_resilient_to_broken_abstract_chunk(tmp_path):
 # --- relocate_paper ---
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_relocate_paper(tmp_path):
     conn = _setup(tmp_path)
     old_dir = tmp_path / "old"

@@ -36,8 +36,8 @@ export OLLAMA_HOST=http://192.168.1.100:11434
 ## Clone and install
 
 ```bash
-git clone https://github.com/dutiona/research-index.git
-cd research-index
+git clone https://github.com/dutiona/knowledge-base.git
+cd knowledge-base
 uv sync
 ```
 
@@ -60,13 +60,13 @@ or project-level `.mcp.json`):
 ```json
 {
   "mcpServers": {
-    "research-index": {
+    "knowledge-base": {
       "command": "uv",
       "args": [
         "run",
         "--directory",
-        "/path/to/research-index",
-        "research-index"
+        "/path/to/knowledge-base",
+        "knowledge-base"
       ],
       "env": {}
     }
@@ -74,15 +74,15 @@ or project-level `.mcp.json`):
 }
 ```
 
-The server uses FastMCP's stdio transport. The `research-index` entry point is
-defined in `pyproject.toml` and maps to `research_index.server:main`.
+The server uses FastMCP's stdio transport. The `knowledge-base` entry point is
+defined in `pyproject.toml` and maps to `knowledge_base.server:main`.
 
 ## Database location
 
 The SQLite database is created automatically at:
 
 ```
-~/.local/share/research-index/research.db
+~/.local/share/knowledge-base/knowledge.db
 ```
 
 No manual setup required. The schema is initialized on first connection.

@@ -35,7 +35,7 @@ map-reduce extraction
     The LLM extraction strategy used by `extract_structure_tool`. Each {term}`chunk` is independently analyzed by the LLM (map phase), then results are deduplicated and merged across chunks (reduce phase) to produce consolidated methods, datasets, and metrics.
 
 MCP
-    Model Context Protocol. A standard for exposing tools and resources to AI assistants. research-index runs as an MCP server, making its 33 tools available to any MCP-compatible client.
+    Model Context Protocol. A standard for exposing tools and resources to AI assistants. knowledge-base runs as an MCP server, making its 33 tools available to any MCP-compatible client.
 
 OmniParser
     A local tool for detecting UI elements, OCR text, and icons in images. When configured, enriches figure descriptions produced by the vision model with detected text and element labels. Requires a separate installation with its own Python venv.

@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 import httpx
 
-from research_index.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 import pytest
 
-from research_index.extraction import (
+from knowledge_base.extraction import (
     _clear_previous_extraction,
     _collect_entity_mentions,
     _extract_map_reduce,
@@ -31,8 +31,8 @@ from research_index.extraction import (
     compare_papers,
     extract_structure,
 )
-from research_index.ingest import ingest_file
-from research_index.papers import register_paper
+from knowledge_base.ingest import ingest_file
+from knowledge_base.papers import register_paper
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None):
@@ -188,7 +188,7 @@ FAKE_LLM_RESPONSE = json.dumps(
 )
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_structure_basic(tmp_path):
     conn = _setup(tmp_path)
 
@@ -201,7 +201,7 @@ def test_extract_structure_basic(tmp_path):
     def _mock_llm_call(prompt, *, conn):
         return FAKE_LLM_RESPONSE
 
-    with patch("research_index.extraction._llm_call", _mock_llm_call):
+    with patch("knowledge_base.extraction._llm_call", _mock_llm_call):
         result = extract_structure(conn, p)
 
     assert result["methods_added"] == 1
@@ -218,7 +218,7 @@ def test_extract_structure_basic(tmp_path):
     assert metrics[0]["value"] == 88.5
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_structure_no_chunks(tmp_path):
     conn = _setup(tmp_path)
     p = register_paper(conn, "Empty Paper")["paper_id"]
@@ -241,11 +241,11 @@ def test_entity_tables_exist(tmp_path):
     assert row["entity_type"] == "method"
 
     # entity_mentions table — need a real chunk for FK
-    from research_index.ingest import ingest_file
+    from knowledge_base.ingest import ingest_file
 
     md = tmp_path / "doc.md"
     md.write_text("test content")
-    with patch("research_index.ingest.embed", _fake_embed):
+    with patch("knowledge_base.ingest.embed", _fake_embed):
         ingest_file(conn, md)
     chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
     conn.execute(
@@ -354,7 +354,7 @@ def test_map_extract_single_chunk(tmp_path):
         }
     )
 
-    with patch("research_index.extraction._llm_call", return_value=fake_response):
+    with patch("knowledge_base.extraction._llm_call", return_value=fake_response):
         result = _map_extract(
             chunk_id=1,
             chunk_text="BERT achieves 88.5% on GLUE.",
@@ -412,7 +412,7 @@ def test_resolve_entities_merges_aliases(tmp_path):
         }
     )
 
-    with patch("research_index.extraction._llm_call", return_value=resolve_response):
+    with patch("knowledge_base.extraction._llm_call", return_value=resolve_response):
         resolution = _resolve_entities(map_results, conn)
 
     assert len(resolution["groups"]) == 1
@@ -420,7 +420,7 @@ def test_resolve_entities_merges_aliases(tmp_path):
     assert "the proposed approach" in resolution["groups"][0]["members"]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_store_resolved_writes_entities_and_methods(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
@@ -502,7 +502,7 @@ def test_clear_previous_extraction_idempotent(tmp_path):
     assert len(get_methods(conn, p)) == 0
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_structure_fast_path_short_doc(tmp_path):
     """Short docs (<8000 chars) use single LLM call, no entity resolution."""
     conn = _setup(tmp_path)
@@ -514,7 +514,7 @@ def test_extract_structure_fast_path_short_doc(tmp_path):
     def _mock_llm_call(prompt, *, conn):
         return FAKE_LLM_RESPONSE
 
-    with patch("research_index.extraction._llm_call", _mock_llm_call):
+    with patch("knowledge_base.extraction._llm_call", _mock_llm_call):
         result = extract_structure(conn, p)
 
     assert result["methods_added"] == 1
@@ -522,10 +522,10 @@ def test_extract_structure_fast_path_short_doc(tmp_path):
     assert result["metrics_added"] == 1
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_estimate_extraction_time_long_doc(tmp_path):
     """estimate_extraction_time reports is_long for large documents."""
-    from research_index.extraction import estimate_extraction_time
+    from knowledge_base.extraction import estimate_extraction_time
 
     conn = _setup(tmp_path)
     md = tmp_path / "long.md"
@@ -541,7 +541,7 @@ def test_estimate_extraction_time_long_doc(tmp_path):
     assert est["chunk_count"] > 0
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_structure_map_reduce_confirmed(tmp_path):
     """Long docs with confirmed=True run the full pipeline."""
     conn = _setup(tmp_path)
@@ -580,14 +580,14 @@ def test_extract_structure_map_reduce_confirmed(tmp_path):
             return resolve_response
         return map_response
 
-    with patch("research_index.extraction._llm_call", _mock_llm):
+    with patch("knowledge_base.extraction._llm_call", _mock_llm):
         result = extract_structure(conn, p, confirmed=True)
 
     assert "confirm_required" not in result
     assert result["methods_added"] >= 1
 
 
-@patch("research_index.extraction.httpx.get", _mock_get_ok)
+@patch("knowledge_base.extraction.httpx.get", _mock_get_ok)
 def test_configure_llm(tmp_path):
     conn = _setup(tmp_path)
 
@@ -608,7 +608,7 @@ def test_configure_llm(tmp_path):
     assert cfg["api_key"] == "sk-test-123"  # But stored correctly
 
 
-@patch("research_index.extraction.httpx.get", _mock_get_ok)
+@patch("knowledge_base.extraction.httpx.get", _mock_get_ok)
 def test_configure_llm_switch_to_ollama_clears_stale(tmp_path):
     """Switching from openai_compat to ollama clears stale base_url and api_key."""
     conn = _setup(tmp_path)
@@ -633,7 +633,7 @@ def test_configure_llm_switch_to_ollama_clears_stale(tmp_path):
     assert cfg["base_url"] != "http://192.168.1.41:1234"
 
 
-@patch("research_index.extraction.httpx.get", _mock_get_ok)
+@patch("knowledge_base.extraction.httpx.get", _mock_get_ok)
 def test_configure_llm_remote_ollama_preserves_base_url(tmp_path):
     """Explicitly setting base_url for ollama (remote) is preserved."""
     conn = _setup(tmp_path)
@@ -651,7 +651,7 @@ def test_configure_llm_remote_ollama_preserves_base_url(tmp_path):
 # --- configure_llm connectivity tests ---
 
 
-@patch("research_index.extraction.httpx.get", _mock_get_ok)
+@patch("knowledge_base.extraction.httpx.get", _mock_get_ok)
 def test_configure_llm_connectivity_ollama_reachable(tmp_path):
     """Ollama reachable: reachable=True, no warning."""
     conn = _setup(tmp_path)
@@ -661,7 +661,7 @@ def test_configure_llm_connectivity_ollama_reachable(tmp_path):
 
 
 @patch(
-    "research_index.extraction.httpx.get",
+    "knowledge_base.extraction.httpx.get",
     side_effect=httpx.ConnectError("Connection refused"),
 )
 def test_configure_llm_connectivity_ollama_unreachable(mock_get, tmp_path):
@@ -677,9 +677,9 @@ def test_configure_llm_connectivity_ollama_unreachable(mock_get, tmp_path):
     assert cfg["base_url"] == "http://localhost:11434"
 
 
-@patch("research_index.extraction.httpx.get", _mock_get_ok)
+@patch("knowledge_base.extraction.httpx.get", _mock_get_ok)
 @patch(
-    "research_index.extraction._get_ollama_url",
+    "knowledge_base.extraction._get_ollama_url",
     return_value="http://auto-detected:11434",
 )
 def test_configure_llm_connectivity_ollama_default_url(mock_url, tmp_path):
@@ -706,7 +706,7 @@ def test_configure_llm_connectivity_openai_reachable(tmp_path):
         return FakeResp()
 
     conn = _setup(tmp_path)
-    with patch("research_index.extraction.httpx.get", _mock_get_capture):
+    with patch("knowledge_base.extraction.httpx.get", _mock_get_capture):
         result = configure_llm(
             conn,
             provider="openai_compat",
@@ -725,7 +725,7 @@ def test_configure_llm_connectivity_openai_auth_failure(tmp_path):
         raise httpx.HTTPStatusError("401", request=resp.request, response=resp)
 
     conn = _setup(tmp_path)
-    with patch("research_index.extraction.httpx.get", _mock_get_401):
+    with patch("knowledge_base.extraction.httpx.get", _mock_get_401):
         result = configure_llm(
             conn,
             provider="openai_compat",
@@ -737,7 +737,7 @@ def test_configure_llm_connectivity_openai_auth_failure(tmp_path):
 
 
 @patch(
-    "research_index.extraction.httpx.get",
+    "knowledge_base.extraction.httpx.get",
     side_effect=httpx.ReadTimeout("timed out"),
 )
 def test_configure_llm_connectivity_timeout(mock_get, tmp_path):
@@ -759,7 +759,7 @@ def test_configure_llm_connectivity_server_error(tmp_path):
         raise httpx.HTTPStatusError("500", request=resp.request, response=resp)
 
     conn = _setup(tmp_path)
-    with patch("research_index.extraction.httpx.get", _mock_get_500):
+    with patch("knowledge_base.extraction.httpx.get", _mock_get_500):
         result = configure_llm(
             conn, provider="ollama", base_url="http://localhost:11434"
         )
@@ -768,7 +768,7 @@ def test_configure_llm_connectivity_server_error(tmp_path):
 
 
 @patch(
-    "research_index.extraction.httpx.get",
+    "knowledge_base.extraction.httpx.get",
     side_effect=RuntimeError("unexpected"),
 )
 def test_configure_llm_connectivity_generic_exception(mock_get, tmp_path):
@@ -780,7 +780,7 @@ def test_configure_llm_connectivity_generic_exception(mock_get, tmp_path):
 
 
 @patch(
-    "research_index.extraction.httpx.get",
+    "knowledge_base.extraction.httpx.get",
     side_effect=httpx.ConnectError("refused"),
 )
 def test_configure_llm_connectivity_malformed_url(mock_get, tmp_path):
@@ -811,7 +811,7 @@ def test_configure_llm_connectivity_openai_fallback_auth(tmp_path):
         return httpx.Response(401, request=httpx.Request("GET", url))
 
     conn = _setup(tmp_path)
-    with patch("research_index.extraction.httpx.get", _mock_get_fallback):
+    with patch("knowledge_base.extraction.httpx.get", _mock_get_fallback):
         result = configure_llm(
             conn,
             provider="openai_compat",
@@ -823,7 +823,7 @@ def test_configure_llm_connectivity_openai_fallback_auth(tmp_path):
     assert call_count["n"] == 2  # both endpoints were tried
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_get_entities(tmp_path):
     conn = _setup(tmp_path)
     p = register_paper(conn, "Test")["paper_id"]
@@ -927,7 +927,7 @@ def test_llm_call_empty_response_raises(tmp_path):
 
         return FakeResp()
 
-    with patch("research_index.extraction.httpx.post", _mock_post):
+    with patch("knowledge_base.extraction.httpx.post", _mock_post):
         with pytest.raises(ValueError, match="empty response"):
             _llm_call("test prompt", conn=conn)
 
@@ -948,7 +948,7 @@ def test_llm_call_strips_tags_returns_json(tmp_path):
 
         return FakeResp()
 
-    with patch("research_index.extraction.httpx.post", _mock_post):
+    with patch("knowledge_base.extraction.httpx.post", _mock_post):
         result = _llm_call("test prompt", conn=conn)
     assert result == '{"methods": []}'
 
@@ -972,14 +972,14 @@ def test_llm_call_ollama_sends_system_directive(tmp_path):
 
         return FakeResp()
 
-    with patch("research_index.extraction.httpx.post", _mock_post):
+    with patch("knowledge_base.extraction.httpx.post", _mock_post):
         _llm_call("test prompt", conn=conn)
 
     assert "system" in captured
     assert "JSON" in captured["system"]
 
 
-@patch("research_index.extraction.httpx.get", _mock_get_ok)
+@patch("knowledge_base.extraction.httpx.get", _mock_get_ok)
 def test_llm_call_openai_sends_system_message(tmp_path):
     """_llm_call sends system message for openai_compat provider."""
     conn = _setup(tmp_path)
@@ -1005,7 +1005,7 @@ def test_llm_call_openai_sends_system_message(tmp_path):
 
         return FakeResp()
 
-    with patch("research_index.extraction.httpx.post", _mock_post):
+    with patch("knowledge_base.extraction.httpx.post", _mock_post):
         _llm_call("test prompt", conn=conn)
 
     messages = captured.get("messages", [])
@@ -1016,7 +1016,7 @@ def test_llm_call_openai_sends_system_message(tmp_path):
 # --- map-reduce error visibility ---
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
     """When all chunks return empty, the error list is populated."""
     conn = _setup(tmp_path)
@@ -1030,7 +1030,7 @@ def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
     def _mock_llm_empty(prompt, *, conn):
         raise ValueError("LLM returned empty response (possible thinking-mode issue)")
 
-    with patch("research_index.extraction._llm_call", _mock_llm_empty):
+    with patch("knowledge_base.extraction._llm_call", _mock_llm_empty):
         result = extract_structure(conn, p, confirmed=True)
 
     assert "error" in result
@@ -1039,7 +1039,7 @@ def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
     assert "empty response" in result["errors"][0]["error"]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_store_resolved_passes_chunk_id_to_metrics(tmp_path):
     """Map-reduce path: record_metric receives chunk_id from per-chunk extraction."""
     conn = _setup(tmp_path)
@@ -1088,7 +1088,7 @@ def test_store_resolved_passes_chunk_id_to_metrics(tmp_path):
     assert row["chunk_id"] == chunk_id
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
     """Single-pass path: record_metric receives first_chunk_id as approximate provenance."""
     conn = _setup(tmp_path)
@@ -1102,7 +1102,7 @@ def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
     def _mock_llm_call(prompt, *, conn):
         return FAKE_LLM_RESPONSE
 
-    with patch("research_index.extraction._llm_call", _mock_llm_call):
+    with patch("knowledge_base.extraction._llm_call", _mock_llm_call):
         result = extract_structure(conn, p)
 
     assert result["metrics_added"] == 1
@@ -1113,7 +1113,7 @@ def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
     assert row["chunk_id"] == first_chunk_id
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 @pytest.mark.parametrize("table", ["methods", "datasets"])
 def test_store_resolved_passes_chunk_id_to_methods_and_datasets(tmp_path, table):
     """Map-reduce path: record_method/record_dataset receive chunk_id from mentions."""
@@ -1227,7 +1227,7 @@ def test_store_resolved_description_and_chunk_id_same_provenance(
     )
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 @pytest.mark.parametrize("table", ["methods", "datasets"])
 def test_single_pass_passes_first_chunk_id_to_methods_and_datasets(tmp_path, table):
     """Single-pass path: record_method/record_dataset receive first_chunk_id."""
@@ -1242,7 +1242,7 @@ def test_single_pass_passes_first_chunk_id_to_methods_and_datasets(tmp_path, tab
     def _mock_llm_call(prompt, *, conn):
         return FAKE_LLM_RESPONSE
 
-    with patch("research_index.extraction._llm_call", _mock_llm_call):
+    with patch("knowledge_base.extraction._llm_call", _mock_llm_call):
         result = extract_structure(conn, p)
 
     assert result["methods_added"] >= 1
@@ -1342,7 +1342,7 @@ def test_store_resolved_skips_group_missing_canonical(tmp_path, caplog):
         ],
     }
 
-    with caplog.at_level(logging.WARNING, logger="research_index.extraction"):
+    with caplog.at_level(logging.WARNING, logger="knowledge_base.extraction"):
         result = _store_resolved(conn, p, map_results, resolution)
 
     assert result["methods_added"] >= 1
@@ -1364,7 +1364,7 @@ def test_store_resolved_skips_group_with_empty_canonical(tmp_path, caplog):
         ],
     }
 
-    with caplog.at_level(logging.WARNING, logger="research_index.extraction"):
+    with caplog.at_level(logging.WARNING, logger="knowledge_base.extraction"):
         result = _store_resolved(conn, p, map_results, resolution)
 
     assert result["methods_added"] == 0
@@ -1388,7 +1388,7 @@ def test_store_resolved_all_groups_malformed(tmp_path, caplog):
         ],
     }
 
-    with caplog.at_level(logging.WARNING, logger="research_index.extraction"):
+    with caplog.at_level(logging.WARNING, logger="knowledge_base.extraction"):
         result = _store_resolved(conn, p, map_results, resolution)
 
     assert result["methods_added"] == 0
@@ -1406,7 +1406,7 @@ def test_store_resolved_rollback_on_error(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "doc.md"
     md.write_text("# Test\nSome content")
-    with patch("research_index.ingest.embed", _fake_embed):
+    with patch("knowledge_base.ingest.embed", _fake_embed):
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1431,7 +1431,7 @@ def test_store_resolved_rollback_on_error(tmp_path):
 
     # Patch record_metric to raise after methods/datasets have been written
     with patch(
-        "research_index.extraction.record_metric",
+        "knowledge_base.extraction.record_metric",
         side_effect=RuntimeError("simulated failure"),
     ):
         with pytest.raises(RuntimeError, match="simulated failure"):
@@ -1453,7 +1453,7 @@ def test_extract_single_pass_rollback_on_error(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "doc.md"
     md.write_text("# Test\nSome content")
-    with patch("research_index.ingest.embed", _fake_embed):
+    with patch("knowledge_base.ingest.embed", _fake_embed):
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1469,9 +1469,9 @@ def test_extract_single_pass_rollback_on_error(tmp_path):
         }
     )
 
-    with patch("research_index.extraction._llm_call", return_value=llm_response):
+    with patch("knowledge_base.extraction._llm_call", return_value=llm_response):
         with patch(
-            "research_index.extraction.record_metric",
+            "knowledge_base.extraction.record_metric",
             side_effect=RuntimeError("simulated failure"),
         ):
             with pytest.raises(RuntimeError, match="simulated failure"):
@@ -1512,7 +1512,7 @@ def test_store_resolved_handles_none_method_and_dataset(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
     md.write_text("Some content about models.\n")
-    with patch("research_index.ingest.embed", _fake_embed):
+    with patch("knowledge_base.ingest.embed", _fake_embed):
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
     chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
@@ -1552,7 +1552,7 @@ def test_extract_single_pass_handles_none_fields(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "doc.md"
     md.write_text("# Test\nSome content about methods.")
-    with patch("research_index.ingest.embed", _fake_embed):
+    with patch("knowledge_base.ingest.embed", _fake_embed):
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1573,7 +1573,7 @@ def test_extract_single_pass_handles_none_fields(tmp_path):
             ],
         }
     )
-    with patch("research_index.extraction._llm_call", return_value=llm_response):
+    with patch("knowledge_base.extraction._llm_call", return_value=llm_response):
         result = _extract_single_pass(conn, p, chunks)
 
     assert "error" not in result
@@ -1597,7 +1597,7 @@ def test_store_resolved_handles_null_containers(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
     md.write_text("Content.\n")
-    with patch("research_index.ingest.embed", _fake_embed):
+    with patch("knowledge_base.ingest.embed", _fake_embed):
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1614,13 +1614,13 @@ def test_extract_single_pass_handles_null_containers(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "doc.md"
     md.write_text("# Test\nContent.")
-    with patch("research_index.ingest.embed", _fake_embed):
+    with patch("knowledge_base.ingest.embed", _fake_embed):
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
 
     chunks = [{"id": 1, "content": "some text"}]
     llm_response = json.dumps({"methods": None, "datasets": None, "metrics": None})
-    with patch("research_index.extraction._llm_call", return_value=llm_response):
+    with patch("knowledge_base.extraction._llm_call", return_value=llm_response):
         result = _extract_single_pass(conn, p, chunks)
 
     assert "error" not in result
@@ -1680,7 +1680,7 @@ def _mock_llm_for_progress(prompt, *, conn):
     return _MAP_RESPONSE
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_logs_per_chunk_progress(tmp_path, caplog):
     """Each chunk emits an INFO log with chunk number, percentage, timing, and entity counts."""
     conn = _setup(tmp_path)
@@ -1696,8 +1696,8 @@ def test_map_reduce_logs_per_chunk_progress(tmp_path, caplog):
         ).fetchall()
     ]
 
-    with caplog.at_level(logging.INFO, logger="research_index.extraction"):
-        with patch("research_index.extraction._llm_call", _mock_llm_for_progress):
+    with caplog.at_level(logging.INFO, logger="knowledge_base.extraction"):
+        with patch("knowledge_base.extraction._llm_call", _mock_llm_for_progress):
             _extract_map_reduce(conn, p, chunks)
 
     chunk_logs = [m for m in caplog.messages if "Chunk" in m and "/" in m]
@@ -1708,7 +1708,7 @@ def test_map_reduce_logs_per_chunk_progress(tmp_path, caplog):
     assert "metrics=" in chunk_logs[0]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_logs_revised_eta_every_5_chunks(tmp_path, caplog):
     """Revised ETA is logged every 5 chunks."""
     conn = _setup(tmp_path)
@@ -1728,8 +1728,8 @@ def test_map_reduce_logs_revised_eta_every_5_chunks(tmp_path, caplog):
     ]
     assert len(chunks) >= 5, f"Need >= 5 chunks for ETA test, got {len(chunks)}"
 
-    with caplog.at_level(logging.INFO, logger="research_index.extraction"):
-        with patch("research_index.extraction._llm_call", _mock_llm_for_progress):
+    with caplog.at_level(logging.INFO, logger="knowledge_base.extraction"):
+        with patch("knowledge_base.extraction._llm_call", _mock_llm_for_progress):
             _extract_map_reduce(conn, p, chunks)
 
     eta_logs = [m for m in caplog.messages if "revised ETA" in m]
@@ -1740,7 +1740,7 @@ def test_map_reduce_logs_revised_eta_every_5_chunks(tmp_path, caplog):
     assert len(eta_logs) == expected_eta_count
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_logs_failed_chunk(tmp_path, caplog):
     """Failed chunks log 'FAILED' instead of entity counts."""
     conn = _setup(tmp_path)
@@ -1764,8 +1764,8 @@ def test_map_reduce_logs_failed_chunk(tmp_path, caplog):
             raise ValueError("simulated LLM failure")
         return _mock_llm_for_progress(prompt, conn=conn)
 
-    with caplog.at_level(logging.INFO, logger="research_index.extraction"):
-        with patch("research_index.extraction._llm_call", _mock_llm_fail_first):
+    with caplog.at_level(logging.INFO, logger="knowledge_base.extraction"):
+        with patch("knowledge_base.extraction._llm_call", _mock_llm_fail_first):
             _extract_map_reduce(conn, p, chunks)
 
     chunk_logs = [m for m in caplog.messages if "Chunk" in m and "/" in m]
@@ -1775,7 +1775,7 @@ def test_map_reduce_logs_failed_chunk(tmp_path, caplog):
         assert "methods=" in chunk_logs[1]
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_logs_entity_resolution(tmp_path, caplog):
     """Map phase completion and entity resolution are logged."""
     conn = _setup(tmp_path)
@@ -1791,8 +1791,8 @@ def test_map_reduce_logs_entity_resolution(tmp_path, caplog):
         ).fetchall()
     ]
 
-    with caplog.at_level(logging.INFO, logger="research_index.extraction"):
-        with patch("research_index.extraction._llm_call", _mock_llm_for_progress):
+    with caplog.at_level(logging.INFO, logger="knowledge_base.extraction"):
+        with patch("knowledge_base.extraction._llm_call", _mock_llm_for_progress):
             _extract_map_reduce(conn, p, chunks)
 
     assert any("Map phase complete" in m for m in caplog.messages)
@@ -1800,7 +1800,7 @@ def test_map_reduce_logs_entity_resolution(tmp_path, caplog):
     assert any("Entity resolution complete" in m for m in caplog.messages)
 
 
-@patch("research_index.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_result_includes_timing(tmp_path):
     """Result dict includes extraction_seconds and resolution_seconds."""
     conn = _setup(tmp_path)
@@ -1816,7 +1816,7 @@ def test_map_reduce_result_includes_timing(tmp_path):
         ).fetchall()
     ]
 
-    with patch("research_index.extraction._llm_call", _mock_llm_for_progress):
+    with patch("knowledge_base.extraction._llm_call", _mock_llm_for_progress):
         result = _extract_map_reduce(conn, p, chunks)
 
     assert "extraction_seconds" in result
