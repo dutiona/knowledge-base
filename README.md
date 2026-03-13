@@ -27,12 +27,12 @@ Hybrid semantic search MCP server for research papers, code, and notes. Ingests 
 └──────────────────┬──────────────────────────┘
                    │ MCP protocol
 ┌──────────────────▼──────────────────────────┐
-│              FastMCP Server (24 tools)        │
+│              FastMCP Server (33 tools)        │
 ├──────────────────────────────────────────────┤
 │  ingest.py     │ search.py    │ papers.py    │
 │  embed_swap.py │ extraction.py│ conclusions.py│
 ├──────────────────────────────────────────────┤
-│  embeddings.py (Ollama nomic-embed-text)     │
+│  embeddings.py (Ollama bge-m3)               │
 ├──────────────────────────────────────────────┤
 │  SQLite + FTS5 + sqlite-vec                  │
 └──────────────────────────────────────────────┘
@@ -45,7 +45,7 @@ Hybrid semantic search MCP server for research papers, code, and notes. Ingests 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) package manager
 - [Ollama](https://ollama.ai/) running locally (or on a Windows host for WSL2)
-  - `ollama pull nomic-embed-text` for embeddings
+  - `ollama pull bge-m3` for embeddings
   - `ollama pull qwen3.5:27b` for structured extraction (optional, or use any OpenAI-compatible endpoint)
 
 ### Install
@@ -162,13 +162,13 @@ The index is stored at `~/.local/share/research-index/research.db` by default. T
 
 ### Config keys
 
-| Key            | Default            | Description                                                                |
-| -------------- | ------------------ | -------------------------------------------------------------------------- |
-| `embed_model`  | `nomic-embed-text` | Ollama embedding model name                                                |
-| `embed_dim`    | `768`              | Embedding vector dimension                                                 |
-| `llm_provider` | `ollama`           | LLM provider: `ollama` (native API) or `openai_compat` (OpenAI-compatible) |
-| `llm_model`    | `qwen3.5:27b`      | Model name passed to the provider                                          |
-| `llm_base_url` | _(unset)_          | Base URL for `openai_compat` provider (e.g. `http://192.168.1.41:1234`)    |
+| Key            | Default       | Description                                                                |
+| -------------- | ------------- | -------------------------------------------------------------------------- |
+| `embed_model`  | `bge-m3`      | Ollama embedding model name                                                |
+| `embed_dim`    | `1024`        | Embedding vector dimension                                                 |
+| `llm_provider` | `ollama`      | LLM provider: `ollama` (native API) or `openai_compat` (OpenAI-compatible) |
+| `llm_model`    | `qwen3.5:27b` | Model name passed to the provider                                          |
+| `llm_base_url` | _(unset)_     | Base URL for `openai_compat` provider (e.g. `http://192.168.1.41:1234`)    |
 
 ## Limitations
 
