@@ -520,8 +520,12 @@ def sync_bibtex(
             new_entries.append(row["bibtex"])
         else:
             # Idempotency: skip if this paper's ID marker is in the file
+            # Accept both old (research-index-id) and new (knowledge-base-id) markers
             paper_id = row["id"]
-            if f"% knowledge-base-id: {paper_id}" in existing_text:
+            if (
+                f"% knowledge-base-id: {paper_id}" in existing_text
+                or f"% research-index-id: {paper_id}" in existing_text
+            ):
                 skipped += 1
                 continue
             paper = {
