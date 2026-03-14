@@ -2,43 +2,45 @@
 
 > Last updated: 2026-03-12
 
-29 open issues across 6 workstreams. This document establishes priority, ordering,
+31 open issues across 6 workstreams. This document establishes priority, ordering,
 dependency chains, and parallelism opportunities.
 
 ## Issue Index
 
-| #   | Title                                                | Workstream  | Phase |
-| --- | ---------------------------------------------------- | ----------- | ----- |
-| 88  | pymupdf4llm production integration (Phase 2)         | Foundation  | 0     |
-| 89  | **PR**: pymupdf4llm structured markdown extraction   | Foundation  | 0     |
-| 85  | fix(vision): chunk_index encoding overflow           | Foundation  | 0     |
-| 78  | refactor: executemany for config init                | Foundation  | 0     |
-| 46  | refactor: move SQL batching helpers to db.py         | Foundation  | 0     |
-| 45  | refactor: .replace() instead of .format() in SQL     | Foundation  | 0     |
-| 16  | feat: connectivity test for configure_llm            | Foundation  | 0     |
-| 71  | docs: comprehensive documentation + typing + API ref | Foundation  | 1     |
-| 101 | chore: rename to knowledge-base                      | Foundation  | 1     |
-| 99  | multi-space embedding architecture                   | Embedding   | 2     |
-| 100 | dual chunking strategy (8K + 32K)                    | Embedding   | 2     |
-| 95  | pluggable embedding providers                        | Embedding   | 2     |
-| 94  | compressed vector indices (int8/bit)                 | Embedding   | 3     |
-| 106 | stage-2 reranking in hybrid search                   | Search      | 2     |
-| 105 | auto-relationship discovery via similarity           | Search      | 2     |
-| 15  | parallelize map phase LLM calls                      | Search      | 2     |
-| 110 | pymupdf4llm Phase 3: narrow vision pipeline scope    | Ingest      | 2     |
-| 82  | extract inline images from web pages                 | Ingest      | 2     |
-| 111 | pymupdf4llm Phase 4: hybrid enrichment               | Ingest      | 3     |
-| 63  | document watch/sync for auto-re-ingestion            | Ingest      | 3     |
-| 64  | workspace/project tagging for chunk isolation        | Ingest      | 3     |
-| 108 | OCR preprocessing for scanned documents              | Ingest      | 4     |
-| 109 | evaluate IBM Tableformer for tables                  | Ingest      | 4     |
-| 107 | epic: semantic code indexing                         | Ingest      | 4+    |
-| 102 | hook-based memory-engine integration                 | Integration | 3     |
-| 103 | wisdom → knowledge pipeline                          | Integration | 3     |
-| 104 | memory → wisdom consolidation                        | Integration | 3     |
-| 12  | migrate entity graph to neo4j                        | Scale       | 4     |
-| 65  | evaluate LanceDB as sqlite-vec alternative           | Scale       | 4     |
-| 80  | web UI (Svelte + Rust WASM graph)                    | Scale       | 4     |
+| #   | Title                                                 | Workstream  | Phase |
+| --- | ----------------------------------------------------- | ----------- | ----- |
+| 88  | pymupdf4llm production integration (Phase 2)          | Foundation  | 0     |
+| 89  | **PR**: pymupdf4llm structured markdown extraction    | Foundation  | 0     |
+| 85  | fix(vision): chunk_index encoding overflow            | Foundation  | 0     |
+| 78  | refactor: executemany for config init                 | Foundation  | 0     |
+| 46  | refactor: move SQL batching helpers to db.py          | Foundation  | 0     |
+| 45  | refactor: .replace() instead of .format() in SQL      | Foundation  | 0     |
+| 16  | feat: connectivity test for configure_llm             | Foundation  | 0     |
+| 71  | docs: comprehensive documentation + typing + API ref  | Foundation  | 1     |
+| 101 | chore: rename to knowledge-base                       | Foundation  | 1     |
+| 99  | multi-space embedding architecture                    | Embedding   | 2     |
+| 100 | dual chunking strategy (8K + 32K)                     | Embedding   | 2     |
+| 95  | pluggable embedding providers                         | Embedding   | 2     |
+| 94  | compressed vector indices (int8/bit)                  | Embedding   | 3     |
+| 106 | stage-2 reranking in hybrid search                    | Search      | 2     |
+| 105 | auto-relationship discovery via similarity            | Search      | 2     |
+| 15  | parallelize map phase LLM calls                       | Search      | 2     |
+| 110 | pymupdf4llm Phase 3: narrow vision pipeline scope     | Ingest      | 2     |
+| 82  | extract inline images from web pages                  | Ingest      | 2     |
+| 126 | folder-level semantic embeddings for context boosting | Search      | 2     |
+| 127 | prediction-error detection for stale search results   | Search      | 2     |
+| 111 | pymupdf4llm Phase 4: hybrid enrichment                | Ingest      | 3     |
+| 63  | document watch/sync for auto-re-ingestion             | Ingest      | 3     |
+| 64  | workspace/project tagging for chunk isolation         | Ingest      | 3     |
+| 108 | OCR preprocessing for scanned documents               | Ingest      | 4     |
+| 109 | evaluate IBM Tableformer for tables                   | Ingest      | 4     |
+| 107 | epic: semantic code indexing                          | Ingest      | 4+    |
+| 102 | hook-based memory-engine integration                  | Integration | 3     |
+| 103 | wisdom → knowledge pipeline                           | Integration | 3     |
+| 104 | memory → wisdom consolidation                         | Integration | 3     |
+| 12  | migrate entity graph to neo4j                         | Scale       | 4     |
+| 65  | evaluate LanceDB as sqlite-vec alternative            | Scale       | 4     |
+| 80  | web UI (Svelte + Rust WASM graph)                     | Scale       | 4     |
 
 ---
 
@@ -105,6 +107,8 @@ measured, project renamed.
 #105 (auto-relationships)    ─── independent
 #15 (parallel LLM calls)    ─── independent
 #82 (web page images)        ─── independent
+#126 (folder embeddings)     ─── independent
+#127 (prediction errors)     ─── independent
 ```
 
 **Dependency chain:**
@@ -125,8 +129,9 @@ measured, project renamed.
 
 **Parallelism:**
 
-- #105 (auto-relationships), #15 (parallel LLM), #82 (web images), and #110
-  (vision Phase 3) are fully independent of the embedding work and of each other.
+- #105 (auto-relationships), #15 (parallel LLM), #82 (web images), #110
+  (vision Phase 3), #126 (folder embeddings), and #127 (prediction errors) are
+  fully independent of the embedding work and of each other.
 - #99 and #100 can be developed in parallel.
 
 **Exit criteria:** Multiple embedding models coexist, Matryoshka truncation
@@ -222,7 +227,9 @@ PR #89 ──────┐
 #16 ─────────┘                   │                              #94 (needs #99)      #12
                                  ├─ #105                        #63                  #65
                                  ├─ #15                         #64                  #80
-                                 ├─ #82                         #111 (needs #110)
+                                 ├─ #82
+                                 ├─ #126
+                                 ├─ #127                         #111 (needs #110)
                                  └─ #110 (needs PR #89)
 ```
 
