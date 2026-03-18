@@ -1,8 +1,8 @@
 # Roadmap
 
-> Last updated: 2026-03-12
+> Last updated: 2026-03-19
 
-31 open issues across 6 workstreams. This document establishes priority, ordering,
+34 open issues across 6 workstreams. This document establishes priority, ordering,
 dependency chains, and parallelism opportunities.
 
 ## Issue Index
@@ -29,7 +29,10 @@ dependency chains, and parallelism opportunities.
 | 82  | extract inline images from web pages                  | Ingest      | 2     |
 | 126 | folder-level semantic embeddings for context boosting | Search      | 2     |
 | 127 | prediction-error detection for stale search results   | Search      | 2     |
+| 128 | ingestion session tracking for co-occurrence signals  | Search      | 2     |
+| 130 | keyword intent extraction pre-filter for search       | Search      | 2     |
 | 111 | pymupdf4llm Phase 4: hybrid enrichment                | Ingest      | 3     |
+| 129 | retrieval plan intermediate representation            | Search      | 3     |
 | 63  | document watch/sync for auto-re-ingestion             | Ingest      | 3     |
 | 64  | workspace/project tagging for chunk isolation         | Ingest      | 3     |
 | 108 | OCR preprocessing for scanned documents               | Ingest      | 4     |
@@ -105,10 +108,12 @@ measured, project renamed.
 
 #110 (vision Phase 3)        ─── depends on PR #89 (Phase 2)
 #105 (auto-relationships)    ─── independent
+#128 (session co-occurrence) ─── independent, feeds #105
 #15 (parallel LLM calls)    ─── independent
 #82 (web page images)        ─── independent
 #126 (folder embeddings)     ─── independent
 #127 (prediction errors)     ─── independent
+#130 (keyword pre-filter)    ─── independent, research: APC (arXiv:2506.14852)
 ```
 
 **Dependency chain:**
@@ -129,9 +134,11 @@ measured, project renamed.
 
 **Parallelism:**
 
-- #105 (auto-relationships), #15 (parallel LLM), #82 (web images), #110
-  (vision Phase 3), #126 (folder embeddings), and #127 (prediction errors) are
-  fully independent of the embedding work and of each other.
+- #105 (auto-relationships), #128 (session co-occurrence), #15 (parallel LLM),
+  #82 (web images), #110 (vision Phase 3), #126 (folder embeddings), #127
+  (prediction errors), and #130 (keyword pre-filter) are fully independent of
+  the embedding work and of each other. #128 feeds into #105 as a second
+  relationship signal source.
 - #99 and #100 can be developed in parallel.
 
 **Exit criteria:** Multiple embedding models coexist, Matryoshka truncation
@@ -151,6 +158,7 @@ works, search quality measurably improves via reranking.
 #94 (int8/bit quantization) ─── independent (builds on #99)
 #63 (document watch/sync)   ─── independent
 #64 (workspace tagging)     ─── independent
+#129 (retrieval plan IR)    ─── independent, benefits from #106
 ```
 
 **Dependency chain:**
@@ -166,6 +174,8 @@ works, search quality measurably improves via reranking.
 - #94 builds on Phase 2's #99 but is otherwise independent.
 - #63 (watch/sync) and #64 (workspace tagging) are ingest improvements
   independent of the integration work.
+- #129 (retrieval plan IR) is independent but benefits from #106 (reranking)
+  being in place — the plan can specify reranking directives per sub-query.
 
 **Vision pipeline chain:**
 
@@ -225,11 +235,13 @@ PR #89 ──────┐
 #46 ─────────┤                   │          │                   │      └──▶ #104     #109
 #45 ─────────┤    #101 (rename)──┤  #100 ───┘                   │                    #107
 #16 ─────────┘                   │                              #94 (needs #99)      #12
-                                 ├─ #105                        #63                  #65
-                                 ├─ #15                         #64                  #80
+                                 ├─ #105 ◀─ #128                #63                  #65
+                                 ├─ #128 (sessions)             #64                  #80
+                                 ├─ #15                         #129 (plan IR)
                                  ├─ #82
                                  ├─ #126
                                  ├─ #127                         #111 (needs #110)
+                                 ├─ #130
                                  └─ #110 (needs PR #89)
 ```
 
