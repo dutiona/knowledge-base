@@ -380,6 +380,22 @@ def init_schema(conn: sqlite3.Connection) -> None:
         completed_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
+
+    CREATE TABLE IF NOT EXISTS prediction_errors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        query TEXT NOT NULL,
+        query_hash TEXT NOT NULL,
+        top_score REAL,
+        top_chunk_id INTEGER REFERENCES chunks(id) ON DELETE SET NULL,
+        error_type TEXT NOT NULL CHECK(error_type IN ('low_confidence', 'no_results')),
+        source_type_filter TEXT,
+        detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+        resolved_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_prediction_errors_hash_type
+        ON prediction_errors(query_hash, error_type, source_type_filter, detected_at);
+    CREATE INDEX IF NOT EXISTS idx_prediction_errors_unresolved
+        ON prediction_errors(detected_at) WHERE resolved_at IS NULL;
     """)
 
     conn.execute(
@@ -396,6 +412,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_model', 'qwen3.5:27b')"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('prediction_error_threshold', '0.025')"
     )
 
     conn.commit()

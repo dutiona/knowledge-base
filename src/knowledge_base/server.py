@@ -48,6 +48,12 @@ from .papers import (
     suggest_relationships,
     sync_bibtex,
 )
+from .prediction_errors import (
+    detect_and_log,
+    get_prediction_error_count,
+    list_prediction_errors as _list_prediction_errors,
+    resolve_prediction_error,
+)
 from .search import search
 from .vision import configure_omniparser, configure_vision, estimate_figures_time
 
@@ -189,6 +195,7 @@ def search_index(
     """
     conn = _get_conn()
     results = search(conn, query, top_k=top_k, source_type=source_type, mode=mode)
+    detect_and_log(conn, query, results, source_type_filter=source_type, mode=mode)
 
     return json.dumps(
         [
@@ -260,6 +267,7 @@ def status() -> str:
             "methods": method_count,
             "datasets": dataset_count,
             "metrics": metric_count,
+            "prediction_errors": get_prediction_error_count(conn),
             "jobs": job_counts,
             "embed_config": get_embed_config(conn),
             "recent_ingestions": [
@@ -865,6 +873,37 @@ def list_jobs_tool(status: str | None = None, paper_id: int | None = None) -> st
     """
     conn = _get_conn()
     return json.dumps(_list_jobs(conn, status=status, paper_id=paper_id))
+
+
+@mcp.tool()
+def list_prediction_errors_tool(
+    since: str | None = None,
+    unresolved_only: bool = True,
+) -> str:
+    """List prediction errors (queries with low-confidence or missing results).
+
+    Prediction errors are logged automatically when search returns poor results.
+    Use this to identify gaps in the knowledge base — queries that need better coverage.
+
+    Args:
+        since: ISO 8601 timestamp to filter errors after (e.g. '2025-01-01').
+        unresolved_only: Only show unresolved errors (default true).
+    """
+    conn = _get_conn()
+    return json.dumps(
+        _list_prediction_errors(conn, since=since, unresolved_only=unresolved_only)
+    )
+
+
+@mcp.tool()
+def resolve_prediction_error_tool(error_id: int) -> str:
+    """Mark a prediction error as resolved (e.g. after ingesting content that fills the gap).
+
+    Args:
+        error_id: ID of the prediction error to resolve.
+    """
+    conn = _get_conn()
+    return json.dumps(resolve_prediction_error(conn, error_id))
 
 
 def main():
