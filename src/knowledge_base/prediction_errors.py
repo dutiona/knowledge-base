@@ -7,7 +7,12 @@ surfacing retrieval failures as actionable maintenance signals.
 from __future__ import annotations
 
 import hashlib
+import logging
 import sqlite3
+
+from .search import SearchResult
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_THRESHOLD = 0.025
 
@@ -36,27 +41,34 @@ def get_threshold(conn: sqlite3.Connection) -> float:
 def detect_and_log(
     conn: sqlite3.Connection,
     query: str,
-    results: list,
+    results: list[SearchResult],
     source_type_filter: str | None = None,
+    mode: str = "hybrid",
 ) -> None:
     """Detect and log prediction errors. Never raises."""
     try:
-        _detect_and_log_inner(conn, query, results, source_type_filter)
+        _detect_and_log_inner(conn, query, results, source_type_filter, mode)
     except Exception:
-        pass
+        logger.debug("prediction error detection failed", exc_info=True)
 
 
 def _detect_and_log_inner(
     conn: sqlite3.Connection,
     query: str,
-    results: list,
+    results: list[SearchResult],
     source_type_filter: str | None,
+    mode: str,
 ) -> None:
     if not results:
         error_type = "no_results"
         top_score = None
         top_chunk_id = None
     else:
+        # Low-confidence detection only meaningful for hybrid mode.
+        # Single-mode searches (fts/vec) inherently score ~0.016 (one leg),
+        # which would cause false positives against the 0.025 threshold.
+        if mode != "hybrid":
+            return
         threshold = get_threshold(conn)
         top = results[0]
         if top.score >= threshold:
@@ -126,11 +138,13 @@ def list_prediction_errors(
 
 def resolve_prediction_error(conn: sqlite3.Connection, error_id: int) -> dict:
     """Mark a prediction error as resolved."""
-    conn.execute(
+    cursor = conn.execute(
         "UPDATE prediction_errors SET resolved_at = datetime('now') WHERE id = ?",
         (error_id,),
     )
     conn.commit()
+    if cursor.rowcount == 0:
+        return {"error": f"prediction error {error_id} not found"}
     return {"resolved": error_id}
 
 

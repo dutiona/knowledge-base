@@ -90,6 +90,21 @@ def test_high_confidence_hybrid_not_logged(tmp_path):
     assert count == 0
 
 
+def test_single_mode_not_logged(tmp_path):
+    """FTS-only or vec-only searches are never logged as low_confidence."""
+    from knowledge_base.prediction_errors import detect_and_log
+
+    conn = _setup_db(tmp_path)
+    cid = _insert_chunk(conn, chunk_id=10)
+    # Score 0.016 in fts-only mode — should NOT be logged
+    results = [_make_result(chunk_id=cid, score=0.0164, match_type="fts")]
+    detect_and_log(conn, "fts query", results, mode="fts")
+    detect_and_log(conn, "vec query", results, mode="vec")
+
+    count = conn.execute("SELECT COUNT(*) FROM prediction_errors").fetchone()[0]
+    assert count == 0
+
+
 def test_no_results_logged(tmp_path):
     """Empty results are logged as no_results."""
     from knowledge_base.prediction_errors import detect_and_log
@@ -161,6 +176,15 @@ def test_rate_limiting_different_filters(tmp_path):
 # ---------------------------------------------------------------------------
 # Resolution & listing
 # ---------------------------------------------------------------------------
+
+
+def test_resolve_nonexistent(tmp_path):
+    """Resolving a non-existent error returns an error dict."""
+    from knowledge_base.prediction_errors import resolve_prediction_error
+
+    conn = _setup_db(tmp_path)
+    result = resolve_prediction_error(conn, 9999)
+    assert "error" in result
 
 
 def test_resolve(tmp_path):

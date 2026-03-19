@@ -195,7 +195,7 @@ def search_index(
     """
     conn = _get_conn()
     results = search(conn, query, top_k=top_k, source_type=source_type, mode=mode)
-    detect_and_log(conn, query, results, source_type_filter=source_type)
+    detect_and_log(conn, query, results, source_type_filter=source_type, mode=mode)
 
     return json.dumps(
         [

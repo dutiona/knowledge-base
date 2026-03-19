@@ -393,9 +393,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
         resolved_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_prediction_errors_hash_type
-        ON prediction_errors(query_hash, error_type, detected_at);
+        ON prediction_errors(query_hash, error_type, source_type_filter, detected_at);
     CREATE INDEX IF NOT EXISTS idx_prediction_errors_unresolved
-        ON prediction_errors(resolved_at) WHERE resolved_at IS NULL;
+        ON prediction_errors(detected_at) WHERE resolved_at IS NULL;
     """)
 
     conn.execute(
