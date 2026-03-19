@@ -136,9 +136,29 @@ def test_re_embed_with_explicit_provider(mock_get_provider, tmp_path):
 
     re_embed(conn, "text-embedding-3-large", NEW_DIM, provider="openai")
 
-    mock_get_provider.assert_called_with("openai")
+    mock_get_provider.assert_called_with("openai", allow_env_override=False)
     mock_provider.embed.assert_called()
 
     # Provider should be persisted in config
     config = get_embed_config(conn)
     assert config["provider"] == "openai"
+
+
+@patch(
+    "knowledge_base.embed_swap.get_provider",
+    return_value=_mock_provider(_fake_embed_new),
+)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_re_embed_without_provider_still_persists_config(mock_provider, tmp_path):
+    """re_embed without explicit provider= should still persist the resolved provider."""
+    conn = _setup(tmp_path)
+
+    md = tmp_path / "doc.md"
+    md.write_text("Test content.\n")
+    ingest_file(conn, md)
+
+    re_embed(conn, "mxbai-embed-large", NEW_DIM)
+
+    # Provider should be persisted (default "ollama")
+    config = get_embed_config(conn)
+    assert config["provider"] == "ollama"

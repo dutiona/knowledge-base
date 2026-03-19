@@ -11,10 +11,19 @@ import pytest
 from knowledge_base.embeddings import (
     EmbeddingProvider,
     OllamaProvider,
+    _provider_cache,
     embed,
     embed_single,
     get_provider,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_provider_cache():
+    """Ensure provider cache is fresh for each test."""
+    _provider_cache.clear()
+    yield
+    _provider_cache.clear()
 
 
 class TestOllamaProvider:
@@ -93,6 +102,26 @@ class TestGetProvider:
         provider = get_provider("nonexistent_ignored")
         assert isinstance(provider, OllamaProvider)
 
+    def test_env_var_override_disabled(self, monkeypatch):
+        """allow_env_override=False ignores EMBED_PROVIDER."""
+        monkeypatch.setenv("EMBED_PROVIDER", "ollama")
+        with pytest.raises(
+            ValueError, match="Unknown embedding provider 'nonexistent'"
+        ):
+            get_provider("nonexistent", allow_env_override=False)
+
+    def test_provider_caching(self):
+        """get_provider returns the same instance for the same name."""
+        p1 = get_provider("ollama")
+        p2 = get_provider("ollama")
+        assert p1 is p2
+
+    def test_provider_caching_different_names(self):
+        """Different provider names get different instances."""
+        p_ollama = get_provider("ollama")
+        p_openai = get_provider("openai")
+        assert p_ollama is not p_openai
+
 
 class TestEmbedDispatch:
     """Test that module-level embed()/embed_single() dispatch through providers."""
@@ -128,6 +157,16 @@ class TestEmbedDispatch:
 
         result = embed_single("hello", model="bge-m3", _provider_name="openai")
         assert result == [0.1, 0.2, 0.3]
+
+    @patch("knowledge_base.embeddings.get_provider")
+    def test_embed_single_passes_expected_dim(self, mock_get):
+        mock_provider = MagicMock()
+        mock_provider.embed.return_value = [[0.1, 0.2, 0.3]]
+        mock_get.return_value = mock_provider
+
+        embed_single("hello", model="bge-m3", expected_dim=3, _provider_name="ollama")
+        _, kwargs = mock_provider.embed.call_args
+        assert kwargs["expected_dim"] == 3
 
 
 class TestOpenAIProvider:

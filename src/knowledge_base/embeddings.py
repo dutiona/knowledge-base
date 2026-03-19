@@ -10,7 +10,10 @@ import logging
 import math
 import os
 import subprocess
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from onnxruntime import InferenceSession
 
 import httpx
 
@@ -126,8 +129,9 @@ class OpenAIProvider:
                 "OPENAI_API_KEY environment variable required for OpenAI embeddings"
             )
         results = []
-        for i in range(0, len(texts), 32):
-            batch = texts[i : i + 32]
+        batch_size = 512  # OpenAI supports up to 2048, 512 balances throughput/memory
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
             raw_embeddings = self._call_api(api_key, batch, model, expected_dim)
             for emb in raw_embeddings:
                 if expected_dim is not None and len(emb) != expected_dim:
@@ -161,12 +165,15 @@ class ONNXProvider:
     """Embedding provider using ONNX Runtime for local inference.
 
     Expects the model path in ONNX_EMBED_MODEL_PATH env var.
-    The ONNX model must accept string inputs (e.g., exported with
-    SentenceTransformers optimum).
+    The ONNX model must accept raw string inputs as its first input node
+    (i.e., models exported with an embedded tokenizer, such as those
+    produced by ``optimum-cli export onnx`` with SentenceTransformers).
+    Standard HuggingFace ONNX exports that expect pre-tokenized
+    ``input_ids``/``attention_mask`` tensors are NOT supported.
     """
 
     def __init__(self) -> None:
-        self._sessions: dict[tuple[str, str], object] = {}
+        self._sessions: dict[tuple[str, str], InferenceSession] = {}
 
     def embed(
         self,
@@ -174,22 +181,22 @@ class ONNXProvider:
         model: str = "bge-m3",
         expected_dim: int | None = None,
     ) -> list[list[float]]:
+        import numpy as np
+
         session = self._get_session(model)
         results = []
         for i in range(0, len(texts), 32):
             batch = texts[i : i + 32]
-            import numpy as np
-
             inputs = {session.get_inputs()[0].name: np.array(batch)}
-            outputs = session.run(None, inputs)
-            embeddings = outputs[0].tolist()
+            outputs = session.run(None, inputs)  # type: ignore[arg-type]
+            embeddings: list[list[float]] = outputs[0].tolist()  # type: ignore[union-attr]
             for emb in embeddings:
                 if expected_dim is not None and len(emb) != expected_dim:
                     raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
                 results.append(_l2_normalize(emb))
         return results
 
-    def _get_session(self, model: str) -> object:
+    def _get_session(self, model: str) -> InferenceSession:
         model_path = os.environ.get("ONNX_EMBED_MODEL_PATH", "")
         cache_key = (model, model_path)
         if cache_key not in self._sessions:
@@ -215,20 +222,33 @@ _PROVIDERS: dict[str, type] = {
     "onnx": ONNXProvider,
 }
 
+_provider_cache: dict[str, EmbeddingProvider] = {}
 
-def get_provider(name: str) -> EmbeddingProvider:
+
+def get_provider(name: str, *, allow_env_override: bool = True) -> EmbeddingProvider:
     """Get an embedding provider by name.
 
-    Supports env-var override: EMBED_PROVIDER takes precedence.
+    When *allow_env_override* is True (the default), ``EMBED_PROVIDER``
+    env-var takes precedence over *name*.  Callers that already resolved
+    an explicit provider choice (e.g. ``re_embed(provider=...)``) should
+    pass ``allow_env_override=False`` so the env-var cannot silently
+    redirect to a different backend.
     """
-    resolved = os.environ.get("EMBED_PROVIDER", name).lower()
+    resolved = name
+    if allow_env_override:
+        resolved = os.environ.get("EMBED_PROVIDER", name)
+    resolved = resolved.lower()
+    if resolved in _provider_cache:
+        return _provider_cache[resolved]
     cls = _PROVIDERS.get(resolved)
     if cls is None:
         raise ValueError(
             f"Unknown embedding provider '{resolved}'. "
             f"Available: {', '.join(sorted(_PROVIDERS))}"
         )
-    return cls()
+    instance = cls()
+    _provider_cache[resolved] = instance
+    return instance
 
 
 # --- Module-level dispatch functions ---
@@ -253,8 +273,11 @@ def embed(
 def embed_single(
     text: str,
     model: str = "bge-m3",
+    expected_dim: int | None = None,
     *,
     _provider_name: str = "ollama",
 ) -> list[float]:
     """Embed a single text using the named provider."""
-    return embed([text], model=model, _provider_name=_provider_name)[0]
+    return embed(
+        [text], model=model, expected_dim=expected_dim, _provider_name=_provider_name
+    )[0]

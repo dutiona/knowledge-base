@@ -44,7 +44,10 @@ def re_embed(
     """
     # Resolve provider: explicit override > current config > default
     cfg = get_embed_config(conn)
-    embed_provider = get_provider(provider or cfg["provider"])
+    resolved_provider_name = provider or cfg["provider"]
+    embed_provider = get_provider(
+        resolved_provider_name, allow_env_override=provider is None
+    )
 
     # Stage embeddings in a regular table (vec0 tables can't be renamed)
     conn.execute("DROP TABLE IF EXISTS _embed_staging")
@@ -102,11 +105,10 @@ def re_embed(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_dim', ?)",
         (str(new_dim),),
     )
-    if provider:
-        conn.execute(
-            "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', ?)",
-            (provider,),
-        )
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', ?)",
+        (resolved_provider_name,),
+    )
     conn.commit()
 
     return {
