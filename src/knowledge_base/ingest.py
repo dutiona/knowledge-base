@@ -590,9 +590,7 @@ def ingest_file(
         new_chunks, embeddings
     ):
         cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
-                                   chunk_index, session_id, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 chunk_hash,
                 chunk_text,
@@ -794,9 +792,7 @@ def reingest_file(
         insert_items, embeddings
     ):
         cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
-                                   chunk_index, session_id, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 chunk_hash,
                 chunk_text,
@@ -1655,9 +1651,7 @@ def ingest_url(
 
     for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings):
         cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
-                                   chunk_index, session_id, metadata)
-               VALUES (?, ?, 'web', ?, ?, ?, ?)""",
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, metadata) VALUES (?, ?, 'web', ?, ?, ?, ?)",
             (chunk_hash, chunk_text, url, idx, session_id, meta_json),
         )
         chunk_id = cursor.lastrowid
@@ -1679,12 +1673,14 @@ def ingest_directory(
     conn: sqlite3.Connection,
     directory: Path,
     extensions: set[str] | None = None,
+    session_id: str | None = None,
 ) -> list[dict]:
     import uuid
 
     if extensions is None:
         extensions = {".pdf", ".md", ".txt", ".typ", ".rst"}
-    session_id = str(uuid.uuid4())
+    if session_id is None:
+        session_id = str(uuid.uuid4())
     results = []
     affected_folders: set[str] = set()
     for f in sorted(directory.rglob("*")):

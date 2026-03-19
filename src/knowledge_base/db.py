@@ -78,14 +78,18 @@ def co_occurrence_pairs(conn: sqlite3.Connection, min_sessions: int = 1) -> list
     """
     rows = conn.execute(
         """
+        WITH doc_sessions AS (
+            SELECT DISTINCT source_uri, session_id
+            FROM chunks
+            WHERE session_id IS NOT NULL
+        )
         SELECT a.source_uri AS source_uri_a,
                b.source_uri AS source_uri_b,
-               COUNT(DISTINCT a.session_id) AS co_sessions
-        FROM chunks a
-        JOIN chunks b
+               COUNT(*) AS co_sessions
+        FROM doc_sessions a
+        JOIN doc_sessions b
           ON a.session_id = b.session_id
          AND a.source_uri < b.source_uri
-        WHERE a.session_id IS NOT NULL
         GROUP BY a.source_uri, b.source_uri
         HAVING co_sessions >= ?
         ORDER BY co_sessions DESC
@@ -204,10 +208,8 @@ def _migrate_papers_fts(conn: sqlite3.Connection) -> None:
 
 def _migrate_session_id(conn: sqlite3.Connection) -> None:
     """Add session_id column to chunks for co-occurrence tracking."""
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'"
-    ).fetchone()
-    if not row or "session_id" in row[0]:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+    if "session_id" in columns:
         return
     conn.execute("ALTER TABLE chunks ADD COLUMN session_id TEXT")
     conn.commit()

@@ -2683,6 +2683,25 @@ def test_ingest_directory_shares_session_id(tmp_path):
 
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_directory_explicit_session_id(tmp_path):
+    """Caller-provided session_id is used instead of auto-generated UUID."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text("Document A explicit session")
+    (docs / "b.md").write_text("Document B explicit session")
+
+    ingest_directory(conn, docs, session_id="my-custom-session")
+
+    rows = conn.execute("SELECT DISTINCT session_id FROM chunks").fetchall()
+    session_ids = [r["session_id"] for r in rows]
+    assert session_ids == ["my-custom-session"]
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_file_with_session_id(tmp_path):
     """reingest_file stores the new session_id on re-inserted chunks."""
     db_path = tmp_path / "test.db"
