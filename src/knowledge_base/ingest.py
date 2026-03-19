@@ -305,6 +305,160 @@ def _chunk_markdown(
     return result
 
 
+_SECTION_HEADING_RE = re.compile(r"^(#{1,2}) ", re.MULTILINE)
+_SUBSECTION_HEADING_RE = re.compile(r"^(###) ", re.MULTILINE)
+_SPECIAL_SECTION_RE = re.compile(
+    r"^#{1,2}\s+(Abstract|References|Bibliography)\b", re.IGNORECASE
+)
+
+
+def _split_at_pattern(text: str, pattern: re.Pattern) -> list[tuple[str, int]]:
+    """Split text at heading boundaries, returning (section_text, char_offset)."""
+    raw = pattern.split(text)
+    sections: list[tuple[str, int]] = []
+    offset = 0
+
+    if raw:
+        preamble = raw[0]
+        if preamble.strip():
+            sections.append((preamble, 0))
+        offset = len(preamble)
+
+        i = 1
+        while i < len(raw) - 1:
+            hashes = raw[i]
+            rest = raw[i + 1]
+            section_text = hashes + " " + rest
+            sections.append((section_text, offset))
+            offset += len(section_text)
+            i += 2
+
+    return sections
+
+
+def _paragraph_split(
+    text: str,
+    max_size: int,
+    base_offset: int,
+    page_map: dict[int, int],
+    image_dir: Path | None,
+) -> list[tuple[str, list[int]]]:
+    """Split text at paragraph boundaries, respecting atomic tables."""
+    paragraphs = text.split("\n\n")
+    result: list[tuple[str, list[int]]] = []
+    buf = ""
+    buf_offset = base_offset
+
+    def _flush() -> None:
+        nonlocal buf, buf_offset
+        stripped = buf.strip()
+        if stripped:
+            sanitized = _sanitize_image_refs(stripped, image_dir)
+            pages = _pages_for_range(buf_offset, buf_offset + len(buf), page_map)
+            result.append((sanitized, pages))
+        buf = ""
+
+    for para in paragraphs:
+        if not para.strip():
+            continue
+        candidate = (buf + "\n\n" + para) if buf else para
+        # If adding this paragraph exceeds max_size and buffer is non-empty,
+        # flush first (unless the paragraph itself contains a table — keep atomic)
+        if buf and len(candidate) > max_size:
+            _flush()
+            buf_offset = base_offset  # approximate
+            buf = para
+        else:
+            buf = candidate
+
+    _flush()
+    return result
+
+
+def _chunk_by_section(
+    text: str,
+    max_section_size: int = 8000,
+    page_map: dict[int, int] | None = None,
+    image_dir: Path | None = None,
+) -> list[tuple[str, list[int]]]:
+    """Split markdown into section-level chunks for 32K-context embedding models.
+
+    Primary split at H1/H2 headings. Oversized sections split at H3, then
+    paragraph boundaries. No overlap between chunks.
+
+    Returns list of (chunk_text, page_numbers) matching _chunk_markdown signature.
+    """
+    if not text.strip():
+        return []
+
+    pm = page_map or {}
+
+    # Split at H1/H2 boundaries
+    sections = _split_at_pattern(text, _SECTION_HEADING_RE)
+
+    if not sections:
+        # No headings — single chunk or paragraph split if oversized
+        stripped = text.strip()
+        if len(stripped) <= max_section_size:
+            sanitized = _sanitize_image_refs(stripped, image_dir)
+            pages = _pages_for_range(0, len(text), pm)
+            return [(sanitized, pages)]
+        return _paragraph_split(text, max_section_size, 0, pm, image_dir)
+
+    result: list[tuple[str, list[int]]] = []
+
+    for section_text, sec_offset in sections:
+        stripped = section_text.strip()
+        if not stripped:
+            continue
+
+        # Skip sections that are heading-only (no body text)
+        lines = stripped.split("\n", 1)
+        body = lines[1].strip() if len(lines) > 1 else ""
+        if _SECTION_HEADING_RE.match(stripped) and not body:
+            continue
+
+        # Small enough — emit as-is
+        if len(stripped) <= max_section_size:
+            sanitized = _sanitize_image_refs(stripped, image_dir)
+            pages = _pages_for_range(sec_offset, sec_offset + len(section_text), pm)
+            result.append((sanitized, pages))
+            continue
+
+        # Oversized — try splitting at H3 boundaries
+        subsections = _split_at_pattern(section_text, _SUBSECTION_HEADING_RE)
+
+        if len(subsections) <= 1:
+            # No H3 sub-headings — paragraph fallback
+            result.extend(
+                _paragraph_split(
+                    section_text, max_section_size, sec_offset, pm, image_dir
+                )
+            )
+            continue
+
+        # Process H3 sub-sections
+        for sub_text, sub_rel_offset in subsections:
+            sub_stripped = sub_text.strip()
+            if not sub_stripped:
+                continue
+            sub_offset = sec_offset + sub_rel_offset
+
+            if len(sub_stripped) <= max_section_size:
+                sanitized = _sanitize_image_refs(sub_stripped, image_dir)
+                pages = _pages_for_range(sub_offset, sub_offset + len(sub_text), pm)
+                result.append((sanitized, pages))
+            else:
+                # Still too large — paragraph fallback
+                result.extend(
+                    _paragraph_split(
+                        sub_text, max_section_size, sub_offset, pm, image_dir
+                    )
+                )
+
+    return result
+
+
 def _serialize_f32(vec: list[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
 
