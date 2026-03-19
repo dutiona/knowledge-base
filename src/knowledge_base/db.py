@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
+import struct
 from pathlib import Path
 
 import sqlite_vec
@@ -320,6 +322,113 @@ def _migrate_chunk_sessions(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+# ---------------------------------------------------------------------------
+# Embedding space helpers (#99)
+# ---------------------------------------------------------------------------
+
+_SPACE_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+
+
+def _serialize_f32(vec: list[float]) -> bytes:
+    """Serialize a float vector to bytes for sqlite-vec."""
+    return struct.pack(f"{len(vec)}f", *vec)
+
+
+def space_table_name(name: str) -> str:
+    """Deterministic vec table name for an embedding space."""
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+    return f"chunks_vec_{sanitized}"
+
+
+def get_active_space(conn: sqlite3.Connection) -> dict | None:
+    """Return the active embedding space row as a dict, or None."""
+    row = conn.execute("SELECT * FROM embed_spaces WHERE status = 'active'").fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+
+def get_vec_table_name(conn: sqlite3.Connection) -> str:
+    """Return the active space's vec table name, falling back to 'chunks_vec'."""
+    row = conn.execute(
+        "SELECT table_name FROM embed_spaces WHERE status = 'active'"
+    ).fetchone()
+    if row is None:
+        return "chunks_vec"
+    return row["table_name"]
+
+
+def get_active_chunk_strategy(conn: sqlite3.Connection) -> str:
+    """Return the active space's chunk_strategy, falling back to 'mechanical'."""
+    row = conn.execute(
+        "SELECT chunk_strategy FROM embed_spaces WHERE status = 'active'"
+    ).fetchone()
+    if row is None:
+        return "mechanical"
+    return row["chunk_strategy"]
+
+
+def insert_chunk_vec(
+    conn: sqlite3.Connection,
+    chunk_id: int,
+    embedding: list[float],
+    table_name: str | None = None,
+) -> None:
+    """Insert a single chunk embedding into the specified (or active) vec table."""
+    tbl = table_name or get_vec_table_name(conn)
+    conn.execute(
+        f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
+        (chunk_id, _serialize_f32(embedding), chunk_id),
+    )
+
+
+def delete_chunk_vecs(
+    conn: sqlite3.Connection,
+    chunk_ids: list[int],
+    table_name: str | None = None,
+) -> None:
+    """Delete chunk embeddings from the specified (or active) vec table."""
+    if not chunk_ids:
+        return
+    tbl = table_name or get_vec_table_name(conn)
+    _batched_execute(conn, f"DELETE FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids)
+
+
+def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
+    """Register the default embedding space if embed_spaces is empty.
+
+    Works for both fresh DBs (chunks_vec just created, 0 rows) and legacy
+    DBs (chunks_vec has data). Idempotent — skips if any space already exists.
+    """
+    existing = conn.execute("SELECT 1 FROM embed_spaces LIMIT 1").fetchone()
+    if existing:
+        return
+
+    model_row = conn.execute(
+        "SELECT value FROM config WHERE key = 'embed_model'"
+    ).fetchone()
+    provider_row = conn.execute(
+        "SELECT value FROM config WHERE key = 'embed_provider'"
+    ).fetchone()
+
+    model = model_row["value"] if model_row else DEFAULT_EMBED_MODEL
+    provider = provider_row["value"] if provider_row else DEFAULT_EMBED_PROVIDER
+
+    # Count existing embeddings (0 for fresh DBs)
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0]
+    except sqlite3.OperationalError:
+        count = 0
+
+    conn.execute(
+        """INSERT INTO embed_spaces
+           (name, model, provider, dim, chunk_strategy, status, table_name, chunk_count)
+           VALUES (?, ?, ?, ?, 'mechanical', 'active', 'chunks_vec', ?)""",
+        ("default", model, provider, embed_dim, count),
+    )
+    conn.commit()
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     # --- Create config table first so we can read embed_dim before chunks_vec ---
     conn.execute("""
@@ -545,6 +654,21 @@ def init_schema(conn: sqlite3.Connection) -> None:
         embedding float[{embed_dim}],
         +folder_path TEXT
     );
+
+    -- Embedding space registry (#99)
+    CREATE TABLE IF NOT EXISTS embed_spaces (
+        name TEXT PRIMARY KEY,
+        model TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        dim INTEGER NOT NULL,
+        chunk_strategy TEXT NOT NULL DEFAULT 'mechanical'
+            CHECK(chunk_strategy IN ('mechanical', 'semantic')),
+        status TEXT NOT NULL CHECK(status IN ('active', 'populating', 'deprecated')),
+        table_name TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        chunk_count INTEGER DEFAULT 0,
+        total_chunks INTEGER
+    );
     """)
 
     conn.execute(
@@ -575,6 +699,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
         "INSERT OR IGNORE INTO config (key, value) VALUES ('chunk_strategy', 'mechanical')"
     )
 
+    # Enforce at most one active embedding space at the DB level
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_embed_spaces_one_active "
+        "ON embed_spaces(status) WHERE status = 'active'"
+    )
+
     conn.commit()
 
     _migrate_source_type_figure(conn)
@@ -588,3 +718,4 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_paper_paths(conn)
     _migrate_jobs_types(conn)
     _migrate_chunk_sessions(conn)
+    _bootstrap_embed_spaces(conn, embed_dim)

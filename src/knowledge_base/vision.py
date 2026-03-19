@@ -19,7 +19,8 @@ import fitz
 import httpx
 
 from .embeddings import _get_ollama_url
-from .ingest import _content_hash, _embed_with_config, _serialize_f32, pdf_image_dir
+from .db import _serialize_f32, get_vec_table_name
+from .ingest import _content_hash, _embed_with_config, pdf_image_dir
 
 logger = logging.getLogger(__name__)
 
@@ -1169,6 +1170,7 @@ def extract_figures(
         )
         fig_delete_params = (source_uri,)
 
+    vec_table = get_vec_table_name(conn)
     try:
         # Clean up FK references before deleting figure chunks (#53)
         conn.execute(
@@ -1184,7 +1186,7 @@ def extract_figures(
             fig_delete_params,
         )
         conn.execute(
-            f"DELETE FROM chunks_vec WHERE chunk_id IN {fig_chunk_subquery}",
+            f"DELETE FROM [{vec_table}] WHERE chunk_id IN {fig_chunk_subquery}",
             fig_delete_params,
         )
         if candidate_pages is not None and candidate_pages:
@@ -1243,7 +1245,7 @@ def extract_figures(
 
                 embedding_blob = _serialize_f32(embeddings[i])
                 conn.execute(
-                    "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
+                    f"INSERT INTO [{vec_table}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
                     (chunk_id, embedding_blob, chunk_id),
                 )
                 chunks_created += 1

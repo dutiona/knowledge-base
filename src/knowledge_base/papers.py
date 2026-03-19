@@ -8,7 +8,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from .db import RELATIONSHIP_TYPES
+from .db import RELATIONSHIP_TYPES, get_vec_table_name
 
 
 def compute_file_hash(path: Path) -> str:
@@ -311,9 +311,10 @@ def _get_paper_embeddings(
     conn: sqlite3.Connection, paper_id: int
 ) -> list[tuple[int, bytes]]:
     """Return [(chunk_id, embedding_blob), ...] for a paper's non-figure chunks."""
+    vec_table = get_vec_table_name(conn)
     return conn.execute(
-        """SELECT cv.chunk_id, cv.embedding
-           FROM chunks_vec cv
+        f"""SELECT cv.chunk_id, cv.embedding
+           FROM [{vec_table}] cv
            JOIN chunks c ON c.id = cv.chunk_id
            JOIN paper_paths pp ON pp.path = c.source_uri
            WHERE pp.paper_id = ?

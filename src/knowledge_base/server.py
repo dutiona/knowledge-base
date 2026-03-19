@@ -14,8 +14,23 @@ from .conclusions import (
     record_conclusion,
     supersede_conclusion,
 )
-from .db import DEFAULT_DB_PATH, co_occurrence_pairs, get_connection, init_schema
-from .embed_swap import get_embed_config, re_embed
+from .db import (
+    DEFAULT_DB_PATH,
+    co_occurrence_pairs,
+    get_active_space,
+    get_connection,
+    init_schema,
+)
+from .embed_swap import (
+    get_embed_config,
+    re_embed,
+    create_space,
+    backfill_space,
+    promote_space,
+    deprecate_space,
+    cleanup_space,
+    list_spaces,
+)
 from .extraction import (
     _MAX_WORKERS_LIMIT,
     compare_papers,
@@ -322,6 +337,12 @@ def status() -> str:
     ).fetchall():
         job_counts[row["status"]] = row["count"]
 
+    space_counts = {}
+    for row in conn.execute(
+        "SELECT status, COUNT(*) as count FROM embed_spaces GROUP BY status"
+    ).fetchall():
+        space_counts[row["status"]] = row["count"]
+
     return json.dumps(
         {
             "total_chunks": total,
@@ -335,6 +356,7 @@ def status() -> str:
             "metrics": metric_count,
             "prediction_errors": get_prediction_error_count(conn),
             "jobs": job_counts,
+            "embed_spaces": space_counts,
             "embed_config": get_embed_config(conn),
             "chunk_strategy": (lambda r: r["value"] if r else "mechanical")(
                 conn.execute(
@@ -360,7 +382,12 @@ def status() -> str:
 def embed_config() -> str:
     """Get current embedding model configuration (model name and dimension)."""
     conn = _get_conn()
-    return json.dumps(get_embed_config(conn))
+    config = get_embed_config(conn)
+    active = get_active_space(conn)
+    if active:
+        config["active_space"] = active["name"]
+        config["chunk_strategy"] = active["chunk_strategy"]
+    return json.dumps(config)
 
 
 @mcp.tool()
@@ -382,10 +409,114 @@ def re_embed_tool(model: str, dim: int) -> str:
     conn.commit()
     result["note"] = (
         "All 'similar' relationships removed (embedding space changed). "
-        "Run scan_relationships() to recompute."
+        "Run scan_relationships() to recompute. "
+        "Use list_embed_spaces_tool() to see all spaces."
     )
 
     return json.dumps(result)
+
+
+@mcp.tool()
+def list_embed_spaces_tool() -> str:
+    """List all embedding spaces with status, progress, and chunk strategy."""
+    conn = _get_conn()
+    return json.dumps(list_spaces(conn))
+
+
+@mcp.tool()
+def create_embed_space_tool(
+    name: str,
+    model: str,
+    dim: int,
+    provider: str,
+    chunk_strategy: str = "mechanical",
+) -> str:
+    """Create a new embedding space in 'populating' status.
+
+    Args:
+        name: Unique space name (alphanumeric + underscores only).
+        model: Embedding model name (e.g. 'qwen3-embedding').
+        dim: Embedding dimension (e.g. 768, 1024).
+        provider: Embedding provider ('ollama', 'openai', 'onnx').
+        chunk_strategy: Which chunks to embed ('mechanical' or 'semantic').
+    """
+    conn = _get_conn()
+    try:
+        result = create_space(conn, name, model, dim, provider, chunk_strategy)
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def backfill_embed_space_tool(name: str, batch_size: int = 32) -> str:
+    """Backfill an embedding space with chunk embeddings. Resumable.
+
+    Args:
+        name: Name of the space to backfill (must be in 'populating' status).
+        batch_size: Number of chunks per embedding batch (default 32).
+    """
+    conn = _get_conn()
+    try:
+        result = backfill_space(conn, name, batch_size)
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def promote_embed_space_tool(name: str) -> str:
+    """Promote an embedding space to active. Deprecates the current active space.
+
+    Also updates config (embed_model, embed_dim, embed_provider, chunk_strategy)
+    and invalidates all 'similar' relationships.
+
+    Args:
+        name: Name of the space to promote.
+    """
+    conn = _get_conn()
+    try:
+        result = promote_space(conn, name)
+        # Invalidate similarity relationships (same as re_embed)
+        conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
+        conn.commit()
+        result["note"] = (
+            "All 'similar' relationships removed (embedding space changed). "
+            "Run scan_relationships() to recompute."
+        )
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def deprecate_embed_space_tool(name: str) -> str:
+    """Mark an embedding space as deprecated.
+
+    Args:
+        name: Name of the space to deprecate (cannot be the active space).
+    """
+    conn = _get_conn()
+    try:
+        result = deprecate_space(conn, name)
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def cleanup_embed_space_tool(name: str) -> str:
+    """Drop a deprecated space's vec table and remove its registry entry.
+
+    Args:
+        name: Name of the deprecated space to clean up.
+    """
+    conn = _get_conn()
+    try:
+        result = cleanup_space(conn, name)
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
 
 
 @mcp.tool()

@@ -1,19 +1,29 @@
-"""Embedding model swap: re-embed all chunks with a new model."""
+"""Embedding space lifecycle: create, backfill, promote, deprecate, cleanup.
+
+Manages multiple embedding spaces (each with its own sqlite-vec table)
+for zero-downtime model migration, A/B comparison, and rollback.
+"""
 
 from __future__ import annotations
 
+import re
 import sqlite3
-import struct
 
+from .db import (
+    _SPACE_NAME_RE,
+    _serialize_f32,
+    get_active_space,
+    space_table_name,
+)
 from .embeddings import get_provider
 
 
-def _serialize_f32(vec: list[float]) -> bytes:
-    return struct.pack(f"{len(vec)}f", *vec)
-
-
 def get_embed_config(conn: sqlite3.Connection) -> dict:
-    """Get current embedding model configuration."""
+    """Get current embedding model configuration from the config table.
+
+    Backward-compatible: reads from config key-value pairs, which are
+    kept in sync with the active space by promote_space().
+    """
     from .db import DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL, DEFAULT_EMBED_PROVIDER
 
     model = conn.execute(
@@ -30,42 +40,126 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     }
 
 
-def re_embed(
+# ---------------------------------------------------------------------------
+# Space lifecycle
+# ---------------------------------------------------------------------------
+
+
+def _has_chunk_strategy_column(conn: sqlite3.Connection) -> bool:
+    """Check if the chunks table has a chunk_strategy column (#100)."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+    return "chunk_strategy" in columns
+
+
+def create_space(
     conn: sqlite3.Connection,
-    new_model: str,
-    new_dim: int,
-    batch_size: int = 32,
-    provider: str | None = None,
+    name: str,
+    model: str,
+    dim: int,
+    provider: str,
+    chunk_strategy: str = "mechanical",
 ) -> dict:
-    """Re-embed all chunks with a new model.
+    """Create a new embedding space in 'populating' status.
 
-    Embeds into a staging table first. Only drops/recreates the real vec table
-    after all embeddings succeed, preventing data loss on failure.
+    Creates the registry entry and the backing vec0 virtual table.
     """
-    # Resolve provider: explicit override > current config > default
-    cfg = get_embed_config(conn)
-    resolved_provider_name = provider or cfg["provider"]
-    embed_provider = get_provider(
-        resolved_provider_name, allow_env_override=provider is None
-    )
+    if not _SPACE_NAME_RE.match(name):
+        raise ValueError(
+            f"Space name must be alphanumeric/underscore only, got: {name!r}"
+        )
+    if chunk_strategy not in ("mechanical", "semantic"):
+        raise ValueError(
+            f"chunk_strategy must be 'mechanical' or 'semantic', got: {chunk_strategy!r}"
+        )
 
-    # Stage embeddings in a regular table (vec0 tables can't be renamed)
-    conn.execute("DROP TABLE IF EXISTS _embed_staging")
-    conn.execute("""
-        CREATE TABLE _embed_staging (
-            chunk_id INTEGER PRIMARY KEY,
-            embedding BLOB NOT NULL
+    existing = conn.execute(
+        "SELECT 1 FROM embed_spaces WHERE name = ?", (name,)
+    ).fetchone()
+    if existing:
+        raise ValueError(f"Embedding space {name!r} already exists")
+
+    tbl = space_table_name(name)
+
+    # Count target chunks for progress tracking
+    if _has_chunk_strategy_column(conn):
+        total = conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?",
+            (chunk_strategy,),
+        ).fetchone()[0]
+    else:
+        total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+
+    conn.execute(
+        """INSERT INTO embed_spaces
+           (name, model, provider, dim, chunk_strategy, status, table_name, total_chunks)
+           VALUES (?, ?, ?, ?, ?, 'populating', ?, ?)""",
+        (name, model, provider, dim, chunk_strategy, tbl, total),
+    )
+    conn.execute(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS [{tbl}] USING vec0(
+            embedding float[{dim}],
+            +chunk_id INTEGER
         )
     """)
+    conn.commit()
 
-    # Process in batches using ID-based cursor to avoid OOM
+    return {
+        "space": name,
+        "table_name": tbl,
+        "status": "populating",
+        "total_chunks": total,
+    }
+
+
+def backfill_space(
+    conn: sqlite3.Connection,
+    space_name: str,
+    batch_size: int = 32,
+) -> dict:
+    """Embed chunks into a populating space. Resumable via ID-cursor."""
+    space = conn.execute(
+        "SELECT * FROM embed_spaces WHERE name = ?", (space_name,)
+    ).fetchone()
+    if space is None:
+        raise ValueError(f"Embedding space {space_name!r} not found")
+    if space["status"] not in ("populating",):
+        raise ValueError(
+            f"Can only backfill spaces in 'populating' status, got: {space['status']!r}"
+        )
+
+    tbl = space["table_name"]
+    model = space["model"]
+    dim = space["dim"]
+    provider_name = space["provider"]
+    chunk_strategy = space["chunk_strategy"]
+
+    embed_provider = get_provider(provider_name, allow_env_override=False)
+
+    # Build chunk selection query — strategy-aware
+    has_strategy = _has_chunk_strategy_column(conn)
+    if has_strategy:
+        base_query = (
+            "SELECT id, content FROM chunks "
+            "WHERE chunk_strategy = ? AND id > ? "
+            "AND id NOT IN (SELECT chunk_id FROM [{tbl}]) "
+            "ORDER BY id LIMIT ?"
+        ).replace("{tbl}", tbl)
+        base_params_prefix = [chunk_strategy]
+    else:
+        base_query = (
+            "SELECT id, content FROM chunks "
+            "WHERE id > ? "
+            "AND id NOT IN (SELECT chunk_id FROM [{tbl}]) "
+            "ORDER BY id LIMIT ?"
+        ).replace("{tbl}", tbl)
+        base_params_prefix = []
+
     processed = 0
     last_id = 0
+
     while True:
-        batch = conn.execute(
-            "SELECT id, content FROM chunks WHERE id > ? ORDER BY id LIMIT ?",
-            (last_id, batch_size),
-        ).fetchall()
+        params = base_params_prefix + [last_id, batch_size]
+        batch = conn.execute(base_query, params).fetchall()
         if not batch:
             break
 
@@ -73,70 +167,220 @@ def re_embed(
         ids = [row["id"] for row in batch]
         last_id = ids[-1]
 
-        embeddings = embed_provider.embed(texts, model=new_model, expected_dim=new_dim)
+        embeddings = embed_provider.embed(texts, model=model, expected_dim=dim)
 
         for chunk_id, emb_vec in zip(ids, embeddings):
             conn.execute(
-                "INSERT INTO _embed_staging (chunk_id, embedding) VALUES (?, ?)",
-                (chunk_id, _serialize_f32(emb_vec)),
+                f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
+                (chunk_id, _serialize_f32(emb_vec), chunk_id),
             )
         processed += len(batch)
 
-    # All embeddings succeeded — now swap atomically
-    conn.execute("DROP TABLE IF EXISTS chunks_vec")
-    conn.execute(f"""
-        CREATE VIRTUAL TABLE chunks_vec USING vec0(
-            embedding float[{new_dim}],
-            +chunk_id INTEGER
+        # Update progress counter
+        conn.execute(
+            "UPDATE embed_spaces SET chunk_count = chunk_count + ? WHERE name = ?",
+            (len(batch), space_name),
         )
-    """)
-    conn.execute("""
-        INSERT INTO chunks_vec (rowid, embedding, chunk_id)
-        SELECT chunk_id, embedding, chunk_id FROM _embed_staging
-    """)
-    conn.execute("DROP TABLE _embed_staging")
+        conn.commit()
 
-    # Re-embed folder summaries (#126) — always recreate the vec table
-    # so its dimension matches the new model even when no summaries exist yet
-    folders_processed = 0
+    return {
+        "space": space_name,
+        "chunks_processed": processed,
+        "total_chunks": space["total_chunks"],
+    }
+
+
+def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
+    """Promote a space to active, deprecating the current active space.
+
+    Atomically updates status and syncs config table (embed_model,
+    embed_dim, embed_provider, chunk_strategy).
+    """
+    space = conn.execute(
+        "SELECT * FROM embed_spaces WHERE name = ?", (space_name,)
+    ).fetchone()
+    if space is None:
+        raise ValueError(f"Embedding space {space_name!r} not found")
+    if space["status"] not in ("populating", "deprecated"):
+        raise ValueError(
+            f"Can only promote spaces in 'populating' or 'deprecated' status, "
+            f"got: {space['status']!r}"
+        )
+    # Allow promotion of genuinely empty spaces (total_chunks=0 means the DB
+    # has no chunks at all — e.g. re_embed on empty DB). Block promotion only
+    # when there ARE chunks to backfill but none were processed.
+    if space["chunk_count"] == 0 and (space["total_chunks"] or 0) > 0:
+        raise ValueError(
+            f"Cannot promote space {space_name!r}: 0 of "
+            f"{space['total_chunks']} chunks backfilled"
+        )
+
+    old_active = get_active_space(conn)
+    old_name = old_active["name"] if old_active else None
+
+    # Atomic status swap
+    if old_name:
+        conn.execute(
+            "UPDATE embed_spaces SET status = 'deprecated' WHERE name = ?",
+            (old_name,),
+        )
+    conn.execute(
+        "UPDATE embed_spaces SET status = 'active' WHERE name = ?",
+        (space_name,),
+    )
+
+    # Sync config table
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_model', ?)",
+        (space["model"],),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_dim', ?)",
+        (str(space["dim"]),),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', ?)",
+        (space["provider"],),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', ?)",
+        (space["chunk_strategy"],),
+    )
+    conn.commit()
+
+    return {"promoted": space_name, "deprecated": old_name}
+
+
+def deprecate_space(conn: sqlite3.Connection, space_name: str) -> dict:
+    """Mark a space as deprecated. Cannot deprecate the active space."""
+    space = conn.execute(
+        "SELECT status FROM embed_spaces WHERE name = ?", (space_name,)
+    ).fetchone()
+    if space is None:
+        raise ValueError(f"Embedding space {space_name!r} not found")
+    if space["status"] == "active":
+        raise ValueError("Cannot deprecate the active embedding space")
+
+    conn.execute(
+        "UPDATE embed_spaces SET status = 'deprecated' WHERE name = ?",
+        (space_name,),
+    )
+    conn.commit()
+    return {"deprecated": space_name}
+
+
+def cleanup_space(conn: sqlite3.Connection, space_name: str) -> dict:
+    """Drop a deprecated space's vec table and registry entry."""
+    space = conn.execute(
+        "SELECT status, table_name FROM embed_spaces WHERE name = ?",
+        (space_name,),
+    ).fetchone()
+    if space is None:
+        raise ValueError(f"Embedding space {space_name!r} not found")
+    if space["status"] != "deprecated":
+        raise ValueError(
+            f"Can only clean up deprecated spaces, got: {space['status']!r}"
+        )
+
+    tbl = space["table_name"]
+    conn.execute(f"DROP TABLE IF EXISTS [{tbl}]")
+    conn.execute("DELETE FROM embed_spaces WHERE name = ?", (space_name,))
+    conn.commit()
+    return {"cleaned": space_name}
+
+
+def list_spaces(conn: sqlite3.Connection) -> list[dict]:
+    """Return all embedding spaces as dicts."""
+    rows = conn.execute("SELECT * FROM embed_spaces ORDER BY created_at").fetchall()
+    return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Convenience wrapper (backward compat)
+# ---------------------------------------------------------------------------
+
+
+def re_embed(
+    conn: sqlite3.Connection,
+    new_model: str,
+    new_dim: int,
+    batch_size: int = 32,
+    provider: str | None = None,
+) -> dict:
+    """Re-embed all chunks with a new model via the space lifecycle.
+
+    Creates a new space, backfills it, promotes it, and re-embeds folder
+    summaries. The old space is left as 'deprecated' (not auto-cleaned).
+    """
+    # Resolve provider
+    cfg = get_embed_config(conn)
+    resolved_provider = provider or cfg["provider"]
+
+    # Inherit chunk_strategy from current active space
+    active = get_active_space(conn)
+    strategy = active["chunk_strategy"] if active else "mechanical"
+
+    # Generate unique space name
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", new_model)
+    space_name = f"{sanitized}_{new_dim}"
+
+    # Avoid collisions
+    existing = conn.execute(
+        "SELECT 1 FROM embed_spaces WHERE name = ?", (space_name,)
+    ).fetchone()
+    if existing:
+        import time
+
+        space_name = f"{space_name}_{int(time.time())}"
+
+    create_space(conn, space_name, new_model, new_dim, resolved_provider, strategy)
+    result = backfill_space(conn, space_name, batch_size)
+    promote_space(conn, space_name)
+
+    # Re-embed folder summaries (single table, always matches active space)
+    embed_provider = get_provider(
+        resolved_provider, allow_env_override=provider is None
+    )
+    folders_processed = _re_embed_folder_summaries(
+        conn, embed_provider, new_model, new_dim
+    )
+
+    return {
+        "chunks_processed": result["chunks_processed"],
+        "folders_processed": folders_processed,
+        "model": new_model,
+        "dim": new_dim,
+        "space": space_name,
+    }
+
+
+def _re_embed_folder_summaries(
+    conn: sqlite3.Connection,
+    embed_provider: object,
+    model: str,
+    dim: int,
+) -> int:
+    """Recreate folder_summaries_vec with new dimensions and re-embed."""
     conn.execute("DROP TABLE IF EXISTS folder_summaries_vec")
     conn.execute(f"""
         CREATE VIRTUAL TABLE folder_summaries_vec USING vec0(
-            embedding float[{new_dim}],
+            embedding float[{dim}],
             +folder_path TEXT
         )
     """)
     folder_rows = conn.execute(
         "SELECT folder_path, summary FROM folder_summaries"
     ).fetchall()
-    if folder_rows:
-        texts = [row["summary"] for row in folder_rows]
-        embeddings = embed_provider.embed(texts, model=new_model, expected_dim=new_dim)
-        for row, emb in zip(folder_rows, embeddings):
-            conn.execute(
-                "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
-                (_serialize_f32(emb), row["folder_path"]),
-            )
-        folders_processed = len(folder_rows)
+    if not folder_rows:
+        conn.commit()
+        return 0
 
-    # Update config
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_model', ?)",
-        (new_model,),
-    )
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_dim', ?)",
-        (str(new_dim),),
-    )
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', ?)",
-        (resolved_provider_name,),
-    )
+    texts = [row["summary"] for row in folder_rows]
+    embeddings = embed_provider.embed(texts, model=model, expected_dim=dim)  # type: ignore[union-attr]
+    for row, emb in zip(folder_rows, embeddings):
+        conn.execute(
+            "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
+            (_serialize_f32(emb), row["folder_path"]),
+        )
     conn.commit()
-
-    return {
-        "chunks_processed": processed,
-        "folders_processed": folders_processed,
-        "model": new_model,
-        "dim": new_dim,
-    }
+    return len(folder_rows)

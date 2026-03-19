@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Complete reference for all 36 MCP tools exposed by the knowledge-base server.
+Complete reference for all 43 MCP tools exposed by the knowledge-base server.
 
 Return values are JSON strings unless noted otherwise.
 
@@ -666,6 +666,106 @@ With no arguments, returns current configuration.
     "venv": "/path/to/venv"
   }
 }
+```
+
+---
+
+## Embedding Spaces
+
+Tools for managing embedding spaces -- multiple embedding models coexisting with independent vec tables. See [Embedding Spaces](../usage/embedding-spaces.md) for the full workflow.
+
+### list_embed_spaces_tool
+
+List all embedding spaces with status, progress, and chunk strategy.
+
+| Parameter | Type | Required | Default | Description |
+| --------- | ---- | -------- | ------- | ----------- |
+| _(none)_  | --   | --       | --      | --          |
+
+**Returns:** Array of space objects with `name`, `model`, `provider`, `dim`, `chunk_strategy`, `status`, `table_name`, `created_at`, `chunk_count`, `total_chunks`.
+
+### create_embed_space_tool
+
+Create a new embedding space in `populating` status.
+
+| Parameter        | Type  | Required | Default        | Description                                                   |
+| ---------------- | ----- | -------- | -------------- | ------------------------------------------------------------- |
+| `name`           | `str` | yes      | --             | Unique space name (alphanumeric + underscores only)           |
+| `model`          | `str` | yes      | --             | Embedding model name (e.g. `bge-m3`, `qwen3-embedding`)      |
+| `dim`            | `int` | yes      | --             | Embedding dimension (e.g. 768, 1024)                          |
+| `provider`       | `str` | yes      | --             | Embedding provider (`ollama`, `openai`, `onnx`)               |
+| `chunk_strategy` | `str` | no       | `"mechanical"` | Which chunks to embed: `mechanical` or `semantic` (from #100) |
+
+**Returns:**
+
+```json
+{
+  "space": "bge_m3_1024",
+  "table_name": "chunks_vec_bge_m3_1024",
+  "status": "populating",
+  "total_chunks": 1500
+}
+```
+
+### backfill_embed_space_tool
+
+Backfill an embedding space with chunk embeddings. Resumable -- interrupted backfills pick up where they left off.
+
+| Parameter    | Type  | Required | Default | Description                                              |
+| ------------ | ----- | -------- | ------- | -------------------------------------------------------- |
+| `name`       | `str` | yes      | --      | Name of the space to backfill (must be in `populating`)  |
+| `batch_size` | `int` | no       | `32`    | Number of chunks per embedding batch                     |
+
+**Returns:**
+
+```json
+{ "space": "bge_m3_1024", "chunks_processed": 1500, "total_chunks": 1500 }
+```
+
+### promote_embed_space_tool
+
+Promote an embedding space to active. Deprecates the current active space and syncs config.
+
+| Parameter | Type  | Required | Default | Description                     |
+| --------- | ----- | -------- | ------- | ------------------------------- |
+| `name`    | `str` | yes      | --      | Name of the space to promote    |
+
+**Returns:**
+
+```json
+{
+  "promoted": "bge_m3_1024",
+  "deprecated": "default",
+  "note": "All 'similar' relationships removed (embedding space changed). Run scan_relationships() to recompute."
+}
+```
+
+### deprecate_embed_space_tool
+
+Mark an embedding space as deprecated.
+
+| Parameter | Type  | Required | Default | Description                                              |
+| --------- | ----- | -------- | ------- | -------------------------------------------------------- |
+| `name`    | `str` | yes      | --      | Name of the space to deprecate (cannot be active space)  |
+
+**Returns:**
+
+```json
+{ "deprecated": "experimental_model" }
+```
+
+### cleanup_embed_space_tool
+
+Drop a deprecated space's vec table and remove its registry entry.
+
+| Parameter | Type  | Required | Default | Description                                        |
+| --------- | ----- | -------- | ------- | -------------------------------------------------- |
+| `name`    | `str` | yes      | --      | Name of the deprecated space to clean up           |
+
+**Returns:**
+
+```json
+{ "cleaned": "old_model_768" }
 ```
 
 ---

@@ -7,7 +7,7 @@ import sqlite3
 import struct
 from dataclasses import dataclass
 
-from .db import _batched_select
+from .db import _batched_select, get_active_chunk_strategy, get_vec_table_name
 from .embed_swap import get_embed_config
 from .embeddings import embed_single
 from .keywords import build_fts_query, extract_keywords
@@ -29,19 +29,40 @@ def _serialize_f32(vec: list[float]) -> bytes:
 
 
 def _fts_search(
-    conn: sqlite3.Connection, query: str, limit: int
+    conn: sqlite3.Connection,
+    query: str,
+    limit: int,
+    chunk_strategy: str | None = None,
 ) -> list[tuple[int, float]]:
-    """BM25 full-text search. Returns (chunk_id, bm25_score) pairs."""
-    rows = conn.execute(
-        """
-        SELECT rowid, bm25(chunks_fts) AS score
-        FROM chunks_fts
-        WHERE chunks_fts MATCH ?
-        ORDER BY score
-        LIMIT ?
-        """,
-        (query, limit),
-    ).fetchall()
+    """BM25 full-text search. Returns (chunk_id, bm25_score) pairs.
+
+    When *chunk_strategy* is given, only chunks matching that strategy are
+    returned (requires the ``chunk_strategy`` column on ``chunks``).
+    """
+    if chunk_strategy is not None:
+        rows = conn.execute(
+            """
+            SELECT c.id AS rowid, bm25(chunks_fts) AS score
+            FROM chunks_fts
+            JOIN chunks c ON c.id = chunks_fts.rowid
+            WHERE chunks_fts MATCH ?
+              AND c.chunk_strategy = ?
+            ORDER BY score
+            LIMIT ?
+            """,
+            (query, chunk_strategy, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT rowid, bm25(chunks_fts) AS score
+            FROM chunks_fts
+            WHERE chunks_fts MATCH ?
+            ORDER BY score
+            LIMIT ?
+            """,
+            (query, limit),
+        ).fetchall()
     return [(row["rowid"], row["score"]) for row in rows]
 
 
@@ -49,10 +70,11 @@ def _vec_search(
     conn: sqlite3.Connection, query_embedding: list[float], limit: int
 ) -> list[tuple[int, float]]:
     """Vector similarity search. Returns (chunk_id, distance) pairs."""
+    vec_table = get_vec_table_name(conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT chunk_id, distance
-        FROM chunks_vec
+        FROM {vec_table}
         WHERE embedding MATCH ?
         ORDER BY distance
         LIMIT ?
@@ -166,6 +188,12 @@ def search(
             None (default) returns all chunks regardless of strategy.
     """
     fetch_limit = top_k * 3  # over-fetch for RRF merge
+
+    # Default to the active space's chunk_strategy when caller doesn't specify.
+    # This ensures FTS and vec results come from the same granularity.
+    if chunk_strategy is None:
+        chunk_strategy = get_active_chunk_strategy(conn)
+
     # When filtering by chunk_strategy, over-fetch to compensate for
     # candidates that will be filtered out before RRF merge.
     strategy_fetch_limit = fetch_limit * 5 if chunk_strategy else fetch_limit
@@ -182,7 +210,9 @@ def search(
             fts_query = query
         if fts_query:
             try:
-                fts_results = _fts_search(conn, fts_query, strategy_fetch_limit)
+                fts_results = _fts_search(
+                    conn, fts_query, strategy_fetch_limit, chunk_strategy=chunk_strategy
+                )
             except Exception:
                 # FTS query syntax error — skip FTS leg
                 pass
@@ -254,15 +284,16 @@ def search(
     if source_type:
         type_filter = " AND source_type = ?"
         params.append(source_type)
+    strategy_filter = ""
     if chunk_strategy:
-        type_filter += " AND chunk_strategy = ?"
+        strategy_filter = " AND chunk_strategy = ?"
         params.append(chunk_strategy)
 
     rows = conn.execute(
         f"""
         SELECT id, content, source_type, source_uri, chunk_index
         FROM chunks
-        WHERE id IN ({placeholders}){type_filter}
+        WHERE id IN ({placeholders}){type_filter}{strategy_filter}
         """,
         params,
     ).fetchall()

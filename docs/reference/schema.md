@@ -169,6 +169,19 @@ erDiagram
     papers ||--o{ jobs : "has jobs"
     papers }o--o| chunks : "abstract_chunk"
     chunks }o--o{ prediction_errors : "top_chunk"
+    embed_spaces {
+        TEXT name PK
+        TEXT model
+        TEXT provider
+        INTEGER dim
+        TEXT chunk_strategy
+        TEXT status
+        TEXT table_name UK
+        TEXT created_at
+        INTEGER chunk_count
+        INTEGER total_chunks
+    }
+
     chunks ||--o| chunks_vec : "embedding"
     chunks ||--o{ entity_mentions : "mentioned_in"
     chunks }o--o{ methods : "chunk_id"
@@ -274,7 +287,7 @@ N:M join table mapping chunks to ingestion sessions. Introduced in #139 to repla
 
 ### chunks_vec
 
-{term}`sqlite-vec` virtual table for vector similarity search.
+{term}`sqlite-vec` virtual table for vector similarity search. This is the **default** space table (registered as the `default` entry in `embed_spaces`). Additional spaces create their own tables named `chunks_vec_<name>`, all managed through the embedding space registry.
 
 | Column      | Type     | Description                                                 |
 | ----------- | -------- | ----------------------------------------------------------- |
@@ -282,6 +295,32 @@ N:M join table mapping chunks to ingestion sessions. Introduced in #139 to repla
 | `chunk_id`  | INTEGER  | Auxiliary column linking to `chunks.id`                     |
 
 Dimension is read from `config.embed_dim` at schema creation time. Dropped and recreated by `re_embed_tool`.
+
+---
+
+### embed_spaces
+
+Registry for embedding spaces. Each space owns a `sqlite-vec` virtual table and tracks its model, provider, dimension, and lifecycle status. Exactly one space can be `active` at any time (enforced by a partial unique index on `status`). See [Embedding Spaces](../usage/embedding-spaces.md) for the full lifecycle workflow.
+
+| Column           | Type    | Constraints                       | Default           | Description                                      |
+| ---------------- | ------- | --------------------------------- | ----------------- | ------------------------------------------------ |
+| `name`           | TEXT    | PRIMARY KEY                       | --                | Unique space identifier (alphanumeric/underscore) |
+| `model`          | TEXT    | NOT NULL                          | --                | Embedding model name                             |
+| `provider`       | TEXT    | NOT NULL                          | --                | Embedding provider (`ollama`, `openai`, `onnx`)  |
+| `dim`            | INTEGER | NOT NULL                          | --                | Embedding dimension                              |
+| `chunk_strategy` | TEXT    | NOT NULL, CHECK                   | `'mechanical'`    | One of: `mechanical`, `semantic`                 |
+| `status`         | TEXT    | NOT NULL, CHECK                   | --                | One of: `active`, `populating`, `deprecated`     |
+| `table_name`     | TEXT    | NOT NULL, UNIQUE                  | --                | Backing vec0 virtual table name                  |
+| `created_at`     | TEXT    | NOT NULL                          | `datetime('now')` | ISO 8601 timestamp                               |
+| `chunk_count`    | INTEGER | --                                | `0`               | Number of chunks backfilled so far               |
+| `total_chunks`   | INTEGER | --                                | --                | Total chunks targeted for backfill               |
+
+**CHECK constraints:**
+
+- `chunk_strategy IN ('mechanical', 'semantic')`
+- `status IN ('active', 'populating', 'deprecated')`
+
+**Index:** `idx_embed_spaces_one_active` -- UNIQUE on `(status)` WHERE `status = 'active'` (enforces at most one active space)
 
 ---
 
