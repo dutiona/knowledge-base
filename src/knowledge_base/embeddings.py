@@ -157,9 +157,62 @@ class OpenAIProvider:
         return [item["embedding"] for item in data]
 
 
+class ONNXProvider:
+    """Embedding provider using ONNX Runtime for local inference.
+
+    Expects the model path in ONNX_EMBED_MODEL_PATH env var.
+    The ONNX model must accept string inputs (e.g., exported with
+    SentenceTransformers optimum).
+    """
+
+    def __init__(self) -> None:
+        self._sessions: dict[tuple[str, str], object] = {}
+
+    def embed(
+        self,
+        texts: list[str],
+        model: str = "bge-m3",
+        expected_dim: int | None = None,
+    ) -> list[list[float]]:
+        session = self._get_session(model)
+        results = []
+        for i in range(0, len(texts), 32):
+            batch = texts[i : i + 32]
+            import numpy as np
+
+            inputs = {session.get_inputs()[0].name: np.array(batch)}
+            outputs = session.run(None, inputs)
+            embeddings = outputs[0].tolist()
+            for emb in embeddings:
+                if expected_dim is not None and len(emb) != expected_dim:
+                    raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
+                results.append(_l2_normalize(emb))
+        return results
+
+    def _get_session(self, model: str) -> object:
+        model_path = os.environ.get("ONNX_EMBED_MODEL_PATH", "")
+        cache_key = (model, model_path)
+        if cache_key not in self._sessions:
+            try:
+                import onnxruntime as ort
+            except ImportError:
+                raise ImportError(
+                    "onnxruntime is required for ONNX embeddings. "
+                    "Install with: uv sync --group onnx"
+                ) from None
+            if not model_path:
+                raise RuntimeError(
+                    "ONNX_EMBED_MODEL_PATH environment variable required "
+                    "for ONNX embeddings. Point it to the .onnx model file."
+                )
+            self._sessions[cache_key] = ort.InferenceSession(model_path)
+        return self._sessions[cache_key]
+
+
 _PROVIDERS: dict[str, type] = {
     "ollama": OllamaProvider,
     "openai": OpenAIProvider,
+    "onnx": ONNXProvider,
 }
 
 

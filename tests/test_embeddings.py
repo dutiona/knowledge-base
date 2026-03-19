@@ -189,6 +189,54 @@ class TestOpenAIProvider:
         assert isinstance(provider, OpenAIProvider)
 
 
+class TestONNXProvider:
+    def test_implements_protocol(self):
+        from knowledge_base.embeddings import ONNXProvider
+
+        provider = ONNXProvider()
+        assert isinstance(provider, EmbeddingProvider)
+
+    @patch("knowledge_base.embeddings.ONNXProvider._get_session")
+    def test_embed_batch(self, mock_session_fn):
+        np = pytest.importorskip("numpy")
+        from knowledge_base.embeddings import ONNXProvider
+
+        mock_session = MagicMock()
+        mock_session.run.return_value = [np.array([[1.0, 0.0, 0.0]])]
+        mock_session_fn.return_value = mock_session
+        provider = ONNXProvider()
+        result = provider.embed(["hello"], model="bge-m3", expected_dim=3)
+        assert len(result) == 1
+        assert len(result[0]) == 3
+
+    @patch("knowledge_base.embeddings.ONNXProvider._get_session")
+    def test_embed_normalizes(self, mock_session_fn):
+        np = pytest.importorskip("numpy")
+        from knowledge_base.embeddings import ONNXProvider
+
+        mock_session = MagicMock()
+        mock_session.run.return_value = [np.array([[3.0, 4.0, 0.0]])]
+        mock_session_fn.return_value = mock_session
+        provider = ONNXProvider()
+        result = provider.embed(["hello"], model="bge-m3", expected_dim=3)
+        norm = math.sqrt(sum(x * x for x in result[0]))
+        assert abs(norm - 1.0) < 1e-6
+
+    def test_missing_model_path_raises(self, monkeypatch):
+        from knowledge_base.embeddings import ONNXProvider
+
+        monkeypatch.delenv("ONNX_EMBED_MODEL_PATH", raising=False)
+        provider = ONNXProvider()
+        with pytest.raises(RuntimeError, match="ONNX_EMBED_MODEL_PATH"):
+            provider._get_session("bge-m3")
+
+    def test_get_provider_returns_onnx(self):
+        from knowledge_base.embeddings import ONNXProvider
+
+        provider = get_provider("onnx")
+        assert isinstance(provider, ONNXProvider)
+
+
 class TestL2Normalize:
     def test_zero_vector_warns(self, caplog):
         """Zero vectors should log a warning (indicates upstream problem)."""
