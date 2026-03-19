@@ -77,3 +77,72 @@ def test_search_source_type_filter(tmp_path):
     # Filter by correct type
     results = search(conn, "transformers", source_type="markdown", mode="fts")
     assert len(results) >= 1
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_search_hybrid_uses_keyword_prefilter(tmp_path):
+    """Hybrid search with keyword_prefilter=True extracts intent keywords for FTS."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "paper.md"
+    md.write_text(
+        "Rust error handling in async code uses Result types and the ? operator.\n"
+    )
+    ingest_file(conn, md)
+
+    # With keyword prefilter, a verbose query should still find the doc
+    results = search(
+        conn,
+        "What are the best practices for Rust error handling in async code?",
+        mode="hybrid",
+        keyword_prefilter=True,
+    )
+    assert len(results) >= 1
+    assert "rust" in results[0].content.lower()
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_search_keyword_prefilter_stopword_only_query(tmp_path):
+    """When keyword_prefilter=True and query is all stopwords, FTS leg is skipped gracefully."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "doc.md"
+    md.write_text("Some content about neural networks.\n")
+    ingest_file(conn, md)
+
+    # All-stopword query: FTS leg produces nothing, vec leg still works in hybrid
+    results = search(
+        conn,
+        "what is the",
+        mode="hybrid",
+        keyword_prefilter=True,
+    )
+    # Should not crash — vec leg provides results even if FTS leg is empty
+    assert isinstance(results, list)
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_search_fts_with_keyword_prefilter(tmp_path):
+    """FTS-only mode also respects keyword_prefilter."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "doc.md"
+    md.write_text("Neural network architectures for image classification tasks.\n")
+    ingest_file(conn, md)
+
+    results = search(
+        conn,
+        "What neural network is best for image classification?",
+        mode="fts",
+        keyword_prefilter=True,
+    )
+    assert len(results) >= 1
