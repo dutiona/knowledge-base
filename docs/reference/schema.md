@@ -20,6 +20,7 @@ erDiagram
         TEXT source_type
         TEXT source_uri
         INTEGER chunk_index
+        TEXT session_id
         TEXT created_at
         TEXT metadata
     }
@@ -210,10 +211,17 @@ Primary content storage. Each row is one chunk of ingested text.
 | `source_type`  | TEXT    | NOT NULL, CHECK           | --                | One of: `pdf`, `markdown`, `code`, `web`, `note`, `figure`            |
 | `source_uri`   | TEXT    | NOT NULL                  | --                | File path or URL of the source                                        |
 | `chunk_index`  | INTEGER | NOT NULL                  | --                | Position within the source (0-based; figures use 1,000,000+ encoding) |
+| `session_id`   | TEXT    | --                        | --                | Ingestion session ID for co-occurrence tracking (see below)           |
 | `created_at`   | TEXT    | NOT NULL                  | `datetime('now')` | ISO 8601 timestamp                                                    |
 | `metadata`     | TEXT    | --                        | `'{}'`            | JSON metadata blob                                                    |
 
 **CHECK constraint:** `source_type IN ('pdf', 'markdown', 'code', 'web', 'note', 'figure')`
+
+**Index:** `idx_chunks_session_id` on `(session_id)` -- accelerates co-occurrence joins.
+
+**Session tracking:** The `session_id` column groups chunks ingested in the same logical operation. Documents sharing a session are considered co-occurring -- a behavioral signal for relationship discovery. See [Ingesting Documents > Session Tracking](../usage/ingesting-documents.md#session-tracking-co-occurrence) for usage details. The `co_occurrence` MCP tool queries document pairs via a CTE that deduplicates to `DISTINCT (source_uri, session_id)` before self-joining, keeping complexity proportional to documents rather than chunks.
+
+**Known limitation:** Because `session_id` lives on the chunk row and content-hash deduplication skips existing chunks, a document re-ingested in a new session retains its original `session_id`. See #139 for the planned `chunk_sessions` N:M join table.
 
 ---
 

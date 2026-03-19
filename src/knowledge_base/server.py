@@ -14,7 +14,7 @@ from .conclusions import (
     record_conclusion,
     supersede_conclusion,
 )
-from .db import DEFAULT_DB_PATH, get_connection, init_schema
+from .db import DEFAULT_DB_PATH, co_occurrence_pairs, get_connection, init_schema
 from .embed_swap import get_embed_config, re_embed
 from .extraction import (
     _MAX_WORKERS_LIMIT,
@@ -22,10 +22,7 @@ from .extraction import (
     configure_llm,
     estimate_extraction_time,
     extract_structure,
-    get_datasets,
     get_entities,
-    get_methods,
-    get_metrics,
     record_dataset,
     record_method,
     record_metric,
@@ -115,12 +112,19 @@ def _get_conn():
 
 
 @mcp.tool()
-def ingest(path: str, source_type: str | None = None) -> str:
+def ingest(
+    path: str,
+    source_type: str | None = None,
+    session_id: str | None = None,
+) -> str:
     """Ingest a file or directory into the knowledge base.
 
     Args:
         path: Absolute path to a file or directory.
         source_type: Override auto-detection. One of: pdf, markdown, code, web, note, figure.
+        session_id: Optional session ID to group co-ingested documents.
+            For directories, a shared session ID is auto-generated.
+            For files, pass the same session_id across calls to mark co-occurrence.
     """
     conn = _get_conn()
     p = Path(path).expanduser().resolve()
@@ -141,12 +145,16 @@ def ingest(path: str, source_type: str | None = None) -> str:
             }
         )
     else:
-        result = ingest_file(conn, p, source_type)
+        result = ingest_file(conn, p, source_type, session_id=session_id)
         return json.dumps(result)
 
 
 @mcp.tool()
-def reingest(path: str, source_type: str | None = None) -> str:
+def reingest(
+    path: str,
+    source_type: str | None = None,
+    session_id: str | None = None,
+) -> str:
     """Force re-ingest of a previously ingested file. Deletes old chunks and inserts new ones.
 
     Cleans up FK references in papers, relationships, and conclusions.
@@ -154,6 +162,7 @@ def reingest(path: str, source_type: str | None = None) -> str:
     Args:
         path: Absolute path to the file to re-ingest.
         source_type: Override auto-detection. One of: pdf, markdown, code, web, note, figure.
+        session_id: Optional session ID for co-occurrence tracking.
     """
     conn = _get_conn()
     p = Path(path).expanduser().resolve()
@@ -161,12 +170,12 @@ def reingest(path: str, source_type: str | None = None) -> str:
     if not p.exists():
         return json.dumps({"error": f"Path does not exist: {p}"})
 
-    result = reingest_file(conn, p, source_type)
+    result = reingest_file(conn, p, source_type, session_id=session_id)
     return json.dumps(result)
 
 
 @mcp.tool()
-def ingest_url(url: str) -> str:
+def ingest_url(url: str, session_id: str | None = None) -> str:
     """Ingest a web page by URL. Fetches the page, extracts main content, and indexes it.
 
     Uses content-hash dedup — unchanged pages are skipped on re-ingest.
@@ -174,9 +183,10 @@ def ingest_url(url: str) -> str:
 
     Args:
         url: The URL to fetch and ingest.
+        session_id: Optional session ID for co-occurrence tracking.
     """
     conn = _get_conn()
-    return json.dumps(_ingest_url(conn, url))
+    return json.dumps(_ingest_url(conn, url, session_id=session_id))
 
 
 @mcp.tool()
@@ -223,6 +233,21 @@ def search_index(
             for r in results
         ]
     )
+
+
+@mcp.tool()
+def co_occurrence(min_sessions: int = 1) -> str:
+    """Find document pairs that were ingested together in the same session.
+
+    Co-ingestion is a behavioral signal: documents ingested together share
+    research context at ingestion time. This complements embedding similarity
+    by capturing relationships that no query could surface via BM25 or cosine.
+
+    Args:
+        min_sessions: Minimum number of shared sessions to include a pair (default 1).
+    """
+    conn = _get_conn()
+    return json.dumps(co_occurrence_pairs(conn, min_sessions))
 
 
 @mcp.tool()
