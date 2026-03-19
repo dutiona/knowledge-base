@@ -17,6 +17,7 @@ from .conclusions import (
 from .db import DEFAULT_DB_PATH, get_connection, init_schema
 from .embed_swap import get_embed_config, re_embed
 from .extraction import (
+    _MAX_WORKERS_LIMIT,
     compare_papers,
     configure_llm,
     estimate_extraction_time,
@@ -693,7 +694,7 @@ def extract_structure_tool(
         )
 
     # Long doc, not confirmed: ETA warning (adjust for parallelism)
-    effective_workers = min(max(max_workers, 1), est["chunk_count"])
+    effective_workers = min(max(max_workers, 1), est["chunk_count"], _MAX_WORKERS_LIMIT)
     wall_estimate = est["estimated_seconds"] // effective_workers
     if wall_estimate > 120 and not confirmed:
         return json.dumps(
