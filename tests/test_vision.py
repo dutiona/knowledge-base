@@ -2117,3 +2117,56 @@ def test_collect_extracted_images_deduplicates(vision_conn, tmp_path):
     result = _collect_extracted_images(conn, source_uri, image_dir)
     assert len(result) == 1
     assert result[0][1] == 1
+
+
+def test_detect_vector_pages_finds_drawing_heavy_pages(tmp_path):
+    """Pages with many drawings but no extracted images are detected."""
+    from knowledge_base.vision import _detect_vector_pages
+
+    import fitz
+
+    doc = fitz.open()
+    page0 = doc.new_page(width=612, height=792)
+    # Each finish()/commit() cycle creates one drawing path in the PDF,
+    # so we need separate cycles to exceed the threshold.
+    for i in range(15):
+        shape = page0.new_shape()
+        shape.draw_line(fitz.Point(10, 10 + i * 5), fitz.Point(100, 10 + i * 5))
+        shape.finish()
+        shape.commit()
+
+    page1 = doc.new_page(width=612, height=792)
+    page1.insert_text(fitz.Point(72, 72), "Just text, no figures.")
+
+    pdf_path = tmp_path / "test.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    pages_with_images: set[int] = set()
+    result = _detect_vector_pages(str(pdf_path), pages_with_images)
+
+    assert 0 in result
+    assert 1 not in result
+
+
+def test_detect_vector_pages_excludes_pages_with_extracted_images(tmp_path):
+    """Pages that already have extracted images are excluded even if they have drawings."""
+    from knowledge_base.vision import _detect_vector_pages
+
+    import fitz
+
+    doc = fitz.open()
+    page0 = doc.new_page(width=612, height=792)
+    for i in range(15):
+        shape = page0.new_shape()
+        shape.draw_line(fitz.Point(10, 10 + i * 5), fitz.Point(100, 10 + i * 5))
+        shape.finish()
+        shape.commit()
+
+    pdf_path = tmp_path / "test.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    pages_with_images: set[int] = {0}
+    result = _detect_vector_pages(str(pdf_path), pages_with_images)
+    assert 0 not in result

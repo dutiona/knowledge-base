@@ -617,7 +617,45 @@ def _get_paper_source_uri(conn: sqlite3.Connection, paper_id: int) -> str | None
 
 
 # ---------------------------------------------------------------------------
-# Step 6b: Collect extracted images from ingest metadata
+# Step 6b: Detect vector-drawn figure pages
+# ---------------------------------------------------------------------------
+
+_VECTOR_DRAWING_THRESHOLD = 10
+
+
+def _detect_vector_pages(
+    pdf_path: str,
+    pages_with_extracted_images: set[int],
+) -> list[int]:
+    """Detect pages likely containing vector-drawn figures.
+
+    These pages have many vector drawings (> threshold) but no
+    pymupdf4llm-extracted images. They need the fallback full-page
+    render path since pymupdf4llm can't export vector figures.
+
+    Args:
+        pdf_path: Path to PDF file.
+        pages_with_extracted_images: Set of 0-indexed page numbers that
+            already have extracted raster images (excluded from results).
+
+    Returns:
+        Sorted list of 0-indexed page numbers needing fallback rendering.
+    """
+    doc = fitz.open(pdf_path)
+    try:
+        result = []
+        for i, page in enumerate(doc):
+            if i in pages_with_extracted_images:
+                continue
+            if len(page.get_drawings()) > _VECTOR_DRAWING_THRESHOLD:
+                result.append(i)
+        return result
+    finally:
+        doc.close()
+
+
+# ---------------------------------------------------------------------------
+# Step 6c: Collect extracted images from ingest metadata
 # ---------------------------------------------------------------------------
 
 
