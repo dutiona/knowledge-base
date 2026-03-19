@@ -128,6 +128,41 @@ chunk_index = 1,000,000 + (page_num * 1,000) + figure_index
 
 This separates figure chunks from text chunks (which use indices starting at 0) and allows per-page figure management. Each page has 1,000 available slots; if a page has more than 1,000 figures (effectively impossible), the figure index is capped at 999 with a warning.
 
+## Web Page Inline Images
+
+When ingesting web pages via `ingest_url`, inline `<img>` tags are extracted from the HTML and sent to the vision model for description. This complements the browser screenshot approach (below) by extracting individual images at their native resolution rather than relying on a single full-page screenshot.
+
+**When it runs:** Inline image extraction runs automatically when a vision model is configured and the browser-based screenshot extraction did not already fire. If the browser fallback produced figures from a full-page screenshot, inline extraction is skipped to avoid duplicate descriptions of the same visual content.
+
+**Filtering:** Not all images on a page are meaningful. The following are skipped:
+
+- Decorative images (URL or alt text matching patterns like logo, icon, avatar, banner, sprite, tracking)
+- Small images (either HTML dimension < 100px or actual pixel dimensions < 100px)
+- SVG and data URI images (cannot be processed by the vision pipeline without rasterization)
+- Images from private/loopback IP ranges (SSRF protection)
+- Duplicate URLs on the same page
+
+Up to 10 images per page are processed. Each image download is capped at 10 MB (streamed). Non-PNG images (JPEG, WebP, GIF) are converted to PNG before being sent to the vision model.
+
+**Chunk encoding:**
+
+```
+chunk_index = 2,000,000 + image_index
+```
+
+This uses a separate range from PDF figure chunks (1,000,000+) and browser screenshot chunks (also 1,000,000+, scoped by source_uri). The `image_index` is the position of the image among qualifying candidates on that page.
+
+**Metadata:** Each inline image figure chunk stores:
+
+- `figure_type`: `"web_image"`
+- `image_url`: The resolved absolute URL the image was downloaded from
+- `alt_text`: The `alt` attribute from the `<img>` tag (if present)
+- `original_source_type`: `"web"`
+- `source_url`: The page URL (post-redirect)
+- `vision_model`: The model used for description
+
+**Re-ingestion:** When the same URL is ingested again, old inline image chunks (chunk_index >= 2,000,000) are deleted and replaced. Foreign key references (entity mentions, methods, datasets, metrics, papers, relationships, conclusions) are cleaned up before deletion.
+
 ## Browser Configuration
 
 For web page figure extraction (via `ingest_url`), browser rendering must be configured:

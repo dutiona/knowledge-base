@@ -57,6 +57,19 @@ If trafilatura extracts fewer than 200 characters (likely a JS-heavy page), and 
 
 Browser rendering requires explicit configuration via `configure_browser_tool`. See the tool reference for setup instructions.
 
+### Inline Image Extraction
+
+When a vision model is configured (see [Figure Extraction](figure-extraction.md)), `ingest_url` also extracts inline `<img>` tags from the HTML. Each qualifying image is downloaded, sent to the vision model for description, and stored as a figure chunk (`source_type='figure'`, `figure_type='web_image'`).
+
+Filtering heuristics skip non-content images:
+
+- **Decorative patterns** -- URLs or alt text containing logo, icon, avatar, favicon, banner, sprite, spacer, tracking, or badge
+- **Small images** -- Width or height below 100px (checked from HTML attributes before download, and from actual pixel dimensions after download)
+- **Non-raster formats** -- SVG and data URI images are excluded
+- **SSRF protection** -- Image URLs are validated against private/loopback IP ranges, including post-redirect targets
+
+Up to 10 images per page are processed, with a 10 MB cap per image download. Inline image extraction only runs when browser-based screenshot extraction did not already fire (to avoid duplicate figure descriptions for the same visual content).
+
 Only `http` and `https` URLs are accepted.
 
 ## Directory Ingestion
