@@ -2,19 +2,38 @@
 
 ## How It Works
 
-Figure extraction renders PDF pages as images and sends them to a vision model for description. The pipeline:
+Figure extraction uses a dual-path pipeline that prioritizes pymupdf4llm-extracted images over full-page rendering:
 
-1. **Page selection** -- Either user-specified pages or heuristic auto-detection. The heuristic looks for four signals (any one triggers inclusion): embedded images, >10 vector drawings, text density below 50% of page average, or caption cues (Figure/Fig./Table patterns). Falls back to all pages if no candidates are found.
+### Primary path: extracted images
 
-2. **Rendering** -- Candidate pages are rendered as PNG at 2x resolution via PyMuPDF.
+During PDF ingestion, pymupdf4llm extracts raster images and records them in chunk metadata (`images` field). The vision pipeline reads these image basenames from the database, resolves them to files on disk (in the PDF's image directory), and sends each directly to the vision model.
 
-3. **OmniParser (optional)** -- If configured, each rendered page is analyzed by OmniParser to detect text regions and icons. When multiple spatial clusters are detected (using y-axis then x-axis gap analysis), the page is cropped into sub-regions and each crop is sent to the vision model separately.
+**Why this is better than full-page rendering:** each extracted image contains exactly one figure — no sub-figure conflation, no surrounding text noise, and smaller vision model inputs produce more focused descriptions.
 
-4. **Vision model** -- Each page (or crop) is sent to the vision API as a base64-encoded PNG. The model returns a JSON array of figure descriptions, each with `figure_type`, `title`, `description`, and `entities_mentioned`. Vision calls run in a thread pool (max 4 workers) for parallelism.
+### Fallback path: full-page rendering
 
-5. **Enrichment** -- For single-figure pages, OmniParser detected text and icons are appended to the figure description (capped at 500 chars). For multi-figure pages, elements are filtered to each figure's spatial region.
+Some figures are vector-drawn (plots, diagrams composed of PDF drawing primitives). pymupdf4llm cannot extract these as images. The pipeline detects such pages by counting fitz drawing objects (>10 threshold) on pages that have no extracted images, then renders those pages at 2x resolution for the vision model.
 
-6. **Storage** -- Figure descriptions are embedded and stored as chunks with `source_type='figure'`. Old figure chunks for the same pages are deleted first (idempotent). Rendered PNGs are saved to `~/.local/share/knowledge-base/figures/<paper_id>/`.
+### Full pipeline
+
+1. **Extracted image collection** -- Queries chunk metadata for image basenames, resolves to disk paths, deduplicates by filename (earliest page wins).
+
+2. **Vector page detection** -- Identifies pages with many vector drawings (>10) that lack extracted images. When pages are explicitly requested, all pages without extracted images are rendered (regardless of drawing count).
+
+3. **ETA gate** -- If estimated time for (extracted images + vector pages) exceeds 2 minutes, returns a confirmation prompt.
+
+4. **OmniParser (optional)** -- If configured, each extracted image and each rendered vector page is analyzed by OmniParser. For extracted images, no multi-region splitting (each image IS a single figure). For vector pages, spatial clustering may split a page into subregions.
+
+5. **Vision model** -- Extracted images use a figure-specific prompt (tailored for single-figure analysis). Vector pages use the original full-page prompt. Vision calls run in a thread pool (max 4 workers).
+
+6. **Enrichment** -- OmniParser text/icons are merged into figure descriptions (keyed by image name for extracted images, by page number for vector pages).
+
+7. **Storage** -- Figure descriptions are embedded and stored as chunks with `source_type='figure'`. Old figure chunks are deleted first (unscoped for full refresh, page-scoped for explicit pages). Vector-rendered PNGs are saved to `~/.local/share/knowledge-base/figures/<paper_id>/`.
+
+### Known limitations
+
+- **Mixed raster+vector pages**: If a page has an extracted raster image, the full-page render is skipped even if the page also contains vector figures. The extracted image is processed; the vector figure is missed. This is by design — the primary path prioritizes extracted images.
+- **Multi-page chunk images**: A chunk may span multiple PDF pages. All images in the chunk are assigned to the chunk's first page since pymupdf4llm doesn't provide per-image page mapping.
 
 ## Vision Model Configuration
 
@@ -112,7 +131,8 @@ If estimated extraction time exceeds 2 minutes, the tool returns a confirmation 
 {
   "confirm_required": true,
   "estimated_seconds": 264,
-  "candidate_pages": 6
+  "extracted_images": 4,
+  "vector_pages": 2
 }
 ```
 
