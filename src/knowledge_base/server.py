@@ -184,6 +184,7 @@ def search_index(
     top_k: int = 10,
     source_type: str | None = None,
     mode: str = "hybrid",
+    keyword_prefilter: bool = False,
 ) -> str:
     """Search the knowledge base using hybrid semantic + keyword search.
 
@@ -192,9 +193,19 @@ def search_index(
         top_k: Number of results to return (default 10).
         source_type: Filter results by type (pdf, markdown, code, web, note, figure).
         mode: Search mode - 'hybrid' (default), 'fts' (keyword only), 'vec' (semantic only).
+        keyword_prefilter: Extract intent keywords for FTS matching instead of
+            using the raw query. Improves precision for verbose natural language
+            queries by stripping stopwords and filler. Default false.
     """
     conn = _get_conn()
-    results = search(conn, query, top_k=top_k, source_type=source_type, mode=mode)
+    results = search(
+        conn,
+        query,
+        top_k=top_k,
+        source_type=source_type,
+        mode=mode,
+        keyword_prefilter=keyword_prefilter,
+    )
     detect_and_log(conn, query, results, source_type_filter=source_type, mode=mode)
 
     return json.dumps(
