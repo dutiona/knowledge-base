@@ -37,6 +37,7 @@ Read these when the task touches the corresponding area:
 | Vision/figure extraction                 | `src/knowledge_base/vision.py`            | `docs/usage/figure-extraction.md`         |
 | Paper metadata & relationships           | `src/knowledge_base/papers.py`            | `docs/usage/relationships-conclusions.md` |
 | Background jobs                          | `src/knowledge_base/jobs.py`              | `docs/design/architecture-overview.md`    |
+| Folder context boosting                  | `src/knowledge_base/folder_summaries.py`  | `docs/usage/searching.md`                 |
 | Embedding providers (Ollama/OpenAI/ONNX) | `src/knowledge_base/embeddings.py`        | `docs/usage/ingesting-documents.md`       |
 | Embedding model swap                     | `src/knowledge_base/embed_swap.py`        | `docs/design/architecture-overview.md`    |
 | Prediction-error detection               | `src/knowledge_base/prediction_errors.py` | `docs/usage/prediction-errors.md`         |

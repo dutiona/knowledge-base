@@ -77,6 +77,25 @@ The above query extracts keywords like `rust`, `error`, `async`, `practices` and
 - Short, precise queries ("ResNet-50 ImageNet accuracy") — these are already mostly keywords
 - FTS-only mode with exact term requirements — the raw query gives more control
 
+## Folder Context Boosting
+
+Search results from semantically relevant directories receive an automatic relevance boost. This leverages folder-level summaries to inject structural context into retrieval without requiring explicit tagging.
+
+**What:** After RRF merging but before final ranking, the query embedding is compared against folder-level summary embeddings. Chunks from top-matching folders get a 1.15x score multiplier, which can promote them into the final top-k window.
+
+**Why:** Research knowledge bases often organize papers by topic or project. Folder structure carries implicit semantic signal — a query about "attention mechanisms" should naturally favor results from a `transformers/` or `attention/` directory. This idea is adapted from NeuroStack's vault-level folder summaries (see issue #126).
+
+**How it works:**
+
+1. During ingestion, each file's parent folder gets a summary built from the first chunk of each document in that folder.
+2. The summary is embedded and stored in `folder_summaries_vec`.
+3. A content hash (from sorted chunk hashes) detects staleness — no recomputation when folder contents haven't changed.
+4. At search time, the top 5 matching folders (by cosine distance) are identified, and chunks from those folders receive the boost.
+
+Folder summaries only include **direct children** — files in subdirectories are excluded to keep summaries focused and prevent dilution across nested hierarchies.
+
+The boost is conservative (1.15x) and only applies in `hybrid` and `vec` modes. In `fts` mode, no embedding comparison is available, so no folder boost is applied.
+
 ## Source Type Filtering
 
 Restrict results to a specific content type:

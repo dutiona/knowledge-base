@@ -188,6 +188,7 @@ FAKE_LLM_RESPONSE = json.dumps(
 )
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_structure_basic(tmp_path):
     conn = _setup(tmp_path)
@@ -218,6 +219,7 @@ def test_extract_structure_basic(tmp_path):
     assert metrics[0]["value"] == 88.5
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_structure_no_chunks(tmp_path):
     conn = _setup(tmp_path)
@@ -420,6 +422,7 @@ def test_resolve_entities_merges_aliases(tmp_path):
     assert "the proposed approach" in resolution["groups"][0]["members"]
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_store_resolved_writes_entities_and_methods(tmp_path):
     conn = _setup(tmp_path)
@@ -502,6 +505,7 @@ def test_clear_previous_extraction_idempotent(tmp_path):
     assert len(get_methods(conn, p)) == 0
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_structure_fast_path_short_doc(tmp_path):
     """Short docs (<8000 chars) use single LLM call, no entity resolution."""
@@ -522,6 +526,7 @@ def test_extract_structure_fast_path_short_doc(tmp_path):
     assert result["metrics_added"] == 1
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_estimate_extraction_time_long_doc(tmp_path):
     """estimate_extraction_time reports is_long for large documents."""
@@ -541,6 +546,7 @@ def test_estimate_extraction_time_long_doc(tmp_path):
     assert est["chunk_count"] > 0
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_structure_map_reduce_confirmed(tmp_path):
     """Long docs with confirmed=True run the full pipeline."""
@@ -823,6 +829,7 @@ def test_configure_llm_connectivity_openai_fallback_auth(tmp_path):
     assert call_count["n"] == 2  # both endpoints were tried
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_get_entities(tmp_path):
     conn = _setup(tmp_path)
@@ -1016,6 +1023,7 @@ def test_llm_call_openai_sends_system_message(tmp_path):
 # --- map-reduce error visibility ---
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
     """When all chunks return empty, the error list is populated."""
@@ -1039,6 +1047,7 @@ def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
     assert "empty response" in result["errors"][0]["error"]
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_store_resolved_passes_chunk_id_to_metrics(tmp_path):
     """Map-reduce path: record_metric receives chunk_id from per-chunk extraction."""
@@ -1088,6 +1097,7 @@ def test_store_resolved_passes_chunk_id_to_metrics(tmp_path):
     assert row["chunk_id"] == chunk_id
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
     """Single-pass path: record_metric receives first_chunk_id as approximate provenance."""
@@ -1113,6 +1123,7 @@ def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
     assert row["chunk_id"] == first_chunk_id
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @pytest.mark.parametrize("table", ["methods", "datasets"])
 def test_store_resolved_passes_chunk_id_to_methods_and_datasets(tmp_path, table):
@@ -1227,6 +1238,7 @@ def test_store_resolved_description_and_chunk_id_same_provenance(
     )
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @pytest.mark.parametrize("table", ["methods", "datasets"])
 def test_single_pass_passes_first_chunk_id_to_methods_and_datasets(tmp_path, table):
@@ -1680,6 +1692,7 @@ def _mock_llm_for_progress(prompt, *, conn):
     return _MAP_RESPONSE
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_logs_per_chunk_progress(tmp_path, caplog):
     """Each chunk emits an INFO log with chunk number, percentage, timing, and entity counts."""
@@ -1708,6 +1721,7 @@ def test_map_reduce_logs_per_chunk_progress(tmp_path, caplog):
     assert "metrics=" in chunk_logs[0]
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_logs_revised_eta_every_5_chunks(tmp_path, caplog):
     """Revised ETA is logged every 5 chunks."""
@@ -1740,6 +1754,7 @@ def test_map_reduce_logs_revised_eta_every_5_chunks(tmp_path, caplog):
     assert len(eta_logs) == expected_eta_count
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_logs_failed_chunk(tmp_path, caplog):
     """Failed chunks log 'FAILED' instead of entity counts."""
@@ -1775,6 +1790,7 @@ def test_map_reduce_logs_failed_chunk(tmp_path, caplog):
         assert "methods=" in chunk_logs[1]
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_logs_entity_resolution(tmp_path, caplog):
     """Map phase completion and entity resolution are logged."""
@@ -1800,6 +1816,7 @@ def test_map_reduce_logs_entity_resolution(tmp_path, caplog):
     assert any("Entity resolution complete" in m for m in caplog.messages)
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_map_reduce_result_includes_timing(tmp_path):
     """Result dict includes extraction_seconds and resolution_seconds."""

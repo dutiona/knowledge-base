@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import posixpath
 import sqlite3
 import struct
 from dataclasses import dataclass
 
+from .db import _batched_select
 from .embed_swap import get_embed_config
 from .embeddings import embed_single
 from .keywords import build_fts_query, extract_keywords
@@ -77,6 +79,69 @@ def _rrf_merge(
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
 
+def _folder_boost(
+    conn: sqlite3.Connection,
+    query_embedding: list[float],
+    chunk_ids: list[int],
+    scores: dict[int, float],
+    boost_factor: float = 1.15,
+    top_folders: int = 5,
+) -> dict[int, float]:
+    """Apply a score multiplier to chunks from semantically relevant folders.
+
+    Compares query_embedding against folder_summaries_vec embeddings.
+    Chunks whose source_uri parent folder matches a top-scoring folder
+    get their RRF score multiplied by boost_factor.
+
+    Returns a new scores dict with boosted values.
+    """
+    if not chunk_ids:
+        return scores
+
+    # Check if folder_summaries_vec has any rows
+    has_folders = conn.execute("SELECT 1 FROM folder_summaries_vec LIMIT 1").fetchone()
+    if not has_folders:
+        return scores
+
+    # Find top matching folders
+    folder_rows = conn.execute(
+        """SELECT folder_path, distance
+           FROM folder_summaries_vec
+           WHERE embedding MATCH ?
+           ORDER BY distance
+           LIMIT ?""",
+        (_serialize_f32(query_embedding), top_folders),
+    ).fetchall()
+    if not folder_rows:
+        return scores
+
+    # Use the top folder's distance as threshold — boost folders within 2x of best
+    best_distance = folder_rows[0]["distance"]
+    boosted_folders = set()
+    for row in folder_rows:
+        if best_distance == 0 or row["distance"] <= best_distance * 2:
+            boosted_folders.add(row["folder_path"])
+
+    if not boosted_folders:
+        return scores
+
+    # Look up source_uri for each candidate chunk (batched for safety)
+    uri_rows = _batched_select(
+        conn, "SELECT id, source_uri FROM chunks WHERE id IN ({ph})", chunk_ids
+    )
+
+    boosted = dict(scores)
+    for row in uri_rows:
+        chunk_id = row["id"]
+        source_uri = row["source_uri"]
+        # Extract parent folder from source_uri
+        parent = posixpath.dirname(source_uri)
+        if parent in boosted_folders and chunk_id in boosted:
+            boosted[chunk_id] *= boost_factor
+
+    return boosted
+
+
 def search(
     conn: sqlite3.Connection,
     query: str,
@@ -101,6 +166,7 @@ def search(
 
     fts_results: list[tuple[int, float]] = []
     vec_results: list[tuple[int, float]] = []
+    query_embedding: list[float] | None = None
 
     if mode in ("hybrid", "fts"):
         if keyword_prefilter:
@@ -142,11 +208,22 @@ def search(
     else:
         return []
 
-    # Fetch chunk details
-    chunk_ids = [cid for cid, _ in merged[:top_k]]
+    # --- Folder boost (#126) ---
+    # Over-fetch slightly so folder boost can re-rank within a larger window
+    boost_window = min(len(merged), top_k * 2)
+    pre_boost_ids = [cid for cid, _ in merged[:boost_window]]
+    score_map = dict(merged[:boost_window])
+
+    if mode in ("hybrid", "vec") and query_embedding is not None:
+        score_map = _folder_boost(conn, query_embedding, pre_boost_ids, score_map)
+
+    # Re-sort after boost and take top_k
+    ranked = sorted(score_map.items(), key=lambda x: x[1], reverse=True)
+    chunk_ids = [cid for cid, _ in ranked[:top_k]]
     if not chunk_ids:
         return []
 
+    # Fetch chunk details
     placeholders = ",".join("?" * len(chunk_ids))
     type_filter = ""
     params: list = list(chunk_ids)
@@ -165,7 +242,7 @@ def search(
 
     # Build lookup
     chunk_map = {row["id"]: row for row in rows}
-    score_map = dict(merged[:top_k])
+    score_map = dict(ranked[:top_k])
 
     results = []
     for cid in chunk_ids:
