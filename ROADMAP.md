@@ -2,7 +2,7 @@
 
 > Last updated: 2026-03-19
 
-34 open issues across 6 workstreams. This document establishes priority, ordering,
+36 open issues across 6 workstreams. This document establishes priority, ordering,
 dependency chains, and parallelism opportunities.
 
 ## Issue Index
@@ -26,12 +26,15 @@ dependency chains, and parallelism opportunities.
 | 105 | auto-relationship discovery via similarity            | Search      | 2     |
 | 15  | parallelize map phase LLM calls                       | Search      | 2     |
 | 110 | pymupdf4llm Phase 3: narrow vision pipeline scope     | Ingest      | 2     |
-| 82  | extract inline images from web pages                  | Ingest      | 2     |
+| 82  | extract inline images from web pages (Phase 1)        | Ingest      | 2     |
 | 126 | folder-level semantic embeddings for context boosting | Search      | 2     |
 | 127 | prediction-error detection for stale search results   | Search      | 2     |
 | 128 | ingestion session tracking for co-occurrence signals  | Search      | 2     |
+| 139 | chunk_sessions join table for N:M session tracking    | Search      | 2     |
 | 130 | keyword intent extraction pre-filter for search       | Search      | 2     |
 | 111 | pymupdf4llm Phase 4: hybrid enrichment                | Ingest      | 3     |
+| 131 | web image extraction Phase 2: rendered DOM images     | Ingest      | 3     |
+| 132 | web image extraction Phase 3: canvas/SVG screenshots  | Ingest      | 3     |
 | 129 | retrieval plan intermediate representation            | Search      | 3     |
 | 63  | document watch/sync for auto-re-ingestion             | Ingest      | 3     |
 | 64  | workspace/project tagging for chunk isolation         | Ingest      | 3     |
@@ -108,9 +111,9 @@ measured, project renamed.
 
 #110 (vision Phase 3)        ─── depends on PR #89 (Phase 2)
 #105 (auto-relationships)    ─── independent
-#128 (session co-occurrence) ─── independent, feeds #105
+#128 (session co-occurrence) ──▶ #139 (chunk_sessions N:M) ──▶ #105
 #15 (parallel LLM calls)    ─── independent
-#82 (web page images)        ─── independent
+#82 (web images, Phase 1)    ─── independent
 #126 (folder embeddings)     ─── independent
 #127 (prediction errors)     ─── independent
 #130 (keyword pre-filter)    ─── independent, research: APC (arXiv:2506.14852)
@@ -155,6 +158,8 @@ works, search quality measurably improves via reranking.
                                     ──▶ #104 (memory→wisdom)
 
 #111 (vision Phase 4)       ─── depends on #110 (Phase 3)
+#131 (web images, Phase 2)  ─── depends on #82
+#132 (web images, Phase 3)  ─── depends on #82, #131
 #94 (int8/bit quantization) ─── independent (builds on #99)
 #63 (document watch/sync)   ─── independent
 #64 (workspace tagging)     ─── independent
@@ -174,6 +179,8 @@ works, search quality measurably improves via reranking.
 - #94 builds on Phase 2's #99 but is otherwise independent.
 - #63 (watch/sync) and #64 (workspace tagging) are ingest improvements
   independent of the integration work.
+- #131 and #132 (web image extraction Phases 2-3) depend on #82 landing
+  in Phase 2. #132 also depends on #131 (shares rendered DOM infrastructure).
 - #129 (retrieval plan IR) is independent but benefits from #106 (reranking)
   being in place — the plan can specify reranking directives per sub-query.
 
@@ -235,10 +242,10 @@ PR #89 ──────┐
 #46 ─────────┤                   │          │                   │      └──▶ #104     #109
 #45 ─────────┤    #101 (rename)──┤  #100 ───┘                   │                    #107
 #16 ─────────┘                   │                              #94 (needs #99)      #12
-                                 ├─ #105 ◀─ #128                #63                  #65
+                                 ├─ #105 ◀─ #139 ◀─ #128                #63                  #65
                                  ├─ #128 (sessions)             #64                  #80
                                  ├─ #15                         #129 (plan IR)
-                                 ├─ #82
+                                 ├─ #82 ──▶ #131 ──▶ #132
                                  ├─ #126
                                  ├─ #127                         #111 (needs #110)
                                  ├─ #130
