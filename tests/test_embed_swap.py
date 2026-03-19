@@ -112,3 +112,29 @@ def test_re_embed_empty_db(mock_provider, tmp_path):
     assert result["chunks_processed"] == 0
     assert result["model"] == "mxbai-embed-large"
     assert result["dim"] == NEW_DIM
+
+
+@patch(
+    "knowledge_base.embed_swap.get_provider",
+    return_value=_mock_provider(_fake_embed_new),
+)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_re_embed_includes_folder_summaries(mock_provider, tmp_path):
+    """re_embed re-creates folder_summaries_vec with the new model."""
+    conn = _setup(tmp_path)
+
+    folder = tmp_path / "papers"
+    folder.mkdir()
+    (folder / "a.md").write_text("Paper about attention.\n")
+    ingest_file(conn, folder / "a.md")
+
+    # Verify folder summary exists
+    assert conn.execute("SELECT count(*) FROM folder_summaries").fetchone()[0] == 1
+    assert conn.execute("SELECT count(*) FROM folder_summaries_vec").fetchone()[0] == 1
+
+    result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
+
+    assert result["folders_processed"] == 1
+    # Vec table rebuilt with new dim
+    assert conn.execute("SELECT count(*) FROM folder_summaries_vec").fetchone()[0] == 1
