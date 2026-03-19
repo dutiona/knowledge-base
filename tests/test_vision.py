@@ -684,7 +684,8 @@ def test_extract_figures_eta_gate(tmp_path):
     result = extract_figures(conn, paper_id=paper_id, confirmed=False)
     assert result.get("confirm_required") is True
     assert result["estimated_seconds"] == 50 * 4
-    assert result["candidate_pages"] == 50
+    # No extracted images, all 50 pages go through heuristic fallback
+    assert result["vector_pages"] == 50
 
 
 @patch("knowledge_base.vision._embed_with_config")
@@ -2170,3 +2171,132 @@ def test_detect_vector_pages_excludes_pages_with_extracted_images(tmp_path):
     pages_with_images: set[int] = {0}
     result = _detect_vector_pages(str(pdf_path), pages_with_images)
     assert 0 not in result
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_uses_extracted_images(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
+):
+    """extract_figures reads pymupdf4llm-extracted images instead of rendering pages."""
+    conn = vision_conn
+    import fitz
+
+    doc = fitz.open()
+    doc.new_page(width=612, height=792)
+    doc.new_page(width=612, height=792)
+    pdf_path = tmp_path / "paper.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Test Paper')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+
+    # Create extracted image directory under tmp_path
+    image_dir = tmp_path / "extracted"
+    image_dir.mkdir(parents=True)
+    mock_image_dir.return_value = image_dir
+
+    from PIL import Image
+    import io
+
+    img = Image.new("RGB", (100, 100), color="red")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+    (image_dir / "image_0.png").write_bytes(png_bytes)
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "ch1",
+            "![fig](image_0.png)",
+            str(pdf_path),
+            json.dumps({"pages": [1], "images": ["image_0.png"]}),
+        ),
+    )
+    conn.commit()
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "chart",
+            "description": "A red chart.",
+            "title": "Fig 1",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.1] * 1024]
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, confirmed=True)
+
+    assert result["figures_found"] == 1
+    assert result["chunks_created"] == 1
+    assert mock_vision.call_count == 1
+    # Verify the figure-specific prompt was used
+    call_args = mock_vision.call_args
+    assert "figure image extracted from a research paper" in call_args[0][1]
+    # The metadata should indicate source_image
+    row = conn.execute(
+        "SELECT metadata FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    meta = json.loads(row["metadata"])
+    assert meta.get("source_image") == "image_0.png"
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_falls_back_to_render_for_vector_pages(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
+):
+    """Pages with vector drawings but no extracted images use full-page render."""
+    conn = vision_conn
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    for i in range(15):
+        shape = page.new_shape()
+        shape.draw_line(fitz.Point(10, 10 + i * 5), fitz.Point(100, 10 + i * 5))
+        shape.finish()
+        shape.commit()
+    pdf_path = tmp_path / "paper.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Vector Paper')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+
+    # Empty extracted dir — no extracted images
+    image_dir = tmp_path / "extracted"
+    image_dir.mkdir(parents=True)
+    mock_image_dir.return_value = image_dir
+
+    conn.commit()
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "diagram",
+            "description": "A vector diagram.",
+            "title": None,
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.1] * 1024]
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, confirmed=True)
+
+    assert result["figures_found"] == 1
+    assert result.get("vector_pages_rendered", 0) > 0
