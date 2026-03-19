@@ -464,8 +464,7 @@ def test_get_paper_source_uri_not_found(tmp_path):
 # Step 5: Vision API call
 # ---------------------------------------------------------------------------
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 def _mock_httpx_response(content: str, status_code: int = 200) -> MagicMock:
