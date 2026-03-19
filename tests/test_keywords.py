@@ -103,6 +103,20 @@ def test_single_char_language_identifier():
     assert "safety" in keywords
 
 
+def test_single_char_with_punctuation():
+    """C followed by punctuation should still be recognized as an identifier."""
+    keywords = extract_keywords("C, memory safety")
+    assert "c" in keywords
+    assert "memory" in keywords
+
+
+def test_contraction_fragments_filtered():
+    """Contraction fragments like 'won' from 'won't' should be stopwords."""
+    keywords = extract_keywords("won something special")
+    assert "won" not in keywords
+    assert "something" in keywords
+
+
 def test_single_char_lowercase_not_kept():
     # "a" is a stopword, but even if it weren't, lowercase single chars
     # from within words should not leak through

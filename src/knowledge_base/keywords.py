@@ -29,7 +29,8 @@ _STOPWORDS: frozenset[str] = frozenset(
     "those through to too under until up very was we were what when where which "
     "while who whom why will with would you your yours yourself yourselves "
     "also use used using can't won't shall may might must need vs "
-    "best better good well many much several".split()
+    "best better good well many much several "
+    "won don doesn didn shouldn couldn wouldn isn aren hasn weren".split()
 )
 
 # Pattern: split on whitespace and strip surrounding punctuation, but keep
@@ -42,7 +43,8 @@ def extract_keywords(query: str, *, max_keywords: int = 5) -> list[str]:
     """Extract intent keywords from a search query.
 
     Returns up to ``max_keywords`` terms, ordered by relevance (frequency-
-    weighted, longer phrases scored higher). All terms are lowercased.
+    weighted, compound terms with hyphens/dots scored higher). All terms
+    are lowercased.
 
     Args:
         query: Natural language search query.
@@ -51,8 +53,13 @@ def extract_keywords(query: str, *, max_keywords: int = 5) -> list[str]:
     if not query or not query.strip():
         return []
 
-    # Track standalone uppercase single-char words (language identifiers: C, R)
-    single_char_ids = {w.lower() for w in query.split() if len(w) == 1 and w.isupper()}
+    # Track standalone uppercase single-char words (language identifiers: C, R).
+    # Strip surrounding punctuation so "C," or "(R)" still match.
+    single_char_ids = {
+        w.strip(".,;:!?()[]{}\"'").lower()
+        for w in query.split()
+        if len(w.strip(".,;:!?()[]{}\"'")) == 1 and w.strip(".,;:!?()[]{}\"'").isupper()
+    }
 
     tokens = _TOKEN_RE.findall(query.lower())
 
@@ -67,16 +74,20 @@ def extract_keywords(query: str, *, max_keywords: int = 5) -> list[str]:
     if not content_words:
         return []
 
-    # Score: simple frequency count, with bonus for longer terms
-    # (technical compound terms like "self-supervised" are more specific).
+    # Score: frequency count with bonus for compound terms (hyphens/dots).
+    # Secondary sort: first occurrence position in query (earlier = higher priority).
     counts = Counter(content_words)
+    first_pos = {}
+    for i, w in enumerate(content_words):
+        if w not in first_pos:
+            first_pos[w] = i
     scored = [
-        (word, count + (0.5 if "-" in word or "." in word else 0))
+        (word, count + (0.5 if "-" in word or "." in word else 0), first_pos[word])
         for word, count in counts.items()
     ]
-    scored.sort(key=lambda x: x[1], reverse=True)
+    scored.sort(key=lambda x: (-x[1], x[2]))
 
-    return [word for word, _ in scored[:max_keywords]]
+    return [word for word, _, _ in scored[:max_keywords]]
 
 
 # FTS5 reserved words that must not appear as bare terms in queries.
@@ -100,7 +111,7 @@ def build_fts_query(keywords: list[str]) -> str:
 
     terms = []
     for kw in keywords:
-        if kw.lower() in _FTS5_OPERATORS:
+        if kw in _FTS5_OPERATORS:
             continue
         # Quote terms with special chars to prevent FTS5 misinterpretation
         if "-" in kw or "." in kw:
