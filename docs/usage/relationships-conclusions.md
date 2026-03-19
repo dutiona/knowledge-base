@@ -2,17 +2,20 @@
 
 ## Relationship Types
 
-Seven typed edges connect papers:
+Eight typed edges connect papers:
 
-| Type          | Meaning                                        |
-| ------------- | ---------------------------------------------- |
-| `extends`     | Builds upon the target paper's work            |
-| `contradicts` | Presents conflicting findings                  |
-| `replicates`  | Reproduces or validates results                |
-| `cites`       | References the target paper                    |
-| `compares`    | Evaluates against the target paper's approach  |
-| `applies`     | Uses the target paper's method in a new domain |
-| `implements`  | Provides an implementation of the target paper |
+| Type          | Meaning                                             |
+| ------------- | --------------------------------------------------- |
+| `extends`     | Builds upon the target paper's work                 |
+| `contradicts` | Presents conflicting findings                       |
+| `replicates`  | Reproduces or validates results                     |
+| `cites`       | References the target paper                         |
+| `compares`    | Evaluates against the target paper's approach       |
+| `applies`     | Uses the target paper's method in a new domain      |
+| `implements`  | Provides an implementation of the target paper      |
+| `similar`     | Content similarity via embeddings (auto-discovered) |
+
+The first seven types are manually assigned. `similar` is auto-discovered via chunk embedding cosine similarity -- see [Auto-Relationship Discovery](auto-relationships.md) for details.
 
 ## Adding Relationships
 
