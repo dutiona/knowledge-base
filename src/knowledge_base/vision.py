@@ -734,7 +734,9 @@ def estimate_figures_time(
 ) -> dict:
     """Estimate figure extraction time without running it.
 
-    Returns dict with candidate_pages, estimated_seconds, has_omniparser.
+    Uses the dual-path pipeline: counts extracted images (primary) and
+    vector/heuristic pages (fallback) to compute the ETA.
+
     Returns {"error": ...} on validation failure.
     """
     paper_row = conn.execute(
@@ -752,7 +754,6 @@ def estimate_figures_time(
         return {"error": f"Source is not an existing PDF: {source_uri}"}
 
     if pages is not None:
-        # Bounds-check explicit pages
         doc = fitz.open(str(pdf_path))
         total_pages = len(doc)
         doc.close()
@@ -761,17 +762,33 @@ def estimate_figures_time(
                 return {
                     "error": f"Page {p} out of range (document has {total_pages} pages)"
                 }
-        candidate_pages = pages
+
+    # Collect extracted images
+    image_dir = pdf_image_dir(pdf_path)
+    extracted_images = _collect_extracted_images(conn, source_uri, image_dir)
+    pages_with_images: set[int] = {pn - 1 for _, pn in extracted_images}
+
+    # Determine fallback pages
+    if pages is not None:
+        n_vector = len([p for p in pages if p not in pages_with_images])
+        n_extracted = len(pages) - n_vector
+    elif not extracted_images:
+        fallback = _heuristic_filter(str(pdf_path))
+        n_vector = len(fallback)
+        n_extracted = 0
     else:
-        candidate_pages = _heuristic_filter(str(pdf_path))
+        fallback = _detect_vector_pages(str(pdf_path), pages_with_images)
+        n_vector = len(fallback)
+        n_extracted = len(extracted_images)
 
     omniparser_path = _get_omniparser_config(conn)
     per_page = _ETA_SECS_PER_PAGE_BASE + (
         _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
     )
-    estimated = len(candidate_pages) * per_page
+    estimated = (n_extracted + n_vector) * per_page
     return {
-        "candidate_pages": len(candidate_pages),
+        "extracted_images": n_extracted,
+        "vector_pages": n_vector,
         "estimated_seconds": estimated,
         "has_omniparser": omniparser_path is not None,
     }

@@ -2300,3 +2300,40 @@ def test_extract_figures_falls_back_to_render_for_vector_pages(
 
     assert result["figures_found"] == 1
     assert result.get("vector_pages_rendered", 0) > 0
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._collect_extracted_images")
+def test_estimate_figures_time_accounts_for_extracted_images(
+    mock_collect, mock_image_dir, vision_conn, tmp_path
+):
+    """ETA should be lower when extracted images are available."""
+    conn = vision_conn
+    import fitz
+
+    doc = fitz.open()
+    for _ in range(10):
+        doc.new_page()
+    pdf_path = tmp_path / "paper.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Test')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+    conn.commit()
+
+    mock_image_dir.return_value = tmp_path / "extracted"
+    # 5 extracted images, 0 vector pages → much cheaper than 10 heuristic pages
+    mock_collect.return_value = [(tmp_path / f"img_{i}.png", i + 1) for i in range(5)]
+
+    from knowledge_base.vision import estimate_figures_time
+
+    result = estimate_figures_time(conn, paper_id=1)
+
+    assert result.get("extracted_images", 0) == 5
+    # With 5 extracted images and 0 vector pages, should be cheaper than
+    # the old heuristic which would have returned all 10 pages
+    assert result["estimated_seconds"] < 10 * 4
