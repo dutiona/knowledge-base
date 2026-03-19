@@ -773,7 +773,11 @@ def estimate_figures_time(
     # Determine fallback pages
     if pages is not None:
         n_vector = len([p for p in pages if p not in pages_with_images])
-        n_extracted = len(pages) - n_vector
+        # Count actual extracted images on requested pages (not unique pages)
+        pages_set = set(pages)
+        n_extracted = len(
+            [(p, pn) for p, pn in extracted_images if (pn - 1) in pages_set]
+        )
     elif not extracted_images:
         fallback = _heuristic_filter(str(pdf_path))
         n_vector = len(fallback)
