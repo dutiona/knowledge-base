@@ -135,6 +135,48 @@ On normal `ingest`, each chunk is SHA-256 hashed (truncated to 16 hex chars). If
 
 On `reingest`, all existing chunks for the source URI are deleted unconditionally, then new chunks are inserted. No hash comparison occurs -- it is a force-replace operation.
 
+## Session Tracking (Co-occurrence)
+
+When documents are ingested together, they share a **session ID** that captures their co-occurrence -- a behavioral signal about research context at ingestion time. This complements embedding similarity (#105): similarity finds documents that _say similar things_, while co-ingestion finds documents that _entered the system together_.
+
+**Why:** Inspired by [DiffMem](https://github.com/Growth-Kinetics/DiffMem) (MIT). DiffMem's insight is that entity files modified in the same git commit encode contextual relationships invisible to keyword or vector search. Session tracking applies this principle to ingestion: documents researched in the same sitting share implicit context that no query on their content would surface.
+
+**How it works:**
+
+- **Directory ingestion** automatically generates a shared `session_id` for all files in the directory. No parameter needed.
+- **File and URL ingestion** accept an optional `session_id` parameter. Pass the same ID across multiple calls in one research session to mark co-occurrence.
+- **Single-file ingestion** without a `session_id` generates a unique ID per call. Single-document sessions produce no co-occurrence signal, which is correct -- no false positives.
+
+```json
+{
+  "name": "ingest",
+  "arguments": {
+    "path": "/home/user/papers/paper1.pdf",
+    "session_id": "my-session-1"
+  }
+}
+```
+
+```json
+{
+  "name": "ingest",
+  "arguments": {
+    "path": "/home/user/papers/paper2.pdf",
+    "session_id": "my-session-1"
+  }
+}
+```
+
+These two papers now share a session. Query co-occurrence with the `co_occurrence` tool:
+
+```json
+{ "name": "co_occurrence", "arguments": { "min_sessions": 1 } }
+```
+
+Returns document pairs ordered by number of shared sessions. Pairs that co-occur across multiple sessions get stronger signals.
+
+**Limitation:** Session IDs are stored on chunks. Because of content-hash deduplication, re-ingesting the same file in a new session does not update its `session_id` (the chunks already exist). See #139 for the planned `chunk_sessions` join table that enables proper N:M session tracking.
+
 ## Embedding
 
 Chunks are embedded automatically during ingestion using the configured embedding provider and model. Embeddings are stored in the `chunks_vec` virtual table. The model, dimension, and provider can be checked with the `embed_config` tool and changed with `re_embed_tool` (which re-embeds all existing chunks).

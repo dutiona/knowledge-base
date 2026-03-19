@@ -26,7 +26,6 @@ from knowledge_base.ingest import (
 from knowledge_base.papers import (
     register_paper,
     get_paper,
-    get_paper_paths,
     add_relationship,
     get_relationships,
 )
@@ -295,7 +294,7 @@ def test_reingest_does_not_relink_unrelated_papers(tmp_path):
     md_b.write_text("Content B.\n")
     ingest_file(conn, md_b)
 
-    paper_a = register_paper(conn, "Paper A", source_uri=str(md_a.resolve()))
+    register_paper(conn, "Paper A", source_uri=str(md_a.resolve()))
     paper_b = register_paper(conn, "Paper B", source_uri=str(md_b.resolve()))
     old_b_chunk = paper_b["abstract_chunk_id"]
 

@@ -1,7 +1,6 @@
 """Smoke tests for schema and basic operations."""
 
 import sqlite3
-import json
 import struct
 
 from knowledge_base.db import (
