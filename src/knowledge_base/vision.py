@@ -695,7 +695,9 @@ def _collect_extracted_images(
         (source_uri,),
     ).fetchall()
 
-    # Map image basename -> earliest page number
+    # Map image basename -> earliest page number (1-indexed, from pymupdf4llm).
+    # A chunk may span multiple pages; we use the chunk's first page as the
+    # reference since pymupdf4llm doesn't provide per-image page mapping.
     seen: dict[str, int] = {}
     for row in rows:
         try:
@@ -704,7 +706,7 @@ def _collect_extracted_images(
             continue
         images = meta.get("images", [])
         pages = meta.get("pages", [])
-        first_page = pages[0] if pages else 0
+        first_page = pages[0] if pages else 1  # 1-indexed; default to page 1
         for img_name in images:
             if img_name not in seen or first_page < seen[img_name]:
                 seen[img_name] = first_page
@@ -857,7 +859,12 @@ def extract_figures(
             (p, pn) for p, pn in extracted_images if (pn - 1) in pages_set
         ]
 
-    # 5b. Determine which pages need full-page rendering (fallback path)
+    # 5b. Determine which pages need full-page rendering (fallback path).
+    # NOTE: Pages with extracted raster images skip full-page rendering even
+    # if they also contain vector figures. This is by design — the primary
+    # path deliberately avoids full-page rendering for pages that already
+    # have high-quality extracted images. Vector figures on mixed pages
+    # will be captured in a future iteration if needed.
     if pages is not None:
         # User explicitly requested pages — render any that don't have extracted images
         vector_pages = [p for p in pages if p not in pages_with_images]
@@ -906,22 +913,28 @@ def extract_figures(
     omni_data: dict[
         int, tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]]
     ] = {}
+    omni_data_by_image: dict[
+        str, tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]]
+    ] = {}
     omniparser_elapsed = 0.0
     if omniparser_path:
         if on_progress:
             on_progress("omniparser processing...")
         t_omni_start = time.monotonic()
 
-        # OmniParser on extracted images (already PNGs on disk)
+        # OmniParser on extracted images (already PNGs on disk).
+        # Key by image name (unique) rather than page index (not unique).
+        omni_data_by_image: dict[
+            str,
+            tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]],
+        ] = {}
         for img_path, page_num in extracted_images:
-            page_0idx = page_num - 1
             omni_result = _run_omniparser(img_path, omniparser_path)
-            if not omni_result or not omni_result.get("elements"):
-                omni_data[page_0idx] = (omni_result, [(0.0, 0.0, 1.0, 1.0)], [])
-            else:
-                # No multi-region splitting for extracted images
-                # (each extracted image IS a single figure already)
-                omni_data[page_0idx] = (omni_result, [(0.0, 0.0, 1.0, 1.0)], [])
+            omni_data_by_image[img_path.name] = (
+                omni_result,
+                [(0.0, 0.0, 1.0, 1.0)],
+                [],
+            )
 
         # OmniParser on rendered vector pages (existing logic)
         for page_num, png_bytes in rendered.items():
@@ -966,8 +979,10 @@ def extract_figures(
     with ThreadPoolExecutor(max_workers=4) as executor:
         future_to_key: dict = {}
 
-        # 7a. Extracted images — use _FIGURE_VISION_PROMPT
-        for img_path, page_num in extracted_images:
+        # 7a. Extracted images — use _FIGURE_VISION_PROMPT.
+        # Each extracted image gets a unique image_idx as its region key
+        # so multiple images on the same page don't overwrite each other.
+        for image_idx, (img_path, page_num) in enumerate(extracted_images):
             page_0idx = page_num - 1
             img_bytes = img_path.read_bytes()
             b64 = base64.b64encode(img_bytes).decode("ascii")
@@ -978,7 +993,7 @@ def extract_figures(
                 base_url=base_url,
                 model=model,
             )
-            future_to_key[future] = (page_0idx, None, img_path.name)
+            future_to_key[future] = (page_0idx, image_idx, img_path.name)
 
         # 7b. Vector page fallback — use _VISION_PROMPT (original full-page)
         for page_num, png_bytes in rendered.items():
@@ -1051,22 +1066,48 @@ def extract_figures(
         for page_num in page_results:
             if not page_results[page_num]:
                 continue
+
+            figures_on_page = page_results[page_num]
+
+            # Extracted images: look up OmniParser data by image name
+            for i, fig in enumerate(figures_on_page):
+                source_image_name = fig.get("_source_image")
+                if source_image_name and source_image_name in omni_data_by_image:
+                    omni_result, _, _ = omni_data_by_image[source_image_name]
+                    if omni_result and omni_result.get("elements"):
+                        enriched = _merge_omniparser_elements(
+                            fig, omni_result["elements"]
+                        )
+                        if enriched is not fig:
+                            omniparser_enriched += 1
+                        figures_on_page[i] = enriched
+
+            # Vector pages: look up OmniParser data by page number
             omni_result, regions, crops = omni_data.get(
                 page_num, (None, [(0.0, 0.0, 1.0, 1.0)], [])
             )
             if not omni_result or not omni_result.get("elements"):
                 continue
 
-            figures_on_page = page_results[page_num]
+            # Only process figures from the vector path (no _source_image tag)
+            vector_figs = [
+                (i, fig)
+                for i, fig in enumerate(figures_on_page)
+                if not fig.get("_source_image")
+            ]
+            if not vector_figs:
+                continue
+
             omni_elements = omni_result["elements"]
 
-            if len(figures_on_page) == 1:
-                enriched = _merge_omniparser_elements(figures_on_page[0], omni_elements)
-                if enriched is not figures_on_page[0]:
+            if len(vector_figs) == 1:
+                idx, fig = vector_figs[0]
+                enriched = _merge_omniparser_elements(fig, omni_elements)
+                if enriched is not fig:
                     omniparser_enriched += 1
-                page_results[page_num] = [enriched]
+                figures_on_page[idx] = enriched
             else:
-                for i, fig in enumerate(figures_on_page):
+                for idx, fig in vector_figs:
                     region_idx = fig.get("_region_idx")
                     if region_idx is not None and region_idx < len(regions):
                         region_elements = _elements_in_region(
@@ -1074,7 +1115,7 @@ def extract_figures(
                         )
                     else:
                         region_elements = omni_elements
-                    figures_on_page[i] = {
+                    figures_on_page[idx] = {
                         **fig,
                         "_omniparser_elements": region_elements,
                     }
@@ -1096,11 +1137,10 @@ def extract_figures(
 
     # 10. Atomic transaction: delete old, insert new (main thread)
     chunks_created = 0
-    # Determine candidate_pages for scoped DELETE (#79)
-    all_affected_pages = sorted(
-        {pn - 1 for _, pn in extracted_images} | set(vector_pages)
-    )
-    candidate_pages = pages if pages is not None else (all_affected_pages or None)
+    # Determine candidate_pages for scoped DELETE (#79).
+    # When pages=None (full refresh), always do unscoped DELETE to remove
+    # stale figure chunks from pages no longer detected.
+    candidate_pages = pages
 
     if candidate_pages is not None and candidate_pages:
         page_clauses = []

@@ -2252,6 +2252,80 @@ def test_extract_figures_uses_extracted_images(
 @patch("knowledge_base.vision.pdf_image_dir")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_multi_image_same_page(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
+):
+    """Multiple images on the same page must all be processed, not overwritten."""
+    conn = vision_conn
+    import fitz
+
+    doc = fitz.open()
+    doc.new_page(width=612, height=792)
+    pdf_path = tmp_path / "paper.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Multi-Fig Paper')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+
+    image_dir = tmp_path / "extracted"
+    image_dir.mkdir(parents=True)
+    mock_image_dir.return_value = image_dir
+
+    from PIL import Image
+    import io
+
+    for name in ("image_0.png", "image_1.png"):
+        img = Image.new("RGB", (100, 100), color="blue")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        (image_dir / name).write_bytes(buf.getvalue())
+
+    # Both images on page 1 (1-indexed in metadata)
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "ch1",
+            "![fig](image_0.png) ![fig](image_1.png)",
+            str(pdf_path),
+            json.dumps({"pages": [1], "images": ["image_0.png", "image_1.png"]}),
+        ),
+    )
+    conn.commit()
+
+    call_count = [0]
+
+    def vision_side_effect(*args, **kwargs):
+        call_count[0] += 1
+        return [
+            {
+                "figure_type": "chart",
+                "description": f"Figure {call_count[0]}",
+                "title": f"Fig {call_count[0]}",
+                "entities_mentioned": [],
+            }
+        ]
+
+    mock_vision.side_effect = vision_side_effect
+    mock_embed.return_value = [[0.1] * 1024, [0.2] * 1024]
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, confirmed=True)
+
+    # Both images must be processed — no overwrite
+    assert result["figures_found"] == 2
+    assert result["chunks_created"] == 2
+    assert mock_vision.call_count == 2
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
 def test_extract_figures_falls_back_to_render_for_vector_pages(
     mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
 ):
