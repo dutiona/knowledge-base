@@ -42,6 +42,7 @@ def test_record_conclusion_basic(tmp_path):
     assert conclusions[0]["confidence"] == 0.9
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_record_conclusion_with_evidence(tmp_path):
     conn = _setup(tmp_path)

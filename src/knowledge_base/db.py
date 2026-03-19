@@ -396,6 +396,19 @@ def init_schema(conn: sqlite3.Connection) -> None:
         ON prediction_errors(query_hash, error_type, source_type_filter, detected_at);
     CREATE INDEX IF NOT EXISTS idx_prediction_errors_unresolved
         ON prediction_errors(detected_at) WHERE resolved_at IS NULL;
+
+    -- Folder summaries for search context boosting (#126)
+    CREATE TABLE IF NOT EXISTS folder_summaries (
+        folder_path TEXT PRIMARY KEY,
+        summary TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS folder_summaries_vec USING vec0(
+        embedding float[{embed_dim}],
+        +folder_path TEXT
+    );
     """)
 
     conn.execute(

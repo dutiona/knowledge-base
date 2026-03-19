@@ -96,6 +96,29 @@ def re_embed(
     """)
     conn.execute("DROP TABLE _embed_staging")
 
+    # Re-embed folder summaries (#126) — always recreate the vec table
+    # so its dimension matches the new model even when no summaries exist yet
+    folders_processed = 0
+    conn.execute("DROP TABLE IF EXISTS folder_summaries_vec")
+    conn.execute(f"""
+        CREATE VIRTUAL TABLE folder_summaries_vec USING vec0(
+            embedding float[{new_dim}],
+            +folder_path TEXT
+        )
+    """)
+    folder_rows = conn.execute(
+        "SELECT folder_path, summary FROM folder_summaries"
+    ).fetchall()
+    if folder_rows:
+        texts = [row["summary"] for row in folder_rows]
+        embeddings = embed_provider.embed(texts, model=new_model, expected_dim=new_dim)
+        for row, emb in zip(folder_rows, embeddings):
+            conn.execute(
+                "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
+                (_serialize_f32(emb), row["folder_path"]),
+            )
+        folders_processed = len(folder_rows)
+
     # Update config
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_model', ?)",
@@ -113,6 +136,7 @@ def re_embed(
 
     return {
         "chunks_processed": processed,
+        "folders_processed": folders_processed,
         "model": new_model,
         "dim": new_dim,
     }

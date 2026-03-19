@@ -57,6 +57,7 @@ def test_chunk_text_empty():
     assert _chunk_text("   ") == []
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_markdown_file(tmp_path):
     db_path = tmp_path / "test.db"
@@ -79,6 +80,7 @@ def test_ingest_markdown_file(tmp_path):
     assert len(rows) >= 1
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_dedup(tmp_path):
     db_path = tmp_path / "test.db"
@@ -99,6 +101,7 @@ def test_ingest_dedup(tmp_path):
 # --- reingest_file ---
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_updates_paper_paths_hash(tmp_path):
     db_path = tmp_path / "test.db"
@@ -127,6 +130,7 @@ def test_reingest_updates_paper_paths_hash(tmp_path):
     assert new_hash is not None
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_replaces_chunks(tmp_path):
     db_path = tmp_path / "test.db"
@@ -159,6 +163,7 @@ def test_reingest_replaces_chunks(tmp_path):
     assert any("reinforcement" in r["content"] for r in rows)
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_updates_fts(tmp_path):
     db_path = tmp_path / "test.db"
@@ -185,6 +190,7 @@ def test_reingest_updates_fts(tmp_path):
     assert len(new_matches) >= 1
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_cleans_vec_table(tmp_path):
     db_path = tmp_path / "test.db"
@@ -206,6 +212,7 @@ def test_reingest_cleans_vec_table(tmp_path):
     assert new_vec_count == old_vec_count
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_paper_abstract_chunk(tmp_path):
     """After reingest, abstract_chunk_id should point to the new first chunk."""
@@ -242,6 +249,7 @@ def test_reingest_relinks_paper_abstract_chunk(tmp_path):
     assert chunk["chunk_index"] == 0
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_multiple_papers_same_source(tmp_path):
     """Multiple papers linked to same source should all get relinked."""
@@ -270,6 +278,7 @@ def test_reingest_relinks_multiple_papers_same_source(tmp_path):
     assert papers_a[0]["abstract_chunk_id"] == papers_b[0]["abstract_chunk_id"]
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_does_not_relink_unrelated_papers(tmp_path):
     """Papers linked to a different source should not be affected."""
@@ -298,6 +307,7 @@ def test_reingest_does_not_relink_unrelated_papers(tmp_path):
     assert papers_b[0]["abstract_chunk_id"] == old_b_chunk
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_nullifies_relationship_evidence(tmp_path):
     db_path = tmp_path / "test.db"
@@ -321,6 +331,7 @@ def test_reingest_nullifies_relationship_evidence(tmp_path):
     assert rels[0]["evidence_chunk_id"] is None
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_cleans_conclusion_chunk_refs(tmp_path):
     db_path = tmp_path / "test.db"
@@ -343,6 +354,7 @@ def test_reingest_cleans_conclusion_chunk_refs(tmp_path):
     assert chunk_id not in conclusions[0]["source_chunk_ids"]
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_method_by_name_search(tmp_path):
     """After reingest, method.chunk_id should point to the new chunk containing the method name."""
@@ -398,6 +410,7 @@ def test_reingest_relinks_method_by_name_search(tmp_path):
     assert "TransformerXL" in new_chunk["content"]
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_dataset_by_name_search(tmp_path):
     """After reingest, dataset.chunk_id should point to the new chunk containing the dataset name."""
@@ -438,6 +451,7 @@ def test_reingest_relinks_dataset_by_name_search(tmp_path):
     assert row["chunk_id"] != old_chunk_id
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_metric_by_name_search(tmp_path):
     """After reingest, metric.chunk_id should point to the new chunk containing the metric name."""
@@ -478,6 +492,7 @@ def test_reingest_relinks_metric_by_name_search(tmp_path):
     assert row["chunk_id"] != old_chunk_id
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_relinks_entity_at_chunk_index_zero(tmp_path):
     """Entities linked to chunk_index=0 should be re-linked to the new first chunk."""
@@ -511,6 +526,7 @@ def test_reingest_relinks_entity_at_chunk_index_zero(tmp_path):
     assert row["chunk_id"] != old_chunk_id
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_leaves_null_when_no_name_match(tmp_path):
     """If the entity name doesn't appear in any new chunk, chunk_id stays NULL."""
@@ -543,6 +559,7 @@ def test_reingest_leaves_null_when_no_name_match(tmp_path):
     )
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_does_not_relink_unrelated_entities(tmp_path):
     """Entities from other papers should not be affected by reingest."""
@@ -579,6 +596,7 @@ def test_reingest_does_not_relink_unrelated_entities(tmp_path):
     assert row["chunk_id"] == old_b_chunk_id, "Unrelated entity should not be affected"
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_nonexistent_source(tmp_path):
     db_path = tmp_path / "test.db"
@@ -592,6 +610,7 @@ def test_reingest_nonexistent_source(tmp_path):
     assert result["error"] is not None
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_idempotent_content(tmp_path):
     """Reingest same content = delete old + insert new (same result)."""
@@ -614,6 +633,7 @@ def test_reingest_idempotent_content(tmp_path):
 # --- reingest batching (issue #40) ---
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.db._SQL_BATCH_SIZE", 2)
 def test_reingest_batches_in_clauses(tmp_path):
@@ -756,6 +776,7 @@ def _mock_httpx_get(url, **kwargs):
     return resp
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.ingest.httpx.get", _mock_httpx_get)
 def test_ingest_url_basic(tmp_path):
@@ -774,6 +795,7 @@ def test_ingest_url_basic(tmp_path):
     assert all(r["source_type"] == "web" for r in rows)
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.ingest.httpx.get", _mock_httpx_get)
 def test_ingest_url_dedup(tmp_path):
@@ -789,6 +811,7 @@ def test_ingest_url_dedup(tmp_path):
     assert r2["chunks_skipped"] >= 1
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.ingest.httpx.get", _mock_httpx_get)
 def test_ingest_url_stores_title_in_metadata(tmp_path):
@@ -803,6 +826,7 @@ def test_ingest_url_stores_title_in_metadata(tmp_path):
     assert "title" in meta
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_url_http_error(tmp_path):
     db_path = tmp_path / "test.db"
@@ -831,6 +855,7 @@ def test_ingest_url_rejects_non_http_schemes(tmp_path):
     assert "error" in result
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_url_no_content(tmp_path):
     db_path = tmp_path / "test.db"
@@ -918,6 +943,7 @@ def test_chunk_python_ast_module_level():
     assert "CONSTANT = 42" in module_chunk["text"]
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_python_file_uses_ast(tmp_path):
     db_path = tmp_path / "test.db"
@@ -969,6 +995,7 @@ def _create_entity_with_mention(conn, paper_id, canonical_name, chunk_id, surfac
     return entity_id
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_deletes_entity_mentions(tmp_path):
     """reingest_file must delete entity_mentions referencing old chunks."""
@@ -999,6 +1026,7 @@ def test_reingest_deletes_entity_mentions(tmp_path):
     assert remaining == 0
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_preserves_unrelated_entity_mentions(tmp_path):
     """reingest_file must not delete entity_mentions for other source files."""
@@ -1283,6 +1311,7 @@ def _mock_httpx_js_only(url, **kwargs):
     return resp
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.ingest.httpx.get", _mock_httpx_js_only)
 @patch("knowledge_base.ingest._render_with_browser")
@@ -1310,6 +1339,7 @@ def test_ingest_url_browser_rendered(mock_render, tmp_path):
     assert result["browser_rendered"] is True
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.ingest.httpx.get", _mock_httpx_js_only)
 def test_ingest_url_no_browser_configured(tmp_path):
@@ -1322,6 +1352,7 @@ def test_ingest_url_no_browser_configured(tmp_path):
     assert result["browser_rendered"] is False
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.ingest.httpx.get", _mock_httpx_js_only)
 @patch("knowledge_base.ingest._render_with_browser")
@@ -1347,6 +1378,7 @@ def test_ingest_url_browser_fallback_also_empty(mock_render, tmp_path):
     assert result["chunks_added"] == 0
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.ingest.httpx.get", _mock_httpx_get)
 @patch("knowledge_base.ingest._render_with_browser")
@@ -1361,6 +1393,7 @@ def test_ingest_url_no_fallback_when_trafilatura_succeeds(mock_render, tmp_path)
     mock_render.assert_not_called()
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.ingest.httpx.get", _mock_httpx_js_only)
 @patch("knowledge_base.ingest._render_with_browser")
@@ -1387,6 +1420,7 @@ def test_ingest_url_browser_fallback_near_empty(mock_render, tmp_path):
     assert result["chunks_added"] >= 1
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.ingest.httpx.get", _mock_httpx_js_only)
 @patch("knowledge_base.ingest._render_with_browser")
@@ -1418,6 +1452,7 @@ def test_ingest_url_browser_fallback_tmpdir_cleanup(mock_render, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
@@ -1456,6 +1491,7 @@ def test_extract_web_figures_success(mock_vision_cfg, mock_vision_call, tmp_path
     assert meta["figure_type"] == "chart"
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
 def test_extract_web_figures_no_vision_config(mock_vision_cfg, tmp_path):
@@ -1472,6 +1508,7 @@ def test_extract_web_figures_no_vision_config(mock_vision_cfg, tmp_path):
     assert count == 0
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
@@ -2350,6 +2387,7 @@ def test_ingest_url_uses_response_url_for_base(
 # --- duplicate detection by content hash (issue #59, task 10) ---
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_detects_duplicate_by_hash(tmp_path):
     """If a file with same content hash exists under a different path, return info."""
@@ -2400,6 +2438,7 @@ _SIMPLE_PAGES = [
 ]
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_pdf_markdown_basic(tmp_path):
     """Mock pymupdf4llm returns structured markdown with page map."""
@@ -2420,6 +2459,7 @@ def test_extract_pdf_markdown_basic(tmp_path):
     assert 2 in page_map.values()
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_pdf_markdown_with_images(tmp_path):
     """image_dir is created and passed to to_markdown."""
@@ -2440,6 +2480,7 @@ def test_extract_pdf_markdown_with_images(tmp_path):
     assert call_kwargs[1]["image_path"] == str(image_dir)
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_extract_pdf_markdown_fallback_on_import_error(tmp_path):
     """Falls back to flat extraction when pymupdf4llm is unavailable."""
@@ -2468,6 +2509,7 @@ def test_extract_pdf_markdown_fallback_on_import_error(tmp_path):
     assert page_map == {}
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_pdf_uses_markdown_chunks(tmp_path):
     """End-to-end: ingest a PDF → chunks have markdown structure + metadata."""
@@ -2499,6 +2541,7 @@ def test_ingest_pdf_uses_markdown_chunks(tmp_path):
         assert meta["extractor"].startswith("pymupdf4llm")
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_pdf_uses_markdown(tmp_path):
     """Reingest produces markdown-aware chunks for PDFs."""
@@ -2527,6 +2570,7 @@ def test_reingest_pdf_uses_markdown(tmp_path):
         assert "extractor" in meta
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_pdf_chunk_metadata_extractor(tmp_path):
     """PDF chunk metadata includes extractor version and page numbers."""

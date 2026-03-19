@@ -244,6 +244,9 @@ def status() -> str:
     relationship_count = conn.execute(
         "SELECT COUNT(*) as count FROM relationships"
     ).fetchone()["count"]
+    folder_summary_count = conn.execute(
+        "SELECT COUNT(*) as count FROM folder_summaries"
+    ).fetchone()["count"]
     method_count = conn.execute("SELECT COUNT(*) as count FROM methods").fetchone()[
         "count"
     ]
@@ -275,6 +278,7 @@ def status() -> str:
             "papers": paper_count,
             "conclusions": conclusion_count,
             "relationships": relationship_count,
+            "folder_summaries": folder_summary_count,
             "methods": method_count,
             "datasets": dataset_count,
             "metrics": metric_count,

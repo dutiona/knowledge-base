@@ -28,6 +28,7 @@ def test_rrf_merge():
     assert 2 in ids[:2]
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.search.embed_single", _fake_embed_single)
 def test_search_fts_mode(tmp_path):
@@ -44,6 +45,7 @@ def test_search_fts_mode(tmp_path):
     assert "attention" in results[0].content.lower()
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.search.embed_single", _fake_embed_single)
 def test_search_vec_mode(tmp_path):
@@ -59,6 +61,7 @@ def test_search_vec_mode(tmp_path):
     assert len(results) >= 1
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.search.embed_single", _fake_embed_single)
 def test_search_source_type_filter(tmp_path):

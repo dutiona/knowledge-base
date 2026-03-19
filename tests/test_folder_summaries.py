@@ -1,0 +1,343 @@
+"""Tests for folder-level semantic embeddings."""
+
+from unittest.mock import patch
+
+from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.folder_summaries import compute_folder_hash, update_folder_summary
+from knowledge_base.ingest import ingest_file
+
+
+def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
+    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    return [[0.1] * dim for _ in texts]
+
+
+def test_folder_summaries_table_exists(tmp_path):
+    """init_schema creates folder_summaries and folder_summaries_vec tables."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table')"
+        ).fetchall()
+    }
+    assert "folder_summaries" in tables
+    assert "folder_summaries_vec" in tables
+
+
+def test_init_schema_idempotent_folder_summaries(tmp_path):
+    """Calling init_schema twice doesn't error on folder tables."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+    # Insert a row to verify data survives the second init
+    conn.execute(
+        "INSERT INTO folder_summaries (folder_path, summary, content_hash) VALUES (?, ?, ?)",
+        ("/test", "test summary", "abc123"),
+    )
+    conn.commit()
+
+    init_schema(conn)  # should not raise or drop data
+
+    row = conn.execute(
+        "SELECT * FROM folder_summaries WHERE folder_path = '/test'"
+    ).fetchone()
+    assert row is not None
+    assert row["summary"] == "test summary"
+
+
+def test_folder_summaries_columns(tmp_path):
+    """folder_summaries has the expected columns."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(folder_summaries)").fetchall()
+    }
+    assert cols == {"folder_path", "summary", "content_hash", "updated_at"}
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_compute_folder_hash_changes_with_content(tmp_path):
+    """Hash changes when folder contents change."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    folder = tmp_path / "papers"
+    folder.mkdir()
+    (folder / "a.md").write_text("Paper about attention mechanisms.\n")
+    ingest_file(conn, folder / "a.md")
+
+    hash1 = compute_folder_hash(conn, str(folder))
+
+    (folder / "b.md").write_text("Paper about transformers.\n")
+    ingest_file(conn, folder / "b.md")
+
+    hash2 = compute_folder_hash(conn, str(folder))
+    assert hash1 != hash2
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_update_folder_summary_creates_entry(tmp_path):
+    """update_folder_summary inserts a new folder summary."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    folder = tmp_path / "papers"
+    folder.mkdir()
+    (folder / "a.md").write_text("Paper about attention mechanisms.\n")
+    ingest_file(conn, folder / "a.md")
+
+    # ingest_file auto-triggers update_folder_summary, so entry already exists
+    row = conn.execute(
+        "SELECT * FROM folder_summaries WHERE folder_path = ?",
+        (str(folder),),
+    ).fetchone()
+    assert row is not None
+    assert "attention" in row["summary"].lower()
+
+    # Calling again with unchanged content returns False (no-op)
+    assert update_folder_summary(conn, str(folder)) is False
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_update_folder_summary_skips_when_unchanged(tmp_path):
+    """update_folder_summary returns False when content hash hasn't changed."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    folder = tmp_path / "papers"
+    folder.mkdir()
+    (folder / "a.md").write_text("Paper about attention.\n")
+    ingest_file(conn, folder / "a.md")
+
+    # ingest_file already triggered update, so second call is a no-op
+    assert update_folder_summary(conn, str(folder)) is False
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_update_folder_summary_updates_stale_entry(tmp_path):
+    """update_folder_summary updates when content changes."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    folder = tmp_path / "papers"
+    folder.mkdir()
+    (folder / "a.md").write_text("Paper about attention.\n")
+    ingest_file(conn, folder / "a.md")
+
+    # ingest_file auto-triggers, so summary exists
+    old_row = conn.execute(
+        "SELECT summary FROM folder_summaries WHERE folder_path = ?",
+        (str(folder),),
+    ).fetchone()
+    assert old_row is not None
+
+    (folder / "b.md").write_text("Paper about diffusion models.\n")
+    ingest_file(conn, folder / "b.md")
+
+    # ingest_file auto-updated, verify content changed
+    new_row = conn.execute(
+        "SELECT summary FROM folder_summaries WHERE folder_path = ?",
+        (str(folder),),
+    ).fetchone()
+    assert new_row["summary"] != old_row["summary"]
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_ingest_file_triggers_folder_summary(tmp_path):
+    """Ingesting a file automatically creates/updates its folder's summary."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    folder = tmp_path / "papers"
+    folder.mkdir()
+    (folder / "a.md").write_text("Paper about attention mechanisms.\n")
+    ingest_file(conn, folder / "a.md")
+
+    row = conn.execute(
+        "SELECT * FROM folder_summaries WHERE folder_path = ?",
+        (str(folder),),
+    ).fetchone()
+    assert row is not None
+    assert row["summary"]  # non-empty
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch(
+    "knowledge_base.search.embed_single",
+    lambda text, model="bge-m3", **_kw: [0.1] * DEFAULT_EMBED_DIM,
+)
+def test_search_folder_summaries_populated(tmp_path):
+    """Ingesting files into folders creates folder summaries and vec entries."""
+    from knowledge_base.search import search
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    ml_folder = tmp_path / "machine-learning"
+    ml_folder.mkdir()
+    (ml_folder / "attention.md").write_text(
+        "Attention mechanisms in neural networks enable selective focus on input.\n"
+    )
+    ingest_file(conn, ml_folder / "attention.md")
+
+    bio_folder = tmp_path / "biology"
+    bio_folder.mkdir()
+    (bio_folder / "cells.md").write_text(
+        "Cell biology studies the structure and function of living organisms.\n"
+    )
+    ingest_file(conn, bio_folder / "cells.md")
+
+    assert conn.execute("SELECT count(*) FROM folder_summaries").fetchone()[0] == 2
+    assert conn.execute("SELECT count(*) FROM folder_summaries_vec").fetchone()[0] == 2
+
+    # Search still works with folder summaries present
+    results = search(conn, "attention", mode="hybrid")
+    assert len(results) >= 1
+
+
+def test_folder_boost_multiplies_scores(tmp_path):
+    """_folder_boost multiplies scores for chunks in matching folders."""
+    from knowledge_base.search import _folder_boost, _serialize_f32
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Manually insert two chunks in different folders
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
+        " VALUES (?, ?, ?, ?, ?)",
+        ("h1", "attention content", "markdown", "/papers/ml/a.md", 0),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
+        " VALUES (?, ?, ?, ?, ?)",
+        ("h2", "biology content", "markdown", "/papers/bio/b.md", 0),
+    )
+    chunk_ids = [1, 2]
+    dim = DEFAULT_EMBED_DIM
+
+    # Insert a folder summary vec for /papers/ml (but not /papers/bio)
+    conn.execute(
+        "INSERT INTO folder_summaries (folder_path, summary, content_hash) VALUES (?, ?, ?)",
+        ("/papers/ml", "ml summary", "hash1"),
+    )
+    conn.execute(
+        "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
+        (_serialize_f32([0.1] * dim), "/papers/ml"),
+    )
+    conn.commit()
+
+    scores = {1: 0.5, 2: 0.5}
+    query_embedding = [0.1] * dim
+    boosted = _folder_boost(conn, query_embedding, chunk_ids, scores)
+
+    # Chunk 1 (/papers/ml) should be boosted, chunk 2 (/papers/bio) should not
+    assert boosted[1] > scores[1]
+    assert boosted[2] == scores[2]
+
+
+def test_folder_boost_no_folders_is_noop(tmp_path):
+    """_folder_boost returns original scores when no folder summaries exist."""
+    from knowledge_base.search import _folder_boost
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    scores = {1: 0.5}
+    result = _folder_boost(conn, [0.1] * DEFAULT_EMBED_DIM, [1], scores)
+    assert result == scores
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_update_folder_summary_empty_folder(tmp_path):
+    """update_folder_summary returns False for a folder with no indexed chunks."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    empty_folder = tmp_path / "empty"
+    empty_folder.mkdir()
+
+    assert update_folder_summary(conn, str(empty_folder)) is False
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_folder_summary_ignores_subdirectory_files(tmp_path):
+    """Folder summary only includes direct children, not files in subdirectories."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    parent = tmp_path / "research"
+    parent.mkdir()
+    child = parent / "subdir"
+    child.mkdir()
+
+    (parent / "top.md").write_text("Top-level paper about attention.\n")
+    (child / "nested.md").write_text("Nested paper about transformers.\n")
+
+    ingest_file(conn, parent / "top.md")
+    ingest_file(conn, child / "nested.md")
+
+    # Parent folder summary should only contain top.md
+    row = conn.execute(
+        "SELECT summary FROM folder_summaries WHERE folder_path = ?",
+        (str(parent),),
+    ).fetchone()
+    assert row is not None
+    assert "top.md" in row["summary"]
+    assert "nested.md" not in row["summary"]
+
+    # Child folder summary should only contain nested.md
+    child_row = conn.execute(
+        "SELECT summary FROM folder_summaries WHERE folder_path = ?",
+        (str(child),),
+    ).fetchone()
+    assert child_row is not None
+    assert "nested.md" in child_row["summary"]
+    assert "top.md" not in child_row["summary"]
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_ingest_directory_batches_folder_summaries(tmp_path):
+    """ingest_directory updates folder summaries once per folder, not per file."""
+    from knowledge_base.ingest import ingest_directory
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    folder = tmp_path / "papers"
+    folder.mkdir()
+    (folder / "a.md").write_text("Paper about attention.\n")
+    (folder / "b.md").write_text("Paper about diffusion.\n")
+    (folder / "c.md").write_text("Paper about transformers.\n")
+
+    with patch("knowledge_base.ingest.update_folder_summary") as mock_update:
+        ingest_directory(conn, folder)
+
+    # Should be called exactly once for the folder (batch), not 3 times (per-file)
+    assert mock_update.call_count == 1

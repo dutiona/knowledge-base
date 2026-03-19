@@ -25,6 +25,18 @@ import trafilatura
 from .db import _batched_execute, _batched_select
 from .embed_swap import get_embed_config
 from .embeddings import embed
+from .folder_summaries import update_folder_summary
+
+
+def _update_folder_summary_safe(conn: sqlite3.Connection, path: Path) -> None:
+    """Update folder summary for the parent directory, swallowing errors."""
+    try:
+        update_folder_summary(conn, str(path.parent))
+    except Exception:
+        logger.warning(
+            "Failed to update folder summary for %s", path.parent, exc_info=True
+        )
+
 
 logger = logging.getLogger(__name__)
 
@@ -461,6 +473,7 @@ def ingest_file(
     conn: sqlite3.Connection,
     path: Path,
     source_type: str | None = None,
+    _skip_folder_summary: bool = False,
 ) -> dict:
     path = path.resolve()
     if source_type is None:
@@ -587,6 +600,9 @@ def ingest_file(
         )
 
     conn.commit()
+    if not _skip_folder_summary:
+        _update_folder_summary_safe(conn, path)
+
     return {
         "file": str(path),
         "chunks_added": len(new_chunks),
@@ -720,6 +736,7 @@ def reingest_file(
         )
         if not md_chunks:
             conn.commit()
+            _update_folder_summary_safe(conn, path)
             return {
                 "file": source_uri,
                 "chunks_deleted": len(old_ids),
@@ -744,6 +761,7 @@ def reingest_file(
         fixed_chunks = _chunk_text(text)
         if not fixed_chunks:
             conn.commit()
+            _update_folder_summary_safe(conn, path)
             return {
                 "file": source_uri,
                 "chunks_deleted": len(old_ids),
@@ -755,6 +773,7 @@ def reingest_file(
 
     if not insert_items:
         conn.commit()
+        _update_folder_summary_safe(conn, path)
         return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": 0}
 
     texts_to_embed = [item[1] for item in insert_items]
@@ -818,6 +837,8 @@ def reingest_file(
         )
 
     conn.commit()
+    _update_folder_summary_safe(conn, path)
+
     return {
         "file": source_uri,
         "chunks_deleted": len(old_ids),
@@ -1640,8 +1661,15 @@ def ingest_directory(
     if extensions is None:
         extensions = {".pdf", ".md", ".txt", ".typ", ".rst"}
     results = []
+    affected_folders: set[str] = set()
     for f in sorted(directory.rglob("*")):
         if f.is_file() and f.suffix.lower() in extensions:
-            result = ingest_file(conn, f)
+            result = ingest_file(conn, f, _skip_folder_summary=True)
             results.append(result)
+            affected_folders.add(str(f.resolve().parent))
+
+    # Batch-update folder summaries once per affected folder
+    for folder in sorted(affected_folders):
+        _update_folder_summary_safe(conn, Path(folder))
+
     return results
