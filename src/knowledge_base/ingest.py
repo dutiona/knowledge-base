@@ -844,7 +844,9 @@ _MAX_IMAGE_DOWNLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 """Maximum size of a single image download."""
 
 _DECORATIVE_URL_PATTERNS = re.compile(
-    r"logo|icon|avatar|favicon|banner|ads?[_\-/]|sprite|spacer|pixel|tracking|badge",
+    r"[/\-_](logo|favicon|avatar|banner|sprite|spacer|badge)[/\-_.]"
+    r"|[/\-_]ads?[/\-_]"
+    r"|[/\-_](tracking[_\-]?pixel|1x1)[/\-_.]",
     re.IGNORECASE,
 )
 
@@ -1178,7 +1180,7 @@ def _extract_html_images(
         )
         figures_added += 1
 
-    if figures_added:
+    if figures_added or old_ids:
         conn.commit()
     return figures_added
 

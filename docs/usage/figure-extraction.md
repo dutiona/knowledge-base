@@ -132,6 +132,8 @@ This separates figure chunks from text chunks (which use indices starting at 0) 
 
 When ingesting web pages via `ingest_url`, inline `<img>` tags are extracted from the HTML and sent to the vision model for description. This complements the browser screenshot approach (below) by extracting individual images at their native resolution rather than relying on a single full-page screenshot.
 
+**Why this exists:** Text-rich pages (>= 200 chars from trafilatura) never trigger the browser fallback, so their images were completely lost — even pages with dozens of meaningful diagrams and charts. Even when the browser fallback fires, the single 1280x8000px screenshot approach misses images below the fold and asks one vision call to enumerate all figures from a dense composite image. Inline extraction solves both gaps by parsing `<img>` tags directly from the fetched HTML (see [#82](https://github.com/dutiona/knowledge-base/issues/82) for the full analysis).
+
 **When it runs:** Inline image extraction runs automatically when a vision model is configured and the browser-based screenshot extraction did not already fire. If the browser fallback produced figures from a full-page screenshot, inline extraction is skipped to avoid duplicate descriptions of the same visual content.
 
 **Filtering:** Not all images on a page are meaningful. The following are skipped:
