@@ -771,7 +771,8 @@ def extract_figures_tool(
             {
                 "confirm_required": True,
                 "estimated_seconds": est["estimated_seconds"],
-                "candidate_pages": est["candidate_pages"],
+                "extracted_images": est["extracted_images"],
+                "vector_pages": est["vector_pages"],
             }
         )
 

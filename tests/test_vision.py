@@ -1251,7 +1251,8 @@ def test_mcp_tool_page_conversion(mock_get_conn, mock_eft, mock_submit):
 
     mock_get_conn.return_value = MagicMock()
     mock_eft.return_value = {
-        "candidate_pages": 3,
+        "extracted_images": 2,
+        "vector_pages": 1,
         "estimated_seconds": 200,
         "has_omniparser": False,
     }
