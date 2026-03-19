@@ -149,3 +149,84 @@ def test_search_fts_with_keyword_prefilter(tmp_path):
         keyword_prefilter=True,
     )
     assert len(results) >= 1
+
+
+# --- chunk_strategy filter tests ---
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_search_no_strategy_filter_by_default(tmp_path):
+    """Default search (chunk_strategy=None) returns all chunks regardless of strategy."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Insert chunks with different strategies
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, chunk_strategy) "
+        "VALUES ('mech1', 'mechanical attention mechanism', 'pdf', '/tmp/a.pdf', 0, 'mechanical')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, chunk_strategy) "
+        "VALUES ('sem1', 'semantic attention mechanism', 'pdf', '/tmp/b.pdf', 0, 'semantic')"
+    )
+    conn.commit()
+
+    results = search(conn, "attention", mode="fts")
+    assert len(results) == 2
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_search_explicit_strategy_filter(tmp_path):
+    """chunk_strategy='semantic' returns only semantic chunks."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, chunk_strategy) "
+        "VALUES ('mech2', 'mechanical transformer model', 'pdf', '/tmp/a.pdf', 0, 'mechanical')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, chunk_strategy) "
+        "VALUES ('sem2', 'semantic transformer model', 'pdf', '/tmp/b.pdf', 0, 'semantic')"
+    )
+    conn.commit()
+
+    results = search(conn, "transformer", mode="fts", chunk_strategy="semantic")
+    assert len(results) == 1
+    assert results[0].content.startswith("semantic")
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_search_strategy_filter_nonpdf_visible(tmp_path):
+    """Non-PDF chunks (always mechanical) remain visible with no strategy filter."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Set config to semantic (should NOT affect search default)
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')"
+    )
+
+    # Insert non-PDF chunk (mechanical) and PDF chunk (semantic)
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, chunk_strategy) "
+        "VALUES ('md1', 'markdown deep learning notes', 'markdown', '/tmp/notes.md', 0, 'mechanical')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, chunk_strategy) "
+        "VALUES ('pdf1', 'semantic deep learning paper', 'pdf', '/tmp/paper.pdf', 0, 'semantic')"
+    )
+    conn.commit()
+
+    # Default search (no filter) should return both
+    results = search(conn, "deep learning", mode="fts")
+    assert len(results) == 2

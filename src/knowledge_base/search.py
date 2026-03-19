@@ -149,6 +149,7 @@ def search(
     source_type: str | None = None,
     mode: str = "hybrid",
     keyword_prefilter: bool = False,
+    chunk_strategy: str | None = None,
 ) -> list[SearchResult]:
     """
     Hybrid search over indexed chunks.
@@ -161,6 +162,8 @@ def search(
         keyword_prefilter: Extract intent keywords for FTS leg instead of
             using the raw query. Reduces noise from stopwords and context-
             specific filler. Only affects hybrid and fts modes.
+        chunk_strategy: Filter by chunk strategy ('mechanical' or 'semantic').
+            None (default) returns all chunks regardless of strategy.
     """
     fetch_limit = top_k * 3  # over-fetch for RRF merge
 
@@ -190,6 +193,27 @@ def search(
             _provider_name=cfg["provider"],
         )
         vec_results = _vec_search(conn, query_embedding, fetch_limit)
+
+    # --- chunk_strategy filter (pre-RRF) ---
+    if chunk_strategy:
+        # Over-fetch from vec to compensate for filtering
+        if mode in ("hybrid", "vec") and query_embedding is not None:
+            vec_results = _vec_search(conn, query_embedding, fetch_limit * 5)
+        # Filter both result sets by joining against chunks table
+        all_candidate_ids = list(
+            {cid for cid, _ in fts_results} | {cid for cid, _ in vec_results}
+        )
+        if all_candidate_ids:
+            placeholders = ",".join("?" * len(all_candidate_ids))
+            valid_ids = {
+                row["id"]
+                for row in conn.execute(
+                    f"SELECT id FROM chunks WHERE id IN ({placeholders}) AND chunk_strategy = ?",
+                    [*all_candidate_ids, chunk_strategy],
+                ).fetchall()
+            }
+            fts_results = [(cid, s) for cid, s in fts_results if cid in valid_ids]
+            vec_results = [(cid, s) for cid, s in vec_results if cid in valid_ids]
 
     # Merge
     if mode == "hybrid" and fts_results and vec_results:
@@ -230,6 +254,9 @@ def search(
     if source_type:
         type_filter = " AND source_type = ?"
         params.append(source_type)
+    if chunk_strategy:
+        type_filter += " AND chunk_strategy = ?"
+        params.append(chunk_strategy)
 
     rows = conn.execute(
         f"""
