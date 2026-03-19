@@ -14,15 +14,19 @@ def _serialize_f32(vec: list[float]) -> bytes:
 
 def get_embed_config(conn: sqlite3.Connection) -> dict:
     """Get current embedding model configuration."""
-    from .db import DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL
+    from .db import DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL, DEFAULT_EMBED_PROVIDER
 
     model = conn.execute(
         "SELECT value FROM config WHERE key = 'embed_model'"
     ).fetchone()
     dim = conn.execute("SELECT value FROM config WHERE key = 'embed_dim'").fetchone()
+    provider = conn.execute(
+        "SELECT value FROM config WHERE key = 'embed_provider'"
+    ).fetchone()
     return {
         "model": model["value"] if model else DEFAULT_EMBED_MODEL,
         "dim": int(dim["value"]) if dim else DEFAULT_EMBED_DIM,
+        "provider": provider["value"] if provider else DEFAULT_EMBED_PROVIDER,
     }
 
 

@@ -95,3 +95,9 @@ def test_re_embed_empty_db(tmp_path):
     assert result["chunks_processed"] == 0
     config = get_embed_config(conn)
     assert config["model"] == "mxbai-embed-large"
+
+
+def test_get_embed_config_includes_provider(tmp_path):
+    conn = _setup(tmp_path)
+    config = get_embed_config(conn)
+    assert config["provider"] == "ollama"
