@@ -107,8 +107,59 @@ class OllamaProvider:
         return results
 
 
+class OpenAIProvider:
+    """Embedding provider using the OpenAI API.
+
+    Requires OPENAI_API_KEY env var. Uses httpx directly to avoid
+    hard dependency on the openai package.
+    """
+
+    def embed(
+        self,
+        texts: list[str],
+        model: str = "text-embedding-3-large",
+        expected_dim: int | None = None,
+    ) -> list[list[float]]:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "OPENAI_API_KEY environment variable required for OpenAI embeddings"
+            )
+        results = []
+        for i in range(0, len(texts), 32):
+            batch = texts[i : i + 32]
+            raw_embeddings = self._call_api(api_key, batch, model, expected_dim)
+            for emb in raw_embeddings:
+                if expected_dim is not None and len(emb) != expected_dim:
+                    raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
+                results.append(_l2_normalize(emb))
+        return results
+
+    def _call_api(
+        self,
+        api_key: str,
+        texts: list[str],
+        model: str,
+        dimensions: int | None,
+    ) -> list[list[float]]:
+        body: dict = {"model": model, "input": texts}
+        if dimensions is not None:
+            body["dimensions"] = dimensions
+        resp = httpx.post(
+            "https://api.openai.com/v1/embeddings",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=body,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()["data"]
+        data.sort(key=lambda x: x["index"])
+        return [item["embedding"] for item in data]
+
+
 _PROVIDERS: dict[str, type] = {
     "ollama": OllamaProvider,
+    "openai": OpenAIProvider,
 }
 
 

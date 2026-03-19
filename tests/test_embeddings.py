@@ -130,6 +130,65 @@ class TestEmbedDispatch:
         assert result == [0.1, 0.2, 0.3]
 
 
+class TestOpenAIProvider:
+    @pytest.fixture(autouse=True)
+    def _set_api_key(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def test_implements_protocol(self):
+        from knowledge_base.embeddings import OpenAIProvider
+
+        provider = OpenAIProvider()
+        assert isinstance(provider, EmbeddingProvider)
+
+    @patch("knowledge_base.embeddings.OpenAIProvider._call_api")
+    def test_embed_batch(self, mock_api):
+        from knowledge_base.embeddings import OpenAIProvider
+
+        mock_api.return_value = [[1.0, 0.0, 0.0]]
+        provider = OpenAIProvider()
+        result = provider.embed(
+            ["hello"], model="text-embedding-3-large", expected_dim=3
+        )
+        assert len(result) == 1
+        assert len(result[0]) == 3
+
+    @patch("knowledge_base.embeddings.OpenAIProvider._call_api")
+    def test_embed_normalizes(self, mock_api):
+        from knowledge_base.embeddings import OpenAIProvider
+
+        mock_api.return_value = [[3.0, 4.0, 0.0]]
+        provider = OpenAIProvider()
+        result = provider.embed(
+            ["hello"], model="text-embedding-3-large", expected_dim=3
+        )
+        norm = math.sqrt(sum(x * x for x in result[0]))
+        assert abs(norm - 1.0) < 1e-6
+
+    @patch("knowledge_base.embeddings.OpenAIProvider._call_api")
+    def test_embed_rejects_wrong_dim(self, mock_api):
+        from knowledge_base.embeddings import OpenAIProvider
+
+        mock_api.return_value = [[0.1, 0.2]]
+        provider = OpenAIProvider()
+        with pytest.raises(ValueError, match="Expected 3 dims"):
+            provider.embed(["hello"], model="text-embedding-3-large", expected_dim=3)
+
+    def test_missing_api_key_raises(self, monkeypatch):
+        from knowledge_base.embeddings import OpenAIProvider
+
+        monkeypatch.delenv("OPENAI_API_KEY")
+        provider = OpenAIProvider()
+        with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+            provider.embed(["hello"], model="text-embedding-3-large")
+
+    def test_get_provider_returns_openai(self):
+        from knowledge_base.embeddings import OpenAIProvider
+
+        provider = get_provider("openai")
+        assert isinstance(provider, OpenAIProvider)
+
+
 class TestL2Normalize:
     def test_zero_vector_warns(self, caplog):
         """Zero vectors should log a warning (indicates upstream problem)."""
