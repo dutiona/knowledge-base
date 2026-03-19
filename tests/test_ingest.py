@@ -2721,3 +2721,146 @@ def test_reingest_file_with_session_id(tmp_path):
         "SELECT session_id FROM chunks WHERE source_uri = ?", (str(md.resolve()),)
     ).fetchall()
     assert all(r["session_id"] == "new-session" for r in rows)
+
+
+# --- chunk_sessions join table tests (#139) ---
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_file_dedup_records_session(tmp_path):
+    """When chunks are deduped, the new session is still recorded in chunk_sessions."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    test_file = tmp_path / "a.md"
+    test_file.write_text("# Hello\n\nSome content here for testing.")
+
+    # First ingest — creates chunks with session-1
+    r1 = ingest_file(conn, test_file, session_id="session-1")
+    assert r1["chunks_added"] > 0
+
+    # Second ingest — same content, different session
+    r2 = ingest_file(conn, test_file, session_id="session-2")
+    assert r2["chunks_added"] == 0  # All deduped
+    assert r2["chunks_skipped"] > 0
+
+    # Both sessions should be recorded in chunk_sessions
+    chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)
+    ).fetchone()["id"]
+    sessions = conn.execute(
+        "SELECT session_id FROM chunk_sessions WHERE chunk_id = ? ORDER BY session_id",
+        (chunk_id,),
+    ).fetchall()
+    assert len(sessions) == 2
+    assert sessions[0]["session_id"] == "session-1"
+    assert sessions[1]["session_id"] == "session-2"
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.httpx.get", _mock_httpx_get)
+def test_ingest_url_dedup_records_session(tmp_path):
+    """When URL chunks are deduped, the new session is still recorded."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    url = "https://example.com/test"
+    r1 = ingest_url(conn, url, session_id="ws-1")
+    assert r1["chunks_added"] > 0
+
+    r2 = ingest_url(conn, url, session_id="ws-2")
+    assert r2["chunks_added"] == 0
+    assert r2["chunks_skipped"] > 0
+
+    chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (url,)
+    ).fetchone()["id"]
+    sessions = conn.execute(
+        "SELECT session_id FROM chunk_sessions WHERE chunk_id = ? ORDER BY session_id",
+        (chunk_id,),
+    ).fetchall()
+    assert len(sessions) == 2
+    assert sessions[0]["session_id"] == "ws-1"
+    assert sessions[1]["session_id"] == "ws-2"
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_reingest_preserves_historical_sessions(tmp_path):
+    """reingest_file preserves session associations from prior ingestions."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    test_file = tmp_path / "a.md"
+    test_file.write_text("# Original\n\nOriginal content here.")
+    ingest_file(conn, test_file, session_id="sess-1")
+
+    # Simulate a second session via direct chunk_sessions insert
+    chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, 'sess-2')",
+        (chunk_id,),
+    )
+    conn.commit()
+
+    # Reingest with modified content
+    test_file.write_text("# Updated\n\nUpdated content here.")
+    result = reingest_file(conn, test_file, session_id="sess-3")
+    assert result["chunks_added"] > 0
+
+    # New chunks should have ALL three sessions: sess-1, sess-2, sess-3
+    new_chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)
+    ).fetchone()["id"]
+    sessions = conn.execute(
+        "SELECT session_id FROM chunk_sessions WHERE chunk_id = ? ORDER BY session_id",
+        (new_chunk_id,),
+    ).fetchall()
+    session_ids = {r["session_id"] for r in sessions}
+    assert session_ids == {"sess-1", "sess-2", "sess-3"}
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_multi_session_dedup_co_occurrence(tmp_path):
+    """End-to-end: deduped chunks still produce correct co-occurrence counts."""
+    from knowledge_base.db import co_occurrence_pairs
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_text("# Paper A\n\nContent of paper A.")
+    b.write_text("# Paper B\n\nContent of paper B.")
+
+    # Session 1: ingest both files
+    ingest_file(conn, a, session_id="s1")
+    ingest_file(conn, b, session_id="s1")
+
+    # Session 2: re-ingest same files (all deduped)
+    r_a = ingest_file(conn, a, session_id="s2")
+    r_b = ingest_file(conn, b, session_id="s2")
+    assert r_a["chunks_skipped"] > 0
+    assert r_b["chunks_skipped"] > 0
+
+    # co_occurrence should see 2 shared sessions for (a, b)
+    pairs = co_occurrence_pairs(conn, min_sessions=1)
+    assert len(pairs) == 1
+    assert pairs[0]["co_sessions"] == 2
+
+    # min_sessions=2 should still include them
+    pairs_2 = co_occurrence_pairs(conn, min_sessions=2)
+    assert len(pairs_2) == 1
+
+    # min_sessions=3 should exclude them
+    pairs_3 = co_occurrence_pairs(conn, min_sessions=3)
+    assert len(pairs_3) == 0
