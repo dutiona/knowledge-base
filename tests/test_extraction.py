@@ -35,7 +35,7 @@ from knowledge_base.ingest import ingest_file
 from knowledge_base.papers import register_paper
 
 
-def _fake_embed(texts, model="bge-m3", expected_dim=None):
+def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
     dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 

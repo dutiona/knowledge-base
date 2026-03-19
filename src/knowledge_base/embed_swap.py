@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import struct
 
-from .embeddings import embed
+from .embeddings import get_provider
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
@@ -35,12 +35,17 @@ def re_embed(
     new_model: str,
     new_dim: int,
     batch_size: int = 32,
+    provider: str | None = None,
 ) -> dict:
     """Re-embed all chunks with a new model.
 
     Embeds into a staging table first. Only drops/recreates the real vec table
     after all embeddings succeed, preventing data loss on failure.
     """
+    # Resolve provider: explicit override > current config > default
+    cfg = get_embed_config(conn)
+    embed_provider = get_provider(provider or cfg["provider"])
+
     # Stage embeddings in a regular table (vec0 tables can't be renamed)
     conn.execute("DROP TABLE IF EXISTS _embed_staging")
     conn.execute("""
@@ -65,7 +70,7 @@ def re_embed(
         ids = [row["id"] for row in batch]
         last_id = ids[-1]
 
-        embeddings = embed(texts, model=new_model, expected_dim=new_dim)
+        embeddings = embed_provider.embed(texts, model=new_model, expected_dim=new_dim)
 
         for chunk_id, emb_vec in zip(ids, embeddings):
             conn.execute(
@@ -97,6 +102,11 @@ def re_embed(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_dim', ?)",
         (str(new_dim),),
     )
+    if provider:
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', ?)",
+            (provider,),
+        )
     conn.commit()
 
     return {

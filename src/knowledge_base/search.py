@@ -106,7 +106,9 @@ def search(
 
     if mode in ("hybrid", "vec"):
         cfg = get_embed_config(conn)
-        query_embedding = embed_single(query, model=cfg["model"])
+        query_embedding = embed_single(
+            query, model=cfg["model"], _provider_name=cfg["provider"]
+        )
         vec_results = _vec_search(conn, query_embedding, fetch_limit)
 
     # Merge
