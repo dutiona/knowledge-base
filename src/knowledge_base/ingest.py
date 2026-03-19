@@ -459,6 +459,14 @@ def _chunk_by_section(
     return result
 
 
+def _get_chunk_strategy(conn: sqlite3.Connection) -> str:
+    """Read the active chunk strategy from config. Defaults to 'mechanical'."""
+    row = conn.execute(
+        "SELECT value FROM config WHERE key = 'chunk_strategy'"
+    ).fetchone()
+    return row["value"] if row else "mechanical"
+
+
 def _serialize_f32(vec: list[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
 
@@ -634,6 +642,8 @@ def ingest_file(
     if source_type is None:
         source_type = _detect_source_type(path)
 
+    strategy = _get_chunk_strategy(conn)
+
     if source_type == "pdf":
         image_dir = pdf_image_dir(path)
         if image_dir.exists():
@@ -647,6 +657,12 @@ def ingest_file(
     ast_chunks = None
     if source_type == "code" and path.suffix.lower() == ".py":
         ast_chunks = _chunk_python_ast(text)
+
+    # Determine the effective chunk_strategy for this file
+    # Only PDFs get 'semantic' when configured; all others stay 'mechanical'
+    effective_strategy = (
+        "semantic" if source_type == "pdf" and strategy == "semantic" else "mechanical"
+    )
 
     if ast_chunks:
         # AST-aware path: each chunk has metadata
@@ -673,12 +689,19 @@ def ingest_file(
             }
             new_chunks.append((i, ac["text"], h, json.dumps(meta)))
     elif source_type == "pdf":
-        # Markdown-aware chunking for PDFs
-        md_chunks = _chunk_markdown(
-            text,
-            page_map=page_map,
-            image_dir=image_dir if page_map else None,
-        )
+        # Dispatch based on chunk strategy
+        if effective_strategy == "semantic":
+            md_chunks = _chunk_by_section(
+                text,
+                page_map=page_map,
+                image_dir=image_dir if page_map else None,
+            )
+        else:
+            md_chunks = _chunk_markdown(
+                text,
+                page_map=page_map,
+                image_dir=image_dir if page_map else None,
+            )
         if not md_chunks:
             return {"file": str(path), "chunks_added": 0, "chunks_skipped": 0}
         new_chunks = []
@@ -759,7 +782,7 @@ def ingest_file(
         new_chunks, embeddings
     ):
         cursor = conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, chunk_strategy, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 chunk_hash,
                 chunk_text,
@@ -767,6 +790,7 @@ def ingest_file(
                 source_uri,
                 idx,
                 session_id,
+                effective_strategy,
                 meta_json,
             ),
         )
@@ -895,6 +919,11 @@ def reingest_file(
     if source_type is None:
         source_type = _detect_source_type(path)
 
+    strategy = _get_chunk_strategy(conn)
+    effective_strategy = (
+        "semantic" if source_type == "pdf" and strategy == "semantic" else "mechanical"
+    )
+
     if source_type == "pdf":
         image_dir = pdf_image_dir(path)
         if image_dir.exists():
@@ -922,11 +951,18 @@ def reingest_file(
             )
             insert_items.append((i, ac["text"], _content_hash(ac["text"]), meta))
     elif source_type == "pdf":
-        md_chunks = _chunk_markdown(
-            text,
-            page_map=page_map,
-            image_dir=image_dir if page_map else None,
-        )
+        if effective_strategy == "semantic":
+            md_chunks = _chunk_by_section(
+                text,
+                page_map=page_map,
+                image_dir=image_dir if page_map else None,
+            )
+        else:
+            md_chunks = _chunk_markdown(
+                text,
+                page_map=page_map,
+                image_dir=image_dir if page_map else None,
+            )
         if not md_chunks:
             conn.commit()
             _update_folder_summary_safe(conn, path)
@@ -981,7 +1017,7 @@ def reingest_file(
         insert_items, embeddings
     ):
         cursor = conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, chunk_strategy, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 chunk_hash,
                 chunk_text,
@@ -989,6 +1025,7 @@ def reingest_file(
                 source_uri,
                 idx,
                 session_id,
+                effective_strategy,
                 meta_json,
             ),
         )
