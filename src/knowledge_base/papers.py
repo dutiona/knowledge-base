@@ -328,6 +328,7 @@ def auto_relate(
     on_progress: object = None,
 ) -> dict:
     """Discover 'similar' relationships by comparing chunk embeddings."""
+    import heapq
     import numpy as np
 
     _TOP_K = 3
@@ -411,9 +412,8 @@ def auto_relate(
                 sim = float(np.dot(s_vec, o_vec))
                 similarities.append((sim, s_cid, o_cid))
 
-        # Top-k average
-        similarities.sort(key=lambda x: x[0], reverse=True)
-        top_k = similarities[:_TOP_K]
+        # Top-k average (heapq avoids sorting the full list)
+        top_k = heapq.nlargest(_TOP_K, similarities, key=lambda x: x[0])
         avg_score = sum(s for s, _, _ in top_k) / len(top_k)
 
         if avg_score < propose_threshold:
