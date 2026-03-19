@@ -25,6 +25,7 @@ import trafilatura
 from .db import _batched_execute, _batched_select
 from .embed_swap import get_embed_config
 from .embeddings import embed
+from .folder_summaries import update_folder_summary
 
 logger = logging.getLogger(__name__)
 
@@ -587,6 +588,14 @@ def ingest_file(
         )
 
     conn.commit()
+
+    # Update folder-level summary embedding (#126)
+    folder = str(path.parent)
+    try:
+        update_folder_summary(conn, folder)
+    except Exception:
+        logger.warning("Failed to update folder summary for %s", folder, exc_info=True)
+
     return {
         "file": str(path),
         "chunks_added": len(new_chunks),
@@ -818,6 +827,14 @@ def reingest_file(
         )
 
     conn.commit()
+
+    # Update folder-level summary embedding (#126)
+    folder = str(path.parent)
+    try:
+        update_folder_summary(conn, folder)
+    except Exception:
+        logger.warning("Failed to update folder summary for %s", folder, exc_info=True)
+
     return {
         "file": source_uri,
         "chunks_deleted": len(old_ids),

@@ -75,15 +75,16 @@ def test_update_folder_summary_creates_entry(tmp_path):
     (folder / "a.md").write_text("Paper about attention mechanisms.\n")
     ingest_file(conn, folder / "a.md")
 
-    updated = update_folder_summary(conn, str(folder))
-    assert updated is True
-
+    # ingest_file auto-triggers update_folder_summary, so entry already exists
     row = conn.execute(
         "SELECT * FROM folder_summaries WHERE folder_path = ?",
         (str(folder),),
     ).fetchone()
     assert row is not None
     assert "attention" in row["summary"].lower()
+
+    # Calling again with unchanged content returns False (no-op)
+    assert update_folder_summary(conn, str(folder)) is False
 
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
@@ -99,7 +100,7 @@ def test_update_folder_summary_skips_when_unchanged(tmp_path):
     (folder / "a.md").write_text("Paper about attention.\n")
     ingest_file(conn, folder / "a.md")
 
-    assert update_folder_summary(conn, str(folder)) is True
+    # ingest_file already triggered update, so second call is a no-op
     assert update_folder_summary(conn, str(folder)) is False
 
 
@@ -116,18 +117,40 @@ def test_update_folder_summary_updates_stale_entry(tmp_path):
     (folder / "a.md").write_text("Paper about attention.\n")
     ingest_file(conn, folder / "a.md")
 
-    update_folder_summary(conn, str(folder))
+    # ingest_file auto-triggers, so summary exists
     old_row = conn.execute(
         "SELECT summary FROM folder_summaries WHERE folder_path = ?",
         (str(folder),),
     ).fetchone()
+    assert old_row is not None
 
     (folder / "b.md").write_text("Paper about diffusion models.\n")
     ingest_file(conn, folder / "b.md")
 
-    assert update_folder_summary(conn, str(folder)) is True
+    # ingest_file auto-updated, verify content changed
     new_row = conn.execute(
         "SELECT summary FROM folder_summaries WHERE folder_path = ?",
         (str(folder),),
     ).fetchone()
     assert new_row["summary"] != old_row["summary"]
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_ingest_file_triggers_folder_summary(tmp_path):
+    """Ingesting a file automatically creates/updates its folder's summary."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    folder = tmp_path / "papers"
+    folder.mkdir()
+    (folder / "a.md").write_text("Paper about attention mechanisms.\n")
+    ingest_file(conn, folder / "a.md")
+
+    row = conn.execute(
+        "SELECT * FROM folder_summaries WHERE folder_path = ?",
+        (str(folder),),
+    ).fetchone()
+    assert row is not None
+    assert row["summary"]  # non-empty

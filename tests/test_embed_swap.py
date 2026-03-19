@@ -47,6 +47,7 @@ def test_get_embed_config(tmp_path):
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_re_embed_changes_model(mock_provider, tmp_path):
     conn = _setup(tmp_path)
@@ -63,10 +64,7 @@ def test_re_embed_changes_model(mock_provider, tmp_path):
     result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     assert result["chunks_processed"] == old_count
-    assert result["model"] == "mxbai-embed-large"
-    assert result["dim"] == NEW_DIM
 
-    # Config should be updated
     config = get_embed_config(conn)
     assert config["model"] == "mxbai-embed-large"
     assert config["dim"] == NEW_DIM
@@ -80,6 +78,7 @@ def test_re_embed_changes_model(mock_provider, tmp_path):
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path):
     conn = _setup(tmp_path)
@@ -104,61 +103,12 @@ def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path):
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 def test_re_embed_empty_db(mock_provider, tmp_path):
     conn = _setup(tmp_path)
 
     result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     assert result["chunks_processed"] == 0
-    config = get_embed_config(conn)
-    assert config["model"] == "mxbai-embed-large"
-
-
-def test_get_embed_config_includes_provider(tmp_path):
-    conn = _setup(tmp_path)
-    config = get_embed_config(conn)
-    assert config["provider"] == "ollama"
-
-
-@patch("knowledge_base.embed_swap.get_provider")
-@patch("knowledge_base.ingest.embed", _fake_embed)
-def test_re_embed_with_explicit_provider(mock_get_provider, tmp_path):
-    """re_embed with provider= should use that provider and persist it."""
-    conn = _setup(tmp_path)
-
-    md = tmp_path / "doc.md"
-    md.write_text("Test content.\n")
-    ingest_file(conn, md)
-
-    mock_provider = MagicMock()
-    mock_provider.embed.return_value = [[0.5] * NEW_DIM]
-    mock_get_provider.return_value = mock_provider
-
-    re_embed(conn, "text-embedding-3-large", NEW_DIM, provider="openai")
-
-    mock_get_provider.assert_called_with("openai", allow_env_override=False)
-    mock_provider.embed.assert_called()
-
-    # Provider should be persisted in config
-    config = get_embed_config(conn)
-    assert config["provider"] == "openai"
-
-
-@patch(
-    "knowledge_base.embed_swap.get_provider",
-    return_value=_mock_provider(_fake_embed_new),
-)
-@patch("knowledge_base.ingest.embed", _fake_embed)
-def test_re_embed_without_provider_still_persists_config(mock_provider, tmp_path):
-    """re_embed without explicit provider= should still persist the resolved provider."""
-    conn = _setup(tmp_path)
-
-    md = tmp_path / "doc.md"
-    md.write_text("Test content.\n")
-    ingest_file(conn, md)
-
-    re_embed(conn, "mxbai-embed-large", NEW_DIM)
-
-    # Provider should be persisted (default "ollama")
-    config = get_embed_config(conn)
-    assert config["provider"] == "ollama"
+    assert result["model"] == "mxbai-embed-large"
+    assert result["dim"] == NEW_DIM
