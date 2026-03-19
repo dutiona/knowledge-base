@@ -2721,3 +2721,39 @@ def test_reingest_file_with_session_id(tmp_path):
         "SELECT session_id FROM chunks WHERE source_uri = ?", (str(md.resolve()),)
     ).fetchall()
     assert all(r["session_id"] == "new-session" for r in rows)
+
+
+# --- chunk_sessions join table tests (#139) ---
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_file_dedup_records_session(tmp_path):
+    """When chunks are deduped, the new session is still recorded in chunk_sessions."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    test_file = tmp_path / "a.md"
+    test_file.write_text("# Hello\n\nSome content here for testing.")
+
+    # First ingest — creates chunks with session-1
+    r1 = ingest_file(conn, test_file, session_id="session-1")
+    assert r1["chunks_added"] > 0
+
+    # Second ingest — same content, different session
+    r2 = ingest_file(conn, test_file, session_id="session-2")
+    assert r2["chunks_added"] == 0  # All deduped
+    assert r2["chunks_skipped"] > 0
+
+    # Both sessions should be recorded in chunk_sessions
+    chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)
+    ).fetchone()["id"]
+    sessions = conn.execute(
+        "SELECT session_id FROM chunk_sessions WHERE chunk_id = ? ORDER BY session_id",
+        (chunk_id,),
+    ).fetchall()
+    assert len(sessions) == 2
+    assert sessions[0]["session_id"] == "session-1"
+    assert sessions[1]["session_id"] == "session-2"
