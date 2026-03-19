@@ -2554,7 +2554,7 @@ def test_pdf_chunk_metadata_extractor(tmp_path):
         assert isinstance(meta["pages"], list)
 
 
-def testpdf_image_dir_content_hash(tmp_path):
+def test_pdf_image_dir_content_hash(tmp_path):
     """pdf_image_dir uses content hash, so different content → different dirs."""
     pdf_a = tmp_path / "paper.pdf"
     pdf_a.write_bytes(b"%PDF content A")
