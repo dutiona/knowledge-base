@@ -28,6 +28,27 @@ def test_folder_summaries_table_exists(tmp_path):
     assert "folder_summaries_vec" in tables
 
 
+def test_init_schema_idempotent_folder_summaries(tmp_path):
+    """Calling init_schema twice doesn't error on folder tables."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+    # Insert a row to verify data survives the second init
+    conn.execute(
+        "INSERT INTO folder_summaries (folder_path, summary, content_hash) VALUES (?, ?, ?)",
+        ("/test", "test summary", "abc123"),
+    )
+    conn.commit()
+
+    init_schema(conn)  # should not raise or drop data
+
+    row = conn.execute(
+        "SELECT * FROM folder_summaries WHERE folder_path = '/test'"
+    ).fetchone()
+    assert row is not None
+    assert row["summary"] == "test summary"
+
+
 def test_folder_summaries_columns(tmp_path):
     """folder_summaries has the expected columns."""
     db_path = tmp_path / "test.db"
