@@ -146,8 +146,21 @@ erDiagram
     papers ||--o{ datasets : "uses"
     papers ||--o{ metrics : "reports"
     papers ||--o{ entities : "mentions"
+    prediction_errors {
+        INTEGER id PK
+        TEXT query
+        TEXT query_hash
+        REAL top_score
+        INTEGER top_chunk_id FK
+        TEXT error_type
+        TEXT source_type_filter
+        TEXT detected_at
+        TEXT resolved_at
+    }
+
     papers ||--o{ jobs : "has jobs"
     papers }o--o| chunks : "abstract_chunk"
+    chunks }o--o{ prediction_errors : "top_chunk"
     chunks ||--o| chunks_vec : "embedding"
     chunks ||--o{ entity_mentions : "mentioned_in"
     chunks }o--o{ methods : "chunk_id"
@@ -449,3 +462,28 @@ Background extraction job tracking.
 - `status IN ('pending', 'running', 'completed', 'failed')`
 
 **Index:** `idx_jobs_status_created` on `(status, created_at)`
+
+---
+
+### prediction_errors
+
+Search observability: queries where the best result fell below a confidence threshold or returned no results.
+
+| Column               | Type    | Constraints                         | Default           | Description                                            |
+| -------------------- | ------- | ----------------------------------- | ----------------- | ------------------------------------------------------ |
+| `id`                 | INTEGER | PRIMARY KEY AUTOINCREMENT           | --                | Error ID                                               |
+| `query`              | TEXT    | NOT NULL                            | --                | Normalized query text                                  |
+| `query_hash`         | TEXT    | NOT NULL                            | --                | SHA-256 of normalized query (for dedup/rate-limit)     |
+| `top_score`          | REAL    | --                                  | --                | RRF score of the top result (NULL if no results)       |
+| `top_chunk_id`       | INTEGER | FK -> chunks(id) ON DELETE SET NULL | --                | Top result chunk (NULL if no results or chunk deleted) |
+| `error_type`         | TEXT    | NOT NULL, CHECK                     | --                | One of: `low_confidence`, `no_results`                 |
+| `source_type_filter` | TEXT    | --                                  | --                | Source type filter applied (NULL if unfiltered)        |
+| `detected_at`        | TEXT    | NOT NULL                            | `datetime('now')` | ISO 8601 timestamp                                     |
+| `resolved_at`        | TEXT    | --                                  | --                | ISO 8601 timestamp when resolved (NULL if open)        |
+
+**CHECK constraint:** `error_type IN ('low_confidence', 'no_results')`
+
+**Indexes:**
+
+- `idx_prediction_errors_hash_type` on `(query_hash, error_type, detected_at)` -- rate-limit lookups
+- `idx_prediction_errors_unresolved` on `(resolved_at)` WHERE `resolved_at IS NULL` -- unresolved error queries
