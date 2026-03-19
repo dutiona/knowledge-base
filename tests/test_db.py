@@ -147,14 +147,29 @@ def test_co_occurrence_pairs_basic(tmp_path):
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
         "VALUES ('h1', 'c1', 'note', '/tmp/a.md', 0, 'session-A')"
     )
+    cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, 'session-A')",
+        (cid,),
+    )
     conn.execute(
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
         "VALUES ('h2', 'c2', 'note', '/tmp/b.md', 0, 'session-A')"
+    )
+    cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, 'session-A')",
+        (cid,),
     )
     # A third doc in a different session — no co-occurrence with a.md/b.md
     conn.execute(
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
         "VALUES ('h3', 'c3', 'note', '/tmp/c.md', 0, 'session-B')"
+    )
+    cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, 'session-B')",
+        (cid,),
     )
     conn.commit()
 
@@ -178,15 +193,29 @@ def test_co_occurrence_pairs_min_sessions(tmp_path):
             f"VALUES ('a_{sess}', 'ca', 'note', '/tmp/a.md', 0, ?)",
             (sess,),
         )
+        cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
+            (cid, sess),
+        )
         conn.execute(
             "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
             f"VALUES ('b_{sess}', 'cb', 'note', '/tmp/b.md', 0, ?)",
             (sess,),
         )
+        cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
+            (cid, sess),
+        )
     # c.md shares only ONE session with a.md
     conn.execute(
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
         "VALUES ('c_s1', 'cc', 'note', '/tmp/c.md', 0, 's1')"
+    )
+    cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)", (cid, "s1")
     )
     conn.commit()
 
@@ -356,3 +385,36 @@ def test_migrate_chunk_sessions_backfill(tmp_path):
         "SELECT * FROM chunk_sessions WHERE chunk_id = 3"
     ).fetchall()
     assert len(null_rows) == 0
+
+
+def test_co_occurrence_pairs_uses_join_table(tmp_path):
+    """co_occurrence_pairs reads from chunk_sessions, not chunks.session_id."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Insert chunks WITHOUT session_id on the chunk itself
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h1', 'c1', 'note', '/tmp/a.md', 0)"
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h2', 'c2', 'note', '/tmp/b.md', 0)"
+    )
+    conn.commit()
+
+    # Manually populate chunk_sessions (simulating the new write path)
+    conn.execute(
+        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (1, 'sess-X')"
+    )
+    conn.execute(
+        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (2, 'sess-X')"
+    )
+    conn.commit()
+
+    pairs = co_occurrence_pairs(conn)
+    assert len(pairs) == 1
+    assert pairs[0]["source_uri_a"] == "/tmp/a.md"
+    assert pairs[0]["source_uri_b"] == "/tmp/b.md"
+    assert pairs[0]["co_sessions"] == 1

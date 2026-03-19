@@ -80,9 +80,9 @@ def co_occurrence_pairs(conn: sqlite3.Connection, min_sessions: int = 1) -> list
     rows = conn.execute(
         """
         WITH doc_sessions AS (
-            SELECT DISTINCT source_uri, session_id
-            FROM chunks
-            WHERE session_id IS NOT NULL
+            SELECT DISTINCT c.source_uri, cs.session_id
+            FROM chunk_sessions cs
+            JOIN chunks c ON c.id = cs.chunk_id
         )
         SELECT a.source_uri AS source_uri_a,
                b.source_uri AS source_uri_b,
