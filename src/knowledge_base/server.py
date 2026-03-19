@@ -171,6 +171,24 @@ def reingest(
         return json.dumps({"error": f"Path does not exist: {p}"})
 
     result = reingest_file(conn, p, source_type, session_id=session_id)
+
+    # Invalidate stale "similar" relationships for all papers linked to this file
+    source_uri = str(p)
+    affected = conn.execute(
+        "SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)
+    ).fetchall()
+    if affected:
+        from .jobs import submit_job
+
+        for row in affected:
+            pid = row["paper_id"]
+            conn.execute(
+                "DELETE FROM relationships WHERE relation_type = 'similar' "
+                "AND (source_paper_id = ? OR target_paper_id = ?)",
+                (pid, pid),
+            )
+            submit_job(conn, pid, "auto_relate", {"paper_id": pid})
+        conn.commit()
     return json.dumps(result)
 
 
@@ -345,7 +363,17 @@ def re_embed_tool(model: str, dim: int) -> str:
         dim: Embedding dimension for the new model.
     """
     conn = _get_conn()
-    return json.dumps(re_embed(conn, model, dim))
+    result = re_embed(conn, model, dim)
+
+    # All "similar" relationships are invalid after embedding space change
+    conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
+    conn.commit()
+    result["note"] = (
+        "All 'similar' relationships removed (embedding space changed). "
+        "Run scan_relationships() to recompute."
+    )
+
+    return json.dumps(result)
 
 
 @mcp.tool()
@@ -357,6 +385,7 @@ def register_paper_tool(
     doi: str | None = None,
     bibtex: str | None = None,
     source_uri: str | None = None,
+    skip_auto_relate: bool = False,
 ) -> str:
     """Register a research paper. Optionally link to already-ingested chunks via source_uri.
 
@@ -368,11 +397,16 @@ def register_paper_tool(
         doi: Digital Object Identifier.
         bibtex: Raw BibTeX entry (stored as-is for export).
         source_uri: Path of an already-ingested file to link chunks to this paper.
+        skip_auto_relate: If True, skip auto-scheduling similarity scan (useful for bulk imports).
     """
     conn = _get_conn()
-    return json.dumps(
-        register_paper(conn, title, authors, year, venue, doi, bibtex, source_uri)
-    )
+    result = register_paper(conn, title, authors, year, venue, doi, bibtex, source_uri)
+    paper_id = result.get("paper_id")
+    if paper_id and source_uri and not skip_auto_relate:
+        from .jobs import submit_job
+
+        submit_job(conn, paper_id, "auto_relate", {"paper_id": paper_id})
+    return json.dumps(result)
 
 
 @mcp.tool()
@@ -584,6 +618,32 @@ def suggest_relationships_tool(paper_id: int) -> str:
     """
     conn = _get_conn()
     return json.dumps(suggest_relationships(conn, paper_id))
+
+
+@mcp.tool()
+def scan_relationships(paper_id: int | None = None) -> str:
+    """Scan for embedding-similarity relationships between papers.
+
+    Compares chunk embeddings and creates 'similar' relationships when cosine
+    similarity exceeds the configured threshold. Submits background jobs.
+
+    Args:
+        paper_id: Scan this paper only (1×M). If omitted, scan all papers (N×M).
+    """
+    conn = _get_conn()
+    from .jobs import submit_job
+
+    if paper_id is not None:
+        job_id = submit_job(conn, paper_id, "auto_relate", {"paper_id": paper_id})
+        return json.dumps({"job_id": job_id})
+
+    # Full scan: one job per paper
+    papers = conn.execute("SELECT id FROM papers").fetchall()
+    submitted = 0
+    for row in papers:
+        submit_job(conn, row["id"], "auto_relate", {"paper_id": row["id"]})
+        submitted += 1
+    return json.dumps({"jobs_submitted": submitted})
 
 
 @mcp.tool()

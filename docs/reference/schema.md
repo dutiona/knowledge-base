@@ -187,13 +187,15 @@ Key-value store for server configuration (embedding model, LLM provider, vision 
 
 Populated on first run with:
 
-| Key              | Default Value |
-| ---------------- | ------------- |
-| `embed_model`    | `bge-m3`      |
-| `embed_dim`      | `1024`        |
-| `embed_provider` | `ollama`      |
-| `llm_provider`   | `ollama`      |
-| `llm_model`      | `qwen3.5:27b` |
+| Key                             | Default Value |
+| ------------------------------- | ------------- |
+| `embed_model`                   | `bge-m3`      |
+| `embed_dim`                     | `1024`        |
+| `embed_provider`                | `ollama`      |
+| `llm_provider`                  | `ollama`      |
+| `llm_model`                     | `qwen3.5:27b` |
+| `auto_relate_propose_threshold` | `0.82`        |
+| `auto_relate_accept_threshold`  | `0.95`        |
 
 Additional keys set via configure tools: `llm_base_url`, `llm_api_key`, `vision_model`, `vision_base_url`, `omniparser_path`, `browser_mode`, `browser_endpoint`, `browser_venv`.
 
@@ -309,7 +311,7 @@ Typed directed edges between papers.
 | `evidence_chunk_id` | INTEGER | FK -> chunks(id)           | --                | Supporting evidence chunk |
 | `created_at`        | TEXT    | NOT NULL                   | `datetime('now')` | ISO 8601 timestamp        |
 
-**CHECK constraint:** `relation_type IN ('extends', 'contradicts', 'replicates', 'cites', 'compares', 'applies', 'implements')`
+**CHECK constraint:** `relation_type IN ('extends', 'contradicts', 'replicates', 'cites', 'compares', 'applies', 'implements', 'similar')`
 
 **UNIQUE constraint:** `(source_paper_id, target_paper_id, relation_type)`
 
@@ -450,23 +452,23 @@ Resolved entities from LLM extraction. Each entity has a canonical name and type
 
 Background extraction job tracking.
 
-| Column         | Type    | Constraints                                  | Default           | Description                                         |
-| -------------- | ------- | -------------------------------------------- | ----------------- | --------------------------------------------------- |
-| `id`           | INTEGER | PRIMARY KEY AUTOINCREMENT                    | --                | Job ID                                              |
-| `paper_id`     | INTEGER | NOT NULL, FK -> papers(id) ON DELETE CASCADE | --                | Target paper                                        |
-| `job_type`     | TEXT    | NOT NULL, CHECK                              | --                | One of: `extract_structure`, `extract_figures`      |
-| `params`       | TEXT    | NOT NULL                                     | `'{}'`            | JSON parameters for the job                         |
-| `status`       | TEXT    | NOT NULL, CHECK                              | `'pending'`       | One of: `pending`, `running`, `completed`, `failed` |
-| `progress`     | TEXT    | --                                           | --                | Current progress message                            |
-| `result`       | TEXT    | --                                           | --                | JSON result on completion                           |
-| `error`        | TEXT    | --                                           | --                | Error message on failure                            |
-| `created_at`   | TEXT    | NOT NULL                                     | `datetime('now')` | Job creation time                                   |
-| `started_at`   | TEXT    | --                                           | --                | Job start time                                      |
-| `completed_at` | TEXT    | --                                           | --                | Job completion time                                 |
+| Column         | Type    | Constraints                                  | Default           | Description                                                   |
+| -------------- | ------- | -------------------------------------------- | ----------------- | ------------------------------------------------------------- |
+| `id`           | INTEGER | PRIMARY KEY AUTOINCREMENT                    | --                | Job ID                                                        |
+| `paper_id`     | INTEGER | NOT NULL, FK -> papers(id) ON DELETE CASCADE | --                | Target paper                                                  |
+| `job_type`     | TEXT    | NOT NULL, CHECK                              | --                | One of: `extract_structure`, `extract_figures`, `auto_relate` |
+| `params`       | TEXT    | NOT NULL                                     | `'{}'`            | JSON parameters for the job                                   |
+| `status`       | TEXT    | NOT NULL, CHECK                              | `'pending'`       | One of: `pending`, `running`, `completed`, `failed`           |
+| `progress`     | TEXT    | --                                           | --                | Current progress message                                      |
+| `result`       | TEXT    | --                                           | --                | JSON result on completion                                     |
+| `error`        | TEXT    | --                                           | --                | Error message on failure                                      |
+| `created_at`   | TEXT    | NOT NULL                                     | `datetime('now')` | Job creation time                                             |
+| `started_at`   | TEXT    | --                                           | --                | Job start time                                                |
+| `completed_at` | TEXT    | --                                           | --                | Job completion time                                           |
 
 **CHECK constraints:**
 
-- `job_type IN ('extract_structure', 'extract_figures')`
+- `job_type IN ('extract_structure', 'extract_figures', 'auto_relate')`
 - `status IN ('pending', 'running', 'completed', 'failed')`
 
 **Index:** `idx_jobs_status_created` on `(status, created_at)`

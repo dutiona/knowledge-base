@@ -307,6 +307,138 @@ def add_relationship(
     }
 
 
+def _get_paper_embeddings(
+    conn: sqlite3.Connection, paper_id: int
+) -> list[tuple[int, bytes]]:
+    """Return [(chunk_id, embedding_blob), ...] for a paper's non-figure chunks."""
+    return conn.execute(
+        """SELECT cv.chunk_id, cv.embedding
+           FROM chunks_vec cv
+           JOIN chunks c ON c.id = cv.chunk_id
+           JOIN paper_paths pp ON pp.path = c.source_uri
+           WHERE pp.paper_id = ?
+             AND c.source_type != 'figure'""",
+        (paper_id,),
+    ).fetchall()
+
+
+def auto_relate(
+    conn: sqlite3.Connection,
+    paper_id: int,
+    on_progress: object = None,
+) -> dict:
+    """Discover 'similar' relationships by comparing chunk embeddings."""
+    import numpy as np
+
+    _TOP_K = 3
+
+    # Read thresholds from config
+    propose_row = conn.execute(
+        "SELECT value FROM config WHERE key = 'auto_relate_propose_threshold'"
+    ).fetchone()
+    propose_threshold = float(propose_row["value"]) if propose_row else 0.82
+
+    # Fetch source paper embeddings
+    source_rows = _get_paper_embeddings(conn, paper_id)
+    if not source_rows:
+        return {"skipped": "no embeddings", "relationships_created": 0}
+
+    source_vecs = [
+        (row["chunk_id"], np.frombuffer(bytes(row["embedding"]), dtype=np.float32))
+        for row in source_rows
+    ]
+    # Pre-normalize source vectors
+    source_normed = []
+    for cid, vec in source_vecs:
+        norm = np.linalg.norm(vec)
+        if norm > 0:
+            source_normed.append((cid, vec / norm))
+
+    if not source_normed:
+        return {"skipped": "no valid embeddings", "relationships_created": 0}
+
+    # Fetch all other paper IDs
+    other_papers = conn.execute(
+        "SELECT id FROM papers WHERE id != ?", (paper_id,)
+    ).fetchall()
+
+    if not other_papers:
+        return {"skipped": "no other papers", "relationships_created": 0}
+
+    created = 0
+    compared = 0
+    skipped = 0
+
+    for other_row in other_papers:
+        other_id = other_row["id"]
+
+        # Direction normalization: always source < target for "similar"
+        lo, hi = min(paper_id, other_id), max(paper_id, other_id)
+
+        # Check for existing "similar" relationship (either direction)
+        existing = conn.execute(
+            "SELECT 1 FROM relationships WHERE relation_type = 'similar' "
+            "AND source_paper_id = ? AND target_paper_id = ?",
+            (lo, hi),
+        ).fetchone()
+        if existing:
+            skipped += 1
+            continue
+
+        # Fetch other paper embeddings
+        other_rows = _get_paper_embeddings(conn, other_id)
+        if not other_rows:
+            skipped += 1
+            continue
+
+        other_vecs = []
+        for row in other_rows:
+            vec = np.frombuffer(bytes(row["embedding"]), dtype=np.float32)
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                other_vecs.append((row["chunk_id"], vec / norm))
+
+        if not other_vecs:
+            skipped += 1
+            continue
+
+        compared += 1
+
+        # Compute all pairwise cosine similarities (dot of unit vectors)
+        similarities = []
+        for s_cid, s_vec in source_normed:
+            for o_cid, o_vec in other_vecs:
+                sim = float(np.dot(s_vec, o_vec))
+                similarities.append((sim, s_cid, o_cid))
+
+        # Top-k average
+        similarities.sort(key=lambda x: x[0], reverse=True)
+        top_k = similarities[:_TOP_K]
+        avg_score = sum(s for s, _, _ in top_k) / len(top_k)
+
+        if avg_score < propose_threshold:
+            continue
+
+        # Best-matching chunk for evidence
+        best_sim, best_s_cid, best_o_cid = top_k[0]
+        evidence_chunk_id = best_s_cid
+
+        confidence = avg_score
+        add_relationship(conn, lo, hi, "similar", confidence, evidence_chunk_id)
+        created += 1
+
+        if on_progress is not None:
+            on_progress(
+                f"Compared paper {paper_id} vs {other_id}: score={avg_score:.3f}"
+            )
+
+    return {
+        "relationships_created": created,
+        "papers_compared": compared,
+        "papers_skipped": skipped,
+    }
+
+
 def get_relationships(
     conn: sqlite3.Connection,
     paper_id: int,
