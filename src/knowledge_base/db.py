@@ -269,6 +269,32 @@ def _migrate_jobs_types(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migrate_chunk_sessions(conn: sqlite3.Connection) -> None:
+    """Create chunk_sessions join table and backfill from chunks.session_id."""
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_sessions'"
+    ).fetchone()
+    if exists:
+        return
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chunk_sessions (
+            chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+            session_id TEXT NOT NULL,
+            UNIQUE(chunk_id, session_id)
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chunk_sessions_session "
+        "ON chunk_sessions(session_id)"
+    )
+    # Backfill from existing chunks.session_id
+    conn.execute("""
+        INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id)
+        SELECT id, session_id FROM chunks WHERE session_id IS NOT NULL
+    """)
+    conn.commit()
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     # --- Create config table first so we can read embed_dim before chunks_vec ---
     conn.execute("""
@@ -531,3 +557,4 @@ def init_schema(conn: sqlite3.Connection) -> None:
     )
     _migrate_paper_paths(conn)
     _migrate_jobs_types(conn)
+    _migrate_chunk_sessions(conn)

@@ -263,3 +263,96 @@ def test_migrate_session_id_on_existing_db(tmp_path):
         "VALUES ('new', 'new content', 'note', '/tmp/new.md', 0, 'sess-1')"
     )
     conn.commit()
+
+
+def test_chunk_sessions_table_exists(tmp_path):
+    """chunk_sessions join table is created by init_schema."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Table exists
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_sessions'"
+    ).fetchone()
+    assert row is not None
+
+    # Has correct columns
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(chunk_sessions)").fetchall()}
+    assert cols == {"chunk_id", "session_id"}
+
+    # UNIQUE constraint works
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h1', 'c1', 'note', '/tmp/a.md', 0)"
+    )
+    chunk_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, 'sess-1')",
+        (chunk_id,),
+    )
+    # Duplicate should be silently ignored
+    conn.execute(
+        "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, 'sess-1')",
+        (chunk_id,),
+    )
+    count = conn.execute(
+        "SELECT COUNT(*) FROM chunk_sessions WHERE chunk_id = ?", (chunk_id,)
+    ).fetchone()[0]
+    assert count == 1
+
+
+def test_migrate_chunk_sessions_backfill(tmp_path):
+    """Migration backfills chunk_sessions from existing chunks.session_id."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+
+    # Create schema WITHOUT chunk_sessions table but WITH session_id column
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT OR IGNORE INTO config (key, value) VALUES ('embed_model', 'bge-m3');
+    INSERT OR IGNORE INTO config (key, value) VALUES ('embed_dim', '1024');
+
+    CREATE TABLE chunks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content_hash TEXT NOT NULL UNIQUE,
+        content TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK(source_type IN ('pdf','markdown','code','web','note','figure')),
+        source_uri TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        session_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        metadata TEXT DEFAULT '{}'
+    );
+    """)
+    # Insert chunks with session_id values
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
+        "VALUES ('h1', 'c1', 'note', '/tmp/a.md', 0, 'sess-A')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
+        "VALUES ('h2', 'c2', 'note', '/tmp/b.md', 0, 'sess-A')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h3', 'c3', 'note', '/tmp/c.md', 0)"  # NULL session_id
+    )
+    conn.commit()
+
+    # Run init_schema (triggers migration)
+    init_schema(conn)
+
+    # Verify backfill: chunks with session_id should have entries
+    rows = conn.execute(
+        "SELECT chunk_id, session_id FROM chunk_sessions ORDER BY chunk_id"
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["session_id"] == "sess-A"
+    assert rows[1]["session_id"] == "sess-A"
+
+    # Verify NULL session_id chunk was NOT backfilled
+    null_rows = conn.execute(
+        "SELECT * FROM chunk_sessions WHERE chunk_id = 3"
+    ).fetchall()
+    assert len(null_rows) == 0
