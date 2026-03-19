@@ -126,6 +126,11 @@ erDiagram
         REAL confidence
     }
 
+    chunk_sessions {
+        INTEGER chunk_id FK
+        TEXT session_id
+    }
+
     jobs {
         INTEGER id PK
         INTEGER paper_id FK
@@ -140,6 +145,7 @@ erDiagram
         TEXT completed_at
     }
 
+    chunks ||--o{ chunk_sessions : "session membership"
     papers ||--o{ paper_paths : "has paths"
     papers ||--o{ relationships : "source"
     papers ||--o{ relationships : "target"
@@ -213,7 +219,7 @@ Primary content storage. Each row is one chunk of ingested text.
 | `source_type`  | TEXT    | NOT NULL, CHECK           | --                | One of: `pdf`, `markdown`, `code`, `web`, `note`, `figure`            |
 | `source_uri`   | TEXT    | NOT NULL                  | --                | File path or URL of the source                                        |
 | `chunk_index`  | INTEGER | NOT NULL                  | --                | Position within the source (0-based; figures use 1,000,000+ encoding) |
-| `session_id`   | TEXT    | --                        | --                | Ingestion session ID for co-occurrence tracking (see below)           |
+| `session_id`   | TEXT    | --                        | --                | **Deprecated.** Ingestion session ID (superseded by `chunk_sessions` join table) |
 | `created_at`   | TEXT    | NOT NULL                  | `datetime('now')` | ISO 8601 timestamp                                                    |
 | `metadata`     | TEXT    | --                        | `'{}'`            | JSON metadata blob                                                    |
 
@@ -221,9 +227,28 @@ Primary content storage. Each row is one chunk of ingested text.
 
 **Index:** `idx_chunks_session_id` on `(session_id)` -- accelerates co-occurrence joins.
 
-**Session tracking:** The `session_id` column groups chunks ingested in the same logical operation. Documents sharing a session are considered co-occurring -- a behavioral signal for relationship discovery. See [Ingesting Documents > Session Tracking](../usage/ingesting-documents.md#session-tracking-co-occurrence) for usage details. The `co_occurrence` MCP tool queries document pairs via a CTE that deduplicates to `DISTINCT (source_uri, session_id)` before self-joining, keeping complexity proportional to documents rather than chunks.
+**Session tracking:** Session associations are stored in the `chunk_sessions` join table (see below), enabling N:M relationships between chunks and sessions. The `chunks.session_id` column is retained for backward compatibility but is no longer read by `co_occurrence_pairs()`. See [Ingesting Documents > Session Tracking](../usage/ingesting-documents.md#session-tracking-co-occurrence) for usage details.
 
-**Known limitation:** Because `session_id` lives on the chunk row and content-hash deduplication skips existing chunks, a document re-ingested in a new session retains its original `session_id`. See #139 for the planned `chunk_sessions` N:M join table.
+---
+
+### chunk_sessions
+
+N:M join table mapping chunks to ingestion sessions. Introduced in #139 to replace the 1:1 `chunks.session_id` column.
+
+| Column       | Type    | Constraints                                    | Description                |
+| ------------ | ------- | ---------------------------------------------- | -------------------------- |
+| `chunk_id`   | INTEGER | NOT NULL, FK → `chunks(id)` ON DELETE CASCADE  | Chunk ID                   |
+| `session_id` | TEXT    | NOT NULL                                       | Ingestion session ID       |
+
+**UNIQUE constraint:** `(chunk_id, session_id)` — prevents duplicate associations. `INSERT OR IGNORE` is idempotent.
+
+**Index:** `idx_chunk_sessions_session` on `(session_id)` — accelerates co-occurrence CTE joins.
+
+**Why N:M:** Content-hash deduplication skips existing chunks on re-ingest. With the old 1:1 column, the new session was silently lost. The join table allows `INSERT OR IGNORE` on the dedup path, preserving all session associations regardless of whether the chunk itself was skipped.
+
+**Co-occurrence query:** The `co_occurrence_pairs()` CTE joins `chunk_sessions` → `chunks` to compute `DISTINCT (source_uri, session_id)` pairs, then self-joins to find documents sharing sessions. Complexity is proportional to documents, not chunks.
+
+**Migration:** `_migrate_chunk_sessions()` creates the table and backfills from existing `chunks.session_id` values. Runs idempotently via `init_schema()`.
 
 ---
 
