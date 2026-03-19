@@ -53,7 +53,7 @@ If only one leg returns results (e.g., FTS query syntax error causes FTS to retu
 
 When `keyword_prefilter` is set to `true`, the search engine extracts high-level intent keywords from the query before running the FTS5 leg. This strips stopwords, context-specific filler, and query phrasing artifacts, producing a focused OR query of content terms.
 
-This is based on research showing that keyword-based matching on extracted intent outperforms full-query matching for identifying relevant documents — full queries overemphasize entity names and context-specific details rather than broader intent.
+This is based on research from **Agentic Plan Caching** (Zhang et al., Stanford, NeurIPS 2025, arXiv:2506.14852, §3.2): keyword-based matching on extracted intent outperforms full-query semantic similarity for identifying relevant documents. Full queries overemphasize entity names and context-specific details rather than broader intent — their Figure 3 shows lower false positive AND false negative rates with keyword extraction at all similarity thresholds.
 
 ```json
 {
