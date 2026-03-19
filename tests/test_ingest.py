@@ -2786,3 +2786,42 @@ def test_ingest_url_dedup_records_session(tmp_path):
     assert len(sessions) == 2
     assert sessions[0]["session_id"] == "ws-1"
     assert sessions[1]["session_id"] == "ws-2"
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_reingest_preserves_historical_sessions(tmp_path):
+    """reingest_file preserves session associations from prior ingestions."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    test_file = tmp_path / "a.md"
+    test_file.write_text("# Original\n\nOriginal content here.")
+    ingest_file(conn, test_file, session_id="sess-1")
+
+    # Simulate a second session via direct chunk_sessions insert
+    chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, 'sess-2')",
+        (chunk_id,),
+    )
+    conn.commit()
+
+    # Reingest with modified content
+    test_file.write_text("# Updated\n\nUpdated content here.")
+    result = reingest_file(conn, test_file, session_id="sess-3")
+    assert result["chunks_added"] > 0
+
+    # New chunks should have ALL three sessions: sess-1, sess-2, sess-3
+    new_chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)
+    ).fetchone()["id"]
+    sessions = conn.execute(
+        "SELECT session_id FROM chunk_sessions WHERE chunk_id = ? ORDER BY session_id",
+        (new_chunk_id,),
+    ).fetchall()
+    session_ids = {r["session_id"] for r in sessions}
+    assert session_ids == {"sess-1", "sess-2", "sess-3"}

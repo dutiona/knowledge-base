@@ -718,6 +718,16 @@ def reingest_file(
         old_ids,
     )
 
+    # --- Preserve historical session associations ---
+    historical_sessions = {
+        r["session_id"]
+        for r in conn.execute(
+            "SELECT DISTINCT session_id FROM chunk_sessions "
+            "WHERE chunk_id IN (SELECT id FROM chunks WHERE source_uri = ?)",
+            (source_uri,),
+        ).fetchall()
+    }
+
     # --- Delete old chunks (triggers handle FTS cleanup) ---
     # Delete from vec table first (no trigger)
     _batched_execute(conn, "DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_ids)
@@ -808,6 +818,11 @@ def reingest_file(
     texts_to_embed = [item[1] for item in insert_items]
     embeddings = _embed_with_config(conn, texts_to_embed)
 
+    # --- Restore historical + current session associations on new chunks ---
+    all_sessions = historical_sessions
+    if session_id is not None:
+        all_sessions = historical_sessions | {session_id}
+
     for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(
         insert_items, embeddings
     ):
@@ -824,6 +839,11 @@ def reingest_file(
             ),
         )
         chunk_id = cursor.lastrowid
+        for sid in all_sessions:
+            conn.execute(
+                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
+                (chunk_id, sid),
+            )
         conn.execute(
             "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
             (chunk_id, _serialize_f32(emb_vec), chunk_id),
