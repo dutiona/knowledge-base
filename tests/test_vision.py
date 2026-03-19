@@ -1,11 +1,21 @@
 """Tests for vision/figure extraction schema support."""
 
+import json
 import pytest
 import sqlite3
 from pathlib import Path
+from unittest.mock import patch
 
 from knowledge_base.db import get_connection, init_schema, DEFAULT_EMBED_DIM
 from knowledge_base.vision import _FIGURE_BASE, _FIGS_PER_PAGE
+
+
+@pytest.fixture
+def vision_conn(tmp_path):
+    """Create a temporary DB with full schema for vision tests."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    return conn
 
 
 OLD_SCHEMA_SQL = f"""
@@ -1989,3 +1999,121 @@ def test_constants_are_consistent():
     assert _OMNIPARSER_SUBPROCESS_TIMEOUT >= _ETA_SECS_PER_PAGE_OMNIPARSER, (
         f"OmniParser timeout ({_OMNIPARSER_SUBPROCESS_TIMEOUT}s) < ETA ({_ETA_SECS_PER_PAGE_OMNIPARSER}s)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Extracted-image pipeline tests (#110)
+# ---------------------------------------------------------------------------
+
+
+def test_collect_extracted_images_returns_images_grouped_by_page(vision_conn, tmp_path):
+    """_collect_extracted_images reads chunk metadata and resolves image paths."""
+    conn = vision_conn
+    source_uri = str(tmp_path / "paper.pdf")
+
+    image_dir = tmp_path / "figures" / "paper_abc123" / "extracted"
+    image_dir.mkdir(parents=True)
+    (image_dir / "image_0.png").write_bytes(b"PNG_FAKE_1")
+    (image_dir / "image_1.png").write_bytes(b"PNG_FAKE_2")
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "h1",
+            "text about fig1",
+            source_uri,
+            json.dumps({"pages": [1], "images": ["image_0.png"]}),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 1, ?)",
+        (
+            "h2",
+            "text about fig2",
+            source_uri,
+            json.dumps({"pages": [3], "images": ["image_1.png"]}),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 2, ?)",
+        ("h3", "just text", source_uri, json.dumps({"pages": [2]})),
+    )
+    conn.commit()
+
+    from knowledge_base.vision import _collect_extracted_images
+
+    result = _collect_extracted_images(conn, source_uri, image_dir)
+
+    assert len(result) == 2
+    paths = {r[0].name for r in result}
+    assert paths == {"image_0.png", "image_1.png"}
+    page_map = {r[0].name: r[1] for r in result}
+    assert page_map["image_0.png"] == 1
+    assert page_map["image_1.png"] == 3
+
+
+def test_collect_extracted_images_skips_missing_files(vision_conn, tmp_path):
+    """Images referenced in metadata but missing on disk are skipped."""
+    conn = vision_conn
+    source_uri = str(tmp_path / "paper.pdf")
+    image_dir = tmp_path / "figures" / "paper_abc" / "extracted"
+    image_dir.mkdir(parents=True)
+    (image_dir / "image_0.png").write_bytes(b"PNG_FAKE")
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "h1",
+            "fig1",
+            source_uri,
+            json.dumps({"pages": [1], "images": ["image_0.png", "missing.png"]}),
+        ),
+    )
+    conn.commit()
+
+    from knowledge_base.vision import _collect_extracted_images
+
+    result = _collect_extracted_images(conn, source_uri, image_dir)
+    assert len(result) == 1
+    assert result[0][0].name == "image_0.png"
+
+
+def test_collect_extracted_images_deduplicates(vision_conn, tmp_path):
+    """Same image referenced in multiple chunks is returned once."""
+    conn = vision_conn
+    source_uri = str(tmp_path / "paper.pdf")
+    image_dir = tmp_path / "figures" / "paper_abc" / "extracted"
+    image_dir.mkdir(parents=True)
+    (image_dir / "image_0.png").write_bytes(b"PNG_FAKE")
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "h1",
+            "first",
+            source_uri,
+            json.dumps({"pages": [1, 2], "images": ["image_0.png"]}),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 1, ?)",
+        (
+            "h2",
+            "second",
+            source_uri,
+            json.dumps({"pages": [2, 3], "images": ["image_0.png"]}),
+        ),
+    )
+    conn.commit()
+
+    from knowledge_base.vision import _collect_extracted_images
+
+    result = _collect_extracted_images(conn, source_uri, image_dir)
+    assert len(result) == 1
+    assert result[0][1] == 1

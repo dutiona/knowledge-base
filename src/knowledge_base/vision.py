@@ -617,6 +617,57 @@ def _get_paper_source_uri(conn: sqlite3.Connection, paper_id: int) -> str | None
 
 
 # ---------------------------------------------------------------------------
+# Step 6b: Collect extracted images from ingest metadata
+# ---------------------------------------------------------------------------
+
+
+def _collect_extracted_images(
+    conn: sqlite3.Connection,
+    source_uri: str,
+    image_dir: Path,
+) -> list[tuple[Path, int]]:
+    """Collect pymupdf4llm-extracted images from chunk metadata.
+
+    Queries chunks for the given source_uri, reads the 'images' field from
+    each chunk's metadata, and resolves basenames to full paths in image_dir.
+    Deduplicates by filename, using the earliest page number.
+
+    Returns:
+        List of (image_path, page_num) sorted by page number then filename.
+    """
+    rows = conn.execute(
+        "SELECT metadata FROM chunks WHERE source_uri = ? AND source_type = 'pdf'",
+        (source_uri,),
+    ).fetchall()
+
+    # Map image basename -> earliest page number
+    seen: dict[str, int] = {}
+    for row in rows:
+        try:
+            meta = json.loads(row["metadata"]) if row["metadata"] else {}
+        except (json.JSONDecodeError, TypeError):
+            continue
+        images = meta.get("images", [])
+        pages = meta.get("pages", [])
+        first_page = pages[0] if pages else 0
+        for img_name in images:
+            if img_name not in seen or first_page < seen[img_name]:
+                seen[img_name] = first_page
+
+    # Resolve to disk paths, filtering out missing files
+    result: list[tuple[Path, int]] = []
+    for img_name, page_num in seen.items():
+        img_path = image_dir / img_name
+        if img_path.exists():
+            result.append((img_path, page_num))
+        else:
+            logger.warning("Extracted image %s not found on disk, skipping", img_name)
+
+    result.sort(key=lambda x: (x[1], x[0].name))
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Step 7: Orchestrator
 # ---------------------------------------------------------------------------
 
