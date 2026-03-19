@@ -2825,3 +2825,42 @@ def test_reingest_preserves_historical_sessions(tmp_path):
     ).fetchall()
     session_ids = {r["session_id"] for r in sessions}
     assert session_ids == {"sess-1", "sess-2", "sess-3"}
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_multi_session_dedup_co_occurrence(tmp_path):
+    """End-to-end: deduped chunks still produce correct co-occurrence counts."""
+    from knowledge_base.db import co_occurrence_pairs
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_text("# Paper A\n\nContent of paper A.")
+    b.write_text("# Paper B\n\nContent of paper B.")
+
+    # Session 1: ingest both files
+    ingest_file(conn, a, session_id="s1")
+    ingest_file(conn, b, session_id="s1")
+
+    # Session 2: re-ingest same files (all deduped)
+    r_a = ingest_file(conn, a, session_id="s2")
+    r_b = ingest_file(conn, b, session_id="s2")
+    assert r_a["chunks_skipped"] > 0
+    assert r_b["chunks_skipped"] > 0
+
+    # co_occurrence should see 2 shared sessions for (a, b)
+    pairs = co_occurrence_pairs(conn, min_sessions=1)
+    assert len(pairs) == 1
+    assert pairs[0]["co_sessions"] == 2
+
+    # min_sessions=2 should still include them
+    pairs_2 = co_occurrence_pairs(conn, min_sessions=2)
+    assert len(pairs_2) == 1
+
+    # min_sessions=3 should exclude them
+    pairs_3 = co_occurrence_pairs(conn, min_sessions=3)
+    assert len(pairs_3) == 0
