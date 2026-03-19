@@ -16,7 +16,7 @@ from .db import (
     get_active_space,
     space_table_name,
 )
-from .embeddings import get_provider
+from .embeddings import EmbeddingProvider, get_provider
 
 
 def get_embed_config(conn: sqlite3.Connection) -> dict:
@@ -377,7 +377,7 @@ def re_embed(
 
 def _re_embed_folder_summaries(
     conn: sqlite3.Connection,
-    embed_provider: object,
+    embed_provider: EmbeddingProvider,
     model: str,
     dim: int,
 ) -> int:
