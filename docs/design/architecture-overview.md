@@ -12,6 +12,7 @@ graph LR
     Server --> Papers["papers.py"]
     Server --> Conclusions["conclusions.py"]
     Server --> EmbedSwap["embed_swap.py"]
+    Server --> FolderSum["folder_summaries.py"]
     Server --> Jobs["jobs.py"]
 
     Ingest --> DB["SQLite<br/>FTS5 + sqlite-vec"]
@@ -21,11 +22,13 @@ graph LR
     Papers --> DB
     Conclusions --> DB
     EmbedSwap --> DB
+    FolderSum --> DB
     Jobs --> DB
 
     Ingest --> Ollama["Ollama<br/>Embedding API"]
     Search --> Ollama
     EmbedSwap --> Ollama
+    FolderSum --> Ollama
     Vision --> Ollama
 
     Extract --> LLM["LLM<br/>Ollama / OpenAI-compat"]
@@ -50,7 +53,9 @@ graph LR
 
 **`conclusions.py`** -- Evidence-chained conclusions with supersession. Each conclusion links to source chunk IDs as evidence. Supersession creates a new conclusion and atomically marks the old one, forming traceable chains. Chain traversal walks both backward (predecessors) and forward (successors).
 
-**`embed_swap.py`** -- Atomic embedding model swap. Embeds all chunks into a staging table first, then drops and recreates the vector table only after all embeddings succeed -- preventing data loss on failure. Updates the config table with the new model name and dimension.
+**`folder_summaries.py`** -- Folder-level semantic embeddings for search context boosting. Computes per-folder summaries from the first chunk of each direct-child document, embeds them, and stores them in `folder_summaries` + `folder_summaries_vec`. A content hash from sorted chunk hashes detects staleness — unchanged folders are skipped. Called automatically after `ingest_file()` and `reingest_file()`. At search time, `_folder_boost()` in `search.py` multiplies RRF scores by 1.15x for chunks from top-matching folders. Inspired by NeuroStack's vault-level folder summaries.
+
+**`embed_swap.py`** -- Atomic embedding model swap. Embeds all chunks into a staging table first, then drops and recreates the vector table only after all embeddings succeed -- preventing data loss on failure. Also recreates `folder_summaries_vec` with the new dimension and batch-re-embeds all folder summaries. Updates the config table with the new model name and dimension.
 
 **`embeddings.py`** -- Pluggable embedding provider abstraction. Defines a `EmbeddingProvider` Protocol with three implementations: `OllamaProvider` (default, auto-detects Ollama URL via `OLLAMA_HOST` env / WSL2 gateway / localhost), `OpenAIProvider` (uses httpx, requires `OPENAI_API_KEY`), and `ONNXProvider` (local inference via onnxruntime, requires `ONNX_EMBED_MODEL_PATH`). The `get_provider()` factory resolves providers by name with `EMBED_PROVIDER` env-var override. Module-level `embed()` and `embed_single()` dispatch through providers. All providers L2-normalize output vectors and batch in groups of 32.
 
@@ -85,6 +90,7 @@ flowchart TD
     Dedup -->|Yes| Skip["Skip"]
     Dedup -->|No| Embed["Ollama embed"]
     Embed --> Store["INSERT chunks + chunks_vec"]
+    Store --> FolderUp["Update parent folder<br/>summary + embedding"]
 ```
 
 ### Search
@@ -99,7 +105,8 @@ flowchart TD
     FTS --> RRF["RRF merge<br/>k=60"]
     Vec --> RRF
 
-    RRF --> TopK["Take top-k"]
+    RRF --> Boost{"Folder boost<br/>(hybrid/vec only)"}
+    Boost --> TopK["Take top-k"]
     TopK --> Filter{"source_type<br/>filter?"}
     Filter --> Fetch["Fetch chunk details<br/>from chunks table"]
     Fetch --> Results["SearchResult list<br/>(chunk_id, content, score,<br/>source_type, source_uri,<br/>chunk_index, match_type)"]
