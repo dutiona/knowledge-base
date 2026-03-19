@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 
 from .db import (
     _SPACE_NAME_RE,
@@ -206,14 +207,33 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
             f"Can only promote spaces in 'populating' or 'deprecated' status, "
             f"got: {space['status']!r}"
         )
-    # Allow promotion of genuinely empty spaces (total_chunks=0 means the DB
-    # has no chunks at all — e.g. re_embed on empty DB). Block promotion only
-    # when there ARE chunks to backfill but none were processed.
-    if space["chunk_count"] == 0 and (space["total_chunks"] or 0) > 0:
+    # Block promotion of incompletely backfilled spaces.
+    # Allow genuinely empty spaces (total_chunks=0, e.g. re_embed on empty DB).
+    total = space["total_chunks"] or 0
+    count = space["chunk_count"] or 0
+    if total > 0 and count < total:
         raise ValueError(
-            f"Cannot promote space {space_name!r}: 0 of "
-            f"{space['total_chunks']} chunks backfilled"
+            f"Cannot promote space {space_name!r}: only {count} of "
+            f"{total} chunks backfilled"
         )
+
+    # Staleness check: warn if promoting a deprecated space whose chunk_count
+    # doesn't match the current corpus (chunks ingested after deprecation).
+    stale_warning = None
+    if space["status"] == "deprecated":
+        has_strategy = _has_chunk_strategy_column(conn)
+        if has_strategy:
+            current_total = conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?",
+                (space["chunk_strategy"],),
+            ).fetchone()[0]
+        else:
+            current_total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        if current_total != count:
+            stale_warning = (
+                f"Space {space_name!r} has {count} embeddings but corpus now "
+                f"has {current_total} chunks. Run backfill_space() to sync."
+            )
 
     old_active = get_active_space(conn)
     old_name = old_active["name"] if old_active else None
@@ -248,7 +268,10 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
     )
     conn.commit()
 
-    return {"promoted": space_name, "deprecated": old_name}
+    result: dict = {"promoted": space_name, "deprecated": old_name}
+    if stale_warning:
+        result["warning"] = stale_warning
+    return result
 
 
 def deprecate_space(conn: sqlite3.Connection, space_name: str) -> dict:
@@ -329,8 +352,6 @@ def re_embed(
         "SELECT 1 FROM embed_spaces WHERE name = ?", (space_name,)
     ).fetchone()
     if existing:
-        import time
-
         space_name = f"{space_name}_{int(time.time())}"
 
     create_space(conn, space_name, new_model, new_dim, resolved_provider, strategy)
