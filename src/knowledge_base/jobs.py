@@ -238,6 +238,10 @@ class _JobWorker:
                 confirmed=True,
                 on_progress=on_progress,
             )
+        elif job["job_type"] == "auto_relate":
+            from .papers import auto_relate
+
+            return auto_relate(conn, job["paper_id"], on_progress=on_progress)
         else:
             raise ValueError(f"Unknown job type: {job['job_type']}")
 

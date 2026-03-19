@@ -179,21 +179,24 @@ Tools for managing paper metadata and relationships.
 
 Register a research paper. Optionally link to already-ingested chunks via `source_uri`.
 
-| Parameter    | Type                | Required | Default | Description                                                   |
-| ------------ | ------------------- | -------- | ------- | ------------------------------------------------------------- |
-| `title`      | `str`               | yes      | --      | Paper title                                                   |
-| `authors`    | `list[str] \| None` | no       | `None`  | List of author names                                          |
-| `year`       | `int \| None`       | no       | `None`  | Publication year                                              |
-| `venue`      | `str \| None`       | no       | `None`  | Conference or journal name                                    |
-| `doi`        | `str \| None`       | no       | `None`  | Digital Object Identifier                                     |
-| `bibtex`     | `str \| None`       | no       | `None`  | Raw BibTeX entry (stored as-is for export)                    |
-| `source_uri` | `str \| None`       | no       | `None`  | Path of an already-ingested file to link chunks to this paper |
+| Parameter          | Type                | Required | Default | Description                                                      |
+| ------------------ | ------------------- | -------- | ------- | ---------------------------------------------------------------- |
+| `title`            | `str`               | yes      | --      | Paper title                                                      |
+| `authors`          | `list[str] \| None` | no       | `None`  | List of author names                                             |
+| `year`             | `int \| None`       | no       | `None`  | Publication year                                                 |
+| `venue`            | `str \| None`       | no       | `None`  | Conference or journal name                                       |
+| `doi`              | `str \| None`       | no       | `None`  | Digital Object Identifier                                        |
+| `bibtex`           | `str \| None`       | no       | `None`  | Raw BibTeX entry (stored as-is for export)                       |
+| `source_uri`       | `str \| None`       | no       | `None`  | Path of an already-ingested file to link chunks to this paper    |
+| `skip_auto_relate` | `bool`              | no       | `False` | If true, skip auto-scheduling similarity scan (for bulk imports) |
 
 **Returns:**
 
 ```json
 { "paper_id": 1 }
 ```
+
+When `source_uri` is provided and `skip_auto_relate` is false (default), an `auto_relate` background job is automatically scheduled.
 
 ### get_paper_tool
 
@@ -286,6 +289,25 @@ Suggest citation relationships by matching DOIs, title words, and author+year in
 | `paper_id` | `int` | yes      | --      | Paper ID to analyze for citation references |
 
 **Returns:** Object with `suggestions` (candidate relationships with confidence scores) and `unmatched_dois` (DOIs found in text that don't match any registered paper).
+
+### scan_relationships
+
+Scan for embedding-similarity relationships between papers. Submits `auto_relate` background jobs.
+
+| Parameter  | Type          | Required | Default | Description                                             |
+| ---------- | ------------- | -------- | ------- | ------------------------------------------------------- |
+| `paper_id` | `int \| None` | no       | `None`  | Scan this paper only (1×M). If omitted, scan all (N×M). |
+
+**Returns:**
+
+```json
+// Single paper
+{ "job_id": 42 }
+// Full scan
+{ "jobs_submitted": 15 }
+```
+
+See [Auto-Relationship Discovery](../usage/auto-relationships.md) for algorithm details.
 
 ### relocate_paper_tool
 

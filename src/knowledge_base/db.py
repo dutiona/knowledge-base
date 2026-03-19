@@ -22,6 +22,7 @@ RELATIONSHIP_TYPES = (
     "compares",
     "applies",
     "implements",
+    "similar",
 )
 
 
@@ -163,7 +164,7 @@ def _migrate_relationship_types(conn: sqlite3.Connection) -> None:
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='relationships'"
     ).fetchone()
-    if not row or "'applies'" in row[0]:
+    if not row or "'similar'" in row[0]:
         return
 
     check = _relationship_check_constraint()
@@ -229,6 +230,43 @@ def _migrate_paper_paths(conn: sqlite3.Connection) -> None:
           AND p.id NOT IN (SELECT paper_id FROM paper_paths)
     """)
     conn.commit()
+
+
+def _migrate_jobs_types(conn: sqlite3.Connection) -> None:
+    """Add 'auto_relate' to jobs.job_type CHECK constraint for existing DBs."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'"
+    ).fetchone()
+    if not row or "'auto_relate'" in row[0]:
+        return
+
+    conn.executescript("""
+    PRAGMA foreign_keys = OFF;
+    BEGIN;
+    CREATE TABLE jobs_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+        job_type TEXT NOT NULL CHECK(job_type IN ('extract_structure', 'extract_figures', 'auto_relate')),
+        params TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'running', 'completed', 'failed')),
+        progress TEXT,
+        result TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        started_at TEXT,
+        completed_at TEXT
+    );
+
+    INSERT INTO jobs_new SELECT * FROM jobs;
+    DROP TABLE jobs;
+    ALTER TABLE jobs_new RENAME TO jobs;
+
+    CREATE INDEX idx_jobs_status_created ON jobs(status, created_at);
+
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+    """)
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
@@ -414,7 +452,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     CREATE TABLE IF NOT EXISTS jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
-        job_type TEXT NOT NULL CHECK(job_type IN ('extract_structure', 'extract_figures')),
+        job_type TEXT NOT NULL CHECK(job_type IN ('extract_structure', 'extract_figures', 'auto_relate')),
         params TEXT NOT NULL DEFAULT '{{}}',
         status TEXT NOT NULL DEFAULT 'pending'
             CHECK(status IN ('pending', 'running', 'completed', 'failed')),
@@ -475,6 +513,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO config (key, value) VALUES ('prediction_error_threshold', '0.025')"
     )
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_propose_threshold', '0.82')"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_accept_threshold', '0.95')"
+    )
 
     conn.commit()
 
@@ -486,3 +530,4 @@ def init_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_chunks_session_id ON chunks(session_id)"
     )
     _migrate_paper_paths(conn)
+    _migrate_jobs_types(conn)
