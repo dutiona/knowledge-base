@@ -18,7 +18,7 @@ Document length determines the extraction strategy:
 
 **Long documents (>= 8000 total chars):** Three-phase map-reduce:
 
-1. **Map** -- Each chunk is sent to the LLM independently. The prompt asks for methods (with surface_forms/aliases), datasets (with surface_forms), and metrics. Each extraction result is tagged with its source chunk_id for provenance.
+1. **Map** -- Each chunk is sent to the LLM independently. The prompt asks for methods (with surface_forms/aliases), datasets (with surface_forms), and metrics. Each extraction result is tagged with its source chunk_id for provenance. The map phase supports **parallel execution** via a configurable `max_workers` parameter (default 1 = sequential). When `max_workers > 1`, chunks are dispatched to a `ThreadPoolExecutor`. The effective worker count is clamped to `min(max_workers, chunk_count, 32)` — the hard cap of 32 prevents resource exhaustion on large papers. Each worker receives a pre-read LLM config snapshot to avoid thread-safety issues with SQLite connections.
 
 2. **Resolve** -- All extracted entity mentions are collected and sent to the LLM in a single call. The resolution prompt asks the LLM to group mentions that refer to the same real-world entity, choosing the most specific/formal name as canonical. Entity resolution applies to **methods and datasets only**; metrics bypass resolution and are attributed to their resolved method/dataset via surface form lookup.
 
@@ -26,9 +26,34 @@ Document length determines the extraction strategy:
 
 The entire store phase is wrapped in a transaction with rollback on failure.
 
+## Parallel Extraction
+
+Pass `max_workers` to `extract_structure_tool` to parallelize the map phase:
+
+```json
+{
+  "name": "extract_structure_tool",
+  "arguments": { "paper_id": 1, "confirmed": true, "max_workers": 8 }
+}
+```
+
+The effective concurrency is clamped to `min(max_workers, chunk_count, 32)`. Tune based on your LLM endpoint's capacity -- Ollama's default concurrent request limit is 1, so parallelism only helps with endpoints that support concurrent inference (e.g., vLLM, TGI, or OpenAI-compatible APIs with connection pooling).
+
+The ETA warning adjusts for the effective worker count:
+
+```json
+{
+  "warning": "Extraction will take ~2min for 78 chunks (8 workers)",
+  "estimated_seconds": 156,
+  "chunk_count": 78,
+  "max_workers": 8,
+  "confirm_required": true
+}
+```
+
 ## ETA and Background Jobs
 
-Before running extraction, the tool estimates processing time based on chunk count (approximately 4 seconds per chunk). If the estimate exceeds 2 minutes, the tool returns a warning:
+Before running extraction, the tool estimates processing time based on chunk count (approximately 4 seconds per chunk). With `max_workers > 1`, the wall-clock estimate is divided by the effective worker count. If the estimate exceeds 2 minutes, the tool returns a warning:
 
 ```json
 {
