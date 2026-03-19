@@ -70,6 +70,38 @@ def _batched_select(
     return results
 
 
+def co_occurrence_pairs(conn: sqlite3.Connection, min_sessions: int = 1) -> list[dict]:
+    """Return document pairs that share at least *min_sessions* ingestion sessions.
+
+    Each row contains source_uri_a, source_uri_b (alphabetically ordered)
+    and the count of shared sessions.
+    """
+    rows = conn.execute(
+        """
+        SELECT a.source_uri AS source_uri_a,
+               b.source_uri AS source_uri_b,
+               COUNT(DISTINCT a.session_id) AS co_sessions
+        FROM chunks a
+        JOIN chunks b
+          ON a.session_id = b.session_id
+         AND a.source_uri < b.source_uri
+        WHERE a.session_id IS NOT NULL
+        GROUP BY a.source_uri, b.source_uri
+        HAVING co_sessions >= ?
+        ORDER BY co_sessions DESC
+        """,
+        (min_sessions,),
+    ).fetchall()
+    return [
+        {
+            "source_uri_a": r["source_uri_a"],
+            "source_uri_b": r["source_uri_b"],
+            "co_sessions": r["co_sessions"],
+        }
+        for r in rows
+    ]
+
+
 def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
@@ -170,6 +202,17 @@ def _migrate_papers_fts(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO papers_fts(rowid, title) SELECT id, title FROM papers")
 
 
+def _migrate_session_id(conn: sqlite3.Connection) -> None:
+    """Add session_id column to chunks for co-occurrence tracking."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'"
+    ).fetchone()
+    if not row or "session_id" in row[0]:
+        return
+    conn.execute("ALTER TABLE chunks ADD COLUMN session_id TEXT")
+    conn.commit()
+
+
 def _migrate_paper_paths(conn: sqlite3.Connection) -> None:
     """Populate paper_paths from existing paper -> abstract_chunk -> source_uri links.
 
@@ -222,6 +265,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         source_type TEXT NOT NULL CHECK(source_type IN ('pdf', 'markdown', 'code', 'web', 'note', 'figure')),
         source_uri TEXT NOT NULL,
         chunk_index INTEGER NOT NULL,
+        session_id TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         metadata TEXT DEFAULT '{{}}'
     );
@@ -435,4 +479,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_source_type_figure(conn)
     _migrate_relationship_types(conn)
     _migrate_papers_fts(conn)
+    _migrate_session_id(conn)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chunks_session_id ON chunks(session_id)"
+    )
     _migrate_paper_paths(conn)

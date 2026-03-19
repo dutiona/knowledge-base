@@ -473,6 +473,7 @@ def ingest_file(
     conn: sqlite3.Connection,
     path: Path,
     source_type: str | None = None,
+    session_id: str | None = None,
     _skip_folder_summary: bool = False,
 ) -> dict:
     path = path.resolve()
@@ -589,9 +590,18 @@ def ingest_file(
         new_chunks, embeddings
     ):
         cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (chunk_hash, chunk_text, source_type, source_uri, idx, meta_json),
+            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
+                                   chunk_index, session_id, metadata)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                chunk_hash,
+                chunk_text,
+                source_type,
+                source_uri,
+                idx,
+                session_id,
+                meta_json,
+            ),
         )
         chunk_id = cursor.lastrowid
         conn.execute(
@@ -614,6 +624,7 @@ def reingest_file(
     conn: sqlite3.Connection,
     path: Path,
     source_type: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     """Delete all chunks for a source_uri, then re-ingest the file.
 
@@ -783,9 +794,18 @@ def reingest_file(
         insert_items, embeddings
     ):
         cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (chunk_hash, chunk_text, source_type, source_uri, idx, meta_json),
+            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
+                                   chunk_index, session_id, metadata)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                chunk_hash,
+                chunk_text,
+                source_type,
+                source_uri,
+                idx,
+                session_id,
+                meta_json,
+            ),
         )
         chunk_id = cursor.lastrowid
         conn.execute(
@@ -1517,6 +1537,7 @@ def _extract_web_figures(
 def ingest_url(
     conn: sqlite3.Connection,
     url: str,
+    session_id: str | None = None,
 ) -> dict:
     """Fetch a web page, extract content, and ingest as chunks.
 
@@ -1634,9 +1655,10 @@ def ingest_url(
 
     for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings):
         cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata)
-               VALUES (?, ?, 'web', ?, ?, ?)""",
-            (chunk_hash, chunk_text, url, idx, meta_json),
+            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
+                                   chunk_index, session_id, metadata)
+               VALUES (?, ?, 'web', ?, ?, ?, ?)""",
+            (chunk_hash, chunk_text, url, idx, session_id, meta_json),
         )
         chunk_id = cursor.lastrowid
         conn.execute(
@@ -1658,13 +1680,18 @@ def ingest_directory(
     directory: Path,
     extensions: set[str] | None = None,
 ) -> list[dict]:
+    import uuid
+
     if extensions is None:
         extensions = {".pdf", ".md", ".txt", ".typ", ".rst"}
+    session_id = str(uuid.uuid4())
     results = []
     affected_folders: set[str] = set()
     for f in sorted(directory.rglob("*")):
         if f.is_file() and f.suffix.lower() in extensions:
-            result = ingest_file(conn, f, _skip_folder_summary=True)
+            result = ingest_file(
+                conn, f, session_id=session_id, _skip_folder_summary=True
+            )
             results.append(result)
             affected_folders.add(str(f.resolve().parent))
 

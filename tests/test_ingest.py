@@ -16,6 +16,7 @@ from knowledge_base.ingest import (
     _render_with_browser,
     _validate_image_url,
     configure_browser,
+    ingest_directory,
     ingest_file,
     reingest_file,
     ingest_url,
@@ -2619,3 +2620,86 @@ def test_pdf_image_dir_content_hash(tmp_path):
     hash_a = dir_a.parent.name.split("_")[-1]
     hash_c = dir_c.parent.name.split("_")[-1]
     assert hash_a == hash_c
+
+
+# --- Session ID tests ---
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_file_with_session_id(tmp_path):
+    """ingest_file stores session_id on all inserted chunks."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "doc.md"
+    md.write_text("Hello world from session test")
+
+    result = ingest_file(conn, md, session_id="test-session-42")
+    assert result["chunks_added"] >= 1
+
+    rows = conn.execute(
+        "SELECT session_id FROM chunks WHERE source_uri = ?", (str(md.resolve()),)
+    ).fetchall()
+    assert all(r["session_id"] == "test-session-42" for r in rows)
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_file_without_session_id(tmp_path):
+    """Omitting session_id stores NULL — backwards compatible."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "doc.md"
+    md.write_text("No session content here")
+
+    ingest_file(conn, md)
+
+    rows = conn.execute(
+        "SELECT session_id FROM chunks WHERE source_uri = ?", (str(md.resolve()),)
+    ).fetchall()
+    assert all(r["session_id"] is None for r in rows)
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_directory_shares_session_id(tmp_path):
+    """All files in a directory ingest share the same session_id."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text("Document A content for session")
+    (docs / "b.md").write_text("Document B content for session")
+
+    ingest_directory(conn, docs)
+
+    rows = conn.execute("SELECT DISTINCT session_id FROM chunks").fetchall()
+    session_ids = [r["session_id"] for r in rows]
+    assert len(session_ids) == 1
+    assert session_ids[0] is not None  # auto-generated UUID
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_reingest_file_with_session_id(tmp_path):
+    """reingest_file stores the new session_id on re-inserted chunks."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "doc.md"
+    md.write_text("Original content for reingest")
+
+    ingest_file(conn, md, session_id="old-session")
+
+    # Modify and reingest with new session
+    md.write_text("Updated content for reingest test")
+    result = reingest_file(conn, md, session_id="new-session")
+    assert result["chunks_added"] >= 1
+
+    rows = conn.execute(
+        "SELECT session_id FROM chunks WHERE source_uri = ?", (str(md.resolve()),)
+    ).fetchall()
+    assert all(r["session_id"] == "new-session" for r in rows)
