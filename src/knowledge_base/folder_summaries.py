@@ -7,6 +7,7 @@ Used at search time to boost results from semantically relevant directories.
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import sqlite3
 import struct
 
@@ -57,7 +58,7 @@ def _build_folder_summary(conn: sqlite3.Connection, folder_path: str) -> str:
     ).fetchall()
     parts = []
     for row in rows:
-        filename = row["source_uri"].rsplit("/", 1)[-1]
+        filename = posixpath.basename(row["source_uri"])
         snippet = row["content"][:200].replace("\n", " ").strip()
         parts.append(f"{filename}: {snippet}")
     return "\n".join(parts)

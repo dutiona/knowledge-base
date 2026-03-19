@@ -27,6 +27,17 @@ from .embed_swap import get_embed_config
 from .embeddings import embed
 from .folder_summaries import update_folder_summary
 
+
+def _update_folder_summary_safe(conn: sqlite3.Connection, path: Path) -> None:
+    """Update folder summary for the parent directory, swallowing errors."""
+    try:
+        update_folder_summary(conn, str(path.parent))
+    except Exception:
+        logger.warning(
+            "Failed to update folder summary for %s", path.parent, exc_info=True
+        )
+
+
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1000  # characters
@@ -588,13 +599,7 @@ def ingest_file(
         )
 
     conn.commit()
-
-    # Update folder-level summary embedding (#126)
-    folder = str(path.parent)
-    try:
-        update_folder_summary(conn, folder)
-    except Exception:
-        logger.warning("Failed to update folder summary for %s", folder, exc_info=True)
+    _update_folder_summary_safe(conn, path)
 
     return {
         "file": str(path),
@@ -729,6 +734,7 @@ def reingest_file(
         )
         if not md_chunks:
             conn.commit()
+            _update_folder_summary_safe(conn, path)
             return {
                 "file": source_uri,
                 "chunks_deleted": len(old_ids),
@@ -753,6 +759,7 @@ def reingest_file(
         fixed_chunks = _chunk_text(text)
         if not fixed_chunks:
             conn.commit()
+            _update_folder_summary_safe(conn, path)
             return {
                 "file": source_uri,
                 "chunks_deleted": len(old_ids),
@@ -764,6 +771,7 @@ def reingest_file(
 
     if not insert_items:
         conn.commit()
+        _update_folder_summary_safe(conn, path)
         return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": 0}
 
     texts_to_embed = [item[1] for item in insert_items]
@@ -827,13 +835,7 @@ def reingest_file(
         )
 
     conn.commit()
-
-    # Update folder-level summary embedding (#126)
-    folder = str(path.parent)
-    try:
-        update_folder_summary(conn, folder)
-    except Exception:
-        logger.warning("Failed to update folder summary for %s", folder, exc_info=True)
+    _update_folder_summary_safe(conn, path)
 
     return {
         "file": source_uri,

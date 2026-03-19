@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import sqlite3
 import struct
 from dataclasses import dataclass
@@ -134,7 +135,7 @@ def _folder_boost(
         chunk_id = row["id"]
         source_uri = row["source_uri"]
         # Extract parent folder from source_uri
-        parent = source_uri.rsplit("/", 1)[0] if "/" in source_uri else ""
+        parent = posixpath.dirname(source_uri)
         if parent in boosted_folders and chunk_id in boosted:
             boosted[chunk_id] *= boost_factor
 
