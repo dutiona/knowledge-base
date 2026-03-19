@@ -175,7 +175,7 @@ These two papers now share a session. Query co-occurrence with the `co_occurrenc
 
 Returns document pairs ordered by number of shared sessions. Pairs that co-occur across multiple sessions get stronger signals.
 
-**Limitation:** Session IDs are stored on chunks. Because of content-hash deduplication, re-ingesting the same file in a new session does not update its `session_id` (the chunks already exist). See #139 for the planned `chunk_sessions` join table that enables proper N:M session tracking.
+**Deduplication handling:** Session associations are stored in a `chunk_sessions` join table with N:M cardinality (#139). When content-hash deduplication skips an existing chunk, the new session is still recorded via `INSERT OR IGNORE` into `chunk_sessions`. This means re-ingesting the same file in a different session correctly produces co-occurrence signals across both sessions. The `reingest` operation also preserves all historical session associations when replacing chunks with updated content.
 
 ## Embedding
 
