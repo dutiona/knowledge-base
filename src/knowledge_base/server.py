@@ -172,6 +172,9 @@ def reingest(
 
     result = reingest_file(conn, p, source_type, session_id=session_id)
 
+    if "error" in result:
+        return json.dumps(result)
+
     # Invalidate stale "similar" relationships for all papers linked to this file
     source_uri = str(p)
     affected = conn.execute(

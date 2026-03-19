@@ -184,7 +184,8 @@ class TestAutoRelate:
         result = auto_relate(conn, pa)
         assert result["relationships_created"] == 0
 
-    def test_skips_existing_similar(self, conn):
+    def test_upserts_existing_similar(self, conn):
+        """Re-running auto_relate updates confidence on existing similar edges."""
         from knowledge_base.papers import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
@@ -194,7 +195,7 @@ class TestAutoRelate:
         conn.execute(
             "INSERT INTO relationships "
             "(source_paper_id, target_paper_id, relation_type, confidence) "
-            "VALUES (?, ?, 'similar', 0.9)",
+            "VALUES (?, ?, 'similar', 0.5)",
             (lo, hi),
         )
         conn.commit()
@@ -203,7 +204,37 @@ class TestAutoRelate:
         count = conn.execute(
             "SELECT count(*) FROM relationships WHERE relation_type = 'similar'"
         ).fetchone()[0]
-        assert count == 1  # no duplicate
+        assert count == 1  # still one edge, not duplicated
+
+        row = conn.execute(
+            "SELECT confidence FROM relationships WHERE relation_type = 'similar'"
+        ).fetchone()
+        assert row["confidence"] != 0.5  # confidence was updated by recomputation
+
+    def test_rethreshold_deletes_stale_edge(self, conn):
+        """Raising threshold removes edges that no longer qualify."""
+        from knowledge_base.papers import auto_relate
+
+        pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
+        _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
+
+        # First run creates edge
+        result = auto_relate(conn, pa)
+        assert result["relationships_created"] >= 1
+
+        # Raise threshold above any achievable score
+        conn.execute(
+            "UPDATE config SET value = '0.9999' "
+            "WHERE key = 'auto_relate_propose_threshold'"
+        )
+        conn.commit()
+
+        # Re-run should delete the stale edge
+        auto_relate(conn, pa)
+        count = conn.execute(
+            "SELECT count(*) FROM relationships WHERE relation_type = 'similar'"
+        ).fetchone()[0]
+        assert count == 0
 
     def test_coexists_with_other_types(self, conn):
         from knowledge_base.papers import auto_relate

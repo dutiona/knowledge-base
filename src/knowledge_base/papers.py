@@ -376,16 +376,6 @@ def auto_relate(
         # Direction normalization: always source < target for "similar"
         lo, hi = min(paper_id, other_id), max(paper_id, other_id)
 
-        # Check for existing "similar" relationship (either direction)
-        existing = conn.execute(
-            "SELECT 1 FROM relationships WHERE relation_type = 'similar' "
-            "AND source_paper_id = ? AND target_paper_id = ?",
-            (lo, hi),
-        ).fetchone()
-        if existing:
-            skipped += 1
-            continue
-
         # Fetch other paper embeddings
         other_rows = _get_paper_embeddings(conn, other_id)
         if not other_rows:
@@ -405,24 +395,33 @@ def auto_relate(
 
         compared += 1
 
-        # Compute all pairwise cosine similarities (dot of unit vectors)
-        similarities = []
+        # Stream top-k via bounded heap — O(_TOP_K) memory, not O(n×m)
+        top_k: list[tuple[float, int, int]] = []
         for s_cid, s_vec in source_normed:
             for o_cid, o_vec in other_vecs:
                 sim = float(np.dot(s_vec, o_vec))
-                similarities.append((sim, s_cid, o_cid))
+                if len(top_k) < _TOP_K:
+                    heapq.heappush(top_k, (sim, s_cid, o_cid))
+                elif sim > top_k[0][0]:
+                    heapq.heapreplace(top_k, (sim, s_cid, o_cid))
 
-        # Top-k average (heapq avoids sorting the full list)
-        top_k = heapq.nlargest(_TOP_K, similarities, key=lambda x: x[0])
         avg_score = sum(s for s, _, _ in top_k) / len(top_k)
 
         if avg_score < propose_threshold:
+            # Below threshold: delete any stale "similar" edge from a
+            # previous run with a lower threshold
+            conn.execute(
+                "DELETE FROM relationships WHERE relation_type = 'similar' "
+                "AND source_paper_id = ? AND target_paper_id = ?",
+                (lo, hi),
+            )
             continue
 
-        # Best-matching chunk for evidence
-        best_sim, best_s_cid, best_o_cid = top_k[0]
+        # Best-matching chunk for evidence (max of the heap)
+        best_sim, best_s_cid, best_o_cid = max(top_k)
         evidence_chunk_id = best_s_cid
 
+        # Upsert: creates new edge or updates confidence/evidence on re-run
         confidence = avg_score
         add_relationship(conn, lo, hi, "similar", confidence, evidence_chunk_id)
         created += 1
