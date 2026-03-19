@@ -62,6 +62,8 @@ def test_cross_thread_usage_after_parallel_burst(tmp_path, monkeypatch):
     barrier = threading.Barrier(4)
     errors = []
 
+    import traceback
+
     def parallel_worker():
         try:
             conn = _get_conn()
@@ -72,8 +74,8 @@ def test_cross_thread_usage_after_parallel_burst(tmp_path, monkeypatch):
                 (f"hash_{threading.current_thread().ident}",),
             )
             conn.commit()
-        except Exception as e:
-            errors.append(e)
+        except Exception:
+            errors.append(traceback.format_exc())
 
     # Phase 1: parallel burst (simulates concurrent ingest calls)
     threads = [threading.Thread(target=parallel_worker) for _ in range(4)]

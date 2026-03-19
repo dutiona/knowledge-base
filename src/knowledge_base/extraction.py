@@ -13,9 +13,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 
-logger = logging.getLogger(__name__)
-
 from .embeddings import _get_ollama_url
+
+logger = logging.getLogger(__name__)
 
 
 def record_method(
