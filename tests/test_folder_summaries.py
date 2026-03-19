@@ -253,3 +253,68 @@ def test_folder_boost_multiplies_scores(tmp_path):
     # Chunk 1 (/papers/ml) should be boosted, chunk 2 (/papers/bio) should not
     assert boosted[1] > scores[1]
     assert boosted[2] == scores[2]
+
+
+def test_folder_boost_no_folders_is_noop(tmp_path):
+    """_folder_boost returns original scores when no folder summaries exist."""
+    from knowledge_base.search import _folder_boost
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    scores = {1: 0.5}
+    result = _folder_boost(conn, [0.1] * DEFAULT_EMBED_DIM, [1], scores)
+    assert result == scores
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_update_folder_summary_empty_folder(tmp_path):
+    """update_folder_summary returns False for a folder with no indexed chunks."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    empty_folder = tmp_path / "empty"
+    empty_folder.mkdir()
+
+    assert update_folder_summary(conn, str(empty_folder)) is False
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_folder_summary_ignores_subdirectory_files(tmp_path):
+    """Folder summary only includes direct children, not files in subdirectories."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    parent = tmp_path / "research"
+    parent.mkdir()
+    child = parent / "subdir"
+    child.mkdir()
+
+    (parent / "top.md").write_text("Top-level paper about attention.\n")
+    (child / "nested.md").write_text("Nested paper about transformers.\n")
+
+    ingest_file(conn, parent / "top.md")
+    ingest_file(conn, child / "nested.md")
+
+    # Parent folder summary should only contain top.md
+    row = conn.execute(
+        "SELECT summary FROM folder_summaries WHERE folder_path = ?",
+        (str(parent),),
+    ).fetchone()
+    assert row is not None
+    assert "top.md" in row["summary"]
+    assert "nested.md" not in row["summary"]
+
+    # Child folder summary should only contain nested.md
+    child_row = conn.execute(
+        "SELECT summary FROM folder_summaries WHERE folder_path = ?",
+        (str(child),),
+    ).fetchone()
+    assert child_row is not None
+    assert "nested.md" in child_row["summary"]
+    assert "top.md" not in child_row["summary"]
