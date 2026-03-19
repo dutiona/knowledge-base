@@ -19,7 +19,7 @@ import fitz
 import httpx
 
 from .embeddings import _get_ollama_url
-from .ingest import _content_hash, _embed_with_config, _serialize_f32
+from .ingest import _content_hash, _embed_with_config, _serialize_f32, pdf_image_dir
 
 logger = logging.getLogger(__name__)
 
@@ -531,6 +531,23 @@ Rules:
 - If text is illegible, describe layout rather than guessing
 - Return [] if no figures/diagrams/charts/tables are present"""
 
+_FIGURE_VISION_PROMPT = """Analyze this figure image extracted from a research paper.
+
+Return a JSON array with one object describing this figure.
+
+Each object:
+{
+  "figure_type": "diagram|chart|table|photo|equation",
+  "title": "Exact caption if visible, or null",
+  "description": "Detailed natural language description of visual content, data relationships, and key takeaways",
+  "entities_mentioned": ["only names explicitly visible in the figure"]
+}
+
+Rules:
+- Do NOT fabricate text not visible in the image
+- If text is illegible, describe layout rather than guessing
+- Return [] if the image contains no meaningful visual content"""
+
 
 def _vision_call(
     image_b64: str, prompt: str, *, base_url: str, model: str
@@ -617,6 +634,97 @@ def _get_paper_source_uri(conn: sqlite3.Connection, paper_id: int) -> str | None
 
 
 # ---------------------------------------------------------------------------
+# Step 6b: Detect vector-drawn figure pages
+# ---------------------------------------------------------------------------
+
+_VECTOR_DRAWING_THRESHOLD = 10
+
+
+def _detect_vector_pages(
+    pdf_path: str,
+    pages_with_extracted_images: set[int],
+) -> list[int]:
+    """Detect pages likely containing vector-drawn figures.
+
+    These pages have many vector drawings (> threshold) but no
+    pymupdf4llm-extracted images. They need the fallback full-page
+    render path since pymupdf4llm can't export vector figures.
+
+    Args:
+        pdf_path: Path to PDF file.
+        pages_with_extracted_images: Set of 0-indexed page numbers that
+            already have extracted raster images (excluded from results).
+
+    Returns:
+        Sorted list of 0-indexed page numbers needing fallback rendering.
+    """
+    doc = fitz.open(pdf_path)
+    try:
+        result = []
+        for i, page in enumerate(doc):
+            if i in pages_with_extracted_images:
+                continue
+            if len(page.get_drawings()) > _VECTOR_DRAWING_THRESHOLD:
+                result.append(i)
+        return result
+    finally:
+        doc.close()
+
+
+# ---------------------------------------------------------------------------
+# Step 6c: Collect extracted images from ingest metadata
+# ---------------------------------------------------------------------------
+
+
+def _collect_extracted_images(
+    conn: sqlite3.Connection,
+    source_uri: str,
+    image_dir: Path,
+) -> list[tuple[Path, int]]:
+    """Collect pymupdf4llm-extracted images from chunk metadata.
+
+    Queries chunks for the given source_uri, reads the 'images' field from
+    each chunk's metadata, and resolves basenames to full paths in image_dir.
+    Deduplicates by filename, using the earliest page number.
+
+    Returns:
+        List of (image_path, page_num) sorted by page number then filename.
+    """
+    rows = conn.execute(
+        "SELECT metadata FROM chunks WHERE source_uri = ? AND source_type = 'pdf'",
+        (source_uri,),
+    ).fetchall()
+
+    # Map image basename -> earliest page number (1-indexed, from pymupdf4llm).
+    # A chunk may span multiple pages; we use the chunk's first page as the
+    # reference since pymupdf4llm doesn't provide per-image page mapping.
+    seen: dict[str, int] = {}
+    for row in rows:
+        try:
+            meta = json.loads(row["metadata"]) if row["metadata"] else {}
+        except (json.JSONDecodeError, TypeError):
+            continue
+        images = meta.get("images", [])
+        pages = meta.get("pages", [])
+        first_page = pages[0] if pages else 1  # 1-indexed; default to page 1
+        for img_name in images:
+            if img_name not in seen or first_page < seen[img_name]:
+                seen[img_name] = first_page
+
+    # Resolve to disk paths, filtering out missing files
+    result: list[tuple[Path, int]] = []
+    for img_name, page_num in seen.items():
+        img_path = image_dir / img_name
+        if img_path.exists():
+            result.append((img_path, page_num))
+        else:
+            logger.warning("Extracted image %s not found on disk, skipping", img_name)
+
+    result.sort(key=lambda x: (x[1], x[0].name))
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Step 7: Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -628,7 +736,9 @@ def estimate_figures_time(
 ) -> dict:
     """Estimate figure extraction time without running it.
 
-    Returns dict with candidate_pages, estimated_seconds, has_omniparser.
+    Uses the dual-path pipeline: counts extracted images (primary) and
+    vector/heuristic pages (fallback) to compute the ETA.
+
     Returns {"error": ...} on validation failure.
     """
     paper_row = conn.execute(
@@ -646,7 +756,6 @@ def estimate_figures_time(
         return {"error": f"Source is not an existing PDF: {source_uri}"}
 
     if pages is not None:
-        # Bounds-check explicit pages
         doc = fitz.open(str(pdf_path))
         total_pages = len(doc)
         doc.close()
@@ -655,17 +764,37 @@ def estimate_figures_time(
                 return {
                     "error": f"Page {p} out of range (document has {total_pages} pages)"
                 }
-        candidate_pages = pages
+
+    # Collect extracted images
+    image_dir = pdf_image_dir(pdf_path)
+    extracted_images = _collect_extracted_images(conn, source_uri, image_dir)
+    pages_with_images: set[int] = {pn - 1 for _, pn in extracted_images}
+
+    # Determine fallback pages
+    if pages is not None:
+        n_vector = len([p for p in pages if p not in pages_with_images])
+        # Count actual extracted images on requested pages (not unique pages)
+        pages_set = set(pages)
+        n_extracted = len(
+            [(p, pn) for p, pn in extracted_images if (pn - 1) in pages_set]
+        )
+    elif not extracted_images:
+        fallback = _heuristic_filter(str(pdf_path))
+        n_vector = len(fallback)
+        n_extracted = 0
     else:
-        candidate_pages = _heuristic_filter(str(pdf_path))
+        fallback = _detect_vector_pages(str(pdf_path), pages_with_images)
+        n_vector = len(fallback)
+        n_extracted = len(extracted_images)
 
     omniparser_path = _get_omniparser_config(conn)
     per_page = _ETA_SECS_PER_PAGE_BASE + (
         _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
     )
-    estimated = len(candidate_pages) * per_page
+    estimated = (n_extracted + n_vector) * per_page
     return {
-        "candidate_pages": len(candidate_pages),
+        "extracted_images": n_extracted,
+        "vector_pages": n_vector,
         "estimated_seconds": estimated,
         "has_omniparser": omniparser_path is not None,
     }
@@ -679,6 +808,10 @@ def extract_figures(
     on_progress: Callable[[str], None] | None = None,
 ) -> dict:
     """Extract figures from a paper's PDF using vision models.
+
+    Dual-path pipeline:
+    - Primary: send pymupdf4llm-extracted figure images to vision LLM
+    - Fallback: render full pages for vector-drawn figures (no extracted images)
 
     Thread-safe architecture: all SQLite access happens on the main thread.
     Vision API calls are dispatched to a thread pool.
@@ -699,71 +832,115 @@ def extract_figures(
     if pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
         return {"error": f"Source is not an existing PDF: {source_uri}"}
 
-    # 3. Determine candidate pages
+    # 3. Bounds-check explicit pages
     if pages is not None:
         if not pages:
             return {"pages_processed": 0, "figures_found": 0, "chunks_created": 0}
         doc = fitz.open(str(pdf_path))
         total_pages = len(doc)
         doc.close()
-        # Bounds-check
         for p in pages:
             if p < 0 or p >= total_pages:
                 return {
                     "error": f"Page {p} out of range (document has {total_pages} pages)"
                 }
-        candidate_pages = pages
-    else:
-        candidate_pages = _heuristic_filter(str(pdf_path))
 
-    # 3b. Read omniparser config (needed for ETA adjustment)
+    # 3b. Read omniparser config
     omniparser_path = _get_omniparser_config(conn)
     omniparser_enriched = 0
 
-    # 4. ETA gate
+    # 5. Collect extracted images (primary path)
+    image_dir = pdf_image_dir(pdf_path)
+    extracted_images = _collect_extracted_images(conn, source_uri, image_dir)
+
+    # Convert 1-indexed page numbers (from ingest metadata) to 0-indexed (for fitz)
+    pages_with_images: set[int] = {pn - 1 for _, pn in extracted_images}
+
+    # If explicit pages requested, filter extracted images to those pages only
+    if pages is not None:
+        pages_set = set(pages)
+        extracted_images = [
+            (p, pn) for p, pn in extracted_images if (pn - 1) in pages_set
+        ]
+
+    # 5b. Determine which pages need full-page rendering (fallback path).
+    # NOTE: Pages with extracted raster images skip full-page rendering even
+    # if they also contain vector figures. This is by design — the primary
+    # path deliberately avoids full-page rendering for pages that already
+    # have high-quality extracted images. Vector figures on mixed pages
+    # will be captured in a future iteration if needed.
+    if pages is not None:
+        # User explicitly requested pages — render any that don't have extracted images
+        vector_pages = [p for p in pages if p not in pages_with_images]
+    elif not extracted_images:
+        # No extracted images at all — fall back entirely to heuristic
+        vector_pages = _heuristic_filter(str(pdf_path))
+    else:
+        # Auto-detect: only render pages with vector drawings that lack images
+        vector_pages = _detect_vector_pages(str(pdf_path), pages_with_images)
+
+    # 4. ETA gate (computed after knowing the dual-path split)
+    n_items = len(extracted_images) + len(vector_pages)
     per_page = _ETA_SECS_PER_PAGE_BASE + (
         _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
     )
-    estimated = len(candidate_pages) * per_page
+    estimated = n_items * per_page
     if estimated > 120 and not confirmed:
         return {
             "confirm_required": True,
             "estimated_seconds": estimated,
-            "candidate_pages": len(candidate_pages),
+            "extracted_images": len(extracted_images),
+            "vector_pages": len(vector_pages),
         }
 
-    # 5. Render all candidate pages to PNG bytes (main thread, single doc open)
-    if on_progress:
-        on_progress(f"rendering {len(candidate_pages)} pages...")
+    # 5c. Render only vector pages (fallback path)
     rendered: dict[int, bytes] = {}
-    doc = fitz.open(str(pdf_path))
-    try:
-        for page_num in candidate_pages:
-            page = doc[page_num]
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-            rendered[page_num] = pix.tobytes("png")
-    finally:
-        doc.close()
+    if vector_pages:
+        if on_progress:
+            on_progress(f"rendering {len(vector_pages)} vector-figure pages...")
+        doc = fitz.open(str(pdf_path))
+        try:
+            for page_num in vector_pages:
+                page = doc[page_num]
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                rendered[page_num] = pix.tobytes("png")
+        finally:
+            doc.close()
 
     # 6. Read vision config once (main thread)
     config = _get_vision_config(conn)
     base_url = config["base_url"]
     model = config["model"]
 
-    # 6b. Run OmniParser BEFORE vision calls to detect multi-figure layouts.
-    # NOTE: OmniParser runs sequentially per page. Since it's CPU/GPU-bound
-    # (not I/O-bound like vision API calls), parallelizing would contend for
-    # the same compute resources. Future: consider async if OmniParser moves
-    # to a network service.
-    # Maps page_num -> (omni_result, regions, crops)
+    # 6b. Run OmniParser BEFORE vision calls (sequential, CPU/GPU-bound).
+    # Runs on BOTH extracted images and rendered vector pages.
     omni_data: dict[
         int, tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]]
+    ] = {}
+    omni_data_by_image: dict[
+        str, tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]]
     ] = {}
     omniparser_elapsed = 0.0
     if omniparser_path:
         if on_progress:
-            on_progress(f"omniparser {len(rendered)} pages...")
+            on_progress("omniparser processing...")
         t_omni_start = time.monotonic()
+
+        # OmniParser on extracted images (already PNGs on disk).
+        # Key by image name (unique) rather than page index (not unique).
+        omni_data_by_image: dict[
+            str,
+            tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]],
+        ] = {}
+        for img_path, page_num in extracted_images:
+            omni_result = _run_omniparser(img_path, omniparser_path)
+            omni_data_by_image[img_path.name] = (
+                omni_result,
+                [(0.0, 0.0, 1.0, 1.0)],
+                [],
+            )
+
+        # OmniParser on rendered vector pages (existing logic)
         for page_num, png_bytes in rendered.items():
             png_fd, png_tmp = tempfile.mkstemp(suffix=".png")
             try:
@@ -792,35 +969,43 @@ def extract_figures(
 
             omni_data[page_num] = (omni_result, regions, crops)
         omniparser_elapsed = time.monotonic() - t_omni_start
-        logger.info(
-            "OmniParser phase: %d pages in %.1fs (%.1fs/page)",
-            len(rendered),
-            omniparser_elapsed,
-            omniparser_elapsed / len(rendered) if rendered else 0,
-        )
 
     # 7. Dispatch vision calls in thread pool (no conn access)
     if on_progress:
-        on_progress(f"vision {len(rendered)} pages...")
-    # For pages with multiple detected regions, send one vision call per crop.
-    # For pages with single region (or no OmniParser), send the full page.
+        on_progress("vision processing...")
+    # future_to_key maps future -> (page_0idx, region_idx, source_image_name)
+    # source_image_name is set for extracted images, None for rendered pages
     page_results: dict[int, list[dict]] = {}
     errors: list[str] = []
     pages_failed = 0
 
     t_vision_start = time.monotonic()
     with ThreadPoolExecutor(max_workers=4) as executor:
-        # Each future maps to (page_num, region_idx) where region_idx is None
-        # for full-page calls.
         future_to_key: dict = {}
 
+        # 7a. Extracted images — use _FIGURE_VISION_PROMPT.
+        # Each extracted image gets a unique image_idx as its region key
+        # so multiple images on the same page don't overwrite each other.
+        for image_idx, (img_path, page_num) in enumerate(extracted_images):
+            page_0idx = page_num - 1
+            img_bytes = img_path.read_bytes()
+            b64 = base64.b64encode(img_bytes).decode("ascii")
+            future = executor.submit(
+                _vision_call,
+                b64,
+                _FIGURE_VISION_PROMPT,
+                base_url=base_url,
+                model=model,
+            )
+            future_to_key[future] = (page_0idx, image_idx, img_path.name)
+
+        # 7b. Vector page fallback — use _VISION_PROMPT (original full-page)
         for page_num, png_bytes in rendered.items():
             _, regions, crops = omni_data.get(
                 page_num, (None, [(0.0, 0.0, 1.0, 1.0)], [])
             )
 
             if len(crops) > 1:
-                # Multi-region: send each crop separately
                 for region_idx, crop_bytes in enumerate(crops):
                     b64 = base64.b64encode(crop_bytes).decode("ascii")
                     future = executor.submit(
@@ -830,9 +1015,8 @@ def extract_figures(
                         base_url=base_url,
                         model=model,
                     )
-                    future_to_key[future] = (page_num, region_idx)
+                    future_to_key[future] = (page_num, region_idx, None)
             else:
-                # Single region or no OmniParser: send full page
                 b64 = base64.b64encode(png_bytes).decode("ascii")
                 future = executor.submit(
                     _vision_call,
@@ -841,15 +1025,19 @@ def extract_figures(
                     base_url=base_url,
                     model=model,
                 )
-                future_to_key[future] = (page_num, None)
+                future_to_key[future] = (page_num, None, None)
 
         # Collect results, grouping by page
         page_figures_by_region: dict[int, dict[int | None, list[dict]]] = {}
 
         for future in as_completed(future_to_key):
-            page_num, region_idx = future_to_key[future]
+            page_num, region_idx, source_image_name = future_to_key[future]
             try:
                 figures = future.result()
+                # Tag each figure with source image name (for metadata later)
+                if source_image_name:
+                    for fig in figures:
+                        fig["_source_image"] = source_image_name
                 page_figures_by_region.setdefault(page_num, {})[region_idx] = figures
             except Exception as exc:
                 pages_failed += 1
@@ -861,8 +1049,7 @@ def extract_figures(
                     exc,
                 )
 
-        # Flatten: merge all regions for each page into a single list,
-        # tagging each figure with its region index for later element filtering.
+        # Flatten: merge all regions for each page into a single list
         for page_num, region_map in page_figures_by_region.items():
             merged: list[dict] = []
             for key in sorted(region_map, key=lambda k: (k is None, k)):
@@ -873,35 +1060,58 @@ def extract_figures(
 
     vision_elapsed = time.monotonic() - t_vision_start
     logger.info(
-        "Vision phase: %d pages in %.1fs (%.1fs/page wall-clock)",
-        len(rendered),
+        "Vision phase: %d items in %.1fs",
+        len(extracted_images) + len(rendered),
         vision_elapsed,
-        vision_elapsed / len(rendered) if rendered else 0,
     )
 
-    # 7b. Enrich with OmniParser text/icon data (post-vision)
+    # 7c. Enrich with OmniParser text/icon data (post-vision)
     if omniparser_path:
         for page_num in page_results:
             if not page_results[page_num]:
                 continue
+
+            figures_on_page = page_results[page_num]
+
+            # Extracted images: look up OmniParser data by image name
+            for i, fig in enumerate(figures_on_page):
+                source_image_name = fig.get("_source_image")
+                if source_image_name and source_image_name in omni_data_by_image:
+                    omni_result, _, _ = omni_data_by_image[source_image_name]
+                    if omni_result and omni_result.get("elements"):
+                        enriched = _merge_omniparser_elements(
+                            fig, omni_result["elements"]
+                        )
+                        if enriched is not fig:
+                            omniparser_enriched += 1
+                        figures_on_page[i] = enriched
+
+            # Vector pages: look up OmniParser data by page number
             omni_result, regions, crops = omni_data.get(
                 page_num, (None, [(0.0, 0.0, 1.0, 1.0)], [])
             )
             if not omni_result or not omni_result.get("elements"):
                 continue
 
-            figures_on_page = page_results[page_num]
+            # Only process figures from the vector path (no _source_image tag)
+            vector_figs = [
+                (i, fig)
+                for i, fig in enumerate(figures_on_page)
+                if not fig.get("_source_image")
+            ]
+            if not vector_figs:
+                continue
+
             omni_elements = omni_result["elements"]
 
-            if len(figures_on_page) == 1:
-                # Single-figure gate: safe to merge into description
-                enriched = _merge_omniparser_elements(figures_on_page[0], omni_elements)
-                if enriched is not figures_on_page[0]:
+            if len(vector_figs) == 1:
+                idx, fig = vector_figs[0]
+                enriched = _merge_omniparser_elements(fig, omni_elements)
+                if enriched is not fig:
                     omniparser_enriched += 1
-                page_results[page_num] = [enriched]
+                figures_on_page[idx] = enriched
             else:
-                # Multi-figure: filter elements to each figure's region
-                for i, fig in enumerate(figures_on_page):
+                for idx, fig in vector_figs:
                     region_idx = fig.get("_region_idx")
                     if region_idx is not None and region_idx < len(regions):
                         region_elements = _elements_in_region(
@@ -909,7 +1119,7 @@ def extract_figures(
                         )
                     else:
                         region_elements = omni_elements
-                    figures_on_page[i] = {
+                    figures_on_page[idx] = {
                         **fig,
                         "_omniparser_elements": region_elements,
                     }
@@ -930,11 +1140,13 @@ def extract_figures(
         embeddings = _embed_with_config(conn, texts)
 
     # 10. Atomic transaction: delete old, insert new (main thread)
-    # Always delete old figure chunks (even if no new figures found — ensures idempotency)
     chunks_created = 0
-    # Scope DELETE to only the requested pages' chunk_index ranges (#79).
-    # When pages=None (full extraction), delete all figure chunks (original behavior).
-    if pages is not None and candidate_pages:
+    # Determine candidate_pages for scoped DELETE (#79).
+    # When pages=None (full refresh), always do unscoped DELETE to remove
+    # stale figure chunks from pages no longer detected.
+    candidate_pages = pages
+
+    if candidate_pages is not None and candidate_pages:
         page_clauses = []
         page_params: list[int] = []
         for p in candidate_pages:
@@ -956,6 +1168,7 @@ def extract_figures(
             "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')"
         )
         fig_delete_params = (source_uri,)
+
     try:
         # Clean up FK references before deleting figure chunks (#53)
         conn.execute(
@@ -974,7 +1187,7 @@ def extract_figures(
             f"DELETE FROM chunks_vec WHERE chunk_id IN {fig_chunk_subquery}",
             fig_delete_params,
         )
-        if pages is not None and candidate_pages:
+        if candidate_pages is not None and candidate_pages:
             conn.execute(
                 f"DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'"
                 f"{page_filter}",
@@ -991,7 +1204,6 @@ def extract_figures(
                 content = figure["description"]
                 content_hash = _content_hash(content)
 
-                # Check for content_hash collision
                 existing = conn.execute(
                     "SELECT id FROM chunks WHERE content_hash = ?", (content_hash,)
                 ).fetchone()
@@ -1000,13 +1212,9 @@ def extract_figures(
 
                 if fig_idx >= _FIGS_PER_PAGE:
                     logger.warning(
-                        "Page %d has %d+ figures; capping chunk_index at %d "
-                        "(fig_idx=%d exceeds slot size %d)",
+                        "Page %d has %d+ figures; capping chunk_index",
                         page_num,
                         fig_idx + 1,
-                        _FIGS_PER_PAGE - 1,
-                        fig_idx,
-                        _FIGS_PER_PAGE,
                     )
                     fig_idx = _FIGS_PER_PAGE - 1
                 chunk_index = _FIGURE_BASE + page_num * _FIGS_PER_PAGE + fig_idx
@@ -1017,6 +1225,10 @@ def extract_figures(
                     "entities_mentioned": figure["entities_mentioned"],
                     "vision_model": model,
                 }
+                # Track source image for extracted-image figures
+                source_image_name = figure.get("_source_image")
+                if source_image_name:
+                    meta_dict["source_image"] = source_image_name
                 # Store omniparser elements in metadata (multi-figure pages)
                 if "_omniparser_elements" in figure:
                     meta_dict["omniparser_elements"] = figure["_omniparser_elements"]
@@ -1041,16 +1253,23 @@ def extract_figures(
         conn.rollback()
         raise
 
-    # 11. Save PNGs to disk (best effort, outside transaction)
-    figures_dir = (
-        Path.home() / ".local" / "share" / "knowledge-base" / "figures" / str(paper_id)
-    )
-    try:
-        figures_dir.mkdir(parents=True, exist_ok=True)
-        for page_num, png_bytes in rendered.items():
-            (figures_dir / f"page_{page_num}.png").write_bytes(png_bytes)
-    except OSError as exc:
-        logger.warning("Failed to save figure PNGs: %s", exc)
+    # 11. Save PNGs to disk — only for vector-rendered pages
+    #     (extracted images are already on disk from ingest)
+    if rendered:
+        figures_dir = (
+            Path.home()
+            / ".local"
+            / "share"
+            / "knowledge-base"
+            / "figures"
+            / str(paper_id)
+        )
+        try:
+            figures_dir.mkdir(parents=True, exist_ok=True)
+            for page_num, png_bytes in rendered.items():
+                (figures_dir / f"page_{page_num}.png").write_bytes(png_bytes)
+        except OSError as exc:
+            logger.warning("Failed to save figure PNGs: %s", exc)
 
     total_elapsed = vision_elapsed + omniparser_elapsed
     result = {
@@ -1058,6 +1277,8 @@ def extract_figures(
         "pages_failed": pages_failed,
         "figures_found": len(all_figures),
         "chunks_created": chunks_created,
+        "extracted_images_processed": len(extracted_images),
+        "vector_pages_rendered": len(rendered),
         "omniparser_enriched": omniparser_enriched,
         "errors": errors,
         "timing": {

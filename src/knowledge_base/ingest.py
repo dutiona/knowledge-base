@@ -307,7 +307,7 @@ def _extract_pdf_text(path: Path) -> str:
     return "\n\n".join(pages)
 
 
-def _pdf_image_dir(path: Path) -> Path:
+def pdf_image_dir(path: Path) -> Path:
     """Content-hash keyed directory for extracted images."""
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -467,7 +467,7 @@ def ingest_file(
         source_type = _detect_source_type(path)
 
     if source_type == "pdf":
-        image_dir = _pdf_image_dir(path)
+        image_dir = pdf_image_dir(path)
         if image_dir.exists():
             shutil.rmtree(image_dir)
         text, page_map = _extract_pdf_markdown(path, image_dir=image_dir)
@@ -687,7 +687,7 @@ def reingest_file(
         source_type = _detect_source_type(path)
 
     if source_type == "pdf":
-        image_dir = _pdf_image_dir(path)
+        image_dir = pdf_image_dir(path)
         if image_dir.exists():
             shutil.rmtree(image_dir)
         text, page_map = _extract_pdf_markdown(path, image_dir=image_dir)

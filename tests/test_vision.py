@@ -1,11 +1,21 @@
 """Tests for vision/figure extraction schema support."""
 
+import json
 import pytest
 import sqlite3
 from pathlib import Path
+from unittest.mock import patch
 
 from knowledge_base.db import get_connection, init_schema, DEFAULT_EMBED_DIM
 from knowledge_base.vision import _FIGURE_BASE, _FIGS_PER_PAGE
+
+
+@pytest.fixture
+def vision_conn(tmp_path):
+    """Create a temporary DB with full schema for vision tests."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    return conn
 
 
 OLD_SCHEMA_SQL = f"""
@@ -454,8 +464,7 @@ def test_get_paper_source_uri_not_found(tmp_path):
 # Step 5: Vision API call
 # ---------------------------------------------------------------------------
 
-import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 def _mock_httpx_response(content: str, status_code: int = 200) -> MagicMock:
@@ -674,7 +683,8 @@ def test_extract_figures_eta_gate(tmp_path):
     result = extract_figures(conn, paper_id=paper_id, confirmed=False)
     assert result.get("confirm_required") is True
     assert result["estimated_seconds"] == 50 * 4
-    assert result["candidate_pages"] == 50
+    # No extracted images, all 50 pages go through heuristic fallback
+    assert result["vector_pages"] == 50
 
 
 @patch("knowledge_base.vision._embed_with_config")
@@ -1241,7 +1251,8 @@ def test_mcp_tool_page_conversion(mock_get_conn, mock_eft, mock_submit):
 
     mock_get_conn.return_value = MagicMock()
     mock_eft.return_value = {
-        "candidate_pages": 3,
+        "extracted_images": 2,
+        "vector_pages": 1,
         "estimated_seconds": 200,
         "has_omniparser": False,
     }
@@ -1989,3 +2000,414 @@ def test_constants_are_consistent():
     assert _OMNIPARSER_SUBPROCESS_TIMEOUT >= _ETA_SECS_PER_PAGE_OMNIPARSER, (
         f"OmniParser timeout ({_OMNIPARSER_SUBPROCESS_TIMEOUT}s) < ETA ({_ETA_SECS_PER_PAGE_OMNIPARSER}s)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Extracted-image pipeline tests (#110)
+# ---------------------------------------------------------------------------
+
+
+def test_collect_extracted_images_returns_images_grouped_by_page(vision_conn, tmp_path):
+    """_collect_extracted_images reads chunk metadata and resolves image paths."""
+    conn = vision_conn
+    source_uri = str(tmp_path / "paper.pdf")
+
+    image_dir = tmp_path / "figures" / "paper_abc123" / "extracted"
+    image_dir.mkdir(parents=True)
+    (image_dir / "image_0.png").write_bytes(b"PNG_FAKE_1")
+    (image_dir / "image_1.png").write_bytes(b"PNG_FAKE_2")
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "h1",
+            "text about fig1",
+            source_uri,
+            json.dumps({"pages": [1], "images": ["image_0.png"]}),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 1, ?)",
+        (
+            "h2",
+            "text about fig2",
+            source_uri,
+            json.dumps({"pages": [3], "images": ["image_1.png"]}),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 2, ?)",
+        ("h3", "just text", source_uri, json.dumps({"pages": [2]})),
+    )
+    conn.commit()
+
+    from knowledge_base.vision import _collect_extracted_images
+
+    result = _collect_extracted_images(conn, source_uri, image_dir)
+
+    assert len(result) == 2
+    paths = {r[0].name for r in result}
+    assert paths == {"image_0.png", "image_1.png"}
+    page_map = {r[0].name: r[1] for r in result}
+    assert page_map["image_0.png"] == 1
+    assert page_map["image_1.png"] == 3
+
+
+def test_collect_extracted_images_skips_missing_files(vision_conn, tmp_path):
+    """Images referenced in metadata but missing on disk are skipped."""
+    conn = vision_conn
+    source_uri = str(tmp_path / "paper.pdf")
+    image_dir = tmp_path / "figures" / "paper_abc" / "extracted"
+    image_dir.mkdir(parents=True)
+    (image_dir / "image_0.png").write_bytes(b"PNG_FAKE")
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "h1",
+            "fig1",
+            source_uri,
+            json.dumps({"pages": [1], "images": ["image_0.png", "missing.png"]}),
+        ),
+    )
+    conn.commit()
+
+    from knowledge_base.vision import _collect_extracted_images
+
+    result = _collect_extracted_images(conn, source_uri, image_dir)
+    assert len(result) == 1
+    assert result[0][0].name == "image_0.png"
+
+
+def test_collect_extracted_images_deduplicates(vision_conn, tmp_path):
+    """Same image referenced in multiple chunks is returned once."""
+    conn = vision_conn
+    source_uri = str(tmp_path / "paper.pdf")
+    image_dir = tmp_path / "figures" / "paper_abc" / "extracted"
+    image_dir.mkdir(parents=True)
+    (image_dir / "image_0.png").write_bytes(b"PNG_FAKE")
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "h1",
+            "first",
+            source_uri,
+            json.dumps({"pages": [1, 2], "images": ["image_0.png"]}),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 1, ?)",
+        (
+            "h2",
+            "second",
+            source_uri,
+            json.dumps({"pages": [2, 3], "images": ["image_0.png"]}),
+        ),
+    )
+    conn.commit()
+
+    from knowledge_base.vision import _collect_extracted_images
+
+    result = _collect_extracted_images(conn, source_uri, image_dir)
+    assert len(result) == 1
+    assert result[0][1] == 1
+
+
+def test_detect_vector_pages_finds_drawing_heavy_pages(tmp_path):
+    """Pages with many drawings but no extracted images are detected."""
+    from knowledge_base.vision import _detect_vector_pages
+
+    import fitz
+
+    doc = fitz.open()
+    page0 = doc.new_page(width=612, height=792)
+    # Each finish()/commit() cycle creates one drawing path in the PDF,
+    # so we need separate cycles to exceed the threshold.
+    for i in range(15):
+        shape = page0.new_shape()
+        shape.draw_line(fitz.Point(10, 10 + i * 5), fitz.Point(100, 10 + i * 5))
+        shape.finish()
+        shape.commit()
+
+    page1 = doc.new_page(width=612, height=792)
+    page1.insert_text(fitz.Point(72, 72), "Just text, no figures.")
+
+    pdf_path = tmp_path / "test.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    pages_with_images: set[int] = set()
+    result = _detect_vector_pages(str(pdf_path), pages_with_images)
+
+    assert 0 in result
+    assert 1 not in result
+
+
+def test_detect_vector_pages_excludes_pages_with_extracted_images(tmp_path):
+    """Pages that already have extracted images are excluded even if they have drawings."""
+    from knowledge_base.vision import _detect_vector_pages
+
+    import fitz
+
+    doc = fitz.open()
+    page0 = doc.new_page(width=612, height=792)
+    for i in range(15):
+        shape = page0.new_shape()
+        shape.draw_line(fitz.Point(10, 10 + i * 5), fitz.Point(100, 10 + i * 5))
+        shape.finish()
+        shape.commit()
+
+    pdf_path = tmp_path / "test.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    pages_with_images: set[int] = {0}
+    result = _detect_vector_pages(str(pdf_path), pages_with_images)
+    assert 0 not in result
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_uses_extracted_images(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
+):
+    """extract_figures reads pymupdf4llm-extracted images instead of rendering pages."""
+    conn = vision_conn
+    import fitz
+
+    doc = fitz.open()
+    doc.new_page(width=612, height=792)
+    doc.new_page(width=612, height=792)
+    pdf_path = tmp_path / "paper.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Test Paper')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+
+    # Create extracted image directory under tmp_path
+    image_dir = tmp_path / "extracted"
+    image_dir.mkdir(parents=True)
+    mock_image_dir.return_value = image_dir
+
+    from PIL import Image
+    import io
+
+    img = Image.new("RGB", (100, 100), color="red")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+    (image_dir / "image_0.png").write_bytes(png_bytes)
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "ch1",
+            "![fig](image_0.png)",
+            str(pdf_path),
+            json.dumps({"pages": [1], "images": ["image_0.png"]}),
+        ),
+    )
+    conn.commit()
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "chart",
+            "description": "A red chart.",
+            "title": "Fig 1",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.1] * 1024]
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, confirmed=True)
+
+    assert result["figures_found"] == 1
+    assert result["chunks_created"] == 1
+    assert mock_vision.call_count == 1
+    # Verify the figure-specific prompt was used
+    call_args = mock_vision.call_args
+    assert "figure image extracted from a research paper" in call_args[0][1]
+    # The metadata should indicate source_image
+    row = conn.execute(
+        "SELECT metadata FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    meta = json.loads(row["metadata"])
+    assert meta.get("source_image") == "image_0.png"
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_multi_image_same_page(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
+):
+    """Multiple images on the same page must all be processed, not overwritten."""
+    conn = vision_conn
+    import fitz
+
+    doc = fitz.open()
+    doc.new_page(width=612, height=792)
+    pdf_path = tmp_path / "paper.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Multi-Fig Paper')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+
+    image_dir = tmp_path / "extracted"
+    image_dir.mkdir(parents=True)
+    mock_image_dir.return_value = image_dir
+
+    from PIL import Image
+    import io
+
+    for name in ("image_0.png", "image_1.png"):
+        img = Image.new("RGB", (100, 100), color="blue")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        (image_dir / name).write_bytes(buf.getvalue())
+
+    # Both images on page 1 (1-indexed in metadata)
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "ch1",
+            "![fig](image_0.png) ![fig](image_1.png)",
+            str(pdf_path),
+            json.dumps({"pages": [1], "images": ["image_0.png", "image_1.png"]}),
+        ),
+    )
+    conn.commit()
+
+    call_count = [0]
+
+    def vision_side_effect(*args, **kwargs):
+        call_count[0] += 1
+        return [
+            {
+                "figure_type": "chart",
+                "description": f"Figure {call_count[0]}",
+                "title": f"Fig {call_count[0]}",
+                "entities_mentioned": [],
+            }
+        ]
+
+    mock_vision.side_effect = vision_side_effect
+    mock_embed.return_value = [[0.1] * 1024, [0.2] * 1024]
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, confirmed=True)
+
+    # Both images must be processed — no overwrite
+    assert result["figures_found"] == 2
+    assert result["chunks_created"] == 2
+    assert mock_vision.call_count == 2
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_falls_back_to_render_for_vector_pages(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
+):
+    """Pages with vector drawings but no extracted images use full-page render."""
+    conn = vision_conn
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    for i in range(15):
+        shape = page.new_shape()
+        shape.draw_line(fitz.Point(10, 10 + i * 5), fitz.Point(100, 10 + i * 5))
+        shape.finish()
+        shape.commit()
+    pdf_path = tmp_path / "paper.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Vector Paper')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+
+    # Empty extracted dir — no extracted images
+    image_dir = tmp_path / "extracted"
+    image_dir.mkdir(parents=True)
+    mock_image_dir.return_value = image_dir
+
+    conn.commit()
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "diagram",
+            "description": "A vector diagram.",
+            "title": None,
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.1] * 1024]
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, confirmed=True)
+
+    assert result["figures_found"] == 1
+    assert result.get("vector_pages_rendered", 0) > 0
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._collect_extracted_images")
+def test_estimate_figures_time_accounts_for_extracted_images(
+    mock_collect, mock_image_dir, vision_conn, tmp_path
+):
+    """ETA should be lower when extracted images are available."""
+    conn = vision_conn
+    import fitz
+
+    doc = fitz.open()
+    for _ in range(10):
+        doc.new_page()
+    pdf_path = tmp_path / "paper.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Test')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+    conn.commit()
+
+    mock_image_dir.return_value = tmp_path / "extracted"
+    # 5 extracted images, 0 vector pages → much cheaper than 10 heuristic pages
+    mock_collect.return_value = [(tmp_path / f"img_{i}.png", i + 1) for i in range(5)]
+
+    from knowledge_base.vision import estimate_figures_time
+
+    result = estimate_figures_time(conn, paper_id=1)
+
+    assert result.get("extracted_images", 0) == 5
+    # With 5 extracted images and 0 vector pages, should be cheaper than
+    # the old heuristic which would have returned all 10 pages
+    assert result["estimated_seconds"] < 10 * 4
