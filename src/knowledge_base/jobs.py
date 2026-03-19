@@ -222,7 +222,11 @@ class _JobWorker:
             from .extraction import extract_structure
 
             return extract_structure(
-                conn, job["paper_id"], confirmed=True, on_progress=on_progress
+                conn,
+                job["paper_id"],
+                confirmed=True,
+                on_progress=on_progress,
+                max_workers=params.get("max_workers", 1),
             )
         elif job["job_type"] == "extract_figures":
             from .vision import extract_figures

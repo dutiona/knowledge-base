@@ -156,7 +156,7 @@ def test_progress_callback_updates_row(tmp_path):
     conn, db_path = _setup(tmp_path)
     paper_id = _make_paper(conn)
 
-    def fake_extract(conn_, paper_id_, confirmed=False, on_progress=None):
+    def fake_extract(conn_, paper_id_, confirmed=False, on_progress=None, **kwargs):
         if on_progress:
             # Simulate chunk progress — every 5th gets written
             for i in range(10):
