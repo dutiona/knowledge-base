@@ -249,6 +249,83 @@ def test_co_occurrence_ignores_null_sessions(tmp_path):
     assert pairs == []
 
 
+def test_chunk_strategy_column_exists(tmp_path):
+    """Fresh DB has chunk_strategy column with default 'mechanical'."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('cs_test', 'strategy test', 'pdf', '/tmp/paper.pdf', 0)"
+    )
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT chunk_strategy FROM chunks WHERE content_hash = 'cs_test'"
+    ).fetchone()
+    assert row["chunk_strategy"] == "mechanical"
+
+
+def test_chunk_strategy_config_default(tmp_path):
+    """Config table has chunk_strategy = 'mechanical' after init."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    row = conn.execute(
+        "SELECT value FROM config WHERE key = 'chunk_strategy'"
+    ).fetchone()
+    assert row is not None
+    assert row["value"] == "mechanical"
+
+
+def test_chunk_strategy_migration(tmp_path):
+    """Existing DB without chunk_strategy column gets it via migration."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+
+    # Create old schema WITHOUT chunk_strategy
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT OR IGNORE INTO config (key, value) VALUES ('embed_model', 'bge-m3');
+    INSERT OR IGNORE INTO config (key, value) VALUES ('embed_dim', '1024');
+    INSERT OR IGNORE INTO config (key, value) VALUES ('embed_provider', 'ollama');
+
+    CREATE TABLE chunks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content_hash TEXT NOT NULL UNIQUE,
+        content TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK(source_type IN ('pdf','markdown','code','web','note','figure')),
+        source_uri TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        session_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        metadata TEXT DEFAULT '{}'
+    );
+    """)
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('old', 'old content', 'note', '/tmp/old.md', 0)"
+    )
+    conn.commit()
+
+    # Run init_schema which triggers migration
+    init_schema(conn)
+
+    # Verify chunk_strategy column exists with default
+    row = conn.execute(
+        "SELECT chunk_strategy FROM chunks WHERE content_hash = 'old'"
+    ).fetchone()
+    assert row["chunk_strategy"] == "mechanical"
+
+    # Config key also set
+    cfg = conn.execute(
+        "SELECT value FROM config WHERE key = 'chunk_strategy'"
+    ).fetchone()
+    assert cfg["value"] == "mechanical"
+
+
 def test_migrate_session_id_on_existing_db(tmp_path):
     """Migration adds session_id to a pre-existing chunks table."""
     db_path = tmp_path / "test.db"

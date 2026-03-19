@@ -126,7 +126,19 @@ def _migrate_source_type_figure(conn: sqlite3.Connection) -> None:
     if not row or "'figure'" in row[0]:
         return
 
-    conn.executescript("""
+    # Determine columns in the old table to handle INSERT INTO ... SELECT
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+    old_cols = "id, content_hash, content, source_type, source_uri, chunk_index, created_at, metadata"
+    # session_id and chunk_strategy may not exist in very old schemas
+    new_cols = old_cols
+    if "session_id" in columns:
+        old_cols += ", session_id"
+        new_cols += ", session_id"
+    if "chunk_strategy" in columns:
+        old_cols += ", chunk_strategy"
+        new_cols += ", chunk_strategy"
+
+    conn.executescript(f"""
     PRAGMA foreign_keys = OFF;
     BEGIN;
     CREATE TABLE chunks_new (
@@ -136,11 +148,13 @@ def _migrate_source_type_figure(conn: sqlite3.Connection) -> None:
         source_type TEXT NOT NULL CHECK(source_type IN ('pdf', 'markdown', 'code', 'web', 'note', 'figure')),
         source_uri TEXT NOT NULL,
         chunk_index INTEGER NOT NULL,
+        session_id TEXT,
+        chunk_strategy TEXT NOT NULL DEFAULT 'mechanical',
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        metadata TEXT DEFAULT '{}'
+        metadata TEXT DEFAULT '{{}}'
     );
 
-    INSERT INTO chunks_new SELECT * FROM chunks;
+    INSERT INTO chunks_new ({new_cols}) SELECT {old_cols} FROM chunks;
     DROP TABLE chunks;
     ALTER TABLE chunks_new RENAME TO chunks;
 
@@ -213,6 +227,17 @@ def _migrate_session_id(conn: sqlite3.Connection) -> None:
     if "session_id" in columns:
         return
     conn.execute("ALTER TABLE chunks ADD COLUMN session_id TEXT")
+    conn.commit()
+
+
+def _migrate_chunk_strategy(conn: sqlite3.Connection) -> None:
+    """Add chunk_strategy column to chunks for dual chunking support."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+    if "chunk_strategy" in columns:
+        return
+    conn.execute(
+        "ALTER TABLE chunks ADD COLUMN chunk_strategy TEXT NOT NULL DEFAULT 'mechanical'"
+    )
     conn.commit()
 
 
@@ -332,6 +357,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         source_uri TEXT NOT NULL,
         chunk_index INTEGER NOT NULL,
         session_id TEXT,
+        chunk_strategy TEXT NOT NULL DEFAULT 'mechanical',
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         metadata TEXT DEFAULT '{{}}'
     );
@@ -545,6 +571,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_accept_threshold', '0.95')"
     )
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('chunk_strategy', 'mechanical')"
+    )
 
     conn.commit()
 
@@ -552,6 +581,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_relationship_types(conn)
     _migrate_papers_fts(conn)
     _migrate_session_id(conn)
+    _migrate_chunk_strategy(conn)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_chunks_session_id ON chunks(session_id)"
     )
