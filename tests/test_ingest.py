@@ -2757,3 +2757,32 @@ def test_ingest_file_dedup_records_session(tmp_path):
     assert len(sessions) == 2
     assert sessions[0]["session_id"] == "session-1"
     assert sessions[1]["session_id"] == "session-2"
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest.httpx.get", _mock_httpx_get)
+def test_ingest_url_dedup_records_session(tmp_path):
+    """When URL chunks are deduped, the new session is still recorded."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    url = "https://example.com/test"
+    r1 = ingest_url(conn, url, session_id="ws-1")
+    assert r1["chunks_added"] > 0
+
+    r2 = ingest_url(conn, url, session_id="ws-2")
+    assert r2["chunks_added"] == 0
+    assert r2["chunks_skipped"] > 0
+
+    chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (url,)
+    ).fetchone()["id"]
+    sessions = conn.execute(
+        "SELECT session_id FROM chunk_sessions WHERE chunk_id = ? ORDER BY session_id",
+        (chunk_id,),
+    ).fetchall()
+    assert len(sessions) == 2
+    assert sessions[0]["session_id"] == "ws-1"
+    assert sessions[1]["session_id"] == "ws-2"

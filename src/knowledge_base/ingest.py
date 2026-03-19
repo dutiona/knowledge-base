@@ -1659,6 +1659,11 @@ def ingest_url(
             "SELECT id FROM chunks WHERE content_hash = ?", (h,)
         ).fetchone()
         if existing:
+            if session_id is not None:
+                conn.execute(
+                    "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
+                    (existing["id"], session_id),
+                )
             skipped += 1
             continue
         new_chunks.append((i, chunk, h))
@@ -1675,6 +1680,11 @@ def ingest_url(
             (chunk_hash, chunk_text, url, idx, session_id, meta_json),
         )
         chunk_id = cursor.lastrowid
+        if session_id is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
+                (chunk_id, session_id),
+            )
         conn.execute(
             "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
             (chunk_id, _serialize_f32(emb_vec), chunk_id),
