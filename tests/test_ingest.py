@@ -12,7 +12,7 @@ from knowledge_base.ingest import (
     _extract_web_figures,
     _get_browser_config,
     _is_private_ip,
-    _pdf_image_dir,
+    pdf_image_dir,
     _render_with_browser,
     _validate_image_url,
     configure_browser,
@@ -2555,20 +2555,20 @@ def test_pdf_chunk_metadata_extractor(tmp_path):
 
 
 def test_pdf_image_dir_content_hash(tmp_path):
-    """_pdf_image_dir uses content hash, so different content → different dirs."""
+    """pdf_image_dir uses content hash, so different content → different dirs."""
     pdf_a = tmp_path / "paper.pdf"
     pdf_a.write_bytes(b"%PDF content A")
     pdf_b = tmp_path / "paper2.pdf"
     pdf_b.write_bytes(b"%PDF content B")
 
-    dir_a = _pdf_image_dir(pdf_a)
-    dir_b = _pdf_image_dir(pdf_b)
+    dir_a = pdf_image_dir(pdf_a)
+    dir_b = pdf_image_dir(pdf_b)
     assert dir_a != dir_b
 
     # Same content, different filename → same hash prefix
     pdf_c = tmp_path / "copy.pdf"
     pdf_c.write_bytes(b"%PDF content A")
-    dir_c = _pdf_image_dir(pdf_c)
+    dir_c = pdf_image_dir(pdf_c)
     # Hash part should match but stem differs
     assert dir_a.parent.name != dir_c.parent.name  # different stems
     # But both contain the same hash substring
