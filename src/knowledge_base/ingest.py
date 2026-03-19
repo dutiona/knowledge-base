@@ -948,16 +948,26 @@ def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> N
 
 
 def _extract_html_images(
-    conn: sqlite3.Connection, html_content: str, base_url: str
+    conn: sqlite3.Connection,
+    html_content: str,
+    source_url: str,
+    base_url: str | None = None,
 ) -> int:
     """Extract inline ``<img>`` tags from HTML, describe via vision, store as figure chunks.
 
-    *base_url* should be the post-redirect URL (``str(response.url)``) so that
-    relative ``src`` attributes resolve correctly.
+    *source_url* is used as ``source_uri`` for storage and stale cleanup (must
+    match the key used for text chunks — typically the original requested URL).
+
+    *base_url* is used for resolving relative ``<img src>`` attributes via
+    ``urljoin``.  Defaults to *source_url* when not provided.  Pass
+    ``str(response.url)`` when the page redirected so relative paths resolve
+    against the final location.
 
     Returns the number of figure chunks added.  Returns 0 if vision is not
     configured or no qualifying images are found.
     """
+    if base_url is None:
+        base_url = source_url
     import base64
     import io
 
@@ -1114,7 +1124,7 @@ def _extract_html_images(
                 "image_url": image_url,
                 "alt_text": alt_text,
                 "original_source_type": "web",
-                "source_url": base_url,
+                "source_url": source_url,
                 "vision_model": vis_model,
                 "title": fig.get("title", ""),
             }
@@ -1133,7 +1143,7 @@ def _extract_html_images(
         for r in conn.execute(
             "SELECT id FROM chunks WHERE source_uri = ? "
             "AND source_type = 'figure' AND chunk_index >= ?",
-            (base_url, _WEB_IMAGE_CHUNK_INDEX_START),
+            (source_url, _WEB_IMAGE_CHUNK_INDEX_START),
         ).fetchall()
     ]
     if old_ids:
@@ -1159,7 +1169,7 @@ def _extract_html_images(
             """INSERT INTO chunks (content_hash, content, source_type, source_uri,
                chunk_index, metadata)
                VALUES (?, ?, 'figure', ?, ?, ?)""",
-            (chunk_hash, desc, base_url, chunk_index, meta_json),
+            (chunk_hash, desc, source_url, chunk_index, meta_json),
         )
         chunk_id = cursor.lastrowid
         conn.execute(
@@ -1557,7 +1567,9 @@ def ingest_url(
     # Extract inline images from HTML (skip when screenshot figures already extracted)
     if figures_extracted == 0:
         try:
-            inline_figures = _extract_html_images(conn, html, str(response.url))
+            inline_figures = _extract_html_images(
+                conn, html, source_url=url, base_url=str(response.url)
+            )
             figures_extracted += inline_figures
         except Exception:
             logger.warning("Inline image extraction failed for %s", url, exc_info=True)
