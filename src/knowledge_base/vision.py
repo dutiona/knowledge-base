@@ -531,6 +531,23 @@ Rules:
 - If text is illegible, describe layout rather than guessing
 - Return [] if no figures/diagrams/charts/tables are present"""
 
+_FIGURE_VISION_PROMPT = """Analyze this figure image extracted from a research paper.
+
+Return a JSON array with one object describing this figure.
+
+Each object:
+{
+  "figure_type": "diagram|chart|table|photo|equation",
+  "title": "Exact caption if visible, or null",
+  "description": "Detailed natural language description of visual content, data relationships, and key takeaways",
+  "entities_mentioned": ["only names explicitly visible in the figure"]
+}
+
+Rules:
+- Do NOT fabricate text not visible in the image
+- If text is illegible, describe layout rather than guessing
+- Return [] if the image contains no meaningful visual content"""
+
 
 def _vision_call(
     image_b64: str, prompt: str, *, base_url: str, model: str
