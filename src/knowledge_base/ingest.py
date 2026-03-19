@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import html.parser
+import ipaddress
 import json
 import logging
 import re
 import shutil
+import socket
 import sqlite3
 import struct
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import fitz  # pymupdf
 import httpx
@@ -827,6 +831,360 @@ _BROWSER_FALLBACK_MIN_CHARS = 200
 _WEB_FIGURE_CHUNK_INDEX_START = 1_000_000
 """Chunk index offset for web figure chunks (avoids collision with text chunks)."""
 
+_WEB_IMAGE_CHUNK_INDEX_START = 2_000_000
+"""Chunk index offset for inline web image figures (avoids collision with screenshot figures)."""
+
+_MIN_IMAGE_DIMENSION = 100
+"""Minimum width/height in pixels for an image to be considered non-decorative."""
+
+_MAX_IMAGES_PER_PAGE = 10
+"""Maximum number of inline images to extract per web page."""
+
+_MAX_IMAGE_DOWNLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+"""Maximum size of a single image download."""
+
+_DECORATIVE_URL_PATTERNS = re.compile(
+    r"[/\-_](logo|favicon|avatar|banner|sprite|spacer|badge)[/\-_.]"
+    r"|[/\-_]ads?[/\-_]"
+    r"|[/\-_](tracking[_\-]?pixel|1x1)[/\-_.]",
+    re.IGNORECASE,
+)
+
+_DECORATIVE_ALT_PATTERNS = re.compile(
+    r"\b(logo|icon|avatar|banner|advertisement|ad|spacer)\b",
+    re.IGNORECASE,
+)
+
+
+# ---------------------------------------------------------------------------
+# HTML image extraction helpers
+# ---------------------------------------------------------------------------
+
+
+class _ImgTagParser(html.parser.HTMLParser):
+    """Extract <img> tag attributes from HTML."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.images: list[dict[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "img":
+            d = {k: v for k, v in attrs if v is not None}
+            if "src" in d:
+                self.images.append(d)
+
+
+def _is_private_ip(hostname: str) -> bool:
+    """Reject private/loopback/link-local IPs to prevent SSRF.
+
+    Resolves hostnames to IPs to catch DNS rebinding (e.g., 127.0.0.1.nip.io).
+    """
+    try:
+        addr = ipaddress.ip_address(hostname)
+        return addr.is_private or addr.is_loopback or addr.is_link_local
+    except ValueError:
+        pass  # Not an IP literal — fall through to DNS resolution
+    # Resolve hostname to IP
+    try:
+        resolved = socket.gethostbyname(hostname)
+        addr = ipaddress.ip_address(resolved)
+        return addr.is_private or addr.is_loopback or addr.is_link_local
+    except (socket.gaierror, ValueError):
+        return True  # Can't resolve → reject
+
+
+def _validate_image_url(url: str) -> bool:
+    """Validate an image URL is safe to fetch (scheme + SSRF check)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if not parsed.hostname:
+        return False
+    return not _is_private_ip(parsed.hostname)
+
+
+def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> None:
+    """Clean FK references to figure chunks before deletion.
+
+    Mirrors the FK cleanup in ``reingest_file`` (papers, relationships,
+    conclusions, methods, datasets, metrics, entity_mentions).
+    """
+    if not chunk_ids:
+        return
+    id_set = set(chunk_ids)
+
+    _batched_execute(
+        conn,
+        "UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({ph})",
+        chunk_ids,
+    )
+    _batched_execute(
+        conn,
+        "UPDATE relationships SET evidence_chunk_id = NULL "
+        "WHERE evidence_chunk_id IN ({ph})",
+        chunk_ids,
+    )
+
+    rows = conn.execute("SELECT id, source_chunk_ids FROM conclusions").fetchall()
+    for row in rows:
+        cids = json.loads(row["source_chunk_ids"])
+        filtered = [cid for cid in cids if cid not in id_set]
+        if len(filtered) != len(cids):
+            conn.execute(
+                "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
+                (json.dumps(filtered), row["id"]),
+            )
+
+    for table in ("methods", "datasets", "metrics"):
+        _batched_execute(
+            conn,
+            f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",
+            chunk_ids,
+        )
+    _batched_execute(
+        conn,
+        "DELETE FROM entity_mentions WHERE chunk_id IN ({ph})",
+        chunk_ids,
+    )
+
+
+def _extract_html_images(
+    conn: sqlite3.Connection,
+    html_content: str,
+    source_url: str,
+    base_url: str | None = None,
+) -> int:
+    """Extract inline ``<img>`` tags from HTML, describe via vision, store as figure chunks.
+
+    *source_url* is used as ``source_uri`` for storage and stale cleanup (must
+    match the key used for text chunks — typically the original requested URL).
+
+    *base_url* is used for resolving relative ``<img src>`` attributes via
+    ``urljoin``.  Defaults to *source_url* when not provided.  Pass
+    ``str(response.url)`` when the page redirected so relative paths resolve
+    against the final location.
+
+    Returns the number of figure chunks added.  Returns 0 if vision is not
+    configured or no qualifying images are found.
+    """
+    if base_url is None:
+        base_url = source_url
+    import base64
+    import io
+
+    from PIL import Image
+
+    from .vision import _get_vision_config, _vision_call
+
+    try:
+        vision_config = _get_vision_config(conn)
+    except Exception:
+        return 0
+
+    vis_base_url = vision_config["base_url"]
+    vis_model = vision_config["model"]
+
+    # --- Parse <img> tags ---
+    parser = _ImgTagParser()
+    try:
+        parser.feed(html_content)
+    except Exception:
+        logger.warning("HTML parsing failed for %s", base_url, exc_info=True)
+        return 0
+
+    if not parser.images:
+        return 0
+
+    # --- Pre-filter ---
+    seen_urls: set[str] = set()
+    candidates: list[tuple[str, str]] = []  # (resolved_url, alt_text)
+
+    for img in parser.images:
+        src = img["src"]
+
+        # Skip data URIs and SVGs
+        if src.startswith("data:"):
+            continue
+        if src.lower().endswith((".svg", ".svgz")):
+            continue
+
+        resolved = urljoin(base_url, src)
+
+        if not _validate_image_url(resolved):
+            continue
+
+        # Decorative URL patterns
+        if _DECORATIVE_URL_PATTERNS.search(resolved):
+            continue
+
+        alt = img.get("alt", "")
+        if alt and _DECORATIVE_ALT_PATTERNS.search(alt):
+            continue
+
+        # HTML dimension pre-filter
+        w_str = img.get("width", "")
+        h_str = img.get("height", "")
+        try:
+            w = int(w_str) if w_str else None
+            h = int(h_str) if h_str else None
+        except ValueError:
+            w, h = None, None
+        if w is not None and h is not None:
+            if w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION:
+                continue
+
+        # URL dedup
+        if resolved in seen_urls:
+            continue
+        seen_urls.add(resolved)
+
+        candidates.append((resolved, alt))
+
+    if not candidates:
+        return 0
+
+    # Cap
+    candidates = candidates[:_MAX_IMAGES_PER_PAGE]
+
+    # --- Download, convert, describe ---
+    collected: list[tuple[str, dict]] = []  # (description, metadata_dict)
+
+    for image_url, alt_text in candidates:
+        try:
+            with httpx.stream(
+                "GET", image_url, timeout=15.0, follow_redirects=True
+            ) as resp:
+                resp.raise_for_status()
+
+                # Post-redirect SSRF check
+                final_url = str(resp.url)
+                if not _validate_image_url(final_url):
+                    logger.warning(
+                        "SSRF: image redirected to private address %s", final_url
+                    )
+                    continue
+
+                # Stream with byte counter
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in resp.iter_bytes(chunk_size=65536):
+                    total += len(chunk)
+                    if total > _MAX_IMAGE_DOWNLOAD_BYTES:
+                        logger.warning(
+                            "Image too large (>%d bytes): %s",
+                            _MAX_IMAGE_DOWNLOAD_BYTES,
+                            image_url,
+                        )
+                        break
+                    chunks.append(chunk)
+                else:
+                    # Loop completed without break — download OK
+                    pass
+
+                if total > _MAX_IMAGE_DOWNLOAD_BYTES:
+                    continue
+
+                image_bytes = b"".join(chunks)
+        except Exception:
+            logger.warning("Image download failed: %s", image_url, exc_info=True)
+            continue
+
+        # Open with Pillow, check dimensions, convert to PNG
+        try:
+            img_obj = Image.open(io.BytesIO(image_bytes))
+            w, h = img_obj.size
+            if w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION:
+                continue
+
+            buf = io.BytesIO()
+            img_obj.convert("RGB").save(buf, format="PNG")
+            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:
+            logger.warning("Image decode failed: %s", image_url, exc_info=True)
+            continue
+
+        # Vision call
+        prompt = (
+            "Describe this image from a web page. Identify what it shows — "
+            "diagrams, charts, schematics, photographs, or other visual content. "
+            "Respond with a JSON list of objects with keys: "
+            '"description", "figure_type", "title".'
+        )
+        try:
+            figures = _vision_call(b64, prompt, base_url=vis_base_url, model=vis_model)
+        except Exception:
+            logger.warning("Vision call failed for image %s", image_url, exc_info=True)
+            continue
+
+        for fig in figures:
+            desc = fig.get("description", "")
+            if not desc:
+                continue
+            meta = {
+                "figure_type": "web_image",
+                "image_url": image_url,
+                "alt_text": alt_text,
+                "original_source_type": "web",
+                "source_url": source_url,
+                "vision_model": vis_model,
+                "title": fig.get("title", ""),
+            }
+            collected.append((desc, meta))
+
+    if not collected:
+        return 0
+
+    # --- Compute embeddings (last fallible step) ---
+    texts = [desc for desc, _ in collected]
+    embeddings = _embed_with_config(conn, texts)
+
+    # --- Delete stale inline image chunks (only after embeddings succeed) ---
+    old_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM chunks WHERE source_uri = ? "
+            "AND source_type = 'figure' AND chunk_index >= ?",
+            (source_url, _WEB_IMAGE_CHUNK_INDEX_START),
+        ).fetchall()
+    ]
+    if old_ids:
+        _cleanup_figure_fk_refs(conn, old_ids)
+        _batched_execute(
+            conn, "DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_ids
+        )
+        _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
+
+    # --- Insert new figure chunks ---
+    figures_added = 0
+    for idx, ((desc, meta), emb_vec) in enumerate(zip(collected, embeddings)):
+        chunk_hash = _content_hash(desc)
+        existing = conn.execute(
+            "SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)
+        ).fetchone()
+        if existing:
+            continue
+
+        meta_json = json.dumps(meta)
+        chunk_index = _WEB_IMAGE_CHUNK_INDEX_START + idx
+        cursor = conn.execute(
+            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
+               chunk_index, metadata)
+               VALUES (?, ?, 'figure', ?, ?, ?)""",
+            (chunk_hash, desc, source_url, chunk_index, meta_json),
+        )
+        chunk_id = cursor.lastrowid
+        conn.execute(
+            "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
+            (chunk_id, _serialize_f32(emb_vec), chunk_id),
+        )
+        figures_added += 1
+
+    if figures_added or old_ids:
+        conn.commit()
+    return figures_added
+
+
 _RENDER_SCRIPT = Path(__file__).parent / "browser" / "render_page.py"
 
 
@@ -1079,15 +1437,18 @@ def _extract_web_figures(
 
     embeddings = _embed_with_config(conn, texts)
 
-    # Remove stale figure chunks only after all fallible operations succeeded
+    # Remove stale screenshot figure chunks only (scope to < _WEB_IMAGE_CHUNK_INDEX_START
+    # to avoid deleting inline image figures managed by _extract_html_images)
     old_fig_ids = [
         r["id"]
         for r in conn.execute(
-            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
-            (source_url,),
+            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' "
+            "AND chunk_index < ?",
+            (source_url, _WEB_IMAGE_CHUNK_INDEX_START),
         ).fetchall()
     ]
     if old_fig_ids:
+        _cleanup_figure_fk_refs(conn, old_fig_ids)
         _batched_execute(
             conn, "DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_fig_ids
         )
@@ -1141,8 +1502,6 @@ def ingest_url(
     Uses trafilatura for content extraction (strips boilerplate, extracts main content).
     Falls back to browser rendering when trafilatura extracts insufficient content.
     """
-    from urllib.parse import urlparse
-
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_URL_SCHEMES:
         return {"error": f"URL scheme must be http or https, got: {parsed.scheme!r}"}
@@ -1206,6 +1565,16 @@ def ingest_url(
                     tmpdir = render_result.get("tmpdir")
                     if tmpdir:
                         shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # Extract inline images from HTML (skip when screenshot figures already extracted)
+    if figures_extracted == 0:
+        try:
+            inline_figures = _extract_html_images(
+                conn, html, source_url=url, base_url=str(response.url)
+            )
+            figures_extracted += inline_figures
+        except Exception:
+            logger.warning("Inline image extraction failed for %s", url, exc_info=True)
 
     _base_result: dict = {
         "url": url,
