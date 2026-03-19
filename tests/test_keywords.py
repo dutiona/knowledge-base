@@ -88,3 +88,23 @@ def test_build_fts_query_strips_fts_operators():
 
 def test_build_fts_query_all_operators_returns_empty():
     assert build_fts_query(["and", "or", "not", "near"]) == ""
+
+
+def test_unicode_terms_preserved():
+    keywords = extract_keywords("naïve Bayes classifier for Gödel numbering")
+    assert "naïve" in keywords
+    assert "gödel" in keywords
+
+
+def test_single_char_language_identifier():
+    keywords = extract_keywords("C memory safety")
+    assert "c" in keywords
+    assert "memory" in keywords
+    assert "safety" in keywords
+
+
+def test_single_char_lowercase_not_kept():
+    # "a" is a stopword, but even if it weren't, lowercase single chars
+    # from within words should not leak through
+    keywords = extract_keywords("something about testing")
+    assert all(len(k) > 1 for k in keywords)

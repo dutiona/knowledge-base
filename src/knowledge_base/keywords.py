@@ -34,7 +34,8 @@ _STOPWORDS: frozenset[str] = frozenset(
 
 # Pattern: split on whitespace and strip surrounding punctuation, but keep
 # internal hyphens and dots (e.g. "ResNet-50", "GPT-3.5").
-_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9\-\.]*[a-z0-9]|[a-z0-9]", re.IGNORECASE)
+# Uses \w to support Unicode letters (e.g. "naïve", "Gödel").
+_TOKEN_RE = re.compile(r"[\w][\w\-\.]*[\w]|[\w]", re.UNICODE)
 
 
 def extract_keywords(query: str, *, max_keywords: int = 5) -> list[str]:
@@ -50,10 +51,18 @@ def extract_keywords(query: str, *, max_keywords: int = 5) -> list[str]:
     if not query or not query.strip():
         return []
 
+    # Track standalone uppercase single-char words (language identifiers: C, R)
+    single_char_ids = {w.lower() for w in query.split() if len(w) == 1 and w.isupper()}
+
     tokens = _TOKEN_RE.findall(query.lower())
 
-    # Filter stopwords and single-char tokens
-    content_words = [t for t in tokens if t not in _STOPWORDS and len(t) > 1]
+    # Filter stopwords; keep single-char tokens only if they appeared as
+    # standalone uppercase words in the original query.
+    content_words = [
+        t
+        for t in tokens
+        if t not in _STOPWORDS and (len(t) > 1 or t in single_char_ids)
+    ]
 
     if not content_words:
         return []
