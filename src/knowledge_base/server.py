@@ -217,6 +217,7 @@ def search_index(
     source_type: str | None = None,
     mode: str = "hybrid",
     keyword_prefilter: bool = False,
+    chunk_strategy: str | None = None,
 ) -> str:
     """Search the knowledge base using hybrid semantic + keyword search.
 
@@ -228,6 +229,8 @@ def search_index(
         keyword_prefilter: Extract intent keywords for FTS matching instead of
             using the raw query. Improves precision for verbose natural language
             queries by stripping stopwords and filler. Default false.
+        chunk_strategy: Filter by chunking strategy ('mechanical' or 'semantic').
+            None (default) returns all chunks regardless of strategy.
     """
     conn = _get_conn()
     results = search(
@@ -237,6 +240,7 @@ def search_index(
         source_type=source_type,
         mode=mode,
         keyword_prefilter=keyword_prefilter,
+        chunk_strategy=chunk_strategy,
     )
     detect_and_log(conn, query, results, source_type_filter=source_type, mode=mode)
 
@@ -332,6 +336,11 @@ def status() -> str:
             "prediction_errors": get_prediction_error_count(conn),
             "jobs": job_counts,
             "embed_config": get_embed_config(conn),
+            "chunk_strategy": (lambda r: r["value"] if r else "mechanical")(
+                conn.execute(
+                    "SELECT value FROM config WHERE key = 'chunk_strategy'"
+                ).fetchone()
+            ),
             "recent_ingestions": [
                 {
                     "source_uri": row["source_uri"],
@@ -835,6 +844,40 @@ def configure_llm_tool(
     """
     conn = _get_conn()
     return json.dumps(configure_llm(conn, provider, base_url, model, api_key))
+
+
+@mcp.tool()
+def configure_chunking(strategy: str | None = None) -> str:
+    """Configure the chunking strategy for PDF ingestion.
+
+    With 32K-context embedding models, 'semantic' chunking splits PDFs at
+    section boundaries (3-5 chunks per paper). The default 'mechanical' uses
+    fixed-size splitting (1000 chars + overlap, ~15 chunks per paper).
+
+    Non-PDF content (markdown, code, web) always uses mechanical chunking
+    regardless of this setting.
+
+    Args:
+        strategy: 'mechanical' or 'semantic'. Omit to query current strategy.
+    """
+    conn = _get_conn()
+    if strategy is None:
+        row = conn.execute(
+            "SELECT value FROM config WHERE key = 'chunk_strategy'"
+        ).fetchone()
+        return json.dumps({"chunk_strategy": row["value"] if row else "mechanical"})
+    if strategy not in ("mechanical", "semantic"):
+        return json.dumps(
+            {
+                "error": f"Invalid strategy: {strategy!r}. Must be 'mechanical' or 'semantic'."
+            }
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', ?)",
+        (strategy,),
+    )
+    conn.commit()
+    return json.dumps({"chunk_strategy": strategy})
 
 
 @mcp.tool()

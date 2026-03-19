@@ -149,6 +149,7 @@ def search(
     source_type: str | None = None,
     mode: str = "hybrid",
     keyword_prefilter: bool = False,
+    chunk_strategy: str | None = None,
 ) -> list[SearchResult]:
     """
     Hybrid search over indexed chunks.
@@ -161,8 +162,13 @@ def search(
         keyword_prefilter: Extract intent keywords for FTS leg instead of
             using the raw query. Reduces noise from stopwords and context-
             specific filler. Only affects hybrid and fts modes.
+        chunk_strategy: Filter by chunk strategy ('mechanical' or 'semantic').
+            None (default) returns all chunks regardless of strategy.
     """
     fetch_limit = top_k * 3  # over-fetch for RRF merge
+    # When filtering by chunk_strategy, over-fetch to compensate for
+    # candidates that will be filtered out before RRF merge.
+    strategy_fetch_limit = fetch_limit * 5 if chunk_strategy else fetch_limit
 
     fts_results: list[tuple[int, float]] = []
     vec_results: list[tuple[int, float]] = []
@@ -176,7 +182,7 @@ def search(
             fts_query = query
         if fts_query:
             try:
-                fts_results = _fts_search(conn, fts_query, fetch_limit)
+                fts_results = _fts_search(conn, fts_query, strategy_fetch_limit)
             except Exception:
                 # FTS query syntax error — skip FTS leg
                 pass
@@ -189,7 +195,25 @@ def search(
             expected_dim=cfg["dim"],
             _provider_name=cfg["provider"],
         )
-        vec_results = _vec_search(conn, query_embedding, fetch_limit)
+        vec_results = _vec_search(conn, query_embedding, strategy_fetch_limit)
+
+    # --- chunk_strategy filter (pre-RRF) ---
+    if chunk_strategy:
+        # Filter both result sets by joining against chunks table
+        all_candidate_ids = list(
+            {cid for cid, _ in fts_results} | {cid for cid, _ in vec_results}
+        )
+        if all_candidate_ids:
+            placeholders = ",".join("?" * len(all_candidate_ids))
+            valid_ids = {
+                row["id"]
+                for row in conn.execute(
+                    f"SELECT id FROM chunks WHERE id IN ({placeholders}) AND chunk_strategy = ?",
+                    [*all_candidate_ids, chunk_strategy],
+                ).fetchall()
+            }
+            fts_results = [(cid, s) for cid, s in fts_results if cid in valid_ids]
+            vec_results = [(cid, s) for cid, s in vec_results if cid in valid_ids]
 
     # Merge
     if mode == "hybrid" and fts_results and vec_results:
@@ -230,6 +254,9 @@ def search(
     if source_type:
         type_filter = " AND source_type = ?"
         params.append(source_type)
+    if chunk_strategy:
+        type_filter += " AND chunk_strategy = ?"
+        params.append(chunk_strategy)
 
     rows = conn.execute(
         f"""

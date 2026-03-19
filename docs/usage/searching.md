@@ -135,6 +135,7 @@ Each result contains:
 - **Vec mode** is better for conceptual queries ("methods that improve training stability") where exact terms vary across papers.
 - Increase `top_k` if you need broader recall. The default is 10.
 - Use `source_type` filtering to scope results (e.g., only `pdf` for published papers, only `code` for implementations).
+- Use `chunk_strategy` filtering to target a specific chunking granularity (e.g., `"semantic"` for section-level chunks from 32K models, `"mechanical"` for traditional 1K chunks). By default, no strategy filter is applied -- all chunks are returned regardless of how they were split. See [Ingesting Documents: Chunking Strategy](ingesting-documents.md#chunking-strategy) for configuration.
 
 ## Embedding Provider
 
