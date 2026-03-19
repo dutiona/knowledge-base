@@ -2864,3 +2864,77 @@ def test_multi_session_dedup_co_occurrence(tmp_path):
     # min_sessions=3 should exclude them
     pairs_3 = co_occurrence_pairs(conn, min_sessions=3)
     assert len(pairs_3) == 0
+
+
+# --- chunk_strategy dispatch tests ---
+
+
+def test_get_chunk_strategy_default(tmp_path):
+    """No config row returns 'mechanical'."""
+    from knowledge_base.ingest import _get_chunk_strategy
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.commit()
+    assert _get_chunk_strategy(conn) == "mechanical"
+
+
+def test_get_chunk_strategy_reads_config(tmp_path):
+    """Config set to 'semantic' returns 'semantic'."""
+    from knowledge_base.ingest import _get_chunk_strategy
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')"
+    )
+    conn.commit()
+    assert _get_chunk_strategy(conn) == "semantic"
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_file_mechanical_default(tmp_path):
+    """Default config: chunks have chunk_strategy='mechanical'."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "doc.md"
+    md.write_text("Simple content for mechanical test")
+
+    ingest_file(conn, md)
+
+    rows = conn.execute(
+        "SELECT chunk_strategy FROM chunks WHERE source_uri = ?",
+        (str(md.resolve()),),
+    ).fetchall()
+    assert len(rows) >= 1
+    assert all(r["chunk_strategy"] == "mechanical" for r in rows)
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_file_semantic_nonpdf(tmp_path):
+    """Config 'semantic' with non-PDF file still uses mechanical chunking."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')"
+    )
+    conn.commit()
+
+    md = tmp_path / "doc.md"
+    md.write_text("Non-PDF content stays mechanical")
+
+    ingest_file(conn, md)
+
+    rows = conn.execute(
+        "SELECT chunk_strategy FROM chunks WHERE source_uri = ?",
+        (str(md.resolve()),),
+    ).fetchall()
+    assert len(rows) >= 1
+    assert all(r["chunk_strategy"] == "mechanical" for r in rows)
