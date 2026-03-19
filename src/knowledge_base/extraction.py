@@ -9,6 +9,7 @@ import sqlite3
 import time
 from collections import defaultdict
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 
@@ -281,9 +282,21 @@ def _strip_think_tags(text: str) -> str:
     return stripped
 
 
-def _llm_call(prompt: str, *, conn: sqlite3.Connection) -> str:
-    """Call LLM to extract structured data. Supports Ollama and OpenAI-compatible APIs."""
-    cfg = _get_llm_config(conn)
+def _llm_call(
+    prompt: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+    cfg: dict | None = None,
+) -> str:
+    """Call LLM to extract structured data. Supports Ollama and OpenAI-compatible APIs.
+
+    Accepts either a ``conn`` (reads config from DB) or a pre-read ``cfg`` dict.
+    The ``cfg`` path is preferred in hot loops to avoid threading issues.
+    """
+    if cfg is None:
+        if conn is None:
+            raise ValueError("Either conn or cfg must be provided to _llm_call")
+        cfg = _get_llm_config(conn)
 
     if cfg["provider"] == "ollama":
         resp = httpx.post(
@@ -367,15 +380,22 @@ def _map_extract(
     chunk_text: str,
     chunk_index: int,
     total_chunks: int,
-    conn: sqlite3.Connection,
+    conn_or_cfg: sqlite3.Connection | dict,
 ) -> dict:
-    """Extract structured facts from a single chunk."""
+    """Extract structured facts from a single chunk.
+
+    ``conn_or_cfg`` accepts either a Connection (legacy) or a pre-read config
+    dict (thread-safe path used by the parallel map phase).
+    """
     prompt = _MAP_PROMPT.format(
         text=chunk_text,
         chunk_index=chunk_index + 1,
         total_chunks=total_chunks,
     )
-    raw = _llm_call(prompt, conn=conn)
+    if isinstance(conn_or_cfg, dict):
+        raw = _llm_call(prompt, cfg=conn_or_cfg)
+    else:
+        raw = _llm_call(prompt, conn=conn_or_cfg)
     try:
         result = json.loads(raw)
     except json.JSONDecodeError as e:
@@ -443,14 +463,20 @@ Mentions:
 JSON:"""
 
 
-def _resolve_entities(all_extractions: list[dict], conn: sqlite3.Connection) -> dict:
+def _resolve_entities(
+    all_extractions: list[dict],
+    conn_or_cfg: sqlite3.Connection | dict,
+) -> dict:
     """Merge entities across chunks by resolving aliases."""
     entity_list = _collect_entity_mentions(all_extractions)
     if not entity_list:
         return {"groups": []}
 
     prompt = _RESOLVE_PROMPT.format(entities=json.dumps(entity_list, indent=2))
-    raw = _llm_call(prompt, conn=conn)
+    if isinstance(conn_or_cfg, dict):
+        raw = _llm_call(prompt, cfg=conn_or_cfg)
+    else:
+        raw = _llm_call(prompt, conn=conn_or_cfg)
     return json.loads(raw)
 
 
@@ -777,78 +803,167 @@ def _extract_map_reduce(
     paper_id: int,
     chunks: list[dict],
     on_progress: Callable[[str], None] | None = None,
+    max_workers: int = 1,
 ) -> dict:
-    """Map-reduce path for long documents."""
+    """Map-reduce path for long documents.
+
+    ``max_workers`` controls the number of concurrent LLM calls during the map
+    phase.  Defaults to 1 (sequential, backward-compatible).  Set higher to
+    match your LLM server's parallel capacity (e.g. Ollama
+    ``OLLAMA_NUM_PARALLEL``, or an OpenAI-compatible endpoint's rate limit).
+    """
+    cfg = _get_llm_config(conn)
+    effective_workers = min(max(max_workers, 1), len(chunks))
+
     # Phase 1: Map
-    map_results = []
-    errors = []
-    total_elapsed = 0.0
-    for i, chunk in enumerate(chunks):
-        start = time.monotonic()
-        try:
-            result = _map_extract(chunk["id"], chunk["content"], i, len(chunks), conn)
-            map_results.append(result)
-        except Exception as e:
-            errors.append({"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)})
-            result = None
+    map_results: list[tuple[int, dict]] = []
+    errors: list[dict] = []
+    phase_start = time.monotonic()
+    completed_count = 0
 
-        elapsed = time.monotonic() - start
-        total_elapsed += elapsed
+    if effective_workers == 1:
+        # Sequential fast-path: no thread overhead, preserves original logging
+        for i, chunk in enumerate(chunks):
+            start = time.monotonic()
+            try:
+                result = _map_extract(
+                    chunk["id"], chunk["content"], i, len(chunks), cfg
+                )
+                map_results.append((i, result))
+            except Exception as e:
+                errors.append(
+                    {"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)}
+                )
+                result = None
 
-        if result is not None:
-            m = len(result.get("methods", []))
-            d = len(result.get("datasets", []))
-            mt = len(result.get("metrics", []))
-            logger.info(
-                "Chunk %3d/%d (%.1f%%) - %.1fs - methods=%d, datasets=%d, metrics=%d",
-                i + 1,
-                len(chunks),
-                (i + 1) / len(chunks) * 100,
-                elapsed,
-                m,
-                d,
-                mt,
-            )
-        else:
-            logger.info(
-                "Chunk %3d/%d (%.1f%%) - %.1fs - FAILED",
-                i + 1,
-                len(chunks),
-                (i + 1) / len(chunks) * 100,
-                elapsed,
-            )
+            elapsed = time.monotonic() - start
+            completed_count += 1
 
-        if on_progress:
-            on_progress(f"chunk {i + 1}/{len(chunks)}")
+            if result is not None:
+                m = len(result.get("methods", []))
+                d = len(result.get("datasets", []))
+                mt = len(result.get("metrics", []))
+                logger.info(
+                    "Chunk %3d/%d (%.1f%%) - %.1fs - methods=%d, datasets=%d, metrics=%d",
+                    i + 1,
+                    len(chunks),
+                    (i + 1) / len(chunks) * 100,
+                    elapsed,
+                    m,
+                    d,
+                    mt,
+                )
+            else:
+                logger.info(
+                    "Chunk %3d/%d (%.1f%%) - %.1fs - FAILED",
+                    i + 1,
+                    len(chunks),
+                    (i + 1) / len(chunks) * 100,
+                    elapsed,
+                )
 
-        if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
-            avg = total_elapsed / (i + 1)
-            remaining = avg * (len(chunks) - i - 1)
-            logger.info(
-                "  avg %.1fs/chunk - revised ETA: %.0fmin remaining",
-                avg,
-                remaining / 60,
-            )
+            if on_progress:
+                on_progress(f"chunk {i + 1}/{len(chunks)}")
 
-    if not map_results:
+            total_elapsed = time.monotonic() - phase_start
+            if completed_count % 5 == 0 or completed_count == len(chunks):
+                avg = total_elapsed / completed_count
+                remaining = avg * (len(chunks) - completed_count)
+                logger.info(
+                    "  avg %.1fs/chunk - revised ETA: %.0fmin remaining",
+                    avg,
+                    remaining / 60,
+                )
+    else:
+        # Parallel path
+        logger.info(
+            "Starting parallel map phase: %d chunks, %d workers",
+            len(chunks),
+            effective_workers,
+        )
+        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+            futures = {
+                executor.submit(
+                    _map_extract,
+                    chunk["id"],
+                    chunk["content"],
+                    i,
+                    len(chunks),
+                    cfg,
+                ): (i, chunk)
+                for i, chunk in enumerate(chunks)
+            }
+            for future in as_completed(futures):
+                i, chunk = futures[future]
+                elapsed = time.monotonic() - phase_start  # wall-clock since start
+                completed_count += 1
+                try:
+                    result = future.result()
+                    map_results.append((i, result))
+                    m = len(result.get("methods", []))
+                    d = len(result.get("datasets", []))
+                    mt = len(result.get("metrics", []))
+                    logger.info(
+                        "Chunk %3d/%d (%d/%d done) - methods=%d, datasets=%d, metrics=%d",
+                        i + 1,
+                        len(chunks),
+                        completed_count,
+                        len(chunks),
+                        m,
+                        d,
+                        mt,
+                    )
+                except Exception as e:
+                    errors.append(
+                        {"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)}
+                    )
+                    logger.info(
+                        "Chunk %3d/%d (%d/%d done) - FAILED: %s",
+                        i + 1,
+                        len(chunks),
+                        completed_count,
+                        len(chunks),
+                        e,
+                    )
+
+                if on_progress:
+                    on_progress(f"chunk {completed_count}/{len(chunks)}")
+
+                if completed_count % 5 == 0 or completed_count == len(chunks):
+                    avg = elapsed / completed_count
+                    remaining = avg * (len(chunks) - completed_count)
+                    logger.info(
+                        "  avg %.1fs/chunk (wall) - revised ETA: %.0fmin remaining",
+                        avg,
+                        remaining / 60,
+                    )
+
+    total_elapsed = time.monotonic() - phase_start
+
+    # Sort map results by chunk index to ensure deterministic ordering
+    map_results.sort(key=lambda x: x[0])
+    ordered_results = [r for _, r in map_results]
+
+    if not ordered_results:
         return {"error": "All chunks failed extraction", "errors": errors}
 
     # Phase 2: Resolve
     total_raw = sum(
-        len(r.get("methods", [])) + len(r.get("datasets", [])) for r in map_results
+        len(r.get("methods", [])) + len(r.get("datasets", [])) for r in ordered_results
     )
     logger.info(
-        "Map phase complete: %d raw entities from %d chunks (%.1fs)",
+        "Map phase complete: %d raw entities from %d chunks (%.1fs, %d workers)",
         total_raw,
-        len(map_results),
+        len(ordered_results),
         total_elapsed,
+        effective_workers,
     )
     if on_progress:
         on_progress("resolving entities...")
     logger.info("Starting entity resolution...")
     resolve_start = time.monotonic()
     try:
-        resolution = _resolve_entities(map_results, conn)
+        resolution = _resolve_entities(ordered_results, cfg)
     except Exception as e:
         logger.warning("Entity resolution failed, proceeding without: %s", e)
         resolution = {"groups": []}
@@ -864,9 +979,9 @@ def _extract_map_reduce(
     # Phase 3: Store
     if on_progress:
         on_progress("storing results...")
-    result = _store_resolved(conn, paper_id, map_results, resolution)
+    result = _store_resolved(conn, paper_id, ordered_results, resolution)
     result["paper_id"] = paper_id
-    result["chunks_processed"] = len(map_results)
+    result["chunks_processed"] = len(ordered_results)
     result["chunks_failed"] = len(errors)
     result["errors"] = errors
     result["extraction_seconds"] = total_elapsed
@@ -905,6 +1020,7 @@ def extract_structure(
     confirmed: bool = False,
     on_progress: Callable[[str], None] | None = None,
     *,
+    max_workers: int = 1,
     _prefetched_chunks: list[dict] | None = None,
 ) -> dict:
     """Extract methods, datasets, and metrics from a paper's chunks using LLM.
@@ -912,6 +1028,8 @@ def extract_structure(
     For short documents (<8000 chars), uses a single LLM call.
     For long documents, uses map-reduce with entity resolution.
     The caller (tool layer) is responsible for ETA confirmation flow.
+
+    ``max_workers`` controls concurrent LLM calls in the map phase (default 1).
     """
     paper = conn.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone()
     if not paper:
@@ -927,7 +1045,9 @@ def extract_structure(
     if total_chars <= 8000:
         return _extract_single_pass(conn, paper_id, chunks)
 
-    return _extract_map_reduce(conn, paper_id, chunks, on_progress=on_progress)
+    return _extract_map_reduce(
+        conn, paper_id, chunks, on_progress=on_progress, max_workers=max_workers
+    )
 
 
 def _sanitize_url(url: str) -> str:

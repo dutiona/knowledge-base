@@ -658,7 +658,11 @@ def compare_papers_tool(paper_ids: list[int]) -> str:
 
 
 @mcp.tool()
-def extract_structure_tool(paper_id: int, confirmed: bool = False) -> str:
+def extract_structure_tool(
+    paper_id: int,
+    confirmed: bool = False,
+    max_workers: int = 1,
+) -> str:
     """Extract methods, datasets, and metrics from a paper using LLM.
 
     For short papers, runs inline. For long papers (>2min estimated),
@@ -668,6 +672,8 @@ def extract_structure_tool(paper_id: int, confirmed: bool = False) -> str:
     Args:
         paper_id: Paper ID to extract structure from.
         confirmed: Set True to skip the ETA warning for long documents.
+        max_workers: Number of concurrent LLM calls for the map phase (default 1).
+            Increase to match your LLM server's parallel capacity.
     """
     conn = _get_conn()
     est = estimate_extraction_time(conn, paper_id)
@@ -678,26 +684,39 @@ def extract_structure_tool(paper_id: int, confirmed: bool = False) -> str:
     if not est["is_long"]:
         return json.dumps(
             extract_structure(
-                conn, paper_id, confirmed=True, _prefetched_chunks=est["chunks"]
+                conn,
+                paper_id,
+                confirmed=True,
+                max_workers=max_workers,
+                _prefetched_chunks=est["chunks"],
             )
         )
 
-    # Long doc, not confirmed: ETA warning
-    if est["estimated_seconds"] > 120 and not confirmed:
+    # Long doc, not confirmed: ETA warning (adjust for parallelism)
+    effective_workers = min(max(max_workers, 1), est["chunk_count"])
+    wall_estimate = est["estimated_seconds"] // effective_workers
+    if wall_estimate > 120 and not confirmed:
         return json.dumps(
             {
                 "warning": (
-                    f"Extraction will take ~{est['estimated_seconds'] // 60}min "
+                    f"Extraction will take ~{wall_estimate // 60}min "
                     f"for {est['chunk_count']} chunks"
+                    + (
+                        f" ({effective_workers} workers)"
+                        if effective_workers > 1
+                        else ""
+                    )
                 ),
-                "estimated_seconds": est["estimated_seconds"],
+                "estimated_seconds": wall_estimate,
                 "chunk_count": est["chunk_count"],
+                "max_workers": effective_workers,
                 "confirm_required": True,
             }
         )
 
     # Long doc, confirmed: submit background job
-    job_id = submit_job(conn, paper_id, "extract_structure")
+    params = {"max_workers": max_workers} if max_workers > 1 else None
+    job_id = submit_job(conn, paper_id, "extract_structure", params=params)
     return json.dumps(
         {
             "deferred": True,
