@@ -136,8 +136,8 @@ When ingesting web pages via `ingest_url`, inline `<img>` tags are extracted fro
 
 **Filtering:** Not all images on a page are meaningful. The following are skipped:
 
-- Decorative images (URL or alt text matching patterns like logo, icon, avatar, banner, sprite, tracking)
-- Small images (either HTML dimension < 100px or actual pixel dimensions < 100px)
+- Decorative images (URL or alt text matching patterns like logo, icon, avatar, banner, sprite, tracking pixel, or badge)
+- Small images (width or height below 100px — checked first from HTML attributes to avoid unnecessary downloads, then from actual pixel dimensions after download)
 - SVG and data URI images (cannot be processed by the vision pipeline without rasterization)
 - Images from private/loopback IP ranges (SSRF protection)
 - Duplicate URLs on the same page
@@ -150,7 +150,7 @@ Up to 10 images per page are processed. Each image download is capped at 10 MB (
 chunk_index = 2,000,000 + image_index
 ```
 
-This uses a separate range from PDF figure chunks (1,000,000+) and browser screenshot chunks (also 1,000,000+, scoped by source_uri). The `image_index` is the position of the image among qualifying candidates on that page.
+This uses a separate range from PDF figure chunks (1,000,000+) and browser screenshot chunks (also 1,000,000+, scoped by source_uri). The `image_index` is a zero-based sequential counter over the qualifying images on that page (after filtering and deduplication). Unlike PDF figures which encode page number into the index, web images use a flat counter since HTML has no page concept.
 
 **Metadata:** Each inline image figure chunk stores:
 

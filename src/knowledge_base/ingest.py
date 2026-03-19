@@ -882,7 +882,7 @@ def _is_private_ip(hostname: str) -> bool:
         addr = ipaddress.ip_address(hostname)
         return addr.is_private or addr.is_loopback or addr.is_link_local
     except ValueError:
-        pass
+        pass  # Not an IP literal — fall through to DNS resolution
     # Resolve hostname to IP
     try:
         resolved = socket.gethostbyname(hostname)

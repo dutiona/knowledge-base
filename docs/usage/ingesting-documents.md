@@ -63,8 +63,8 @@ When a vision model is configured (see [Figure Extraction](figure-extraction.md)
 
 Filtering heuristics skip non-content images:
 
-- **Decorative patterns** -- URLs or alt text containing logo, icon, avatar, favicon, banner, sprite, spacer, tracking, or badge
-- **Small images** -- Width or height below 100px (checked from HTML attributes before download, and from actual pixel dimensions after download)
+- **Decorative patterns** -- URLs or alt text containing logo, icon, avatar, favicon, banner, sprite, spacer, tracking pixel, or badge
+- **Small images** -- Width or height below 100px (checked first from HTML attributes to avoid unnecessary downloads, then verified from actual pixel dimensions after download)
 - **Non-raster formats** -- SVG and data URI images are excluded
 - **SSRF protection** -- Image URLs are validated against private/loopback IP ranges, including post-redirect targets
 
