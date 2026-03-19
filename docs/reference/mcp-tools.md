@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Complete reference for all 35 MCP tools exposed by the knowledge-base server.
+Complete reference for all 36 MCP tools exposed by the knowledge-base server.
 
 Return values are JSON strings unless noted otherwise.
 
@@ -12,10 +12,11 @@ Tools for adding content to the index.
 
 Ingest a file or directory into the research index.
 
-| Parameter     | Type          | Required | Default              | Description                                                                         |
-| ------------- | ------------- | -------- | -------------------- | ----------------------------------------------------------------------------------- |
-| `path`        | `str`         | yes      | --                   | Absolute path to a file or directory                                                |
-| `source_type` | `str \| None` | no       | `None` (auto-detect) | Override auto-detection. One of: `pdf`, `markdown`, `code`, `web`, `note`, `figure` |
+| Parameter     | Type          | Required | Default              | Description                                                                                                                         |
+| ------------- | ------------- | -------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `path`        | `str`         | yes      | --                   | Absolute path to a file or directory                                                                                                |
+| `source_type` | `str \| None` | no       | `None` (auto-detect) | Override auto-detection. One of: `pdf`, `markdown`, `code`, `web`, `note`, `figure`                                                 |
+| `session_id`  | `str \| None` | no       | `None`               | Session ID for co-occurrence tracking. Directories auto-generate one; for files, pass the same ID across calls to mark co-ingestion |
 
 **Returns (file):**
 
@@ -46,6 +47,7 @@ Force re-ingest of a previously ingested file. Deletes old chunks and inserts ne
 | ------------- | ------------- | -------- | -------------------- | ----------------------------------------------------------------------------------- |
 | `path`        | `str`         | yes      | --                   | Absolute path to the file to re-ingest                                              |
 | `source_type` | `str \| None` | no       | `None` (auto-detect) | Override auto-detection. One of: `pdf`, `markdown`, `code`, `web`, `note`, `figure` |
+| `session_id`  | `str \| None` | no       | `None`               | Optional session ID for co-occurrence tracking                                      |
 
 **Returns:**
 
@@ -59,9 +61,10 @@ Ingest a web page by URL. Fetches the page, extracts main content, and indexes i
 
 Uses content-hash dedup -- unchanged pages are skipped on re-ingest.
 
-| Parameter | Type  | Required | Default | Description                 |
-| --------- | ----- | -------- | ------- | --------------------------- |
-| `url`     | `str` | yes      | --      | The URL to fetch and ingest |
+| Parameter    | Type          | Required | Default | Description                                    |
+| ------------ | ------------- | -------- | ------- | ---------------------------------------------- |
+| `url`        | `str`         | yes      | --      | The URL to fetch and ingest                    |
+| `session_id` | `str \| None` | no       | `None`  | Optional session ID for co-occurrence tracking |
 
 **Returns:**
 
@@ -79,6 +82,28 @@ Uses content-hash dedup -- unchanged pages are skipped on re-ingest.
 ```
 
 Falls back to browser rendering (if configured) when trafilatura extracts insufficient content (< 200 chars). When browser rendering is active, figures may also be extracted from a viewport screenshot.
+
+### co_occurrence
+
+Find document pairs that were ingested together in the same session. Co-ingestion is a behavioral signal: documents ingested together share research context at ingestion time, complementing embedding similarity.
+
+| Parameter      | Type  | Required | Default | Description                                         |
+| -------------- | ----- | -------- | ------- | --------------------------------------------------- |
+| `min_sessions` | `int` | no       | `1`     | Minimum number of shared sessions to include a pair |
+
+**Returns:**
+
+```json
+[
+  {
+    "source_uri_a": "/path/to/paper1.pdf",
+    "source_uri_b": "/path/to/paper2.pdf",
+    "co_sessions": 3
+  }
+]
+```
+
+Pairs are ordered by `co_sessions` descending. URIs are alphabetically ordered within each pair.
 
 ---
 

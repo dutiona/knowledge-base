@@ -111,10 +111,14 @@ def supersede_conclusion(
         return {"error": f"Conclusion {old_conclusion_id} not found"}
 
     if old["superseded_by"] is not None:
-        return {"error": f"Conclusion {old_conclusion_id} is already superseded by {old['superseded_by']}"}
+        return {
+            "error": f"Conclusion {old_conclusion_id} is already superseded by {old['superseded_by']}"
+        }
 
     # Atomic: insert new + update old in one transaction
-    result = record_conclusion(conn, new_claim, confidence, source_chunk_ids, session_context, _commit=False)
+    result = record_conclusion(
+        conn, new_claim, confidence, source_chunk_ids, session_context, _commit=False
+    )
     if "error" in result:
         return result
 
