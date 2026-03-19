@@ -7,7 +7,7 @@ from knowledge_base.folder_summaries import compute_folder_hash, update_folder_s
 from knowledge_base.ingest import ingest_file
 
 
-def _fake_embed(texts, model="bge-m3", expected_dim=None):
+def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
     dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 
@@ -181,7 +181,7 @@ def test_ingest_file_triggers_folder_summary(tmp_path):
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch(
     "knowledge_base.search.embed_single",
-    lambda text, model="bge-m3": [0.1] * DEFAULT_EMBED_DIM,
+    lambda text, model="bge-m3", **_kw: [0.1] * DEFAULT_EMBED_DIM,
 )
 def test_search_folder_summaries_populated(tmp_path):
     """Ingesting files into folders creates folder summaries and vec entries."""
@@ -318,3 +318,26 @@ def test_folder_summary_ignores_subdirectory_files(tmp_path):
     assert child_row is not None
     assert "nested.md" in child_row["summary"]
     assert "top.md" not in child_row["summary"]
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_ingest_directory_batches_folder_summaries(tmp_path):
+    """ingest_directory updates folder summaries once per folder, not per file."""
+    from knowledge_base.ingest import ingest_directory
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    folder = tmp_path / "papers"
+    folder.mkdir()
+    (folder / "a.md").write_text("Paper about attention.\n")
+    (folder / "b.md").write_text("Paper about diffusion.\n")
+    (folder / "c.md").write_text("Paper about transformers.\n")
+
+    with patch("knowledge_base.ingest.update_folder_summary") as mock_update:
+        ingest_directory(conn, folder)
+
+    # Should be called exactly once for the folder (batch), not 3 times (per-file)
+    assert mock_update.call_count == 1

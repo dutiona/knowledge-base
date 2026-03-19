@@ -473,6 +473,7 @@ def ingest_file(
     conn: sqlite3.Connection,
     path: Path,
     source_type: str | None = None,
+    _skip_folder_summary: bool = False,
 ) -> dict:
     path = path.resolve()
     if source_type is None:
@@ -599,7 +600,8 @@ def ingest_file(
         )
 
     conn.commit()
-    _update_folder_summary_safe(conn, path)
+    if not _skip_folder_summary:
+        _update_folder_summary_safe(conn, path)
 
     return {
         "file": str(path),
@@ -1659,8 +1661,15 @@ def ingest_directory(
     if extensions is None:
         extensions = {".pdf", ".md", ".txt", ".typ", ".rst"}
     results = []
+    affected_folders: set[str] = set()
     for f in sorted(directory.rglob("*")):
         if f.is_file() and f.suffix.lower() in extensions:
-            result = ingest_file(conn, f)
+            result = ingest_file(conn, f, _skip_folder_summary=True)
             results.append(result)
+            affected_folders.add(str(f.resolve().parent))
+
+    # Batch-update folder summaries once per affected folder
+    for folder in sorted(affected_folders):
+        _update_folder_summary_safe(conn, Path(folder))
+
     return results
