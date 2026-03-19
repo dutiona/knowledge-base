@@ -52,7 +52,7 @@ graph LR
 
 **`embed_swap.py`** -- Atomic embedding model swap. Embeds all chunks into a staging table first, then drops and recreates the vector table only after all embeddings succeed -- preventing data loss on failure. Updates the config table with the new model name and dimension.
 
-**`embeddings.py`** -- Ollama embedding client. Auto-detects the Ollama URL: checks `OLLAMA_HOST` env, then WSL2 Windows host gateway, then falls back to localhost:11434. Batches embedding requests in groups of 32 and validates output dimensions.
+**`embeddings.py`** -- Pluggable embedding provider abstraction. Defines a `EmbeddingProvider` Protocol with three implementations: `OllamaProvider` (default, auto-detects Ollama URL via `OLLAMA_HOST` env / WSL2 gateway / localhost), `OpenAIProvider` (uses httpx, requires `OPENAI_API_KEY`), and `ONNXProvider` (local inference via onnxruntime, requires `ONNX_EMBED_MODEL_PATH`). The `get_provider()` factory resolves providers by name with `EMBED_PROVIDER` env-var override. Module-level `embed()` and `embed_single()` dispatch through providers. All providers L2-normalize output vectors and batch in groups of 32.
 
 **`jobs.py`** -- Background job queue for long-running extraction tasks. A singleton daemon thread (`_JobWorker`) processes jobs sequentially from the `jobs` table. Supports `extract_structure` and `extract_figures` job types. Includes crash recovery (resets stale `running` jobs to `pending` on startup) and deduplication (reuses existing pending/running jobs for the same paper+type+params).
 
