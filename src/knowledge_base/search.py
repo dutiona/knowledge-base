@@ -166,6 +166,9 @@ def search(
             None (default) returns all chunks regardless of strategy.
     """
     fetch_limit = top_k * 3  # over-fetch for RRF merge
+    # When filtering by chunk_strategy, over-fetch to compensate for
+    # candidates that will be filtered out before RRF merge.
+    strategy_fetch_limit = fetch_limit * 5 if chunk_strategy else fetch_limit
 
     fts_results: list[tuple[int, float]] = []
     vec_results: list[tuple[int, float]] = []
@@ -179,7 +182,7 @@ def search(
             fts_query = query
         if fts_query:
             try:
-                fts_results = _fts_search(conn, fts_query, fetch_limit)
+                fts_results = _fts_search(conn, fts_query, strategy_fetch_limit)
             except Exception:
                 # FTS query syntax error — skip FTS leg
                 pass
@@ -192,13 +195,10 @@ def search(
             expected_dim=cfg["dim"],
             _provider_name=cfg["provider"],
         )
-        vec_results = _vec_search(conn, query_embedding, fetch_limit)
+        vec_results = _vec_search(conn, query_embedding, strategy_fetch_limit)
 
     # --- chunk_strategy filter (pre-RRF) ---
     if chunk_strategy:
-        # Over-fetch from vec to compensate for filtering
-        if mode in ("hybrid", "vec") and query_embedding is not None:
-            vec_results = _vec_search(conn, query_embedding, fetch_limit * 5)
         # Filter both result sets by joining against chunks table
         all_candidate_ids = list(
             {cid for cid, _ in fts_results} | {cid for cid, _ in vec_results}

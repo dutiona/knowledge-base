@@ -348,6 +348,8 @@ def _paragraph_split(
     result: list[tuple[str, list[int]]] = []
     buf = ""
     buf_offset = base_offset
+    # Track cursor through the original text for accurate page provenance
+    cursor = 0
 
     def _flush() -> None:
         nonlocal buf, buf_offset
@@ -358,18 +360,22 @@ def _paragraph_split(
             result.append((sanitized, pages))
         buf = ""
 
-    for para in paragraphs:
+    for i, para in enumerate(paragraphs):
+        # Advance cursor past the "\n\n" separator (except for the first paragraph)
+        para_offset = base_offset + cursor
         if not para.strip():
+            cursor += len(para) + 2  # +2 for "\n\n"
             continue
         candidate = (buf + "\n\n" + para) if buf else para
-        # If adding this paragraph exceeds max_size and buffer is non-empty,
-        # flush first (unless the paragraph itself contains a table — keep atomic)
         if buf and len(candidate) > max_size:
             _flush()
-            buf_offset = base_offset  # approximate
+            buf_offset = para_offset
             buf = para
         else:
+            if not buf:
+                buf_offset = para_offset
             buf = candidate
+        cursor += len(para) + (2 if i < len(paragraphs) - 1 else 0)
 
     _flush()
     return result
@@ -441,6 +447,11 @@ def _chunk_by_section(
         for sub_text, sub_rel_offset in subsections:
             sub_stripped = sub_text.strip()
             if not sub_stripped:
+                continue
+            # Skip preamble that is just the parent H2 heading with no body
+            sub_lines = sub_stripped.split("\n", 1)
+            sub_body = sub_lines[1].strip() if len(sub_lines) > 1 else ""
+            if _SECTION_HEADING_RE.match(sub_stripped) and not sub_body:
                 continue
             sub_offset = sec_offset + sub_rel_offset
 
