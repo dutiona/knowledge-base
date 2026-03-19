@@ -128,6 +128,8 @@ Chunks are embedded automatically during ingestion using the configured embeddin
 
 ### Embedding Providers
 
+Pluggable embedding providers decouple the knowledge base from any single inference backend. This design was motivated by competitive analysis (NornicDB supports Ollama, OpenAI, and local ONNX inference) and aligns with the [four-layer cognitive architecture](../insights/four-layer-cognitive-architecture.md) — embeddings sit in the Knowledge (infrastructure) layer where swappable backends enable cost/quality/latency trade-offs without touching higher layers.
+
 By default, knowledge-base uses **Ollama** (BGE-M3, 1024 dimensions). Three providers are supported:
 
 | Provider     | Config value       | Requirements                                            |
