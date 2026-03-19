@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from .embed_swap import get_embed_config
 from .embeddings import embed_single
+from .keywords import build_fts_query, extract_keywords
 
 
 @dataclass
@@ -82,6 +83,7 @@ def search(
     top_k: int = 10,
     source_type: str | None = None,
     mode: str = "hybrid",
+    keyword_prefilter: bool = False,
 ) -> list[SearchResult]:
     """
     Hybrid search over indexed chunks.
@@ -91,6 +93,9 @@ def search(
         top_k: Number of results to return.
         source_type: Filter by source type (pdf, markdown, code, web, note).
         mode: 'hybrid' (default), 'fts' (keyword only), 'vec' (semantic only).
+        keyword_prefilter: Extract intent keywords for FTS leg instead of
+            using the raw query. Reduces noise from stopwords and context-
+            specific filler. Only affects hybrid and fts modes.
     """
     fetch_limit = top_k * 3  # over-fetch for RRF merge
 
@@ -98,11 +103,17 @@ def search(
     vec_results: list[tuple[int, float]] = []
 
     if mode in ("hybrid", "fts"):
-        try:
-            fts_results = _fts_search(conn, query, fetch_limit)
-        except Exception:
-            # FTS query syntax error — skip FTS leg
-            pass
+        if keyword_prefilter:
+            keywords = extract_keywords(query)
+            fts_query = build_fts_query(keywords)
+        else:
+            fts_query = query
+        if fts_query:
+            try:
+                fts_results = _fts_search(conn, fts_query, fetch_limit)
+            except Exception:
+                # FTS query syntax error — skip FTS leg
+                pass
 
     if mode in ("hybrid", "vec"):
         cfg = get_embed_config(conn)
