@@ -24,7 +24,7 @@ ruff format src/ tests/          # format
 
 ## Architecture
 
-Eight modules behind `server.py`, each owning its domain. All share a single SQLite file via thread-local connections with double-checked locking for schema init.
+Nine modules behind `server.py`, each owning its domain. All share a single SQLite file via thread-local connections with double-checked locking for schema init.
 
 Read these when the task touches the corresponding area:
 
@@ -36,6 +36,7 @@ Read these when the task touches the corresponding area:
 | Vision/figure extraction             | `src/knowledge_base/vision.py`     | `docs/usage/figure-extraction.md`         |
 | Paper metadata & relationships       | `src/knowledge_base/papers.py`     | `docs/usage/relationships-conclusions.md` |
 | Background jobs                      | `src/knowledge_base/jobs.py`       | `docs/design/architecture-overview.md`    |
+| Embedding providers (Ollama/OpenAI/ONNX) | `src/knowledge_base/embeddings.py` | `docs/usage/ingesting-documents.md`       |
 | Embedding model swap                 | `src/knowledge_base/embed_swap.py` | `docs/design/architecture-overview.md`    |
 | DB schema & migrations               | `src/knowledge_base/db.py`         | `docs/reference/schema.md`                |
 

@@ -54,9 +54,14 @@ def _detect_source_type(path: Path) -> str:
 
 
 def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[float]]:
-    """Call embed() using the model and dim from the config table."""
+    """Call embed() using the model, dim, and provider from the config table."""
     cfg = get_embed_config(conn)
-    return embed(texts, model=cfg["model"], expected_dim=cfg["dim"])
+    return embed(
+        texts,
+        model=cfg["model"],
+        expected_dim=cfg["dim"],
+        _provider_name=cfg["provider"],
+    )
 
 
 def _content_hash(text: str) -> str:

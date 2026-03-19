@@ -124,4 +124,31 @@ On `reingest`, all existing chunks for the source URI are deleted unconditionall
 
 ## Embedding
 
-Chunks are embedded automatically during ingestion using the configured Ollama model (default: BGE-M3, 1024 dimensions). Embeddings are stored in the `chunks_vec` virtual table. The model and dimension can be checked with the `embed_config` tool and changed with `re_embed_tool` (which re-embeds all existing chunks).
+Chunks are embedded automatically during ingestion using the configured embedding provider and model. Embeddings are stored in the `chunks_vec` virtual table. The model, dimension, and provider can be checked with the `embed_config` tool and changed with `re_embed_tool` (which re-embeds all existing chunks).
+
+### Embedding Providers
+
+Pluggable embedding providers decouple the knowledge base from any single inference backend. This design was motivated by competitive analysis (NornicDB supports Ollama, OpenAI, and local ONNX inference) and aligns with the [four-layer cognitive architecture](../insights/four-layer-cognitive-architecture.md) — embeddings sit in the Knowledge (infrastructure) layer where swappable backends enable cost/quality/latency trade-offs without touching higher layers.
+
+By default, knowledge-base uses **Ollama** (BGE-M3, 1024 dimensions). Three providers are supported:
+
+| Provider     | Config value       | Requirements                                            |
+| ------------ | ------------------ | ------------------------------------------------------- |
+| Ollama       | `ollama` (default) | Ollama running locally or via `OLLAMA_HOST`             |
+| OpenAI       | `openai`           | `OPENAI_API_KEY` env var                                |
+| ONNX Runtime | `onnx`             | `ONNX_EMBED_MODEL_PATH` env var, `uv sync --group onnx` |
+
+To switch providers, update the config table:
+
+```sql
+-- Switch to OpenAI
+UPDATE config SET value = 'openai' WHERE key = 'embed_provider';
+UPDATE config SET value = 'text-embedding-3-large' WHERE key = 'embed_model';
+UPDATE config SET value = '3072' WHERE key = 'embed_dim';
+```
+
+After switching providers or models, re-embed existing chunks with `re_embed_tool`.
+
+### Environment Variable Override
+
+Set `EMBED_PROVIDER=openai` (or `onnx`) to override the database config without modifying it. Useful for CI/dev environments.

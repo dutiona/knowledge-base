@@ -173,12 +173,13 @@ Key-value store for server configuration (embedding model, LLM provider, vision 
 
 Populated on first run with:
 
-| Key            | Default Value |
-| -------------- | ------------- |
-| `embed_model`  | `bge-m3`      |
-| `embed_dim`    | `1024`        |
-| `llm_provider` | `ollama`      |
-| `llm_model`    | `qwen3.5:27b` |
+| Key              | Default Value |
+| ---------------- | ------------- |
+| `embed_model`    | `bge-m3`      |
+| `embed_dim`      | `1024`        |
+| `embed_provider` | `ollama`      |
+| `llm_provider`   | `ollama`      |
+| `llm_model`      | `qwen3.5:27b` |
 
 Additional keys set via configure tools: `llm_base_url`, `llm_api_key`, `vision_model`, `vision_base_url`, `omniparser_path`, `browser_mode`, `browser_endpoint`, `browser_venv`.
 

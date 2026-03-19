@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import struct
 
-from .embeddings import embed
+from .embeddings import get_provider
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
@@ -14,15 +14,19 @@ def _serialize_f32(vec: list[float]) -> bytes:
 
 def get_embed_config(conn: sqlite3.Connection) -> dict:
     """Get current embedding model configuration."""
-    from .db import DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL
+    from .db import DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL, DEFAULT_EMBED_PROVIDER
 
     model = conn.execute(
         "SELECT value FROM config WHERE key = 'embed_model'"
     ).fetchone()
     dim = conn.execute("SELECT value FROM config WHERE key = 'embed_dim'").fetchone()
+    provider = conn.execute(
+        "SELECT value FROM config WHERE key = 'embed_provider'"
+    ).fetchone()
     return {
         "model": model["value"] if model else DEFAULT_EMBED_MODEL,
         "dim": int(dim["value"]) if dim else DEFAULT_EMBED_DIM,
+        "provider": provider["value"] if provider else DEFAULT_EMBED_PROVIDER,
     }
 
 
@@ -31,12 +35,20 @@ def re_embed(
     new_model: str,
     new_dim: int,
     batch_size: int = 32,
+    provider: str | None = None,
 ) -> dict:
     """Re-embed all chunks with a new model.
 
     Embeds into a staging table first. Only drops/recreates the real vec table
     after all embeddings succeed, preventing data loss on failure.
     """
+    # Resolve provider: explicit override > current config > default
+    cfg = get_embed_config(conn)
+    resolved_provider_name = provider or cfg["provider"]
+    embed_provider = get_provider(
+        resolved_provider_name, allow_env_override=provider is None
+    )
+
     # Stage embeddings in a regular table (vec0 tables can't be renamed)
     conn.execute("DROP TABLE IF EXISTS _embed_staging")
     conn.execute("""
@@ -61,7 +73,7 @@ def re_embed(
         ids = [row["id"] for row in batch]
         last_id = ids[-1]
 
-        embeddings = embed(texts, model=new_model, expected_dim=new_dim)
+        embeddings = embed_provider.embed(texts, model=new_model, expected_dim=new_dim)
 
         for chunk_id, emb_vec in zip(ids, embeddings):
             conn.execute(
@@ -92,6 +104,10 @@ def re_embed(
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_dim', ?)",
         (str(new_dim),),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', ?)",
+        (resolved_provider_name,),
     )
     conn.commit()
 

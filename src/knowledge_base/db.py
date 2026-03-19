@@ -12,6 +12,7 @@ DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "knowledge-base" / "knowled
 # config table — these constants are only used during initial schema creation.
 DEFAULT_EMBED_MODEL = "bge-m3"
 DEFAULT_EMBED_DIM = 1024
+DEFAULT_EMBED_PROVIDER = "ollama"
 
 RELATIONSHIP_TYPES = (
     "extends",
@@ -202,6 +203,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             [
                 ("embed_model", DEFAULT_EMBED_MODEL),
                 ("embed_dim", str(DEFAULT_EMBED_DIM)),
+                ("embed_provider", DEFAULT_EMBED_PROVIDER),
             ],
         )
         conn.commit()

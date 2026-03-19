@@ -89,6 +89,10 @@ Each result contains:
 - Increase `top_k` if you need broader recall. The default is 10.
 - Use `source_type` filtering to scope results (e.g., only `pdf` for published papers, only `code` for implementations).
 
+## Embedding Provider
+
+Vector search uses the embedding provider configured in the database. By default, this is Ollama (BGE-M3), but OpenAI and ONNX Runtime are also supported. The query embedding is generated using the same provider and model as the indexed chunks -- mismatched providers will produce poor results. See [Ingesting Documents: Embedding Providers](ingesting-documents.md#embedding-providers) for configuration details.
+
 ## Status
 
 Use the `status` tool to get index statistics including total chunks, counts by type, paper/conclusion/relationship counts, embedding config, and recent ingestions:
