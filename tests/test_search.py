@@ -157,8 +157,8 @@ def test_search_fts_with_keyword_prefilter(tmp_path):
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.search.embed_single", _fake_embed_single)
-def test_search_no_strategy_filter_by_default(tmp_path):
-    """Default search (chunk_strategy=None) returns all chunks regardless of strategy."""
+def test_search_defaults_to_active_space_strategy(tmp_path):
+    """Default search uses active space's chunk_strategy (mechanical), filtering out semantic."""
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
@@ -174,8 +174,10 @@ def test_search_no_strategy_filter_by_default(tmp_path):
     )
     conn.commit()
 
+    # Default active space is 'mechanical', so only mechanical chunks returned
     results = search(conn, "attention", mode="fts")
-    assert len(results) == 2
+    assert len(results) == 1
+    assert results[0].source_uri == "/tmp/a.pdf"
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
@@ -205,18 +207,13 @@ def test_search_explicit_strategy_filter(tmp_path):
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.search.embed_single", _fake_embed_single)
-def test_search_strategy_filter_nonpdf_visible(tmp_path):
-    """Non-PDF chunks (always mechanical) remain visible with no strategy filter."""
+def test_search_strategy_filter_matches_active_space(tmp_path):
+    """Search filters by the active space's chunk_strategy, not config alone."""
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
 
-    # Set config to semantic (should NOT affect search default)
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')"
-    )
-
-    # Insert non-PDF chunk (mechanical) and PDF chunk (semantic)
+    # Active space is 'default' (mechanical). Insert both strategies.
     conn.execute(
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, chunk_strategy) "
         "VALUES ('md1', 'markdown deep learning notes', 'markdown', '/tmp/notes.md', 0, 'mechanical')"
@@ -227,6 +224,12 @@ def test_search_strategy_filter_nonpdf_visible(tmp_path):
     )
     conn.commit()
 
-    # Default search (no filter) should return both
+    # Default active space is mechanical → only mechanical chunks returned
     results = search(conn, "deep learning", mode="fts")
-    assert len(results) == 2
+    assert len(results) == 1
+    assert results[0].source_type == "markdown"
+
+    # Explicit strategy override returns the other
+    results_sem = search(conn, "deep learning", mode="fts", chunk_strategy="semantic")
+    assert len(results_sem) == 1
+    assert results_sem[0].source_type == "pdf"
