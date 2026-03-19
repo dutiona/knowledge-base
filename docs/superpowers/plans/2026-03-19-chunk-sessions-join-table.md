@@ -4,7 +4,12 @@
 
 **Goal:** Replace the 1:1 `chunks.session_id` column with an N:M `chunk_sessions` join table so content-hash-deduplicated chunks correctly participate in multiple ingestion sessions.
 
-**Architecture:** New `chunk_sessions(chunk_id, session_id)` join table with UNIQUE constraint. All dedup paths INSERT OR IGNORE into the join table even when the chunk is skipped. `co_occurrence_pairs()` CTE rewired to query the join table. `reingest_file()` preserves historical session associations across delete-and-reinsert cycles. The `chunks.session_id` column is kept but deprecated (still written for backward compat; no longer read by co-occurrence logic).
+**Architecture:** New `chunk_sessions(chunk_id, session_id)` join table with UNIQUE constraint. All dedup paths INSERT OR IGNORE into the join table even when the chunk is skipped. `co_occurrence_pairs()` CTE rewired to query the join table. `reingest_file()` preserves historical session associations across delete-and-reinsert cycles. The `chunks.session_id` column is kept but deprecated (still written for backward compat; no longer read by co-occurrence logic). Removal planned for a future migration once all consumers are confirmed to use `chunk_sessions`.
+
+**Known limitations (out of scope):**
+
+- **Cross-source dedup:** When two different files produce identical chunk content, the globally-unique `content_hash` maps them to the same `chunks` row. Adding a session for the second file only associates the original file's `source_uri`. Fixing this requires an N:M chunk-to-source mapping — a separate architectural change.
+- **Figure chunks:** `_extract_html_images` and `_extract_web_figures` don't receive a `session_id` parameter. Session tracking for figure chunks requires threading `session_id` through the web ingestion helpers — deferred to a follow-up.
 
 **Tech Stack:** Python 3.12+, SQLite (FTS5, sqlite-vec), pytest, ruff
 
@@ -75,24 +80,43 @@ def test_chunk_sessions_table_exists(tmp_path):
 Run: `cd /home/mroynard/dev/knowledge-base/.worktrees/feat-139-chunk-sessions && uv run pytest tests/test_db.py::test_chunk_sessions_table_exists -v`
 Expected: FAIL — table does not exist
 
-- [ ] **Step 3: Add `chunk_sessions` CREATE TABLE to schema**
+- [ ] **Step 3: Implement migration function (creates table + backfills)**
 
-In `db.py`, after the `chunks` table (around line 312), add:
+**CRITICAL**: Do NOT add `chunk_sessions` to the main schema DDL (`executescript` block). The table MUST be created by the migration function so that existing databases get the backfill from `chunks.session_id`. If the DDL creates an empty table first, the migration's `if exists: return` guard skips the backfill.
+
+In `db.py`, add a new migration function after `_migrate_jobs_types` (around line 269):
 
 ```python
-    # -- chunk_sessions: N:M join for chunk-to-session tracking --
-    CREATE TABLE IF NOT EXISTS chunk_sessions (
-        chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-        session_id TEXT NOT NULL,
-        UNIQUE(chunk_id, session_id)
-    );
+def _migrate_chunk_sessions(conn: sqlite3.Connection) -> None:
+    """Create chunk_sessions join table and backfill from chunks.session_id."""
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_sessions'"
+    ).fetchone()
+    if exists:
+        return
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chunk_sessions (
+            chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+            session_id TEXT NOT NULL,
+            UNIQUE(chunk_id, session_id)
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chunk_sessions_session "
+        "ON chunk_sessions(session_id)"
+    )
+    # Backfill from existing chunks.session_id
+    conn.execute("""
+        INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id)
+        SELECT id, session_id FROM chunks WHERE session_id IS NOT NULL
+    """)
+    conn.commit()
 ```
 
-Add index in the index creation section (around line 530):
+Add the migration call in `init_schema()` after the existing migration calls (around line 533):
 
 ```python
-    CREATE INDEX IF NOT EXISTS idx_chunk_sessions_session
-        ON chunk_sessions(session_id);
+    _migrate_chunk_sessions(conn)
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -164,49 +188,12 @@ def test_migrate_chunk_sessions_backfill(tmp_path):
 Run: `cd /home/mroynard/dev/knowledge-base/.worktrees/feat-139-chunk-sessions && uv run pytest tests/test_db.py::test_migrate_chunk_sessions_backfill -v`
 Expected: FAIL — no backfill logic yet
 
-- [ ] **Step 7: Implement migration function**
-
-In `db.py`, add a new migration function after `_migrate_jobs_types`:
-
-```python
-def _migrate_chunk_sessions(conn: sqlite3.Connection) -> None:
-    """Create chunk_sessions join table and backfill from chunks.session_id."""
-    exists = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_sessions'"
-    ).fetchone()
-    if exists:
-        return
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS chunk_sessions (
-            chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-            session_id TEXT NOT NULL,
-            UNIQUE(chunk_id, session_id)
-        )
-    """)
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_chunk_sessions_session "
-        "ON chunk_sessions(session_id)"
-    )
-    # Backfill from existing chunks.session_id
-    conn.execute("""
-        INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id)
-        SELECT id, session_id FROM chunks WHERE session_id IS NOT NULL
-    """)
-    conn.commit()
-```
-
-Add the migration call in `init_schema()` after the existing migration calls (around line 533):
-
-```python
-    _migrate_chunk_sessions(conn)
-```
-
-- [ ] **Step 8: Run test to verify it passes**
+- [ ] **Step 7: Run both tests to verify migration + backfill**
 
 Run: `cd /home/mroynard/dev/knowledge-base/.worktrees/feat-139-chunk-sessions && uv run pytest tests/test_db.py::test_migrate_chunk_sessions_backfill tests/test_db.py::test_chunk_sessions_table_exists -v`
 Expected: PASS
 
-- [ ] **Step 9: Run full test suite to check for regressions**
+- [ ] **Step 8: Run full test suite to check for regressions**
 
 Run: `cd /home/mroynard/dev/knowledge-base/.worktrees/feat-139-chunk-sessions && uv run pytest tests/ -q`
 Expected: All 518 tests pass
@@ -301,7 +288,7 @@ Replace the SQL in `co_occurrence_pairs()` (db.py:80-97):
 - [ ] **Step 4: Run new test + existing co-occurrence tests**
 
 Run: `cd /home/mroynard/dev/knowledge-base/.worktrees/feat-139-chunk-sessions && uv run pytest tests/test_db.py -k "co_occurrence" -v`
-Expected: The new test passes. Existing tests (`test_co_occurrence_pairs_basic`, `test_co_occurrence_pairs_min_sessions`, `test_co_occurrence_ignores_null_sessions`) will FAIL because they write to `chunks.session_id` but not to `chunk_sessions`.
+Expected: The new test passes. Existing tests `test_co_occurrence_pairs_basic` and `test_co_occurrence_pairs_min_sessions` will FAIL because they write to `chunks.session_id` but not to `chunk_sessions`. `test_co_occurrence_ignores_null_sessions` should still PASS (it inserts no session data, so both old and new CTEs return empty).
 
 - [ ] **Step 5: Update existing co-occurrence tests to use join table**
 
@@ -412,7 +399,7 @@ There are three dedup loops in `ingest_file` (AST path ~line 501, PDF path ~line
 
 ```python
             if existing:
-                if session_id:
+                if session_id is not None:
                     conn.execute(
                         "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
                         (existing["id"], session_id),
@@ -425,22 +412,14 @@ Also, after each new chunk INSERT (line 592-603), add the `chunk_sessions` write
 
 ```python
         chunk_id = cursor.lastrowid
-        if session_id:
+        if session_id is not None:
             conn.execute(
                 "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
                 (chunk_id, session_id),
             )
 ```
 
-The existing dedup SELECT queries need to change from `SELECT id FROM chunks` to capture the `id`:
-
-```python
-    existing = conn.execute(
-        "SELECT id FROM chunks WHERE content_hash = ?", (h,)
-    ).fetchone()
-```
-
-These already return `id` — the existing code is correct. Since connections use `Row` factory (set in `get_connection`), `existing["id"]` works.
+The existing dedup SELECT queries already return `id` (`SELECT id FROM chunks WHERE content_hash = ?`) and connections use the `Row` factory (set in `get_connection`), so `existing["id"]` works without any changes to the SELECT statements.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -520,7 +499,7 @@ In the dedup loop (line ~1641):
 
 ```python
         if existing:
-            if session_id:
+            if session_id is not None:
                 conn.execute(
                     "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
                     (existing["id"], session_id),
@@ -533,7 +512,7 @@ After new chunk INSERT (line ~1656):
 
 ```python
         chunk_id = cursor.lastrowid
-        if session_id:
+        if session_id is not None:
             conn.execute(
                 "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
                 (chunk_id, session_id),
@@ -637,26 +616,23 @@ In `reingest_file`, before the chunk deletion block (around line 700), collect h
     }
 ```
 
-After the new chunk INSERT loop (after line 810), restore historical sessions + add current:
+Compute `all_sessions` before the insert loop:
 
 ```python
-    # --- Restore historical session associations on new chunks ---
     all_sessions = historical_sessions
-    if session_id:
+    if session_id is not None:
         all_sessions = historical_sessions | {session_id}
-    if all_sessions:
-        new_chunk_ids = [
-            r["id"]
-            for r in conn.execute(
-                "SELECT id FROM chunks WHERE source_uri = ?", (source_uri,)
-            ).fetchall()
-        ]
-        for cid in new_chunk_ids:
-            for sid in all_sessions:
-                conn.execute(
-                    "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                    (cid, sid),
-                )
+```
+
+Then, inside the existing insert loop in `ingest.py` (after `chunk_id = cursor.lastrowid`, around line 821), write all sessions inline — no second SELECT needed:
+
+```python
+        chunk_id = cursor.lastrowid
+        for sid in all_sessions:
+            conn.execute(
+                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
+                (chunk_id, sid),
+            )
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
