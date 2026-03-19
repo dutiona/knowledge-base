@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Complete reference for all 33 MCP tools exposed by the knowledge-base server.
+Complete reference for all 35 MCP tools exposed by the knowledge-base server.
 
 Return values are JSON strings unless noted otherwise.
 
@@ -135,6 +135,7 @@ Get index statistics: chunk counts by type, recent ingestions, DB size.
   "methods": 40,
   "datasets": 15,
   "metrics": 60,
+  "prediction_errors": 3,
   "jobs": { "completed": 5, "pending": 1 },
   "embed_config": { "model": "bge-m3", "dim": 1024 },
   "recent_ingestions": [],
@@ -641,3 +642,52 @@ List background extraction jobs.
 | `paper_id` | `int \| None` | no       | `None`  | Filter by paper ID                                            |
 
 **Returns:** Array of job objects.
+
+---
+
+## Prediction Errors
+
+Tools for monitoring and resolving search quality issues. Prediction errors are logged automatically when `search_index` returns poor or empty results.
+
+### list_prediction_errors_tool
+
+List prediction errors (queries with low-confidence or missing results).
+
+| Parameter         | Type          | Required | Default | Description                               |
+| ----------------- | ------------- | -------- | ------- | ----------------------------------------- |
+| `since`           | `str \| None` | no       | `None`  | ISO 8601 timestamp to filter errors after |
+| `unresolved_only` | `bool`        | no       | `True`  | Only show unresolved errors               |
+
+**Returns:** Array of prediction error objects:
+
+```json
+[
+  {
+    "id": 1,
+    "query": "quantum error correction",
+    "query_hash": "a1b2c3...",
+    "top_score": null,
+    "top_chunk_id": null,
+    "error_type": "no_results",
+    "source_type_filter": null,
+    "detected_at": "2025-01-15 10:30:00",
+    "resolved_at": null
+  }
+]
+```
+
+Rate-limited: at most 1 error per (query, error_type, source_type_filter) per hour. Configurable threshold via `prediction_error_threshold` config key (default `0.025`).
+
+### resolve_prediction_error_tool
+
+Mark a prediction error as resolved (e.g. after ingesting content that fills the gap).
+
+| Parameter  | Type  | Required | Default | Description                           |
+| ---------- | ----- | -------- | ------- | ------------------------------------- |
+| `error_id` | `int` | yes      | --      | ID of the prediction error to resolve |
+
+**Returns:**
+
+```json
+{ "resolved": 1 }
+```

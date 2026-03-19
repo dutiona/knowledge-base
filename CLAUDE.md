@@ -24,21 +24,22 @@ ruff format src/ tests/          # format
 
 ## Architecture
 
-Nine modules behind `server.py`, each owning its domain. All share a single SQLite file via thread-local connections with double-checked locking for schema init.
+Ten modules behind `server.py`, each owning its domain. All share a single SQLite file via thread-local connections with double-checked locking for schema init.
 
 Read these when the task touches the corresponding area:
 
-| Area                                 | Module                             | Deep-dive doc                             |
-| ------------------------------------ | ---------------------------------- | ----------------------------------------- |
-| Ingestion (PDF, code, web, markdown) | `src/knowledge_base/ingest.py`     | `docs/usage/ingesting-documents.md`       |
-| Hybrid search (FTS5 + vec + RRF)     | `src/knowledge_base/search.py`     | `docs/usage/searching.md`                 |
-| LLM extraction (map-reduce)          | `src/knowledge_base/extraction.py` | `docs/usage/structured-extraction.md`     |
-| Vision/figure extraction             | `src/knowledge_base/vision.py`     | `docs/usage/figure-extraction.md`         |
-| Paper metadata & relationships       | `src/knowledge_base/papers.py`     | `docs/usage/relationships-conclusions.md` |
-| Background jobs                      | `src/knowledge_base/jobs.py`       | `docs/design/architecture-overview.md`    |
-| Embedding providers (Ollama/OpenAI/ONNX) | `src/knowledge_base/embeddings.py` | `docs/usage/ingesting-documents.md`       |
-| Embedding model swap                 | `src/knowledge_base/embed_swap.py` | `docs/design/architecture-overview.md`    |
-| DB schema & migrations               | `src/knowledge_base/db.py`         | `docs/reference/schema.md`                |
+| Area                                     | Module                                    | Deep-dive doc                             |
+| ---------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| Ingestion (PDF, code, web, markdown)     | `src/knowledge_base/ingest.py`            | `docs/usage/ingesting-documents.md`       |
+| Hybrid search (FTS5 + vec + RRF)         | `src/knowledge_base/search.py`            | `docs/usage/searching.md`                 |
+| LLM extraction (map-reduce)              | `src/knowledge_base/extraction.py`        | `docs/usage/structured-extraction.md`     |
+| Vision/figure extraction                 | `src/knowledge_base/vision.py`            | `docs/usage/figure-extraction.md`         |
+| Paper metadata & relationships           | `src/knowledge_base/papers.py`            | `docs/usage/relationships-conclusions.md` |
+| Background jobs                          | `src/knowledge_base/jobs.py`              | `docs/design/architecture-overview.md`    |
+| Embedding providers (Ollama/OpenAI/ONNX) | `src/knowledge_base/embeddings.py`        | `docs/usage/ingesting-documents.md`       |
+| Embedding model swap                     | `src/knowledge_base/embed_swap.py`        | `docs/design/architecture-overview.md`    |
+| Prediction-error detection               | `src/knowledge_base/prediction_errors.py` | `docs/usage/prediction-errors.md`         |
+| DB schema & migrations                   | `src/knowledge_base/db.py`                | `docs/reference/schema.md`                |
 
 ## Testing Conventions
 
