@@ -49,6 +49,34 @@ RRF merges ranked lists without requiring score normalization. For each result a
 
 If only one leg returns results (e.g., FTS query syntax error causes FTS to return nothing), the other leg's results are used directly with RRF-style scoring.
 
+## Keyword Pre-filter
+
+When `keyword_prefilter` is set to `true`, the search engine extracts high-level intent keywords from the query before running the FTS5 leg. This strips stopwords, context-specific filler, and query phrasing artifacts, producing a focused OR query of content terms.
+
+This is based on research showing that keyword-based matching on extracted intent outperforms full-query matching for identifying relevant documents — full queries overemphasize entity names and context-specific details rather than broader intent.
+
+```json
+{
+  "name": "search_index",
+  "arguments": {
+    "query": "What are the best practices for Rust error handling in async code?",
+    "keyword_prefilter": true
+  }
+}
+```
+
+The above query extracts keywords like `rust`, `error`, `async`, `practices` and uses those for BM25 matching, while the full query is still used for semantic vector search.
+
+**When to use:**
+
+- Verbose natural language questions ("What methods exist for...") — keyword extraction removes question structure
+- Queries mixing intent with specific entities — extraction focuses on the intent terms
+
+**When NOT to use:**
+
+- Short, precise queries ("ResNet-50 ImageNet accuracy") — these are already mostly keywords
+- FTS-only mode with exact term requirements — the raw query gives more control
+
 ## Source Type Filtering
 
 Restrict results to a specific content type:
