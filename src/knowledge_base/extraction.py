@@ -673,6 +673,7 @@ def _store_resolved(
 
 
 AVG_SECONDS_PER_CHUNK = 4
+_MAX_WORKERS_LIMIT = 32
 
 
 def _get_paper_chunks(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
@@ -813,7 +814,7 @@ def _extract_map_reduce(
     ``OLLAMA_NUM_PARALLEL``, or an OpenAI-compatible endpoint's rate limit).
     """
     cfg = _get_llm_config(conn)
-    effective_workers = min(max(max_workers, 1), len(chunks))
+    effective_workers = min(max(max_workers, 1), len(chunks), _MAX_WORKERS_LIMIT)
 
     # Phase 1: Map
     map_results: list[tuple[int, dict]] = []
@@ -904,11 +905,10 @@ def _extract_map_reduce(
                     d = len(result.get("datasets", []))
                     mt = len(result.get("metrics", []))
                     logger.info(
-                        "Chunk %3d/%d (%d/%d done) - methods=%d, datasets=%d, metrics=%d",
+                        "Chunk %3d/%d (%.1f%%) - methods=%d, datasets=%d, metrics=%d",
                         i + 1,
                         len(chunks),
-                        completed_count,
-                        len(chunks),
+                        completed_count / len(chunks) * 100,
                         m,
                         d,
                         mt,
@@ -918,11 +918,10 @@ def _extract_map_reduce(
                         {"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)}
                     )
                     logger.info(
-                        "Chunk %3d/%d (%d/%d done) - FAILED: %s",
+                        "Chunk %3d/%d (%.1f%%) - FAILED: %s",
                         i + 1,
                         len(chunks),
-                        completed_count,
-                        len(chunks),
+                        completed_count / len(chunks) * 100,
                         e,
                     )
 

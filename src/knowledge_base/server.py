@@ -715,7 +715,9 @@ def extract_structure_tool(
         )
 
     # Long doc, confirmed: submit background job
-    params = {"max_workers": max_workers} if max_workers > 1 else None
+    # Normalize max_workers to effective value so dedup key is stable
+    # (e.g., max_workers=10 and max_workers=20 on a 3-chunk paper both clamp to 3)
+    params = {"max_workers": effective_workers} if effective_workers > 1 else None
     job_id = submit_job(conn, paper_id, "extract_structure", params=params)
     return json.dumps(
         {

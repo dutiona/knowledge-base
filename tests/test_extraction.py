@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from unittest.mock import patch
 
 import httpx
@@ -2024,8 +2025,6 @@ def test_max_workers_defaults_to_sequential(tmp_path):
         if "Group mentions" in prompt or "canonical" in prompt.lower():
             return json.dumps({"groups": []})
         # Extract chunk index from prompt to verify ordering
-        import re
-
         m = re.search(r"\((\d+)/\d+\)", prompt)
         if m:
             call_order.append(int(m.group(1)))
