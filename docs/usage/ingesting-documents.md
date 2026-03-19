@@ -122,9 +122,28 @@ Use the `reingest` tool to force a full re-ingest. This deletes all existing chu
 
 ## Chunking Strategy
 
+Two chunking strategies are available for PDFs, selectable via the `configure_chunking` tool:
+
+| Strategy       | Target models  | PDF behavior                                              | Typical chunks/paper |
+| -------------- | -------------- | --------------------------------------------------------- | -------------------- |
+| **mechanical** | 8K context     | Fixed-size (1000 chars, 200 overlap), heading-aware split | 15+                  |
+| **semantic**   | 32K context    | Section-level split at H1/H2 boundaries, no overlap       | 3--5                 |
+
+**Why two strategies?** Models like Qwen3-Embedding-0.6B have 32K context windows, making 1000-char chunks unnecessarily granular. Semantic chunking produces complete sections (Abstract, Methods, Results, etc.) as individual chunks, eliminating boundary artifacts and overlap waste. See [#100](https://github.com/dutiona/knowledge-base/issues/100) for the design rationale.
+
+**How it works:** When `chunk_strategy` is set to `'semantic'`, PDF ingestion splits at `#`/`##` heading boundaries. Oversized sections fall back to `###` sub-headings, then paragraph boundaries. Abstract always gets its own chunk. References always get their own chunk. Tables are never split. Non-PDF content (markdown, code, web) always uses mechanical chunking regardless of this setting.
+
+```json
+{ "name": "configure_chunking", "arguments": { "strategy": "semantic" } }
+```
+
+**Default:** `'mechanical'` -- all existing behavior is preserved. Switch to `'semantic'` after configuring a 32K embedding model. After switching, use `reingest` to re-chunk existing documents.
+
+**Per-source-type summary:**
+
 | Source type    | Chunking method       | Details                                                                                              |
 | -------------- | --------------------- | ---------------------------------------------------------------------------------------------------- |
-| PDF            | Header-aware markdown | pymupdf4llm output split at heading boundaries, tables preserved whole, oversized sections sub-split |
+| PDF            | Mechanical or semantic | Mechanical: heading-aware 1000-char split. Semantic: section-level H1/H2 split (configurable).     |
 | Python (`.py`) | AST-aware             | Each function/class = one chunk; module-level code separate; oversized nodes sub-split               |
 | All other text | Fixed-size            | 1000 characters, 200-character overlap                                                               |
 | Web            | Fixed-size            | Same as other text, applied to trafilatura output                                                    |

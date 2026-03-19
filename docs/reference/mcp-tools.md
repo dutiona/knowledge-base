@@ -117,10 +117,11 @@ Search the research index using hybrid semantic + keyword search.
 
 | Parameter     | Type          | Required | Default    | Description                                                                 |
 | ------------- | ------------- | -------- | ---------- | --------------------------------------------------------------------------- |
-| `query`       | `str`         | yes      | --         | Natural language search query                                               |
-| `top_k`       | `int`         | no       | `10`       | Number of results to return                                                 |
-| `source_type` | `str \| None` | no       | `None`     | Filter results by type (`pdf`, `markdown`, `code`, `web`, `note`, `figure`) |
-| `mode`        | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)          |
+| `query`            | `str`         | yes      | --         | Natural language search query                                               |
+| `top_k`            | `int`         | no       | `10`       | Number of results to return                                                 |
+| `source_type`      | `str \| None` | no       | `None`     | Filter results by type (`pdf`, `markdown`, `code`, `web`, `note`, `figure`) |
+| `mode`             | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)          |
+| `chunk_strategy`   | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all. |
 
 **Returns:** Array of result objects:
 
@@ -576,6 +577,22 @@ Re-embed all chunks with a new embedding model. Drops and recreates the vector t
 | `dim`     | `int` | yes      | --      | Embedding dimension for the new model                            |
 
 **Returns:** Summary with chunk count and timing.
+
+### configure_chunking
+
+Configure the chunking strategy for PDF ingestion.
+
+| Parameter  | Type          | Required | Default | Description                                                              |
+| ---------- | ------------- | -------- | ------- | ------------------------------------------------------------------------ |
+| `strategy` | `str \| None` | no       | `None`  | `mechanical` (8K, fixed-size) or `semantic` (32K, section-level). Omit to query. |
+
+With no arguments, returns the current strategy. Non-PDF content always uses mechanical chunking regardless of this setting.
+
+**Returns:**
+
+```json
+{ "chunk_strategy": "mechanical" }
+```
 
 ### configure_llm_tool
 

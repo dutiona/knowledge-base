@@ -21,6 +21,7 @@ erDiagram
         TEXT source_uri
         INTEGER chunk_index
         TEXT session_id
+        TEXT chunk_strategy
         TEXT created_at
         TEXT metadata
     }
@@ -211,17 +212,18 @@ Additional keys set via configure tools: `llm_base_url`, `llm_api_key`, `vision_
 
 Primary content storage. Each row is one chunk of ingested text.
 
-| Column         | Type    | Constraints               | Default           | Description                                                           |
-| -------------- | ------- | ------------------------- | ----------------- | --------------------------------------------------------------------- |
-| `id`           | INTEGER | PRIMARY KEY AUTOINCREMENT | --                | Chunk ID                                                              |
-| `content_hash` | TEXT    | NOT NULL, UNIQUE          | --                | SHA-256 {term}`content hash` for deduplication                        |
-| `content`      | TEXT    | NOT NULL                  | --                | Raw text content                                                      |
-| `source_type`  | TEXT    | NOT NULL, CHECK           | --                | One of: `pdf`, `markdown`, `code`, `web`, `note`, `figure`            |
-| `source_uri`   | TEXT    | NOT NULL                  | --                | File path or URL of the source                                        |
-| `chunk_index`  | INTEGER | NOT NULL                  | --                | Position within the source (0-based; figures use 1,000,000+ encoding) |
-| `session_id`   | TEXT    | --                        | --                | **Deprecated.** Ingestion session ID (superseded by `chunk_sessions` join table) |
-| `created_at`   | TEXT    | NOT NULL                  | `datetime('now')` | ISO 8601 timestamp                                                    |
-| `metadata`     | TEXT    | --                        | `'{}'`            | JSON metadata blob                                                    |
+| Column           | Type    | Constraints               | Default           | Description                                                                      |
+| ---------------- | ------- | ------------------------- | ----------------- | -------------------------------------------------------------------------------- |
+| `id`             | INTEGER | PRIMARY KEY AUTOINCREMENT | --                | Chunk ID                                                                         |
+| `content_hash`   | TEXT    | NOT NULL, UNIQUE          | --                | SHA-256 {term}`content hash` for deduplication                                   |
+| `content`        | TEXT    | NOT NULL                  | --                | Raw text content                                                                 |
+| `source_type`    | TEXT    | NOT NULL, CHECK           | --                | One of: `pdf`, `markdown`, `code`, `web`, `note`, `figure`                       |
+| `source_uri`     | TEXT    | NOT NULL                  | --                | File path or URL of the source                                                   |
+| `chunk_index`    | INTEGER | NOT NULL                  | --                | Position within the source (0-based; figures use 1,000,000+ encoding)            |
+| `session_id`     | TEXT    | --                        | --                | **Deprecated.** Ingestion session ID (superseded by `chunk_sessions` join table) |
+| `chunk_strategy` | TEXT    | NOT NULL                  | `'mechanical'`    | Chunking strategy: `mechanical` (8K) or `semantic` (32K)                         |
+| `created_at`     | TEXT    | NOT NULL                  | `datetime('now')` | ISO 8601 timestamp                                                               |
+| `metadata`       | TEXT    | --                        | `'{}'`            | JSON metadata blob                                                               |
 
 **CHECK constraint:** `source_type IN ('pdf', 'markdown', 'code', 'web', 'note', 'figure')`
 
@@ -235,10 +237,10 @@ Primary content storage. Each row is one chunk of ingested text.
 
 N:M join table mapping chunks to ingestion sessions. Introduced in #139 to replace the 1:1 `chunks.session_id` column.
 
-| Column       | Type    | Constraints                                    | Description                |
-| ------------ | ------- | ---------------------------------------------- | -------------------------- |
-| `chunk_id`   | INTEGER | NOT NULL, FK → `chunks(id)` ON DELETE CASCADE  | Chunk ID                   |
-| `session_id` | TEXT    | NOT NULL                                       | Ingestion session ID       |
+| Column       | Type    | Constraints                                   | Description          |
+| ------------ | ------- | --------------------------------------------- | -------------------- |
+| `chunk_id`   | INTEGER | NOT NULL, FK → `chunks(id)` ON DELETE CASCADE | Chunk ID             |
+| `session_id` | TEXT    | NOT NULL                                      | Ingestion session ID |
 
 **UNIQUE constraint:** `(chunk_id, session_id)` — prevents duplicate associations. `INSERT OR IGNORE` is idempotent.
 
