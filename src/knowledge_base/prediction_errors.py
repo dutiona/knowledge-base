@@ -124,7 +124,7 @@ def list_prediction_errors(
     if unresolved_only:
         clauses.append("resolved_at IS NULL")
     if since:
-        clauses.append("detected_at >= ?")
+        clauses.append("detected_at >= datetime(?)")
         params.append(since)
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
