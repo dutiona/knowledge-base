@@ -68,3 +68,35 @@ def extract_keywords(query: str, *, max_keywords: int = 5) -> list[str]:
     scored.sort(key=lambda x: x[1], reverse=True)
 
     return [word for word, _ in scored[:max_keywords]]
+
+
+# FTS5 reserved words that must not appear as bare terms in queries.
+_FTS5_OPERATORS = frozenset({"and", "or", "not", "near"})
+
+
+def build_fts_query(keywords: list[str]) -> str:
+    """Convert keyword list to an FTS5 OR query.
+
+    Terms containing special characters (hyphens, dots) are double-quoted.
+    FTS5 operator words are excluded.
+
+    Args:
+        keywords: List of extracted keywords.
+
+    Returns:
+        FTS5 query string, or empty string if no valid terms.
+    """
+    if not keywords:
+        return ""
+
+    terms = []
+    for kw in keywords:
+        if kw.lower() in _FTS5_OPERATORS:
+            continue
+        # Quote terms with special chars to prevent FTS5 misinterpretation
+        if "-" in kw or "." in kw:
+            terms.append(f'"{kw}"')
+        else:
+            terms.append(kw)
+
+    return " OR ".join(terms)

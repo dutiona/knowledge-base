@@ -1,6 +1,6 @@
 """Tests for keyword intent extraction."""
 
-from knowledge_base.keywords import extract_keywords
+from knowledge_base.keywords import build_fts_query, extract_keywords
 
 
 def test_extracts_intent_keywords():
@@ -55,3 +55,36 @@ def test_numeric_terms_preserved():
     keywords = extract_keywords("GPT-4 vs GPT-3.5 performance")
     assert any("gpt" in k for k in keywords)
     assert "performance" in keywords
+
+
+def test_build_fts_query_from_keywords():
+    result = build_fts_query(["rust", "error", "async"])
+    # Should produce OR-joined FTS5 query
+    assert result == "rust OR error OR async"
+
+
+def test_build_fts_query_empty():
+    assert build_fts_query([]) == ""
+
+
+def test_build_fts_query_single():
+    assert build_fts_query(["transformer"]) == "transformer"
+
+
+def test_build_fts_query_escapes_special_chars():
+    # FTS5 special: AND, OR, NOT, NEAR, quotes, parens, asterisk, caret
+    result = build_fts_query(["self-supervised", "pre-training"])
+    # Hyphens inside terms should be quoted to prevent FTS5 treating them as operators
+    assert '"self-supervised"' in result
+    assert '"pre-training"' in result
+
+
+def test_build_fts_query_strips_fts_operators():
+    # If a keyword happens to be an FTS operator, skip it
+    result = build_fts_query(["near", "transformer"])
+    assert "transformer" in result
+    assert "near" not in result.split()
+
+
+def test_build_fts_query_all_operators_returns_empty():
+    assert build_fts_query(["and", "or", "not", "near"]) == ""
