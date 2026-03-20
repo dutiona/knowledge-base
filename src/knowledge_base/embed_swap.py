@@ -222,13 +222,19 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
             f"got: {space['status']!r}"
         )
     # Block promotion of incompletely backfilled spaces.
-    # Allow genuinely empty spaces (total_chunks=0, e.g. re_embed on empty DB).
-    total = space["total_chunks"] or 0
+    # Recount live corpus to catch chunks ingested after backfill.
     count = space["chunk_count"] or 0
-    if total > 0 and count < total:
+    if _has_chunk_strategy_column(conn):
+        live_total = conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?",
+            (space["chunk_strategy"],),
+        ).fetchone()[0]
+    else:
+        live_total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    if live_total > 0 and count < live_total:
         raise ValueError(
             f"Cannot promote space {space_name!r}: only {count} of "
-            f"{total} chunks backfilled"
+            f"{live_total} chunks backfilled (run backfill_space to sync)"
         )
 
     # Staleness check: warn if promoting a deprecated space whose chunk_count

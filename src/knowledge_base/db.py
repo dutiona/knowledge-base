@@ -380,6 +380,12 @@ def insert_chunk_vec(
         f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
         (chunk_id, _serialize_f32(embedding), chunk_id),
     )
+    # Keep embed_spaces.chunk_count in sync for the active space
+    conn.execute(
+        "UPDATE embed_spaces SET chunk_count = chunk_count + 1 "
+        "WHERE table_name = ? AND status = 'active'",
+        (tbl,),
+    )
 
 
 def delete_chunk_vecs(
@@ -431,11 +437,17 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     except sqlite3.OperationalError:
         count = 0
 
+    # Inherit chunk_strategy from config (set by #100), default to mechanical
+    strategy_row = conn.execute(
+        "SELECT value FROM config WHERE key = 'chunk_strategy'"
+    ).fetchone()
+    strategy = strategy_row["value"] if strategy_row else "mechanical"
+
     conn.execute(
         """INSERT INTO embed_spaces
            (name, model, provider, dim, chunk_strategy, status, table_name, chunk_count)
-           VALUES (?, ?, ?, ?, 'mechanical', 'active', 'chunks_vec', ?)""",
-        ("default", model, provider, embed_dim, count),
+           VALUES (?, ?, ?, ?, ?, 'active', 'chunks_vec', ?)""",
+        ("default", model, provider, embed_dim, strategy, count),
     )
     conn.commit()
 

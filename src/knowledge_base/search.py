@@ -9,7 +9,6 @@ from dataclasses import dataclass
 
 from .db import (
     _batched_select,
-    get_active_chunk_strategy,
     get_active_space,
     get_vec_table_name,
 )
@@ -79,7 +78,7 @@ def _vec_search(
     rows = conn.execute(
         f"""
         SELECT chunk_id, distance
-        FROM {vec_table}
+        FROM [{vec_table}]
         WHERE embedding MATCH ?
         ORDER BY distance
         LIMIT ?
@@ -194,13 +193,11 @@ def search(
     """
     fetch_limit = top_k * 3  # over-fetch for RRF merge
 
-    # Default to the active space's chunk_strategy when caller doesn't specify.
-    # This ensures FTS and vec results come from the same granularity.
-    if chunk_strategy is None:
-        chunk_strategy = get_active_chunk_strategy(conn)
-
-    # When filtering by chunk_strategy, over-fetch to compensate for
-    # candidates that will be filtered out before RRF merge.
+    # Strategy filtering: only apply when the caller explicitly requests it.
+    # When chunk_strategy is None (default), the vec leg implicitly filters
+    # by the active space's strategy (its vec table only contains those chunks),
+    # but the FTS leg and final fetch return all chunks — this ensures non-PDF
+    # content (always mechanical) stays visible even when a semantic space is active.
     strategy_fetch_limit = fetch_limit * 5 if chunk_strategy else fetch_limit
 
     fts_results: list[tuple[int, float]] = []
@@ -245,19 +242,20 @@ def search(
 
     # --- chunk_strategy filter (pre-RRF) ---
     if chunk_strategy:
-        # Filter both result sets by joining against chunks table
+        # Filter both result sets by joining against chunks table (batched
+        # to stay under SQLite's 999 variable limit for large candidate sets)
         all_candidate_ids = list(
             {cid for cid, _ in fts_results} | {cid for cid, _ in vec_results}
         )
         if all_candidate_ids:
-            placeholders = ",".join("?" * len(all_candidate_ids))
-            valid_ids = {
-                row["id"]
-                for row in conn.execute(
-                    f"SELECT id FROM chunks WHERE id IN ({placeholders}) AND chunk_strategy = ?",
-                    [*all_candidate_ids, chunk_strategy],
-                ).fetchall()
-            }
+            valid_rows = _batched_select(
+                conn,
+                "SELECT id FROM chunks WHERE id IN ({ph}) AND chunk_strategy = '"
+                + chunk_strategy.replace("'", "''")
+                + "'",
+                all_candidate_ids,
+            )
+            valid_ids = {row["id"] for row in valid_rows}
             fts_results = [(cid, s) for cid, s in fts_results if cid in valid_ids]
             vec_results = [(cid, s) for cid, s in vec_results if cid in valid_ids]
 

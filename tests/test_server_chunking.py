@@ -89,10 +89,10 @@ def test_search_index_chunk_strategy_passthrough(tmp_path):
     conn.commit()
 
     with patch("knowledge_base.search.embed_single", _fake_embed_single):
-        # Default active space is mechanical → only mechanical returned
-        mech_results = search(conn, "graph neural", mode="fts")
-        assert len(mech_results) == 1
-        assert mech_results[0].content.startswith("mechanical")
+        # Default (no filter) returns both — vec leg filters implicitly
+        # but FTS mode returns all strategies
+        all_results = search(conn, "graph neural", mode="fts")
+        assert len(all_results) == 2
 
         # Explicit filter to semantic only
         sem_results = search(
