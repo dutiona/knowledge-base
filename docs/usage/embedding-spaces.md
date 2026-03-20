@@ -196,3 +196,63 @@ Matryoshka Representation Learning (MRL) models produce embeddings where prefix 
 This creates a space that embeds at 1024 dimensions (Qwen3-Embedding's native size) but stores 512-dimensional vectors -- halving storage and speeding up cosine similarity searches with minimal quality loss.
 
 Compatible models: Qwen3-Embedding (32--1024), nomic-embed-text-v2-moe (256--768). BGE-M3 does **not** support Matryoshka truncation.
+
+### Comparing spaces
+
+Before promoting a new embedding space, you can quantitatively compare its search behavior against the current active space (or any other space). The comparison tools compute three metrics:
+
+- **Overlap@K** -- fraction of results in common (relative to `min(K, |results_a|, |results_b|)`). A value of 1.0 means both spaces return the same chunks.
+- **Jaccard index** -- `|intersection| / |union|` over the two result sets. More conservative than Overlap@K when result set sizes differ.
+- **Spearman's rho** -- rank correlation coefficient over the chunks that appear in both result sets (computed only when >= 5 common results). Measures whether the two spaces agree on ranking, not just membership.
+
+**Single-query comparison:**
+
+```json
+{
+  "name": "compare_spaces_tool",
+  "arguments": {
+    "query": "attention mechanism in transformers",
+    "space_a": "bge_m3_1024",
+    "space_b": "qwen3_512",
+    "top_k": 10,
+    "mode": "vec"
+  }
+}
+```
+
+Returns side-by-side results with per-space scores, overlap metrics, and any warnings.
+
+**Batch comparison (multiple queries):**
+
+```json
+{
+  "name": "batch_compare_spaces_tool",
+  "arguments": {
+    "space_a": "bge_m3_1024",
+    "space_b": "qwen3_512",
+    "queries": [
+      "attention mechanism in transformers",
+      "contrastive learning loss functions",
+      "graph neural network message passing"
+    ]
+  }
+}
+```
+
+Returns aggregated statistics (mean, std, min, max) for overlap, Jaccard, and rank correlation across all queries. This gives a more robust picture than any single query.
+
+**Searching a specific space:**
+
+You can also pass `space_name` to `search_index` to query a non-active space directly:
+
+```json
+{
+  "name": "search_index",
+  "arguments": {
+    "query": "attention mechanism",
+    "space_name": "qwen3_512"
+  }
+}
+```
+
+**Cross-strategy warnings:** When comparing spaces with different `chunk_strategy` values (e.g., `mechanical` vs `semantic`), the comparison tools emit a warning. In this case, low overlap is expected -- the spaces index different chunks entirely -- so the metrics measure corpus overlap rather than embedding quality. Apples-to-apples model comparison requires spaces with the same chunking strategy.

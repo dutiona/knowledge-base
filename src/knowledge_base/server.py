@@ -21,6 +21,7 @@ from .db import (
     get_connection,
     init_schema,
 )
+from .comparison import batch_compare_spaces, compare_spaces
 from .embed_swap import (
     get_embed_config,
     re_embed,
@@ -233,6 +234,7 @@ def search_index(
     mode: str = "hybrid",
     keyword_prefilter: bool = False,
     chunk_strategy: str | None = None,
+    space_name: str | None = None,
 ) -> str:
     """Search the knowledge base using hybrid semantic + keyword search.
 
@@ -246,6 +248,8 @@ def search_index(
             queries by stripping stopwords and filler. Default false.
         chunk_strategy: Filter by chunking strategy ('mechanical' or 'semantic').
             None (default) returns all chunks regardless of strategy.
+        space_name: Search a specific embedding space instead of the active one.
+            Useful for A/B comparison before promoting a new space.
     """
     conn = _get_conn()
     results = search(
@@ -256,6 +260,7 @@ def search_index(
         mode=mode,
         keyword_prefilter=keyword_prefilter,
         chunk_strategy=chunk_strategy,
+        space_name=space_name,
     )
     detect_and_log(conn, query, results, source_type_filter=source_type, mode=mode)
 
@@ -529,6 +534,60 @@ def cleanup_embed_space_tool(name: str) -> str:
     conn = _get_conn()
     try:
         result = cleanup_space(conn, name)
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def compare_spaces_tool(
+    query: str,
+    space_a: str,
+    space_b: str,
+    top_k: int = 10,
+    mode: str = "vec",
+) -> str:
+    """Compare search results for a query across two embedding spaces.
+
+    Returns side-by-side results with overlap metrics and rank correlation.
+
+    Args:
+        query: Search query to compare.
+        space_a: Name of the first embedding space.
+        space_b: Name of the second embedding space.
+        top_k: Number of results per space (default 10).
+        mode: Search mode - 'vec' (default for comparison), 'hybrid', or 'fts'.
+    """
+    conn = _get_conn()
+    try:
+        result = compare_spaces(conn, query, space_a, space_b, top_k, mode)
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def batch_compare_spaces_tool(
+    space_a: str,
+    space_b: str,
+    queries: list[str],
+    top_k: int = 10,
+    mode: str = "vec",
+) -> str:
+    """Batch-compare two embedding spaces with multiple queries.
+
+    Returns aggregated overlap, Jaccard, and rank correlation metrics.
+
+    Args:
+        space_a: Name of the first embedding space.
+        space_b: Name of the second embedding space.
+        queries: List of search queries to compare.
+        top_k: Number of results per space per query (default 10).
+        mode: Search mode (default 'vec').
+    """
+    conn = _get_conn()
+    try:
+        result = batch_compare_spaces(conn, space_a, space_b, queries, top_k, mode)
         return json.dumps(result)
     except ValueError as e:
         return json.dumps({"error": str(e)})

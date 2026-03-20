@@ -352,6 +352,14 @@ def list_spaces(conn: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def get_space(conn: sqlite3.Connection, name: str) -> dict:
+    """Look up an embedding space by name. Raises ValueError if not found."""
+    row = conn.execute("SELECT * FROM embed_spaces WHERE name = ?", (name,)).fetchone()
+    if row is None:
+        raise ValueError(f"Embedding space {name!r} not found")
+    return dict(row)
+
+
 # ---------------------------------------------------------------------------
 # Convenience wrapper (backward compat)
 # ---------------------------------------------------------------------------

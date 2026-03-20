@@ -122,6 +122,7 @@ Search the research index using hybrid semantic + keyword search.
 | `source_type`    | `str \| None` | no       | `None`     | Filter results by type (`pdf`, `markdown`, `code`, `web`, `note`, `figure`) |
 | `mode`           | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)          |
 | `chunk_strategy` | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all. |
+| `space_name`     | `str \| None` | no       | `None`     | Search a specific embedding space instead of the active one.                |
 
 **Returns:** Array of result objects:
 
@@ -768,6 +769,87 @@ Drop a deprecated space's vec table and remove its registry entry.
 
 ```json
 { "cleaned": "old_model_768" }
+```
+
+---
+
+## Comparison
+
+Tools for A/B comparison of embedding spaces. See [Embedding Spaces: Comparing spaces](../usage/embedding-spaces.md#comparing-spaces) for usage guidance.
+
+### compare_spaces_tool
+
+Compare search results for a query across two embedding spaces. Returns side-by-side results with overlap metrics and rank correlation.
+
+| Parameter | Type  | Required | Default | Description                                                     |
+| --------- | ----- | -------- | ------- | --------------------------------------------------------------- |
+| `query`   | `str` | yes      | --      | Search query to compare                                         |
+| `space_a` | `str` | yes      | --      | Name of the first embedding space                               |
+| `space_b` | `str` | yes      | --      | Name of the second embedding space                              |
+| `top_k`   | `int` | no       | `10`    | Number of results per space                                     |
+| `mode`    | `str` | no       | `"vec"` | Search mode: `vec` (default for comparison), `hybrid`, or `fts` |
+
+**Returns:**
+
+```json
+{
+  "query": "attention mechanism",
+  "space_a": {
+    "name": "bge_m3_1024",
+    "model": "bge-m3",
+    "dim": 1024,
+    "result_count": 10,
+    "results": []
+  },
+  "space_b": {
+    "name": "qwen3_512",
+    "model": "qwen3-embedding",
+    "dim": 512,
+    "result_count": 10,
+    "results": []
+  },
+  "metrics": {
+    "overlap_count": 7,
+    "overlap_at_k": 0.7,
+    "jaccard": 0.5385,
+    "rank_correlation": 0.8214
+  },
+  "warnings": []
+}
+```
+
+Emits a cross-strategy warning when spaces use different `chunk_strategy` values.
+
+### batch_compare_spaces_tool
+
+Batch-compare two embedding spaces with multiple queries. Returns aggregated statistics.
+
+| Parameter | Type        | Required | Default | Description                           |
+| --------- | ----------- | -------- | ------- | ------------------------------------- |
+| `space_a` | `str`       | yes      | --      | Name of the first embedding space     |
+| `space_b` | `str`       | yes      | --      | Name of the second embedding space    |
+| `queries` | `list[str]` | yes      | --      | List of search queries to compare     |
+| `top_k`   | `int`       | no       | `10`    | Number of results per space per query |
+| `mode`    | `str`       | no       | `"vec"` | Search mode (default `vec`)           |
+
+**Returns:**
+
+```json
+{
+  "space_a": "bge_m3_1024",
+  "space_b": "qwen3_512",
+  "queries_analyzed": 5,
+  "overlap_at_k": { "mean": 0.72, "std": 0.15, "min": 0.5, "max": 0.9 },
+  "jaccard": { "mean": 0.55, "std": 0.12, "min": 0.38, "max": 0.7 },
+  "rank_correlation": {
+    "mean": 0.81,
+    "std": 0.1,
+    "min": 0.65,
+    "max": 0.95,
+    "valid_count": 4
+  },
+  "warnings": []
+}
 ```
 
 ---

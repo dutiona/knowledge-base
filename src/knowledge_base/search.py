@@ -71,10 +71,13 @@ def _fts_search(
 
 
 def _vec_search(
-    conn: sqlite3.Connection, query_embedding: list[float], limit: int
+    conn: sqlite3.Connection,
+    query_embedding: list[float],
+    limit: int,
+    table_name: str | None = None,
 ) -> list[tuple[int, float]]:
     """Vector similarity search. Returns (chunk_id, distance) pairs."""
-    vec_table = get_vec_table_name(conn)
+    vec_table = table_name or get_vec_table_name(conn)
     rows = conn.execute(
         f"""
         SELECT chunk_id, distance
@@ -176,6 +179,7 @@ def search(
     mode: str = "hybrid",
     keyword_prefilter: bool = False,
     chunk_strategy: str | None = None,
+    space_name: str | None = None,
 ) -> list[SearchResult]:
     """
     Hybrid search over indexed chunks.
@@ -190,14 +194,33 @@ def search(
             specific filler. Only affects hybrid and fts modes.
         chunk_strategy: Filter by chunk strategy ('mechanical' or 'semantic').
             None (default) returns all chunks regardless of strategy.
+        space_name: Search against a specific embedding space instead of the
+            active one. The space's own model/dim/provider are used for query
+            embedding. Folder boost is disabled for non-active spaces.
     """
     fetch_limit = top_k * 3  # over-fetch for RRF merge
 
+    # Resolve space configuration — either specific space or active
+    if space_name:
+        from .embed_swap import get_space
+
+        space = get_space(conn, space_name)
+        space_cfg = {
+            "model": space["model"],
+            "dim": space["dim"],
+            "provider": space["provider"],
+        }
+        space_base_dim = space.get("matryoshka_base_dim")
+        vec_table: str | None = space["table_name"]
+        skip_folder_boost = True  # dim may not match folder_summaries_vec
+    else:
+        space_cfg = get_embed_config(conn)
+        active = get_active_space(conn)
+        space_base_dim = active.get("matryoshka_base_dim") if active else None
+        vec_table = None  # use active space default
+        skip_folder_boost = False
+
     # Strategy filtering: only apply when the caller explicitly requests it.
-    # When chunk_strategy is None (default), the vec leg implicitly filters
-    # by the active space's strategy (its vec table only contains those chunks),
-    # but the FTS leg and final fetch return all chunks — this ensures non-PDF
-    # content (always mechanical) stays visible even when a semantic space is active.
     strategy_fetch_limit = fetch_limit * 5 if chunk_strategy else fetch_limit
 
     fts_results: list[tuple[int, float]] = []
@@ -220,25 +243,25 @@ def search(
                 pass
 
     if mode in ("hybrid", "vec"):
-        cfg = get_embed_config(conn)
-        active = get_active_space(conn)
-        matryoshka_base_dim = active.get("matryoshka_base_dim") if active else None
-        if matryoshka_base_dim:
+        # Use space-specific config for query embedding
+        if space_base_dim:
             query_embedding = embed_single(
                 query,
-                model=cfg["model"],
-                expected_dim=matryoshka_base_dim,
-                _provider_name=cfg["provider"],
+                model=space_cfg["model"],
+                expected_dim=space_base_dim,
+                _provider_name=space_cfg["provider"],
             )
-            query_embedding = truncate_embedding(query_embedding, cfg["dim"])
+            query_embedding = truncate_embedding(query_embedding, space_cfg["dim"])
         else:
             query_embedding = embed_single(
                 query,
-                model=cfg["model"],
-                expected_dim=cfg["dim"],
-                _provider_name=cfg["provider"],
+                model=space_cfg["model"],
+                expected_dim=space_cfg["dim"],
+                _provider_name=space_cfg["provider"],
             )
-        vec_results = _vec_search(conn, query_embedding, strategy_fetch_limit)
+        vec_results = _vec_search(
+            conn, query_embedding, strategy_fetch_limit, table_name=vec_table
+        )
 
     # --- chunk_strategy filter (pre-RRF) ---
     if chunk_strategy:
@@ -282,7 +305,11 @@ def search(
     pre_boost_ids = [cid for cid, _ in merged[:boost_window]]
     score_map = dict(merged[:boost_window])
 
-    if mode in ("hybrid", "vec") and query_embedding is not None:
+    if (
+        mode in ("hybrid", "vec")
+        and query_embedding is not None
+        and not skip_folder_boost
+    ):
         score_map = _folder_boost(conn, query_embedding, pre_boost_ids, score_map)
 
     # Re-sort after boost and take top_k
