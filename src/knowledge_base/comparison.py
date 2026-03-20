@@ -51,13 +51,20 @@ def compare_spaces(
     jaccard = len(common) / len(union) if union else 0.0
 
     # Rank correlation (Spearman's rho on common results)
+    # Re-rank common results to consecutive 0..N-1 within each space
+    # to satisfy Spearman's formula requirement for permutation ranks.
     rank_correlation = None
     if len(common) >= 5:
         rank_map_a = {cid: rank for rank, cid in enumerate(ids_a)}
         rank_map_b = {cid: rank for rank, cid in enumerate(ids_b)}
-        common_ordered = sorted(common)
-        ranks_a = [rank_map_a[cid] for cid in common_ordered]
-        ranks_b = [rank_map_b[cid] for cid in common_ordered]
+        # Sort common IDs by their rank in space A, assign consecutive ranks
+        common_by_a = sorted(common, key=lambda cid: rank_map_a[cid])
+        common_by_b = sorted(common, key=lambda cid: rank_map_b[cid])
+        # Map each common ID to its consecutive rank in each ordering
+        rerank_a = {cid: i for i, cid in enumerate(common_by_a)}
+        rerank_b = {cid: i for i, cid in enumerate(common_by_b)}
+        ranks_a = [rerank_a[cid] for cid in common_by_a]
+        ranks_b = [rerank_b[cid] for cid in common_by_a]
         rank_correlation = round(_spearman_rho(ranks_a, ranks_b), 4)
 
     # Warnings

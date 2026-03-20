@@ -16,7 +16,7 @@ from .db import (
     get_active_space,
     space_table_name,
 )
-from .embeddings import EmbeddingProvider, get_provider
+from .embeddings import EmbeddingProvider, get_provider, truncate_embedding
 
 
 def get_embed_config(conn: sqlite3.Connection) -> dict:
@@ -180,8 +180,6 @@ def backfill_space(
         embeddings = embed_provider.embed(texts, model=model, expected_dim=embed_dim)
 
         if matryoshka_base_dim:
-            from .embeddings import truncate_embedding
-
             embeddings = [truncate_embedding(e, dim) for e in embeddings]
 
         for chunk_id, emb_vec in zip(ids, embeddings):
@@ -290,6 +288,8 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
         "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_matryoshka_base_dim', ?)",
         (str(space["matryoshka_base_dim"] or ""),),
     )
+    # Invalidate similarity relationships (embedding space changed)
+    conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
     conn.commit()
 
     # Always rebuild folder summaries on promotion (model/dim may differ)

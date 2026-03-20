@@ -212,7 +212,10 @@ def search(
         }
         space_base_dim = space.get("matryoshka_base_dim")
         vec_table: str | None = space["table_name"]
-        skip_folder_boost = True  # dim may not match folder_summaries_vec
+        # Only skip folder boost if the space differs from the active one
+        # (folder_summaries_vec is always at the active space's dim)
+        active = get_active_space(conn)
+        skip_folder_boost = not active or space["name"] != active["name"]
     else:
         space_cfg = get_embed_config(conn)
         active = get_active_space(conn)
