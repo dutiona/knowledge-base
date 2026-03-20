@@ -21,6 +21,12 @@ def test_get_conn_returns_separate_connections_per_thread(tmp_path, monkeypatch)
     """Each thread must get its own SQLite connection to avoid cross-thread errors."""
     _patch_conn(monkeypatch, tmp_path)
 
+    # Initialise schema on the main thread first — mirrors real usage where
+    # the MCP server boots before handling parallel tool calls.  Without this,
+    # concurrent init_schema() writes race under full-suite WAL pressure and
+    # cause intermittent "database is locked" errors (issue #175).
+    _get_conn()
+
     results = {}
     errors = []
 
