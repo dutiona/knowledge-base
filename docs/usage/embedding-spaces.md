@@ -164,3 +164,35 @@ Promotion works on both `populating` and `deprecated` spaces. The current active
 ### Bootstrap behavior
 
 On first schema initialization (or upgrade from a pre-#99 database), the system automatically registers the existing `chunks_vec` table as the `default` space in `active` status. This ensures backward compatibility -- existing databases continue to work without manual space creation.
+
+### Matryoshka truncation
+
+Matryoshka Representation Learning (MRL) models produce embeddings where prefix subsets retain semantic meaning. This lets you embed at the model's native dimension and store only the first N components, trading a small amount of retrieval quality for significant storage savings.
+
+**Why pre-truncate?** sqlite-vec stores fixed-dimension vectors and has no query-time truncation. To use a smaller dimension, vectors must be truncated before insertion. For MRL-capable models, this is nearly free: the [#99 research table](https://github.com/dutiona/knowledge-base/issues/99) shows ~95% retrieval quality retained at 50% dimension reduction (e.g., 1024 -> 512 for Qwen3-Embedding).
+
+**How it works:**
+
+1. The provider embeds text at `matryoshka_base_dim` (the model's native dimension).
+2. The system slices the first `dim` components from the full vector.
+3. The truncated vector is L2 re-normalized (the prefix is not unit-length).
+4. The normalized vector is stored in the space's vec table.
+
+**Example workflow:**
+
+```json
+{
+  "name": "create_embed_space_tool",
+  "arguments": {
+    "name": "qwen3_512",
+    "model": "qwen3-embedding",
+    "dim": 512,
+    "provider": "ollama",
+    "matryoshka_base_dim": 1024
+  }
+}
+```
+
+This creates a space that embeds at 1024 dimensions (Qwen3-Embedding's native size) but stores 512-dimensional vectors -- halving storage and speeding up cosine similarity searches with minimal quality loss.
+
+Compatible models: Qwen3-Embedding (32--1024), nomic-embed-text-v2-moe (256--768). BGE-M3 does **not** support Matryoshka truncation.

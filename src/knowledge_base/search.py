@@ -7,9 +7,14 @@ import sqlite3
 import struct
 from dataclasses import dataclass
 
-from .db import _batched_select, get_active_chunk_strategy, get_vec_table_name
+from .db import (
+    _batched_select,
+    get_active_chunk_strategy,
+    get_active_space,
+    get_vec_table_name,
+)
 from .embed_swap import get_embed_config
-from .embeddings import embed_single
+from .embeddings import embed_single, truncate_embedding
 from .keywords import build_fts_query, extract_keywords
 
 
@@ -219,12 +224,23 @@ def search(
 
     if mode in ("hybrid", "vec"):
         cfg = get_embed_config(conn)
-        query_embedding = embed_single(
-            query,
-            model=cfg["model"],
-            expected_dim=cfg["dim"],
-            _provider_name=cfg["provider"],
-        )
+        active = get_active_space(conn)
+        matryoshka_base_dim = active.get("matryoshka_base_dim") if active else None
+        if matryoshka_base_dim:
+            query_embedding = embed_single(
+                query,
+                model=cfg["model"],
+                expected_dim=matryoshka_base_dim,
+                _provider_name=cfg["provider"],
+            )
+            query_embedding = truncate_embedding(query_embedding, cfg["dim"])
+        else:
+            query_embedding = embed_single(
+                query,
+                model=cfg["model"],
+                expected_dim=cfg["dim"],
+                _provider_name=cfg["provider"],
+            )
         vec_results = _vec_search(conn, query_embedding, strategy_fetch_limit)
 
     # --- chunk_strategy filter (pre-RRF) ---

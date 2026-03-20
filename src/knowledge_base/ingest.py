@@ -21,9 +21,15 @@ import fitz  # pymupdf
 import httpx
 import trafilatura
 
-from .db import _batched_execute, _batched_select, delete_chunk_vecs, insert_chunk_vec
+from .db import (
+    _batched_execute,
+    _batched_select,
+    delete_chunk_vecs,
+    get_active_space,
+    insert_chunk_vec,
+)
 from .embed_swap import get_embed_config
-from .embeddings import embed
+from .embeddings import embed, truncate_embedding
 from .folder_summaries import update_folder_summary
 
 
@@ -71,6 +77,16 @@ def _detect_source_type(path: Path) -> str:
 def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[float]]:
     """Call embed() using the model, dim, and provider from the config table."""
     cfg = get_embed_config(conn)
+    active = get_active_space(conn)
+    base_dim = active.get("matryoshka_base_dim") if active else None
+    if base_dim:
+        vecs = embed(
+            texts,
+            model=cfg["model"],
+            expected_dim=base_dim,
+            _provider_name=cfg["provider"],
+        )
+        return [truncate_embedding(v, cfg["dim"]) for v in vecs]
     return embed(
         texts,
         model=cfg["model"],

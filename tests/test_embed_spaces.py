@@ -396,3 +396,53 @@ def test_partial_unique_index_active(tmp_path):
             "(name, model, provider, dim, chunk_strategy, status, table_name) "
             "VALUES ('rogue', 'model', 'ollama', 4, 'mechanical', 'active', 'chunks_vec_rogue')"
         )
+
+
+# ---------------------------------------------------------------------------
+# Matryoshka truncation
+# ---------------------------------------------------------------------------
+
+
+@patch("knowledge_base.embed_swap.get_provider", return_value=_FakeProvider())
+def test_create_matryoshka_space(mock_prov, tmp_path):
+    conn = _setup(tmp_path)
+    result = create_space(conn, "mat_test", "qwen3", 4, "ollama", matryoshka_base_dim=8)
+    assert result["space"] == "mat_test"
+    space = conn.execute(
+        "SELECT * FROM embed_spaces WHERE name = 'mat_test'"
+    ).fetchone()
+    assert space["matryoshka_base_dim"] == 8
+    assert space["dim"] == 4
+
+
+def test_create_matryoshka_invalid_dim(tmp_path):
+    conn = _setup(tmp_path)
+    with pytest.raises(ValueError, match="matryoshka_base_dim.*must be greater"):
+        create_space(conn, "bad", "model", 8, "ollama", matryoshka_base_dim=4)
+
+
+@patch("knowledge_base.embed_swap.get_provider")
+def test_backfill_matryoshka_space(mock_get_prov, tmp_path):
+    """Provider returns 8-dim vectors, space stores 4-dim truncated vectors."""
+    conn = _setup(tmp_path, dim=4)
+
+    # Mock provider returns 8-dim vectors
+    class _MatProvider:
+        def embed(self, texts, model="x", expected_dim=None):
+            return [[0.1 * (i + 1) for i in range(8)] for _ in texts]
+
+    mock_get_prov.return_value = _MatProvider()
+
+    # Add a chunk
+    _add_chunk(conn, "test content", 0)
+
+    create_space(conn, "mat", "qwen3", 4, "ollama", matryoshka_base_dim=8)
+    result = backfill_space(conn, "mat")
+    assert result["chunks_processed"] == 1
+
+    # Verify stored vector is 4-dim (not 8-dim)
+    import struct
+
+    row = conn.execute("SELECT embedding FROM chunks_vec_mat").fetchone()
+    vec = struct.unpack(f"{4}f", row["embedding"])
+    assert len(vec) == 4

@@ -180,6 +180,7 @@ erDiagram
         TEXT created_at
         INTEGER chunk_count
         INTEGER total_chunks
+        INTEGER matryoshka_base_dim
     }
 
     chunks ||--o| chunks_vec : "embedding"
@@ -302,18 +303,19 @@ Dimension is read from `config.embed_dim` at schema creation time. Dropped and r
 
 Registry for embedding spaces. Each space owns a `sqlite-vec` virtual table and tracks its model, provider, dimension, and lifecycle status. Exactly one space can be `active` at any time (enforced by a partial unique index on `status`). See [Embedding Spaces](../usage/embedding-spaces.md) for the full lifecycle workflow.
 
-| Column           | Type    | Constraints                       | Default           | Description                                      |
-| ---------------- | ------- | --------------------------------- | ----------------- | ------------------------------------------------ |
-| `name`           | TEXT    | PRIMARY KEY                       | --                | Unique space identifier (alphanumeric/underscore) |
-| `model`          | TEXT    | NOT NULL                          | --                | Embedding model name                             |
-| `provider`       | TEXT    | NOT NULL                          | --                | Embedding provider (`ollama`, `openai`, `onnx`)  |
-| `dim`            | INTEGER | NOT NULL                          | --                | Embedding dimension                              |
-| `chunk_strategy` | TEXT    | NOT NULL, CHECK                   | `'mechanical'`    | One of: `mechanical`, `semantic`                 |
-| `status`         | TEXT    | NOT NULL, CHECK                   | --                | One of: `active`, `populating`, `deprecated`     |
-| `table_name`     | TEXT    | NOT NULL, UNIQUE                  | --                | Backing vec0 virtual table name                  |
-| `created_at`     | TEXT    | NOT NULL                          | `datetime('now')` | ISO 8601 timestamp                               |
-| `chunk_count`    | INTEGER | --                                | `0`               | Number of chunks backfilled so far               |
-| `total_chunks`   | INTEGER | --                                | --                | Total chunks targeted for backfill               |
+| Column                | Type    | Constraints      | Default           | Description                                                             |
+| --------------------- | ------- | ---------------- | ----------------- | ----------------------------------------------------------------------- |
+| `name`                | TEXT    | PRIMARY KEY      | --                | Unique space identifier (alphanumeric/underscore)                       |
+| `model`               | TEXT    | NOT NULL         | --                | Embedding model name                                                    |
+| `provider`            | TEXT    | NOT NULL         | --                | Embedding provider (`ollama`, `openai`, `onnx`)                         |
+| `dim`                 | INTEGER | NOT NULL         | --                | Embedding dimension                                                     |
+| `chunk_strategy`      | TEXT    | NOT NULL, CHECK  | `'mechanical'`    | One of: `mechanical`, `semantic`                                        |
+| `status`              | TEXT    | NOT NULL, CHECK  | --                | One of: `active`, `populating`, `deprecated`                            |
+| `table_name`          | TEXT    | NOT NULL, UNIQUE | --                | Backing vec0 virtual table name                                         |
+| `created_at`          | TEXT    | NOT NULL         | `datetime('now')` | ISO 8601 timestamp                                                      |
+| `chunk_count`         | INTEGER | --               | `0`               | Number of chunks backfilled so far                                      |
+| `total_chunks`        | INTEGER | --               | --                | Total chunks targeted for backfill                                      |
+| `matryoshka_base_dim` | INTEGER | --               | `NULL`            | Native model dimension for Matryoshka truncation (NULL = no truncation) |
 
 **CHECK constraints:**
 

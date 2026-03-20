@@ -115,13 +115,13 @@ Tools for querying the index.
 
 Search the research index using hybrid semantic + keyword search.
 
-| Parameter     | Type          | Required | Default    | Description                                                                 |
-| ------------- | ------------- | -------- | ---------- | --------------------------------------------------------------------------- |
-| `query`            | `str`         | yes      | --         | Natural language search query                                               |
-| `top_k`            | `int`         | no       | `10`       | Number of results to return                                                 |
-| `source_type`      | `str \| None` | no       | `None`     | Filter results by type (`pdf`, `markdown`, `code`, `web`, `note`, `figure`) |
-| `mode`             | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)          |
-| `chunk_strategy`   | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all. |
+| Parameter        | Type          | Required | Default    | Description                                                                 |
+| ---------------- | ------------- | -------- | ---------- | --------------------------------------------------------------------------- |
+| `query`          | `str`         | yes      | --         | Natural language search query                                               |
+| `top_k`          | `int`         | no       | `10`       | Number of results to return                                                 |
+| `source_type`    | `str \| None` | no       | `None`     | Filter results by type (`pdf`, `markdown`, `code`, `web`, `note`, `figure`) |
+| `mode`           | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)          |
+| `chunk_strategy` | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all. |
 
 **Returns:** Array of result objects:
 
@@ -571,10 +571,11 @@ Get current embedding model configuration (model name and dimension).
 
 Re-embed all chunks with a new embedding model. Drops and recreates the vector table with new dimensions, then re-embeds all existing chunks. This is expensive -- use only when switching models.
 
-| Parameter | Type  | Required | Default | Description                                                      |
-| --------- | ----- | -------- | ------- | ---------------------------------------------------------------- |
-| `model`   | `str` | yes      | --      | Ollama model name (e.g. `mxbai-embed-large`, `nomic-embed-text`) |
-| `dim`     | `int` | yes      | --      | Embedding dimension for the new model                            |
+| Parameter             | Type          | Required | Default | Description                                                                                                                                   |
+| --------------------- | ------------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`               | `str`         | yes      | --      | Ollama model name (e.g. `mxbai-embed-large`, `nomic-embed-text`)                                                                              |
+| `dim`                 | `int`         | yes      | --      | Embedding dimension for the new model                                                                                                         |
+| `matryoshka_base_dim` | `int \| None` | no       | `None`  | Native model dimension for Matryoshka truncation. Embeds at this dim, truncates to `dim`, L2 re-normalizes. Must be > `dim`. MRL models only. |
 
 **Returns:** Summary with chunk count and timing.
 
@@ -582,8 +583,8 @@ Re-embed all chunks with a new embedding model. Drops and recreates the vector t
 
 Configure the chunking strategy for PDF ingestion.
 
-| Parameter  | Type          | Required | Default | Description                                                              |
-| ---------- | ------------- | -------- | ------- | ------------------------------------------------------------------------ |
+| Parameter  | Type          | Required | Default | Description                                                                      |
+| ---------- | ------------- | -------- | ------- | -------------------------------------------------------------------------------- |
 | `strategy` | `str \| None` | no       | `None`  | `mechanical` (8K, fixed-size) or `semantic` (32K, section-level). Omit to query. |
 
 With no arguments, returns the current strategy. Non-PDF content always uses mechanical chunking regardless of this setting.
@@ -688,13 +689,14 @@ List all embedding spaces with status, progress, and chunk strategy.
 
 Create a new embedding space in `populating` status.
 
-| Parameter        | Type  | Required | Default        | Description                                                   |
-| ---------------- | ----- | -------- | -------------- | ------------------------------------------------------------- |
-| `name`           | `str` | yes      | --             | Unique space name (alphanumeric + underscores only)           |
-| `model`          | `str` | yes      | --             | Embedding model name (e.g. `bge-m3`, `qwen3-embedding`)      |
-| `dim`            | `int` | yes      | --             | Embedding dimension (e.g. 768, 1024)                          |
-| `provider`       | `str` | yes      | --             | Embedding provider (`ollama`, `openai`, `onnx`)               |
-| `chunk_strategy` | `str` | no       | `"mechanical"` | Which chunks to embed: `mechanical` or `semantic` (from #100) |
+| Parameter             | Type          | Required | Default        | Description                                                                                                                                   |
+| --------------------- | ------------- | -------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                | `str`         | yes      | --             | Unique space name (alphanumeric + underscores only)                                                                                           |
+| `model`               | `str`         | yes      | --             | Embedding model name (e.g. `bge-m3`, `qwen3-embedding`)                                                                                       |
+| `dim`                 | `int`         | yes      | --             | Embedding dimension (e.g. 768, 1024)                                                                                                          |
+| `provider`            | `str`         | yes      | --             | Embedding provider (`ollama`, `openai`, `onnx`)                                                                                               |
+| `chunk_strategy`      | `str`         | no       | `"mechanical"` | Which chunks to embed: `mechanical` or `semantic` (from #100)                                                                                 |
+| `matryoshka_base_dim` | `int \| None` | no       | `None`         | Native model dimension for Matryoshka truncation. Embeds at this dim, truncates to `dim`, L2 re-normalizes. Must be > `dim`. MRL models only. |
 
 **Returns:**
 
@@ -711,10 +713,10 @@ Create a new embedding space in `populating` status.
 
 Backfill an embedding space with chunk embeddings. Resumable -- interrupted backfills pick up where they left off.
 
-| Parameter    | Type  | Required | Default | Description                                              |
-| ------------ | ----- | -------- | ------- | -------------------------------------------------------- |
-| `name`       | `str` | yes      | --      | Name of the space to backfill (must be in `populating`)  |
-| `batch_size` | `int` | no       | `32`    | Number of chunks per embedding batch                     |
+| Parameter    | Type  | Required | Default | Description                                             |
+| ------------ | ----- | -------- | ------- | ------------------------------------------------------- |
+| `name`       | `str` | yes      | --      | Name of the space to backfill (must be in `populating`) |
+| `batch_size` | `int` | no       | `32`    | Number of chunks per embedding batch                    |
 
 **Returns:**
 
@@ -726,9 +728,9 @@ Backfill an embedding space with chunk embeddings. Resumable -- interrupted back
 
 Promote an embedding space to active. Deprecates the current active space and syncs config.
 
-| Parameter | Type  | Required | Default | Description                     |
-| --------- | ----- | -------- | ------- | ------------------------------- |
-| `name`    | `str` | yes      | --      | Name of the space to promote    |
+| Parameter | Type  | Required | Default | Description                  |
+| --------- | ----- | -------- | ------- | ---------------------------- |
+| `name`    | `str` | yes      | --      | Name of the space to promote |
 
 **Returns:**
 
@@ -744,9 +746,9 @@ Promote an embedding space to active. Deprecates the current active space and sy
 
 Mark an embedding space as deprecated.
 
-| Parameter | Type  | Required | Default | Description                                              |
-| --------- | ----- | -------- | ------- | -------------------------------------------------------- |
-| `name`    | `str` | yes      | --      | Name of the space to deprecate (cannot be active space)  |
+| Parameter | Type  | Required | Default | Description                                             |
+| --------- | ----- | -------- | ------- | ------------------------------------------------------- |
+| `name`    | `str` | yes      | --      | Name of the space to deprecate (cannot be active space) |
 
 **Returns:**
 
@@ -758,9 +760,9 @@ Mark an embedding space as deprecated.
 
 Drop a deprecated space's vec table and remove its registry entry.
 
-| Parameter | Type  | Required | Default | Description                                        |
-| --------- | ----- | -------- | ------- | -------------------------------------------------- |
-| `name`    | `str` | yes      | --      | Name of the deprecated space to clean up           |
+| Parameter | Type  | Required | Default | Description                              |
+| --------- | ----- | -------- | ------- | ---------------------------------------- |
+| `name`    | `str` | yes      | --      | Name of the deprecated space to clean up |
 
 **Returns:**
 

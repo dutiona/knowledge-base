@@ -387,11 +387,13 @@ def embed_config() -> str:
     if active:
         config["active_space"] = active["name"]
         config["chunk_strategy"] = active["chunk_strategy"]
+        if active.get("matryoshka_base_dim"):
+            config["matryoshka_base_dim"] = active["matryoshka_base_dim"]
     return json.dumps(config)
 
 
 @mcp.tool()
-def re_embed_tool(model: str, dim: int) -> str:
+def re_embed_tool(model: str, dim: int, matryoshka_base_dim: int | None = None) -> str:
     """Re-embed all chunks with a new embedding model.
 
     Drops and recreates the vector table with new dimensions, then re-embeds
@@ -399,10 +401,14 @@ def re_embed_tool(model: str, dim: int) -> str:
 
     Args:
         model: Ollama model name (e.g. 'mxbai-embed-large', 'nomic-embed-text').
-        dim: Embedding dimension for the new model.
+        dim: Embedding dimension for the new model. For Matryoshka models,
+            this is the truncated storage dimension.
+        matryoshka_base_dim: Native embedding dimension when using Matryoshka
+            truncation. Must be greater than ``dim``. See
+            ``create_embed_space_tool`` for details.
     """
     conn = _get_conn()
-    result = re_embed(conn, model, dim)
+    result = re_embed(conn, model, dim, matryoshka_base_dim=matryoshka_base_dim)
 
     # All "similar" relationships are invalid after embedding space change
     conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
@@ -430,19 +436,28 @@ def create_embed_space_tool(
     dim: int,
     provider: str,
     chunk_strategy: str = "mechanical",
+    matryoshka_base_dim: int | None = None,
 ) -> str:
     """Create a new embedding space in 'populating' status.
 
     Args:
         name: Unique space name (alphanumeric + underscores only).
         model: Embedding model name (e.g. 'qwen3-embedding').
-        dim: Embedding dimension (e.g. 768, 1024).
+        dim: Embedding dimension (e.g. 768, 1024). For Matryoshka models,
+            this is the truncated storage dimension.
         provider: Embedding provider ('ollama', 'openai', 'onnx').
         chunk_strategy: Which chunks to embed ('mechanical' or 'semantic').
+        matryoshka_base_dim: Native embedding dimension of the model when using
+            Matryoshka truncation. The provider embeds at this dimension, then
+            the system truncates to ``dim`` and L2 re-normalizes before storage.
+            Must be greater than ``dim``. Only useful with MRL-capable models
+            (e.g. Qwen3-Embedding, nomic-embed-text-v2-moe).
     """
     conn = _get_conn()
     try:
-        result = create_space(conn, name, model, dim, provider, chunk_strategy)
+        result = create_space(
+            conn, name, model, dim, provider, chunk_strategy, matryoshka_base_dim
+        )
         return json.dumps(result)
     except ValueError as e:
         return json.dumps({"error": str(e)})

@@ -394,6 +394,17 @@ def delete_chunk_vecs(
     _batched_execute(conn, f"DELETE FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids)
 
 
+def _migrate_embed_spaces_matryoshka(conn: sqlite3.Connection) -> None:
+    """Add matryoshka_base_dim column to embed_spaces if missing."""
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()
+    }
+    if "matryoshka_base_dim" in columns:
+        return
+    conn.execute("ALTER TABLE embed_spaces ADD COLUMN matryoshka_base_dim INTEGER")
+    conn.commit()
+
+
 def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     """Register the default embedding space if embed_spaces is empty.
 
@@ -667,7 +678,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
         table_name TEXT NOT NULL UNIQUE,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         chunk_count INTEGER DEFAULT 0,
-        total_chunks INTEGER
+        total_chunks INTEGER,
+        matryoshka_base_dim INTEGER
+            CHECK(matryoshka_base_dim IS NULL OR matryoshka_base_dim > dim)
     );
     """)
 
@@ -719,3 +732,4 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_jobs_types(conn)
     _migrate_chunk_sessions(conn)
     _bootstrap_embed_spaces(conn, embed_dim)
+    _migrate_embed_spaces_matryoshka(conn)

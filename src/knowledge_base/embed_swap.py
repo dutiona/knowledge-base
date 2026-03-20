@@ -59,6 +59,7 @@ def create_space(
     dim: int,
     provider: str,
     chunk_strategy: str = "mechanical",
+    matryoshka_base_dim: int | None = None,
 ) -> dict:
     """Create a new embedding space in 'populating' status.
 
@@ -71,6 +72,10 @@ def create_space(
     if chunk_strategy not in ("mechanical", "semantic"):
         raise ValueError(
             f"chunk_strategy must be 'mechanical' or 'semantic', got: {chunk_strategy!r}"
+        )
+    if matryoshka_base_dim is not None and matryoshka_base_dim <= dim:
+        raise ValueError(
+            f"matryoshka_base_dim ({matryoshka_base_dim}) must be greater than dim ({dim})"
         )
 
     existing = conn.execute(
@@ -92,9 +97,10 @@ def create_space(
 
     conn.execute(
         """INSERT INTO embed_spaces
-           (name, model, provider, dim, chunk_strategy, status, table_name, total_chunks)
-           VALUES (?, ?, ?, ?, ?, 'populating', ?, ?)""",
-        (name, model, provider, dim, chunk_strategy, tbl, total),
+           (name, model, provider, dim, chunk_strategy, status, table_name,
+            total_chunks, matryoshka_base_dim)
+           VALUES (?, ?, ?, ?, ?, 'populating', ?, ?, ?)""",
+        (name, model, provider, dim, chunk_strategy, tbl, total, matryoshka_base_dim),
     )
     conn.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS [{tbl}] USING vec0(
@@ -109,6 +115,7 @@ def create_space(
         "table_name": tbl,
         "status": "populating",
         "total_chunks": total,
+        "matryoshka_base_dim": matryoshka_base_dim,
     }
 
 
@@ -133,6 +140,8 @@ def backfill_space(
     dim = space["dim"]
     provider_name = space["provider"]
     chunk_strategy = space["chunk_strategy"]
+    matryoshka_base_dim = space["matryoshka_base_dim"]
+    embed_dim = matryoshka_base_dim or dim
 
     embed_provider = get_provider(provider_name, allow_env_override=False)
 
@@ -168,7 +177,12 @@ def backfill_space(
         ids = [row["id"] for row in batch]
         last_id = ids[-1]
 
-        embeddings = embed_provider.embed(texts, model=model, expected_dim=dim)
+        embeddings = embed_provider.embed(texts, model=model, expected_dim=embed_dim)
+
+        if matryoshka_base_dim:
+            from .embeddings import truncate_embedding
+
+            embeddings = [truncate_embedding(e, dim) for e in embeddings]
 
         for chunk_id, emb_vec in zip(ids, embeddings):
             conn.execute(
@@ -266,7 +280,21 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
         "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', ?)",
         (space["chunk_strategy"],),
     )
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_matryoshka_base_dim', ?)",
+        (str(space["matryoshka_base_dim"] or ""),),
+    )
     conn.commit()
+
+    # Always rebuild folder summaries on promotion (model/dim may differ)
+    embed_provider = get_provider(space["provider"], allow_env_override=False)
+    _re_embed_folder_summaries(
+        conn,
+        embed_provider,
+        space["model"],
+        space["dim"],
+        matryoshka_base_dim=space["matryoshka_base_dim"],
+    )
 
     result: dict = {"promoted": space_name, "deprecated": old_name}
     if stale_warning:
@@ -329,12 +357,19 @@ def re_embed(
     new_dim: int,
     batch_size: int = 32,
     provider: str | None = None,
+    matryoshka_base_dim: int | None = None,
 ) -> dict:
     """Re-embed all chunks with a new model via the space lifecycle.
 
     Creates a new space, backfills it, promotes it, and re-embeds folder
     summaries. The old space is left as 'deprecated' (not auto-cleaned).
     """
+    if matryoshka_base_dim is not None and matryoshka_base_dim <= new_dim:
+        raise ValueError(
+            f"matryoshka_base_dim ({matryoshka_base_dim}) must be greater than "
+            f"new_dim ({new_dim})"
+        )
+
     # Resolve provider
     cfg = get_embed_config(conn)
     resolved_provider = provider or cfg["provider"]
@@ -354,21 +389,26 @@ def re_embed(
     if existing:
         space_name = f"{space_name}_{int(time.time())}"
 
-    create_space(conn, space_name, new_model, new_dim, resolved_provider, strategy)
+    create_space(
+        conn,
+        space_name,
+        new_model,
+        new_dim,
+        resolved_provider,
+        strategy,
+        matryoshka_base_dim=matryoshka_base_dim,
+    )
     result = backfill_space(conn, space_name, batch_size)
     promote_space(conn, space_name)
 
-    # Re-embed folder summaries (single table, always matches active space)
-    embed_provider = get_provider(
-        resolved_provider, allow_env_override=provider is None
-    )
-    folders_processed = _re_embed_folder_summaries(
-        conn, embed_provider, new_model, new_dim
-    )
+    # Count folder summaries re-embedded (done inside promote_space)
+    folders_count = conn.execute(
+        "SELECT COUNT(*) FROM folder_summaries_vec"
+    ).fetchone()[0]
 
     return {
         "chunks_processed": result["chunks_processed"],
-        "folders_processed": folders_processed,
+        "folders_processed": folders_count,
         "model": new_model,
         "dim": new_dim,
         "space": space_name,
@@ -380,6 +420,7 @@ def _re_embed_folder_summaries(
     embed_provider: EmbeddingProvider,
     model: str,
     dim: int,
+    matryoshka_base_dim: int | None = None,
 ) -> int:
     """Recreate folder_summaries_vec with new dimensions and re-embed."""
     conn.execute("DROP TABLE IF EXISTS folder_summaries_vec")
@@ -396,8 +437,15 @@ def _re_embed_folder_summaries(
         conn.commit()
         return 0
 
+    embed_dim = matryoshka_base_dim or dim
     texts = [row["summary"] for row in folder_rows]
-    embeddings = embed_provider.embed(texts, model=model, expected_dim=dim)  # type: ignore[union-attr]
+    embeddings = embed_provider.embed(texts, model=model, expected_dim=embed_dim)  # type: ignore[union-attr]
+
+    if matryoshka_base_dim:
+        from .embeddings import truncate_embedding
+
+        embeddings = [truncate_embedding(e, dim) for e in embeddings]
+
     for row, emb in zip(folder_rows, embeddings):
         conn.execute(
             "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
