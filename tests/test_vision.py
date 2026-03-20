@@ -1,10 +1,13 @@
 """Tests for vision/figure extraction schema support."""
 
 import json
+import subprocess
+
+import fitz as _fitz
 import pytest
 import sqlite3
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from knowledge_base.db import get_connection, init_schema, DEFAULT_EMBED_DIM
 from knowledge_base.vision import _FIGURE_BASE, _FIGS_PER_PAGE
@@ -345,9 +348,6 @@ def test_validate_figure_rejects_missing_type():
 # Step 3: Page rendering
 # ---------------------------------------------------------------------------
 
-import fitz as _fitz
-import pytest
-
 
 def _make_test_pdf(path, pages_text: list[str]) -> str:
     """Create a minimal PDF with given page texts."""
@@ -463,8 +463,6 @@ def test_get_paper_source_uri_not_found(tmp_path):
 # ---------------------------------------------------------------------------
 # Step 5: Vision API call
 # ---------------------------------------------------------------------------
-
-from unittest.mock import MagicMock
 
 
 def _mock_httpx_response(content: str, status_code: int = 200) -> MagicMock:
@@ -1368,8 +1366,6 @@ def test_configure_omniparser_disable(tmp_path):
 # ---------------------------------------------------------------------------
 # OmniParser subprocess tests
 # ---------------------------------------------------------------------------
-
-import subprocess
 
 
 def test_run_omniparser_success(tmp_path):
