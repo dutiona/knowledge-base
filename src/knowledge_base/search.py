@@ -276,10 +276,9 @@ def search(
         if all_candidate_ids:
             valid_rows = _batched_select(
                 conn,
-                "SELECT id FROM chunks WHERE id IN ({ph}) AND chunk_strategy = '"
-                + chunk_strategy.replace("'", "''")
-                + "'",
+                "SELECT id FROM chunks WHERE id IN ({ph}) AND chunk_strategy = ?",
                 all_candidate_ids,
+                extra_params=[chunk_strategy],
             )
             valid_ids = {row["id"] for row in valid_rows}
             fts_results = [(cid, s) for cid, s in fts_results if cid in valid_ids]

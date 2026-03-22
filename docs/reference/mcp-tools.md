@@ -572,11 +572,11 @@ Get current embedding model configuration (model name and dimension).
 
 Re-embed all chunks with a new embedding model. Drops and recreates the vector table with new dimensions, then re-embeds all existing chunks. This is expensive -- use only when switching models.
 
-| Parameter             | Type          | Required | Default | Description                                                                                                                                   |
-| --------------------- | ------------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`               | `str`         | yes      | --      | Ollama model name (e.g. `mxbai-embed-large`, `nomic-embed-text`)                                                                              |
-| `dim`                 | `int`         | yes      | --      | Embedding dimension for the new model                                                                                                         |
-| `matryoshka_base_dim` | `int \| None` | no       | `None`  | Native model dimension for Matryoshka truncation. Embeds at this dim, truncates to `dim`, L2 re-normalizes. Must be > `dim`. MRL models only. |
+| Parameter             | Type          | Required | Default | Description                                                                                                                                                                                                      |
+| --------------------- | ------------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`               | `str`         | yes      | --      | Ollama model name (e.g. `mxbai-embed-large`, `nomic-embed-text`)                                                                                                                                                 |
+| `dim`                 | `int`         | yes      | --      | Embedding dimension for the new model                                                                                                                                                                            |
+| `matryoshka_base_dim` | `int \| None` | no       | `None`  | Native model dimension for Matryoshka truncation. Embeds at this dim, truncates to `dim`, L2 re-normalizes. Must be > `dim`. MRL models only (e.g. Qwen3-Embedding, nomic-embed-text-v2-moe, mxbai-embed-large). |
 
 **Returns:** Summary with chunk count and timing.
 
@@ -690,14 +690,14 @@ List all embedding spaces with status, progress, and chunk strategy.
 
 Create a new embedding space in `populating` status.
 
-| Parameter             | Type          | Required | Default        | Description                                                                                                                                   |
-| --------------------- | ------------- | -------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                | `str`         | yes      | --             | Unique space name (alphanumeric + underscores only)                                                                                           |
-| `model`               | `str`         | yes      | --             | Embedding model name (e.g. `bge-m3`, `qwen3-embedding`)                                                                                       |
-| `dim`                 | `int`         | yes      | --             | Embedding dimension (e.g. 768, 1024)                                                                                                          |
-| `provider`            | `str`         | yes      | --             | Embedding provider (`ollama`, `openai`, `onnx`)                                                                                               |
-| `chunk_strategy`      | `str`         | no       | `"mechanical"` | Which chunks to embed: `mechanical` or `semantic` (from #100)                                                                                 |
-| `matryoshka_base_dim` | `int \| None` | no       | `None`         | Native model dimension for Matryoshka truncation. Embeds at this dim, truncates to `dim`, L2 re-normalizes. Must be > `dim`. MRL models only. |
+| Parameter             | Type          | Required | Default        | Description                                                                                                                                                                                                      |
+| --------------------- | ------------- | -------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                | `str`         | yes      | --             | Unique space name (alphanumeric + underscores only)                                                                                                                                                              |
+| `model`               | `str`         | yes      | --             | Embedding model name (e.g. `bge-m3`, `qwen3-embedding`)                                                                                                                                                          |
+| `dim`                 | `int`         | yes      | --             | Embedding dimension (e.g. 768, 1024)                                                                                                                                                                             |
+| `provider`            | `str`         | yes      | --             | Embedding provider (`ollama`, `openai`, `onnx`)                                                                                                                                                                  |
+| `chunk_strategy`      | `str`         | no       | `"mechanical"` | Which chunks to embed: `mechanical` or `semantic` (from #100)                                                                                                                                                    |
+| `matryoshka_base_dim` | `int \| None` | no       | `None`         | Native model dimension for Matryoshka truncation. Embeds at this dim, truncates to `dim`, L2 re-normalizes. Must be > `dim`. MRL models only (e.g. Qwen3-Embedding, nomic-embed-text-v2-moe, mxbai-embed-large). |
 
 **Returns:**
 

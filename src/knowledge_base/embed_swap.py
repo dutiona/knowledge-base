@@ -149,18 +149,18 @@ def backfill_space(
     has_strategy = _has_chunk_strategy_column(conn)
     if has_strategy:
         base_query = (
-            "SELECT id, content FROM chunks "
-            "WHERE chunk_strategy = ? AND id > ? "
-            "AND id NOT IN (SELECT chunk_id FROM [{tbl}]) "
-            "ORDER BY id LIMIT ?"
+            "SELECT c.id, c.content FROM chunks c "
+            "LEFT JOIN [{tbl}] v ON c.id = v.chunk_id "
+            "WHERE c.chunk_strategy = ? AND c.id > ? AND v.chunk_id IS NULL "
+            "ORDER BY c.id LIMIT ?"
         ).replace("{tbl}", tbl)
         base_params_prefix = [chunk_strategy]
     else:
         base_query = (
-            "SELECT id, content FROM chunks "
-            "WHERE id > ? "
-            "AND id NOT IN (SELECT chunk_id FROM [{tbl}]) "
-            "ORDER BY id LIMIT ?"
+            "SELECT c.id, c.content FROM chunks c "
+            "LEFT JOIN [{tbl}] v ON c.id = v.chunk_id "
+            "WHERE c.id > ? AND v.chunk_id IS NULL "
+            "ORDER BY c.id LIMIT ?"
         ).replace("{tbl}", tbl)
         base_params_prefix = []
 

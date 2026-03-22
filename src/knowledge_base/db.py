@@ -58,16 +58,26 @@ def _batched_execute(
 
 
 def _batched_select(
-    conn: sqlite3.Connection, sql_template: str, ids: list
+    conn: sqlite3.Connection,
+    sql_template: str,
+    ids: list,
+    extra_params: list | None = None,
 ) -> list[sqlite3.Row]:
-    """Execute a SELECT with an IN clause in batches, returning all rows."""
+    """Execute a SELECT with an IN clause in batches, returning all rows.
+
+    The ``{ph}`` placeholder in *sql_template* is replaced with ``?,?,…``
+    for each batch.  Any additional ``?`` placeholders **after** ``{ph}``
+    should have their values supplied via *extra_params*.
+    """
+    suffix = extra_params or []
     results: list[sqlite3.Row] = []
     for i in range(0, len(ids), _SQL_BATCH_SIZE):
         batch = ids[i : i + _SQL_BATCH_SIZE]
         placeholders = ",".join("?" * len(batch))
         results.extend(
             conn.execute(
-                sql_template.replace("{ph}", placeholders, 1), batch
+                sql_template.replace("{ph}", placeholders, 1),
+                [*batch, *suffix],
             ).fetchall()
         )
     return results
