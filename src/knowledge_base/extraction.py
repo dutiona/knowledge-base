@@ -1058,12 +1058,21 @@ def _sanitize_url(url: str) -> str:
 
     try:
         parsed = urlparse(url)
-        host = parsed.hostname or parsed.netloc or url
-        port = f":{parsed.port}" if parsed.port else ""
+        host = parsed.hostname or "unknown"
+        try:
+            port = f":{parsed.port}" if parsed.port else ""
+        except ValueError:
+            port = ""
         return urlunparse((parsed.scheme, f"{host}{port}", parsed.path, "", "", ""))
     except Exception:
-        # Conservative fallback: strip credentials and query params
-        return url.split("@")[-1].split("?")[0] if "@" in url else url.split("?")[0]
+        # Conservative fallback: strip everything that could contain credentials
+        # Remove userinfo (before @), query params (?), and fragments (#)
+        safe = url.split("://", 1)[-1] if "://" in url else url
+        safe = safe.split("@")[-1]  # drop userinfo
+        safe = safe.split("?")[0]  # drop query
+        safe = safe.split("#")[0]  # drop fragment
+        scheme = url.split("://", 1)[0] if "://" in url else "http"
+        return f"{scheme}://{safe}"
 
 
 _CONNECTIVITY_TIMEOUT = 3
