@@ -9,6 +9,7 @@ Phase 2 of issue #60.
 from __future__ import annotations
 
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -16,6 +17,8 @@ import fitz
 import pytest
 
 from knowledge_base.ingest import _extract_pdf_markdown, _extract_pdf_text
+
+_has_tessdata = shutil.which("tesseract") is not None
 
 # ---------------------------------------------------------------------------
 # Synthetic PDF builders (adapted from test_pymupdf4llm_eval.py)
@@ -153,6 +156,7 @@ def test_real_pdf_table_intact(tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(not _has_tessdata, reason="tesseract OCR not installed")
 def test_real_pdf_image_refs(tmp_path):
     """Real PDF with embedded image + write_images=True -> ![](…) in output."""
     from PIL import Image

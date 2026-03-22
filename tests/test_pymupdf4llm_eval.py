@@ -8,12 +8,16 @@ may trigger different heuristics than real papers.
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 import fitz
 import pymupdf4llm
+import pytest
 
 from knowledge_base.ingest import _chunk_text
+
+_has_tessdata = shutil.which("tesseract") is not None
 
 # ---------------------------------------------------------------------------
 # Fixed extraction config — pinned kwargs for reproducibility
@@ -298,6 +302,7 @@ class TestMarkdownPreservesLists:
 class TestMarkdownExtractsImageRefs:
     """to_markdown() should reference embedded raster images."""
 
+    @pytest.mark.skipif(not _has_tessdata, reason="tesseract OCR not installed")
     def test_image_reference_present(self, tmp_path: Path) -> None:
         png_path = _create_test_png(tmp_path / "test_figure.png")
         pdf = _make_image_pdf(tmp_path / "with_image.pdf", png_path)
