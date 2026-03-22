@@ -67,6 +67,17 @@ def _l2_normalize(vec: list[float]) -> list[float]:
     return [x / norm for x in vec]
 
 
+def truncate_embedding(vec: list[float], target_dim: int) -> list[float]:
+    """Truncate a Matryoshka embedding and L2 re-normalize.
+
+    Matryoshka models produce embeddings where prefix subsets retain
+    semantic meaning. After truncation, re-normalization is required
+    because the truncated prefix is not unit-length.
+    """
+    truncated = vec[:target_dim]
+    return _l2_normalize(truncated)
+
+
 @runtime_checkable
 class EmbeddingProvider(Protocol):
     """Interface for embedding backends."""

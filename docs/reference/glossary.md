@@ -35,7 +35,7 @@ map-reduce extraction
     The LLM extraction strategy used by `extract_structure_tool`. Each {term}`chunk` is independently analyzed by the LLM (map phase), then results are deduplicated and merged across chunks (reduce phase) to produce consolidated methods, datasets, and metrics.
 
 MCP
-    Model Context Protocol. A standard for exposing tools and resources to AI assistants. knowledge-base runs as an MCP server, making its 33 tools available to any MCP-compatible client.
+    Model Context Protocol. A standard for exposing tools and resources to AI assistants. knowledge-base runs as an MCP server, making its 43 tools available to any MCP-compatible client.
 
 OmniParser
     A local tool for detecting UI elements, OCR text, and icons in images. When configured, enriches figure descriptions produced by the vision model with detected text and element labels. Requires a separate installation with its own Python venv.
@@ -44,7 +44,7 @@ Reciprocal Rank Fusion (RRF)
     A rank aggregation algorithm that merges results from multiple ranked lists. For each result, its RRF score is the sum of `1/(k + rank)` across all lists where it appears. Used in {term}`hybrid search` to combine {term}`FTS5` and {term}`sqlite-vec` results.
 
 sqlite-vec
-    A SQLite extension providing vector similarity search. Stores float embeddings in a virtual table (`chunks_vec`) and supports nearest-neighbor queries via {term}`cosine similarity`. Powers the semantic component of {term}`hybrid search`.
+    A SQLite extension providing vector similarity search. Stores float embeddings in virtual tables and supports nearest-neighbor queries via {term}`cosine similarity`. Powers the semantic component of {term}`hybrid search`. The multi-space embedding architecture (#99) uses one vec table per embedding space (`chunks_vec` for the default, `chunks_vec_<name>` for additional spaces), all tracked in the `embed_spaces` registry.
 
 supersession
     The mechanism by which a newer conclusion replaces an older one while preserving history. The old conclusion's `superseded_by` column points to the new one, forming a chain that can be traversed with `get_conclusion_chain_tool`.

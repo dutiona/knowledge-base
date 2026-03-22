@@ -11,7 +11,8 @@ retrieval. Each chunk has:
   for Python code)
 - **content_hash** -- SHA-256 prefix for deduplication (if a chunk with the same hash
   exists, it is skipped on ingest)
-- **embedding** -- a dense vector (1024-dim BGE-M3 by default) stored in `chunks_vec`
+- **embedding** -- a dense vector (1024-dim BGE-M3 by default) stored in the active
+  embedding space's vec table (see [Embedding Spaces](../usage/embedding-spaces.md))
 - **FTS5 index** -- full-text search via SQLite FTS5 with Porter stemming and Unicode
   tokenization
 - **source_type** -- one of: `pdf`, `markdown`, `code`, `web`, `note`, `figure`

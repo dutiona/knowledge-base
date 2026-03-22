@@ -276,6 +276,18 @@ class TestONNXProvider:
         assert isinstance(provider, ONNXProvider)
 
 
+class TestTruncateEmbedding:
+    def test_truncate_embedding(self):
+        from knowledge_base.embeddings import truncate_embedding
+
+        vec = [0.5, 0.5, 0.5, 0.5]  # unit-ish vector
+        result = truncate_embedding(vec, 2)
+        assert len(result) == 2
+        # Should be L2-normalized
+        norm = math.sqrt(sum(x * x for x in result))
+        assert abs(norm - 1.0) < 1e-6
+
+
 class TestL2Normalize:
     def test_zero_vector_warns(self, caplog):
         """Zero vectors should log a warning (indicates upstream problem)."""

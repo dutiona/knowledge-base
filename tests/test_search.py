@@ -158,7 +158,7 @@ def test_search_fts_with_keyword_prefilter(tmp_path):
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.search.embed_single", _fake_embed_single)
 def test_search_no_strategy_filter_by_default(tmp_path):
-    """Default search (chunk_strategy=None) returns all chunks regardless of strategy."""
+    """Default search (no chunk_strategy) returns all chunks regardless of strategy."""
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
@@ -174,6 +174,8 @@ def test_search_no_strategy_filter_by_default(tmp_path):
     )
     conn.commit()
 
+    # Default: no strategy filter — both chunks visible (vec leg filters
+    # implicitly via active space table, but FTS leg returns all)
     results = search(conn, "attention", mode="fts")
     assert len(results) == 2
 
@@ -205,18 +207,12 @@ def test_search_explicit_strategy_filter(tmp_path):
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.search.embed_single", _fake_embed_single)
-def test_search_strategy_filter_nonpdf_visible(tmp_path):
-    """Non-PDF chunks (always mechanical) remain visible with no strategy filter."""
+def test_search_explicit_strategy_filter_both_directions(tmp_path):
+    """Explicit chunk_strategy filters in both directions."""
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
 
-    # Set config to semantic (should NOT affect search default)
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')"
-    )
-
-    # Insert non-PDF chunk (mechanical) and PDF chunk (semantic)
     conn.execute(
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, chunk_strategy) "
         "VALUES ('md1', 'markdown deep learning notes', 'markdown', '/tmp/notes.md', 0, 'mechanical')"
@@ -227,6 +223,18 @@ def test_search_strategy_filter_nonpdf_visible(tmp_path):
     )
     conn.commit()
 
-    # Default search (no filter) should return both
-    results = search(conn, "deep learning", mode="fts")
-    assert len(results) == 2
+    # No filter — both visible
+    all_results = search(conn, "deep learning", mode="fts")
+    assert len(all_results) == 2
+
+    # Explicit semantic filter
+    sem_results = search(conn, "deep learning", mode="fts", chunk_strategy="semantic")
+    assert len(sem_results) == 1
+    assert sem_results[0].source_type == "pdf"
+
+    # Explicit mechanical filter
+    mech_results = search(
+        conn, "deep learning", mode="fts", chunk_strategy="mechanical"
+    )
+    assert len(mech_results) == 1
+    assert mech_results[0].source_type == "markdown"

@@ -11,8 +11,9 @@ import posixpath
 import sqlite3
 import struct
 
+from .db import get_active_space
 from .embed_swap import get_embed_config
-from .embeddings import embed
+from .embeddings import embed, truncate_embedding
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
@@ -102,7 +103,24 @@ def update_folder_summary(
         return False
 
     cfg = get_embed_config(conn)
-    embedding = embed([summary], model=cfg["model"], expected_dim=cfg["dim"])[0]
+    active = get_active_space(conn)
+    base_dim = active.get("matryoshka_base_dim") if active else None
+    provider_name = cfg.get("provider", "ollama")
+    if base_dim:
+        embedding = embed(
+            [summary],
+            model=cfg["model"],
+            expected_dim=base_dim,
+            _provider_name=provider_name,
+        )[0]
+        embedding = truncate_embedding(embedding, cfg["dim"])
+    else:
+        embedding = embed(
+            [summary],
+            model=cfg["model"],
+            expected_dim=cfg["dim"],
+            _provider_name=provider_name,
+        )[0]
 
     # Upsert folder_summaries
     conn.execute(
