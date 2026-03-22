@@ -96,6 +96,72 @@ Folder summaries only include **direct children** — files in subdirectories ar
 
 The boost is conservative (1.15x) and only applies in `hybrid` and `vec` modes. In `fts` mode, no embedding comparison is available, so no folder boost is applied.
 
+## Cross-Encoder Reranking
+
+After RRF merging, an optional cross-encoder reranking stage scores each (query, candidate) pair jointly, capturing fine-grained query-document interactions that bi-encoder similarity and BM25 cannot express. This is a classic stage-2 precision pass: the bi-encoder + RRF stage retrieves a broad candidate set cheaply, and the cross-encoder re-scores them with full attention over both sequences.
+
+**Why it helps:** Bi-encoders embed query and document independently -- they never see the interaction between the two. A cross-encoder feeds the concatenated pair through a single transformer, so it can detect subtle relevance signals (negation, qualifier scope, argument structure) that independent embeddings miss.
+
+### Setup
+
+1. Install the optional dependency group:
+
+   ```bash
+   uv sync --group reranker
+   ```
+
+2. Export a cross-encoder model to ONNX:
+
+   ```bash
+   optimum-cli export onnx --model cross-encoder/ms-marco-MiniLM-L-6-v2 reranker-model/
+   ```
+
+3. Set environment variables:
+
+   ```bash
+   export ONNX_RERANK_MODEL_PATH=reranker-model/model.onnx
+   export ONNX_RERANK_TOKENIZER_PATH=reranker-model/
+   ```
+
+### Usage
+
+Set `rerank: true` in the search tool call:
+
+```json
+{
+  "name": "search_index",
+  "arguments": {
+    "query": "how does flash attention reduce memory usage",
+    "top_k": 10,
+    "rerank": true
+  }
+}
+```
+
+### Latency Budget
+
+| Stage              | Typical Latency |
+| ------------------ | --------------- |
+| FTS5 BM25          | ~20 ms          |
+| sqlite-vec cosine  | ~30 ms          |
+| RRF merge          | <5 ms           |
+| Cross-encoder      | ~100 ms         |
+| **Total (rerank)** | **~155 ms**     |
+
+Without reranking the pipeline completes in ~55 ms. The cross-encoder adds ~100 ms but operates only on the top-k candidates, not the full index.
+
+### When to Use
+
+- Complex natural language queries where word-level interaction matters ("methods that improve latency _without_ sacrificing accuracy")
+- High-stakes retrieval where top-3 precision is critical
+- Queries where initial RRF results contain near-misses that need re-scoring
+
+### When NOT to Use
+
+- Simple keyword lookups ("ResNet-50 ImageNet top-1") -- RRF is already precise enough
+- Latency-sensitive batch pipelines where the extra ~100 ms per query matters
+- When `onnxruntime` or the ONNX model is not available -- the flag is silently ignored if the reranker is not configured
+
 ## Source Type Filtering
 
 Restrict results to a specific content type:

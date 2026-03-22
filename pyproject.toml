@@ -40,3 +40,7 @@ docs = [
 ]
 openai = ["openai>=1.0"]
 onnx = ["onnxruntime>=1.16"]
+reranker = [
+    "onnxruntime>=1.16",
+    "tokenizers>=0.15",
+]
