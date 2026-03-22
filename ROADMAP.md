@@ -1,74 +1,158 @@
 # Roadmap
 
-> Last updated: 2026-03-19
+> Last updated: 2026-03-22
 
-42 open issues across 7 workstreams. This document establishes priority, ordering,
+112 open issues (107 actionable + 5 reference/stale) across 8 workstreams. This document establishes priority, ordering,
 dependency chains, and parallelism opportunities.
 
 ## Issue Index
 
-| #   | Title                                                    | Workstream  | Phase | Status |
-| --- | -------------------------------------------------------- | ----------- | ----- | ------ |
-| 88  | pymupdf4llm production integration (Phase 2)             | Foundation  | 0     | ✔      |
-| 89  | **PR**: pymupdf4llm structured markdown extraction       | Foundation  | 0     | ✔      |
-| 85  | fix(vision): chunk_index encoding overflow               | Foundation  | 0     | ✔      |
-| 78  | refactor: executemany for config init                    | Foundation  | 0     | ✔      |
-| 46  | refactor: move SQL batching helpers to db.py             | Foundation  | 0     | ✔      |
-| 45  | refactor: .replace() instead of .format() in SQL         | Foundation  | 0     | ✔      |
-| 16  | feat: connectivity test for configure_llm                | Foundation  | 0     | ✔      |
-| 71  | docs: comprehensive documentation + typing + API ref     | Foundation  | 1     | ✔      |
-| 101 | chore: rename to knowledge-base                          | Foundation  | 1     | ✔      |
-| 95  | pluggable embedding providers                            | Embedding   | 2     | ✔      |
-| 15  | parallelize map phase LLM calls                          | Extraction  | 2     | ✔      |
-| 110 | pymupdf4llm Phase 3: narrow vision pipeline scope        | Ingest      | 2     | ✔      |
-| 82  | extract inline images from web pages (Phase 1)           | Ingest      | 2     | ✔      |
-| 126 | folder-level semantic embeddings for context boosting    | Search      | 2     | ✔      |
-| 127 | prediction-error detection for stale search results      | Search      | 2     | ✔      |
-| 128 | ingestion session tracking for co-occurrence signals     | Search      | 2     | ✔      |
-| 130 | keyword intent extraction pre-filter for search          | Search      | 2     | ✔      |
-| 99  | multi-space embedding architecture                       | Embedding   | 2     |        |
-| 100 | dual chunking strategy (8K + 32K)                        | Embedding   | 2     |        |
-| 106 | stage-2 reranking in hybrid search                       | Search      | 2     |        |
-| 105 | auto-relationship discovery via similarity               | Search      | 2     | ✔      |
-| 139 | chunk_sessions join table for N:M session tracking       | Search      | 2     |        |
-| 163 | bug: qwen3.5 thinking-mode empty extraction              | Extraction  | 2.5   |        |
-| 160 | fix: zombie conclusions after FK cleanup                 | Extraction  | 2.5   |        |
-| 152 | fix: stale inline image chunks on re-ingest              | Ingest      | 2.5   |        |
-| 151 | fix: getaddrinfo for SSRF IP check                       | Ingest      | 2.5   |        |
-| 150 | improve zero-norm embedding vector handling              | Embedding   | 2.5   |        |
-| 154 | refactor: consolidate transaction management             | Ingest      | 2.5   |        |
-| 141 | refactor: unify multi-line SQL INSERT strings            | Foundation  | 2.5   |        |
-| 140 | refactor: extraction module cleanup from #15             | Extraction  | 2.5   |        |
-| 158 | chore: full Windows path support in folder summaries     | Search      | 2.5   |        |
-| 162 | folder summary integration for ingest_url                | Search      | 3     |        |
-| 164 | `<picture>` and srcset in inline image extraction        | Ingest      | 3     |        |
-| 161 | keyword stopwords strips compound technical terms        | Search      | 3     |        |
-| 147 | configurable stopword list for keyword extraction        | Search      | 3     |        |
-| 155 | mixed raster+vector pages in vision pipeline             | Ingest      | 3     |        |
-| 149 | ONNXProvider: pre-tokenized model support                | Embedding   | 3     |        |
-| 146 | workspace-scoped prediction error filtering              | Search      | 3     |        |
-| 145 | scope_miss prediction error type                         | Search      | 3     |        |
-| 166 | scan_relationships: avoid redundant pairwise comparisons | Search      | 2.5   |        |
-| 165 | auto_relate: fallback to abstract_chunk_id               | Search      | 2.5   |        |
-| 125 | BM25-seeded HNSW insertion for graph quality             | Search      | 3     |        |
-| 124 | decouple index construction from query serving           | Search      | 3     |        |
-| 122 | docs: four-layer cognitive architecture                  | Foundation  | 3     |        |
-| 94  | compressed vector indices (int8/bit)                     | Embedding   | 3     |        |
-| 111 | pymupdf4llm Phase 4: hybrid enrichment                   | Ingest      | 3     |        |
-| 131 | web image extraction Phase 2: rendered DOM images        | Ingest      | 3     |        |
-| 132 | web image extraction Phase 3: canvas/SVG screenshots     | Ingest      | 3     |        |
-| 129 | retrieval plan intermediate representation               | Search      | 3     |        |
-| 63  | document watch/sync for auto-re-ingestion                | Ingest      | 3     |        |
-| 64  | workspace/project tagging for chunk isolation            | Ingest      | 3     |        |
-| 102 | hook-based memory-engine integration                     | Integration | 3     |        |
-| 103 | wisdom → knowledge pipeline                              | Integration | 3     |        |
-| 104 | memory → wisdom consolidation                            | Integration | 3     |        |
-| 108 | OCR preprocessing for scanned documents                  | Ingest      | 4     |        |
-| 109 | evaluate IBM Tableformer for tables                      | Ingest      | 4     |        |
-| 107 | epic: semantic code indexing                             | Ingest      | 4+    |        |
-| 12  | migrate entity graph to neo4j                            | Scale       | 4     |        |
-| 65  | evaluate LanceDB as sqlite-vec alternative               | Scale       | 4     |        |
-| 80  | web UI (Svelte + Rust WASM graph)                        | Scale       | 4     |        |
+| #   | Title                                                    | Workstream  | Phase | Status                                            |
+| --- | -------------------------------------------------------- | ----------- | ----- | ------------------------------------------------- |
+| 88  | pymupdf4llm production integration (Phase 2)             | Foundation  | 0     | ✔                                                 |
+| 89  | **PR**: pymupdf4llm structured markdown extraction       | Foundation  | 0     | ✔                                                 |
+| 85  | fix(vision): chunk_index encoding overflow               | Foundation  | 0     | ✔                                                 |
+| 78  | refactor: executemany for config init                    | Foundation  | 0     | ✔                                                 |
+| 46  | refactor: move SQL batching helpers to db.py             | Foundation  | 0     | ✔                                                 |
+| 45  | refactor: .replace() instead of .format() in SQL         | Foundation  | 0     | ✔                                                 |
+| 16  | feat: connectivity test for configure_llm                | Foundation  | 0     | ✔                                                 |
+| 71  | docs: comprehensive documentation + typing + API ref     | Foundation  | 1     | partial (docs done, typing/cov/API ref remaining) |
+| 101 | chore: rename to knowledge-base                          | Foundation  | 1     | ✔                                                 |
+| 95  | pluggable embedding providers                            | Embedding   | 2     | ✔                                                 |
+| 15  | parallelize map phase LLM calls                          | Extraction  | 2     | ✔                                                 |
+| 110 | pymupdf4llm Phase 3: narrow vision pipeline scope        | Ingest      | 2     | ✔                                                 |
+| 82  | extract inline images from web pages (Phase 1)           | Ingest      | 2     | ✔                                                 |
+| 126 | folder-level semantic embeddings for context boosting    | Search      | 2     | ✔                                                 |
+| 127 | prediction-error detection for stale search results      | Search      | 2     | ✔                                                 |
+| 128 | ingestion session tracking for co-occurrence signals     | Search      | 2     | ✔                                                 |
+| 130 | keyword intent extraction pre-filter for search          | Search      | 2     | ✔                                                 |
+| 99  | multi-space embedding architecture                       | Embedding   | 2     | ✔                                                 |
+| 100 | dual chunking strategy (8K + 32K)                        | Embedding   | 2     | ✔                                                 |
+| 105 | auto-relationship discovery via similarity               | Search      | 2     | ✔                                                 |
+| 139 | chunk_sessions join table for N:M session tracking       | Search      | 2     | ✔                                                 |
+| 106 | stage-2 reranking in hybrid search                       | Search      | 2     | ⏳ in-progress                                    |
+| 163 | bug: qwen3.5 thinking-mode empty extraction              | Extraction  | 2.5a  |                                                   |
+| 160 | fix: zombie conclusions after FK cleanup                 | Extraction  | 2.5a  |                                                   |
+| 152 | fix: stale inline image chunks on re-ingest              | Ingest      | 2.5a  |                                                   |
+| 151 | fix: getaddrinfo for SSRF IP check                       | Ingest      | 2.5a  |                                                   |
+| 150 | improve zero-norm embedding vector handling              | Embedding   | 2.5a  |                                                   |
+| 165 | auto_relate: fallback to abstract_chunk_id               | Search      | 2.5a  |                                                   |
+| 166 | scan_relationships: avoid redundant pairwise comparisons | Search      | 2.5a  |                                                   |
+| 180 | no rollback on embedding failure in ingest_file          | Ingest      | 2.5a  |                                                   |
+| 182 | relocate_paper lacks transaction safety                  | Papers      | 2.5a  |                                                   |
+| 195 | path_conflict referenced before assignment               | Ingest      | 2.5a  |                                                   |
+| 197 | LIKE wildcard injection in title search                  | Papers      | 2.5a  |                                                   |
+| 198 | cursor.lastrowid falsy check by accident                 | Papers      | 2.5a  |                                                   |
+| 201 | folder boost bug when best_distance==0                   | Search      | 2.5a  |                                                   |
+| 202 | offset drift in \_chunk_markdown                         | Ingest      | 2.5a  |                                                   |
+| 203 | \_validate_bib_path return value discarded               | Papers      | 2.5a  |                                                   |
+| 204 | supersede_conclusion no rollback                         | Extraction  | 2.5a  |                                                   |
+| 212 | PIL Image not closed in \_crop_regions                   | Vision      | 2.5a  |                                                   |
+| 236 | unified \_insert_chunks helper (5 call sites)            | Ingest      | 2.5b  |                                                   |
+| 238 | extract bibtex module (papers.py → bibtex.py)            | Papers      | 2.5b  |                                                   |
+| 239 | extract auto_relate module (papers.py → auto_relate.py)  | Papers      | 2.5b  |                                                   |
+| 240 | extract LLM module (extraction.py → llm.py)              | Extraction  | 2.5b  |                                                   |
+| 243 | light improvements (7 items)                             | Foundation  | 2.5b  |                                                   |
+| 234 | extract chunking module (ingest.py → chunking.py)        | Ingest      | 2.5b  |                                                   |
+| 235 | extract web ingestion module (ingest.py → web.py)        | Ingest      | 2.5b  |                                                   |
+| 237 | shared reingest/ingest logic                             | Ingest      | 2.5b  |                                                   |
+| 241 | decompose extract_figures into pipeline stages           | Vision      | 2.5b  |                                                   |
+| 242 | decompose server.py into router sub-modules              | Foundation  | 2.5b  |                                                   |
+| 141 | refactor: unify multi-line SQL INSERT strings            | Foundation  | 2.5b  |                                                   |
+| 140 | refactor: extraction module cleanup from #15             | Extraction  | 2.5b  |                                                   |
+| 154 | refactor: consolidate transaction management             | Ingest      | 2.5b  |                                                   |
+| 158 | chore: full Windows path support in folder summaries     | Search      | 2.5b  |                                                   |
+| 181 | auto_relate O(P\*C²) with per-paper DB round-trips       | Search      | 2.5c  |                                                   |
+| 199 | unbounded IN clause in compare_papers                    | Papers      | 2.5c  |                                                   |
+| 200 | chunk_strategy unbatched IN clause (999 limit)           | Search      | 2.5c  |                                                   |
+| 205 | get_paper N+1 queries                                    | Papers      | 2.5c  |                                                   |
+| 206 | suggest_relationships fetches ALL papers                 | Papers      | 2.5c  |                                                   |
+| 207 | O(n\*m) entity mention dedup                             | Extraction  | 2.5c  |                                                   |
+| 208 | N+1 query in get_entities                                | Extraction  | 2.5c  |                                                   |
+| 209 | O(E\*C) entity re-linking with uncompiled regex          | Extraction  | 2.5c  |                                                   |
+| 210 | N+1 content_hash lookups per chunk                       | Ingest      | 2.5c  |                                                   |
+| 211 | N+1 query for conclusion source chunks                   | Extraction  | 2.5c  |                                                   |
+| 213 | single-pass duplicates entity storage                    | Extraction  | 2.5c  |                                                   |
+| 187 | bare except swallows all FTS errors                      | Search      | 2.5c  |                                                   |
+| 188 | no input validation on search params                     | Search      | 2.5c  |                                                   |
+| 189 | subprocess with user-configurable omniparser_path        | Vision      | 2.5c  |                                                   |
+| 190 | LLM base_url SSRF — only scheme validated                | Extraction  | 2.5c  |                                                   |
+| 191 | LLM JSON without structural validation                   | Extraction  | 2.5c  |                                                   |
+| 192 | indirect prompt injection in LLM extraction              | Extraction  | 2.5c  |                                                   |
+| 193 | FTS5 operator sanitization incomplete                    | Search      | 2.5c  |                                                   |
+| 194 | f-string SQL assembly fragile pattern                    | Foundation  | 2.5c  |                                                   |
+| 196 | add_relationship error ignored by auto_relate            | Papers      | 2.5c  |                                                   |
+| 214 | bidirectional coupling vision.py ↔ ingest.py             | Vision      | 2.5c  |                                                   |
+| 215 | papers.py god module — 5 responsibilities                | Papers      | 2.5c  |                                                   |
+| 216 | server.py god module — 38 tools in 1083 LOC              | Foundation  | 2.5c  |                                                   |
+| 217 | status() has 9 inline SQL queries                        | Foundation  | 2.5c  |                                                   |
+| 218 | reingest owns relationship invalidation                  | Ingest      | 2.5c  |                                                   |
+| 219 | primitive obsession — dicts in ingest.py                 | Ingest      | 2.5c  |                                                   |
+| 220 | duplicated FK cleanup logic                              | Papers      | 2.5c  |                                                   |
+| 221 | record_method/dataset WET code                           | Papers      | 2.5c  |                                                   |
+| 222 | ingest_file — no docstring                               | Ingest      | 2.5c  |                                                   |
+| 223 | ingest_directory — no docstring                          | Ingest      | 2.5c  |                                                   |
+| 224 | keyword_prefilter missing from mcp-tools.md              | Search      | 2.5c  |                                                   |
+| 225 | max_workers missing from mcp-tools.md                    | Extraction  | 2.5c  |                                                   |
+| 226 | phantom auto_relate_accept_threshold in docs             | Search      | 2.5c  |                                                   |
+| 227 | get_methods/datasets/metrics — no docstrings             | Papers      | 2.5c  |                                                   |
+| 228 | server.py 38/41 functions untested                       | Foundation  | 2.5c  |                                                   |
+| 229 | \_validate_bib_path — zero tests (security)              | Papers      | 2.5c  |                                                   |
+| 230 | \_cluster_bboxes — zero tests                            | Vision      | 2.5c  |                                                   |
+| 231 | \_folder_boost — zero tests                              | Search      | 2.5c  |                                                   |
+| 232 | low findings (55)                                        | Mixed       | 2.5c  |                                                   |
+| 233 | info findings (30)                                       | Mixed       | 2.5c  |                                                   |
+| 162 | folder summary integration for ingest_url                | Search      | 3     |                                                   |
+| 164 | `<picture>` and srcset in inline image extraction        | Ingest      | 3     |                                                   |
+| 161 | keyword stopwords strips compound technical terms        | Search      | 3     |                                                   |
+| 147 | configurable stopword list for keyword extraction        | Search      | 3     |                                                   |
+| 179 | multilingual stopword support (lingua-py)                | Search      | 3     |                                                   |
+| 155 | mixed raster+vector pages in vision pipeline             | Ingest      | 3     |                                                   |
+| 149 | ONNXProvider: pre-tokenized model support                | Embedding   | 3     |                                                   |
+| 146 | workspace-scoped prediction error filtering              | Search      | 3     |                                                   |
+| 145 | scope_miss prediction error type                         | Search      | 3     |                                                   |
+| 125 | BM25-seeded HNSW insertion for graph quality             | Search      | 3     |                                                   |
+| 124 | decouple index construction from query serving           | Search      | 3     |                                                   |
+| 122 | docs: four-layer cognitive architecture                  | Foundation  | 3     |                                                   |
+| 94  | compressed vector indices (int8/bit)                     | Embedding   | 3     |                                                   |
+| 111 | pymupdf4llm Phase 4: hybrid enrichment                   | Ingest      | 3     |                                                   |
+| 131 | web image extraction Phase 2: rendered DOM images        | Ingest      | 3     |                                                   |
+| 132 | web image extraction Phase 3: canvas/SVG screenshots     | Ingest      | 3     |                                                   |
+| 129 | retrieval plan intermediate representation               | Search      | 3     |                                                   |
+| 63  | document watch/sync for auto-re-ingestion                | Ingest      | 3     |                                                   |
+| 64  | workspace/project tagging for chunk isolation            | Ingest      | 3     |                                                   |
+| 102 | hook-based memory-engine integration                     | Integration | 3     |                                                   |
+| 103 | wisdom → knowledge pipeline                              | Integration | 3     |                                                   |
+| 104 | memory → wisdom consolidation                            | Integration | 3     |                                                   |
+| 173 | N:M chunk-to-source mapping for cross-source dedup       | Ingest      | 3     |                                                   |
+| 246 | retrieval budget annotations to MCP tool descriptions    | Search      | 3     |                                                   |
+| 108 | OCR preprocessing for scanned documents                  | Ingest      | 4     |                                                   |
+| 109 | evaluate IBM docling Tableformer for tables              | Ingest      | 4     |                                                   |
+| 247 | research: evaluate Kreuzberg v4.50                       | Ingest      | 4     |                                                   |
+| 107 | epic: semantic code indexing                             | Ingest      | 4+    |                                                   |
+| 12  | migrate entity graph to neo4j                            | Scale       | 4     |                                                   |
+| 65  | evaluate LanceDB as sqlite-vec alternative               | Scale       | 4     |                                                   |
+| 80  | web UI (Svelte + Rust WASM graph)                        | Scale       | 4     |                                                   |
+
+**Umbrella issues** (closed when child decomposition issues land):
+
+| #   | Title                                           | Children               |
+| --- | ----------------------------------------------- | ---------------------- |
+| 183 | god module — ingest.py 1950 LOC, 5 concerns     | #234, #235, #236, #237 |
+| 184 | 250-line duplication ingest_file/reingest_file  | #237                   |
+| 185 | chunk insert+dedup boilerplate repeated 5 times | #236                   |
+| 186 | extract_figures() 500-LOC god function          | #241                   |
+| 215 | papers.py god module — 5 responsibilities       | #238, #239             |
+| 216 | server.py god module — 38 tools in 1083 LOC     | #242                   |
+
+**Plan issues** (reference-only, not actionable work items):
+
+| #   | Title                                                  |
+| --- | ------------------------------------------------------ |
+| 171 | plan: Phase 1 — Multi-space embedding registry         |
+| 174 | plan: Phase 2 — Matryoshka truncation support          |
+| 177 | plan: Phase 3 — A/B embedding space comparison tooling |
+| 178 | perf: search query optimization opportunities (#172)   |
 
 ---
 
@@ -98,7 +182,7 @@ dependency chains, and parallelism opportunities.
 
 ---
 
-## Phase 2 — Embedding Architecture + Search Quality (9/13 done)
+## Phase 2 — Embedding Architecture + Search Quality (12/13 done)
 
 **Goal:** Upgrade the embedding and search infrastructure.
 
@@ -113,60 +197,175 @@ dependency chains, and parallelism opportunities.
 - ~~#128~~ ingestion session tracking (PR #134)
 - ~~#130~~ keyword intent extraction (PR #136)
 - ~~#105~~ auto-relationship discovery (PR #144)
+- ~~#99~~ multi-space embedding architecture (PR #172)
+- ~~#100~~ dual chunking strategy (PR #170)
+- ~~#139~~ chunk_sessions N:M (PR #169)
 
 **Remaining:**
 
-```
-                    ┌── #99 (multi-space) ───┐
-                    │                        │
-#95 (done) ─────────┤                        ├──▶ #106 (reranking)
-                    │                        │
-                    └── #100 (dual chunking) ┘
+- ⏳ **#106 (reranking)** — in-progress in a side session.
 
-#139 (chunk_sessions N:M) ─── independent (#128 done, #105 done)
-```
-
-**Dependency chain:**
-
-- **#99 (multi-space)** can now start — #95 (providers) is done.
-- **#100 (dual chunking)** is independent of #99, can be parallel.
-- **#106 (reranking)** depends on #99 — reranking across multiple embedding
-  spaces requires the multi-space query layer.
-- **#139 (chunk_sessions N:M)** depends on #128 (done). Originally gated by
-  #105 but can now land independently as a schema improvement.
-
-**Exit criteria:** Multiple embedding models coexist, Matryoshka truncation
-works, search quality measurably improves via reranking.
+**Exit criteria:** #106 lands. Multiple embedding models coexist, Matryoshka
+truncation works, search quality measurably improves via reranking.
 
 ---
 
-## Phase 2.5 — Stabilize
+## Phase 2.5a — Bugs & Safety Fixes
 
-**Goal:** Fix bugs and clean up tech debt from Phase 2 before adding more features.
+**Goal:** Fix all known bugs and safety issues from Phase 2 and super-qa audit
+before adding features or refactoring.
 
 ```
-#163 (qwen3.5 thinking-mode)    ─── bug, independent
-#160 (zombie conclusions)        ─── bug, independent
-#152 (stale inline image chunks) ─── bug, depends on #82 (done)
-#151 (getaddrinfo SSRF)          ─── bug, depends on #82 (done)
-#150 (zero-norm embeddings)      ─── fix, independent
-#154 (transaction consolidation) ─── refactor, independent
-#141 (unify SQL INSERTs)         ─── refactor, independent
-#140 (extraction cleanup)        ─── refactor, depends on #15 (done)
-#158 (Windows path support)      ─── chore, depends on #126 (done)
-#165 (auto_relate fallback)      ─── fix, depends on #105 (done)
-#166 (scan_relationships 2x)     ─── perf, depends on #105 (done)
+#163 (qwen3.5 thinking-mode)        ─── bug, independent
+#160 (zombie conclusions)            ─── bug, independent
+#152 (stale inline image chunks)     ─── bug, depends on #82 (done)
+#151 (getaddrinfo SSRF)              ─── bug, depends on #82 (done)
+#150 (zero-norm embeddings)          ─── fix, independent
+#165 (auto_relate fallback)          ─── fix, depends on #105 (done)
+#166 (scan_relationships 2x)         ─── perf, depends on #105 (done)
+#180 (no rollback on embed failure)  ─── bug, independent
+#182 (relocate_paper no transaction) ─── bug, independent
+#195 (path_conflict unbound)         ─── bug, independent
+#197 (LIKE wildcard injection)       ─── bug, independent
+#198 (lastrowid falsy check)         ─── bug, independent
+#201 (folder boost div-by-zero)      ─── bug, depends on #126 (done)
+#202 (offset drift in chunking)      ─── bug, independent
+#203 (_validate_bib_path discarded)  ─── bug, independent
+#204 (supersede_conclusion rollback) ─── bug, independent
+#212 (PIL Image not closed)          ─── bug, independent
 ```
 
-**Parallelism:** All items are independent of each other. Any can be picked up
-in any order. All are small-to-medium scope (< 1 session each).
+**Parallelism:** All 17 items are independent of each other. Any can be picked up
+in any order. All are small scope (< 1 session each).
 
-**Why a separate phase:** These are follow-up fixes and cleanups from Phase 2
-PRs. Landing them before Phase 3 prevents compounding tech debt and avoids
-merge conflicts with the larger Phase 3 features.
+**Exit criteria:** No known bugs from Phase 2 work or super-qa audit. Clean
+ruff/pyright. Test suite green without workarounds.
 
-**Exit criteria:** No known bugs from Phase 2 work. Clean ruff/pyright. Test
-suite green without workarounds.
+---
+
+## Phase 2.5b — Module Decomposition & Refactoring
+
+**Goal:** Break god modules into focused, single-responsibility modules. This is
+the structural prerequisite that makes Phase 3 features easier to implement and
+review.
+
+**Step 1 — Leaf extractions (all parallel):**
+
+```
+#236 (unified _insert_chunks)         ─── touches ingest.py
+#238 (bibtex.py from papers.py)       ─── touches papers.py
+#239 (auto_relate.py from papers.py)  ─── touches papers.py (coordinate with #238)
+#240 (llm.py from extraction.py)      ─── touches extraction.py
+#243 (light improvements, 7 items)    ─── scattered, low conflict risk
+```
+
+**Step 2 — Ingest decomposition (depends on Step 1, specifically #236):**
+
+```
+#234 (chunking.py from ingest.py)     ─── needs #236 (shared helper) first
+#235 (web.py from ingest.py)          ─── needs #236 first
+#237 (shared reingest/ingest logic)   ─── needs #234, #235
+```
+
+**Step 3 — Final decompositions (depends on Step 2):**
+
+```
+#241 (decompose extract_figures)      ─── after ingest.py is smaller
+#242 (decompose server.py)            ─── independent, can go at any step
+```
+
+**Parallel with any step:**
+
+```
+#141 (unify SQL INSERTs)              ─── refactor, independent
+#140 (extraction cleanup from #15)    ─── refactor, depends on #15 (done)
+#154 (transaction consolidation)      ─── refactor, independent
+#158 (Windows path support)           ─── chore, depends on #126 (done)
+```
+
+**Umbrella closure:** When children land, close #183, #184, #185, #186, #215, #216.
+
+**Exit criteria:** No module exceeds ~500 LOC. Each module has a single
+responsibility. God module warnings resolved.
+
+---
+
+## Phase 2.5c — Super-QA Medium Findings
+
+**Goal:** Address remaining medium-severity findings from the super-qa audit.
+These are lower urgency than 2.5a/2.5b but should land before Phase 3 to prevent
+compounding tech debt.
+
+### Performance (N+1, O(n²)) — 11 items
+
+```
+#181 (auto_relate O(P*C²))            ─── depends on #105 (done), #239 helps
+#199 (unbounded IN in compare_papers)  ─── independent
+#200 (chunk_strategy unbatched IN)     ─── independent
+#205 (get_paper N+1)                   ─── independent
+#206 (suggest_relationships all papers)─── independent
+#207 (O(n*m) entity mention dedup)     ─── independent
+#208 (N+1 in get_entities)             ─── independent
+#209 (O(E*C) entity re-linking)        ─── independent
+#210 (N+1 content_hash lookups)        ─── independent
+#211 (N+1 conclusion source chunks)    ─── independent
+#213 (single-pass entity duplication)  ─── independent
+```
+
+### Security & Validation — 7 items
+
+```
+#187 (bare except swallows FTS errors) ─── independent
+#188 (no input validation on search)   ─── independent
+#189 (subprocess omniparser_path)      ─── independent
+#190 (LLM base_url SSRF)              ─── independent
+#191 (LLM JSON no structural valid.)   ─── independent
+#192 (indirect prompt injection)       ─── independent
+#193 (FTS5 sanitization incomplete)    ─── independent
+```
+
+### Code Quality & Coupling — 7 items
+
+```
+#194 (f-string SQL assembly)           ─── independent
+#196 (add_relationship error ignored)  ─── independent
+#214 (vision ↔ ingest coupling)        ─── easier after #241 (Phase 2.5b)
+#218 (reingest owns relationship inv.) ─── independent
+#219 (primitive obsession — dicts)     ─── easier after #234/#235 (Phase 2.5b)
+#220 (duplicated FK cleanup)           ─── independent
+#221 (record_method/dataset WET)       ─── independent
+```
+
+### Documentation & Tests — 12 items
+
+```
+#217 (status() 9 inline SQL queries)   ─── independent
+#222 (ingest_file no docstring)        ─── independent
+#223 (ingest_directory no docstring)   ─── independent
+#224 (keyword_prefilter docs gap)      ─── independent
+#225 (max_workers docs gap)            ─── independent
+#226 (phantom threshold in docs)       ─── independent
+#227 (no docstrings on get_methods)    ─── independent
+#228 (server.py 38/41 untested)        ─── large, consider after #242
+#229 (_validate_bib_path zero tests)   ─── independent
+#230 (_cluster_bboxes zero tests)      ─── independent
+#231 (_folder_boost zero tests)        ─── independent
+```
+
+### Aggregate / Deferred — 2 items
+
+```
+#232 (low findings, 55 items)          ─── triage individually when convenient
+#233 (info findings, 30 items)         ─── reference only, no action needed
+```
+
+**Parallelism:** All items within each sub-category are independent. Items in
+different sub-categories are also independent. The only soft dependency is that
+#214 and #219 are easier after Phase 2.5b decompositions land, and #228 is easier
+after #242 (server.py decomposition).
+
+**Exit criteria:** All medium super-qa findings addressed or explicitly deferred
+with rationale.
 
 ---
 
@@ -185,15 +384,16 @@ polish ingest pipelines with follow-up enhancements.
 #132 (web images, Phase 3)  ─── depends on #131
 #164 (<picture>/srcset)     ─── depends on #82 (done)
 
-#94 (int8/bit quantization) ─── depends on #99 (Phase 2)
-#125 (BM25-seeded HNSW)     ─── depends on #99 (Phase 2)
+#94 (int8/bit quantization) ─── depends on #99 (done)
+#125 (BM25-seeded HNSW)     ─── depends on #99 (done)
 #124 (build/serve pattern)  ─── independent
 
-#106 lands here if Phase 2 ──▶ #129 (retrieval plan IR)
+#129 (retrieval plan IR)    ─── benefits from #106 (in-progress)
 
 #162 (folder summary + ingest_url) ─── depends on #126 (done)
 #161 (keyword compound terms)      ─── depends on #130 (done)
 #147 (configurable stopwords)      ─── depends on #130 (done)
+#179 (multilingual stopwords)      ─── extends #147, coordinate together
 #146 (workspace prediction errors) ─── depends on #127 (done)
 #145 (scope_miss error type)       ─── depends on #127 (done)
 #149 (ONNX pre-tokenized)          ─── depends on #95 (done)
@@ -201,26 +401,31 @@ polish ingest pipelines with follow-up enhancements.
 
 #63 (document watch/sync)   ─── independent
 #64 (workspace tagging)     ─── independent
+#173 (N:M chunk-to-source)  ─── independent schema evolution
+#246 (retrieval budget MCP) ─── independent, zero-code-change quick win
 ```
 
 **Dependency chains:**
 
 - **#102 → #103, #104**: Memory-engine integration is the prerequisite.
   External dependency: `memory-engine` must expose an MCP server.
-- **#94, #125** both build on #99 (multi-space) from Phase 2.
+- **#94, #125** both build on #99 (multi-space), now done.
 - **#129 (retrieval plan IR)** benefits from #106 (reranking) — plan can
   specify reranking directives per sub-query.
-- **#166, #165** are #105 follow-ups — moved to Phase 2.5 now that #105 has
-  landed.
+- **#147 + #179** should be implemented together — #147 adds configurability,
+  #179 adds language detection. Same module, same tests.
 
 **Parallelism:**
 
-- Follow-up enhancements (#162, #161, #147, #146, #145, #149, #164) are all
-  independent of each other and of the integration work. Good quick-win
+- Follow-up enhancements (#162, #161, #147+#179, #146, #145, #149, #164, #246)
+  are all independent of each other and of the integration work. Good quick-win
   candidates between larger features.
+- **#246** is the lowest-effort item in the entire roadmap — modifying MCP tool
+  description strings only. Can be done at any time.
 - #111 and #155 (vision pipeline) are independent of integration work.
 - #63 (watch/sync) and #64 (workspace tagging) are standalone ingest
   improvements.
+- #173 (N:M chunk-to-source) is independent schema work.
 - #122 (docs) can be done anytime.
 
 **Exit criteria:** Hooks log to memory-engine, consolidation proposes wisdom
@@ -236,7 +441,9 @@ enhancements from Phase 2 are landed.
 ```
 #108 (OCR preprocessing) ─┐
                           ├── can be parallel
-#109 (Tableformer eval)  ─┘
+#109 (Tableformer eval)  ─┤
+                          │
+#247 (Kreuzberg eval)    ─┘
 
 #107 (code indexing epic) ─── multi-phase, starts here
 
@@ -248,8 +455,12 @@ enhancements from Phase 2 are landed.
 These are **exploratory and high-effort** items. Each is independent and can be
 prioritized based on which use case is most pressing at the time.
 
-**#107 (code indexing)** is the largest item — an epic with 6 sub-phases. It
-should be broken into sub-issues when work begins.
+**#247 (Kreuzberg)** and **#109 (Tableformer)** are both document extraction
+evaluations — natural to run them together as a comparative study. #247 may
+subsume parts of #108 (OCR) since Kreuzberg includes multi-backend OCR.
+
+**#107 (code indexing)** is the largest single feature — an epic with 6
+sub-phases. It should be broken into sub-issues when work begins.
 
 **#12 and #65** are mutually exclusive alternatives for scale — evaluate before
 committing to either. neo4j for graph queries, LanceDB for vector queries. Both
@@ -265,21 +476,36 @@ has enough content to warrant visual exploration.
 ## Dependency Graph
 
 ```
-Phase 0 ✔          Phase 1 ✔          Phase 2              Phase 2.5           Phase 3              Phase 4
-────────           ────────           ────────             ────────            ────────             ────────
+Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a          Phase 2.5b              Phase 2.5c
+────────        ────────        ────────             ────────            ────────                ────────
+                                ✔ #95                #163, #160          Step 1:                 Perf:
+PR #89 ──┐                      ✔ #99               #152, #151           #236, #238, #239         #181, #199, #200
+#85 ─────┤                      ✔ #100               #150, #165           #240, #243               #205–#211, #213
+#78 ─────┼──▶ ✔ #71            ✔ #15                #166, #180          Step 2 (needs #236):    Security:
+#46 ─────┤                      ✔ #110               #182, #195           #234, #235, #237         #187–#193
+#45 ─────┤    ✔ #101           ✔ #82                #197, #198          Step 3 (needs Step 2):  Quality:
+#16 ─────┘                      ✔ #126               #201, #202           #241, #242               #194, #196, #214
+                                ✔ #127               #203, #204          Parallel:                #218–#221
+                                ✔ #128               #212                 #141, #140, #154, #158  Docs/Tests:
+                                ✔ #130                                                            #217, #222–#231
+                                ✔ #105
+                                ✔ #99
+                                ✔ #100
+                                ✔ #139
+                                ⏳ #106
 
-PR #89 ──────┐                        ✔ #95 ──▶ #99 ──▶ #106                  #102 ──┬──▶ #103     #108
-#85 ─────────┤                        │         │                   #163       │      └──▶ #104     #109
-#78 ─────────┼──▶ ✔ #71 (docs)       ✔ #15     ├──▶ #94           #160       │                    #107
-#46 ─────────┤                        │  #100 ──┘                   #152       #125 (needs #99)     #12
-#45 ─────────┤    ✔ #101 (rename)    ✔ #110                       #151       #124                 #65
-#16 ─────────┘                        ✔ #82                        #150       #129 (after #106)    #80
-                                      ✔ #126                       #154       #162, #161, #147
-                                      ✔ #127                       #141       #146, #145, #149
-                                      ✔ #128 ──▶ #139              #140       #164, #131 ──▶ #132
-                                      ✔ #130                       #158       #111, #155
-                                      ✔ #105                       #165       #63, #64, #122
-                                                                   #166
+Phase 3                         Phase 4
+────────                        ────────
+#102 ──┬──▶ #103                #108, #109, #247
+       └──▶ #104                #107 (epic)
+#94, #125 (need ✔#99)          #12, #65, #80
+#124, #129 (after #106)
+#162, #161, #147+#179
+#146, #145, #149, #164
+#131 ──▶ #132
+#111, #155
+#63, #64, #122
+#173, #246
 ```
 
 ---
@@ -296,13 +522,24 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
   Good candidate for a focused sprint once the core is stable.
 - **#107** (code indexing) — The largest single feature. Requires its own
   planning session when ready. See issue for 6-phase breakdown.
+- **#232** (low findings) — 55 items to triage individually. Pick off as
+  convenient between features.
+- **#233** (info findings) — 30 items. Reference only, no action needed unless
+  a specific item becomes relevant.
 
 ---
 
 ## Quick Wins (< 1 session each)
 
-**Phase 2.5 items** (all independent, all small scope):
-#163, #160, #152, #151, #150, #154, #141, #140, #158, #165, #166
+**Phase 2.5a items** (all independent, all small scope):
+#163, #160, #152, #151, #150, #165, #166, #180, #182, #195, #197, #198, #201,
+#202, #203, #204, #212
+
+**Phase 2.5b parallel items** (independent of decomposition ordering):
+#141, #140, #154, #158, #243
+
+**Phase 2.5c doc/test gaps** (independent, low risk):
+#222, #223, #224, #225, #226, #227, #229, #230, #231
 
 **Phase 3 follow-up enhancements** (depend on Phase 2 features already done):
-#162, #164, #161, #147, #149, #146, #145, #122
+#162, #164, #161, #147, #149, #146, #145, #122, #246
