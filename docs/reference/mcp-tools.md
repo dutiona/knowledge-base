@@ -115,14 +115,15 @@ Tools for querying the index.
 
 Search the research index using hybrid semantic + keyword search.
 
-| Parameter        | Type          | Required | Default    | Description                                                                 |
-| ---------------- | ------------- | -------- | ---------- | --------------------------------------------------------------------------- |
-| `query`          | `str`         | yes      | --         | Natural language search query                                               |
-| `top_k`          | `int`         | no       | `10`       | Number of results to return                                                 |
-| `source_type`    | `str \| None` | no       | `None`     | Filter results by type (`pdf`, `markdown`, `code`, `web`, `note`, `figure`) |
-| `mode`           | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)          |
-| `chunk_strategy` | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all. |
-| `space_name`     | `str \| None` | no       | `None`     | Search a specific embedding space instead of the active one.                |
+| Parameter        | Type          | Required | Default    | Description                                                                  |
+| ---------------- | ------------- | -------- | ---------- | ---------------------------------------------------------------------------- |
+| `query`          | `str`         | yes      | --         | Natural language search query                                                |
+| `top_k`          | `int`         | no       | `10`       | Number of results to return                                                  |
+| `source_type`    | `str \| None` | no       | `None`     | Filter results by type (`pdf`, `markdown`, `code`, `web`, `note`, `figure`)  |
+| `mode`           | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)           |
+| `chunk_strategy` | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all.  |
+| `space_name`     | `str \| None` | no       | `None`     | Search a specific embedding space instead of the active one.                 |
+| `rerank`         | `bool`        | no       | `false`    | Enable cross-encoder reranking for improved relevance. Requires onnxruntime. |
 
 **Returns:** Array of result objects:
 

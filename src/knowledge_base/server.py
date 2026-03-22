@@ -235,6 +235,7 @@ def search_index(
     keyword_prefilter: bool = False,
     chunk_strategy: str | None = None,
     space_name: str | None = None,
+    rerank: bool = False,
 ) -> str:
     """Search the knowledge base using hybrid semantic + keyword search.
 
@@ -250,6 +251,8 @@ def search_index(
             None (default) returns all chunks regardless of strategy.
         space_name: Search a specific embedding space instead of the active one.
             Useful for A/B comparison before promoting a new space.
+        rerank: Enable cross-encoder reranking for improved relevance. Requires
+            onnxruntime (install with: uv sync --group reranker). Default false.
     """
     conn = _get_conn()
     results = search(
@@ -261,6 +264,7 @@ def search_index(
         keyword_prefilter=keyword_prefilter,
         chunk_strategy=chunk_strategy,
         space_name=space_name,
+        rerank=rerank,
     )
     detect_and_log(conn, query, results, source_type_filter=source_type, mode=mode)
 

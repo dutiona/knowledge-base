@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import posixpath
 import sqlite3
 import struct
@@ -16,6 +17,8 @@ from .embed_swap import get_embed_config
 from .embeddings import embed_single, truncate_embedding
 from .keywords import build_fts_query, extract_keywords
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class SearchResult:
@@ -25,7 +28,7 @@ class SearchResult:
     source_uri: str
     chunk_index: int
     score: float
-    match_type: str  # 'fts', 'vec', 'hybrid'
+    match_type: str  # 'fts', 'vec', 'hybrid', 'reranked'
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
@@ -171,6 +174,16 @@ def _folder_boost(
     return boosted
 
 
+def _fetch_chunk_contents(
+    conn: sqlite3.Connection, chunk_ids: list[int]
+) -> dict[int, str]:
+    """Fetch content for chunk IDs. Returns {chunk_id: content} dict."""
+    rows = _batched_select(
+        conn, "SELECT id, content FROM chunks WHERE id IN ({ph})", chunk_ids
+    )
+    return {row["id"]: row["content"] for row in rows}
+
+
 def search(
     conn: sqlite3.Connection,
     query: str,
@@ -180,6 +193,8 @@ def search(
     keyword_prefilter: bool = False,
     chunk_strategy: str | None = None,
     space_name: str | None = None,
+    rerank: bool = False,
+    rerank_top_n: int = 20,
 ) -> list[SearchResult]:
     """
     Hybrid search over indexed chunks.
@@ -197,6 +212,10 @@ def search(
         space_name: Search against a specific embedding space instead of the
             active one. The space's own model/dim/provider are used for query
             embedding. Folder boost is disabled for non-active spaces.
+        rerank: When True, apply cross-encoder reranking to the top
+            candidates before final selection.
+        rerank_top_n: Number of candidates to feed into the reranker.
+            Larger values improve recall at the cost of latency.
     """
     fetch_limit = top_k * 3  # over-fetch for RRF merge
 
@@ -316,6 +335,60 @@ def search(
 
     # Re-sort after boost and take top_k
     ranked = sorted(score_map.items(), key=lambda x: x[1], reverse=True)
+
+    # --- Cross-encoder reranking (#106) ---
+    reranked_ids: set[int] = set()
+    if rerank:
+        try:
+            from .reranker import rerank as rerank_fn
+
+            # Pre-filter rerank pool by source_type and chunk_strategy so
+            # we don't waste reranker budget on candidates that will be
+            # excluded in the final fetch.  Filter in Python using the
+            # chunk metadata we already need to fetch for content anyway.
+            pool_ids = [cid for cid, _ in ranked]
+            if (source_type or chunk_strategy) and pool_ids:
+                rows = _batched_select(
+                    conn,
+                    "SELECT id, source_type, chunk_strategy"
+                    " FROM chunks WHERE id IN ({ph})",
+                    pool_ids,
+                )
+                valid_ids: set[int] = set()
+                for row in rows:
+                    if source_type and row["source_type"] != source_type:
+                        continue
+                    if chunk_strategy and row["chunk_strategy"] != chunk_strategy:
+                        continue
+                    valid_ids.add(row["id"])
+                rerank_candidates = [(cid, s) for cid, s in ranked if cid in valid_ids][
+                    :rerank_top_n
+                ]
+            else:
+                rerank_candidates = ranked[:rerank_top_n]
+
+            rerank_cids = [cid for cid, _ in rerank_candidates]
+            if rerank_cids:
+                contents = _fetch_chunk_contents(conn, rerank_cids)
+                fetchable_cids = [cid for cid in rerank_cids if cid in contents]
+
+                if fetchable_cids:
+                    texts = [contents[cid] for cid in fetchable_cids]
+                    rerank_scores = rerank_fn(query, texts)
+                    # Replace RRF scores with reranker scores
+                    for cid, rs in zip(fetchable_cids, rerank_scores):
+                        score_map[cid] = rs
+                        reranked_ids.add(cid)
+
+                # Re-sort with updated scores
+                ranked = sorted(score_map.items(), key=lambda x: x[1], reverse=True)
+        except (ImportError, RuntimeError, ValueError, OSError):
+            # Graceful degradation: if reranker fails (missing deps,
+            # bad model path, inference error), fall back to RRF ordering.
+            logger.warning(
+                "Reranker failed, falling back to RRF ordering", exc_info=True
+            )
+
     chunk_ids = [cid for cid, _ in ranked[:top_k]]
     if not chunk_ids:
         return []
@@ -358,7 +431,7 @@ def search(
                 source_uri=row["source_uri"],
                 chunk_index=row["chunk_index"],
                 score=score_map[cid],
-                match_type=match_type,
+                match_type="reranked" if cid in reranked_ids else match_type,
             )
         )
 
