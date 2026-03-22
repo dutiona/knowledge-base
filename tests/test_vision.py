@@ -1188,7 +1188,7 @@ def test_extract_figures_zero_indexed_boundary(tmp_path):
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
 def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path):
-    """If _serialize_f32 fails mid-insert, the transaction is rolled back."""
+    """If insert_chunk_vec fails mid-insert, the transaction is rolled back."""
     from knowledge_base.vision import extract_figures
 
     mock_vision.return_value = [
@@ -1209,20 +1209,19 @@ def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path)
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
-    call_count = 0
-    original_serialize = __import__(
-        "knowledge_base.vision", fromlist=["_serialize_f32"]
-    )._serialize_f32
+    from knowledge_base.db import insert_chunk_vec as original_insert
 
-    def failing_serialize(vec):
+    call_count = 0
+
+    def failing_insert(conn, chunk_id, embedding, table_name=None):
         nonlocal call_count
         call_count += 1
         if call_count >= 2:
-            raise RuntimeError("Simulated serialization failure")
-        return original_serialize(vec)
+            raise RuntimeError("Simulated insert failure")
+        return original_insert(conn, chunk_id, embedding, table_name=table_name)
 
-    with patch("knowledge_base.vision._serialize_f32", side_effect=failing_serialize):
-        with pytest.raises(RuntimeError, match="Simulated serialization failure"):
+    with patch("knowledge_base.vision.insert_chunk_vec", side_effect=failing_insert):
+        with pytest.raises(RuntimeError, match="Simulated insert failure"):
             extract_figures(conn, paper_id=paper_id, pages=[0])
 
     # Rollback should have cleaned up: no figure chunks at all

@@ -19,7 +19,7 @@ import fitz
 import httpx
 
 from .embeddings import _get_ollama_url
-from .db import _serialize_f32, get_vec_table_name
+from .db import get_vec_table_name, insert_chunk_vec
 from .ingest import _content_hash, _embed_with_config, pdf_image_dir
 
 logger = logging.getLogger(__name__)
@@ -1185,10 +1185,21 @@ def extract_figures(
             f"UPDATE datasets SET chunk_id = NULL WHERE chunk_id IN {fig_chunk_subquery}",
             fig_delete_params,
         )
+        # Count vec rows before deleting for bookkeeping
+        vec_del_count = conn.execute(
+            f"SELECT COUNT(*) FROM [{vec_table}] WHERE chunk_id IN {fig_chunk_subquery}",
+            fig_delete_params,
+        ).fetchone()[0]
         conn.execute(
             f"DELETE FROM [{vec_table}] WHERE chunk_id IN {fig_chunk_subquery}",
             fig_delete_params,
         )
+        if vec_del_count:
+            conn.execute(
+                "UPDATE embed_spaces SET chunk_count = MAX(0, chunk_count - ?) "
+                "WHERE table_name = ?",
+                (vec_del_count, vec_table),
+            )
         if candidate_pages is not None and candidate_pages:
             conn.execute(
                 f"DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'"
@@ -1242,12 +1253,8 @@ def extract_figures(
                     (content_hash, content, source_uri, chunk_index, metadata),
                 )
                 chunk_id = cursor.lastrowid
-
-                embedding_blob = _serialize_f32(embeddings[i])
-                conn.execute(
-                    f"INSERT INTO [{vec_table}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
-                    (chunk_id, embedding_blob, chunk_id),
-                )
+                assert chunk_id is not None
+                insert_chunk_vec(conn, chunk_id, embeddings[i], table_name=vec_table)
                 chunks_created += 1
 
         conn.commit()

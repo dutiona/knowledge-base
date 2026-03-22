@@ -403,11 +403,21 @@ def delete_chunk_vecs(
     chunk_ids: list[int],
     table_name: str | None = None,
 ) -> None:
-    """Delete chunk embeddings from the specified (or active) vec table."""
+    """Delete chunk embeddings from the specified (or active) vec table.
+
+    Also decrements ``embed_spaces.chunk_count`` to keep bookkeeping in sync.
+    """
     if not chunk_ids:
         return
     tbl = table_name or get_vec_table_name(conn)
     _batched_execute(conn, f"DELETE FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids)
+    # Keep embed_spaces.chunk_count in sync
+    deleted = len(chunk_ids)
+    conn.execute(
+        "UPDATE embed_spaces SET chunk_count = MAX(0, chunk_count - ?) "
+        "WHERE table_name = ?",
+        (deleted, tbl),
+    )
 
 
 def _migrate_embed_spaces_matryoshka(conn: sqlite3.Connection) -> None:
@@ -447,11 +457,13 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     except sqlite3.OperationalError:
         count = 0
 
-    # Inherit chunk_strategy from config (set by #100), default to mechanical
-    strategy_row = conn.execute(
-        "SELECT value FROM config WHERE key = 'chunk_strategy'"
-    ).fetchone()
-    strategy = strategy_row["value"] if strategy_row else "mechanical"
+    # Legacy DBs (pre-#99): chunks_vec contains ALL chunks regardless of
+    # strategy. The migrate_chunk_strategy backfill marks old chunks as
+    # 'mechanical'. Using config.chunk_strategy here would misclassify the
+    # default space (e.g., as 'semantic' when it actually has all chunks).
+    # Always bootstrap as 'mechanical' — the user can create a new space
+    # with a different strategy after migration.
+    strategy = "mechanical"
 
     conn.execute(
         """INSERT INTO embed_spaces
