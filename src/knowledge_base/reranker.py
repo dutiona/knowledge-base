@@ -52,19 +52,29 @@ class ONNXReranker:
 
         session, tokenizer = self._get_session()
 
-        # Tokenize all (query, candidate) pairs — cross-encoder needs
-        # pair encoding, so we call encode(query, candidate) per pair.
-        encodings = [tokenizer.encode(query, candidate) for candidate in candidates]
+        # Tokenize all (query, candidate) pairs with padding/truncation.
+        # encode_batch is faster than per-pair encode() calls.
+        encodings = tokenizer.encode_batch(
+            [(query, candidate) for candidate in candidates]
+        )
 
         input_ids = np.array([enc.ids for enc in encodings], dtype=np.int64)
         attention_mask = np.array(
             [enc.attention_mask for enc in encodings], dtype=np.int64
         )
 
-        outputs = session.run(
-            None,
-            {"input_ids": input_ids, "attention_mask": attention_mask},
-        )
+        # Build feed dict — include token_type_ids if model expects them
+        feed: dict[str, Any] = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+        input_names = {inp.name for inp in session.get_inputs()}
+        if "token_type_ids" in input_names:
+            feed["token_type_ids"] = np.array(
+                [enc.type_ids for enc in encodings], dtype=np.int64
+            )
+
+        outputs = session.run(None, feed)
 
         # Cross-encoder output: logits of shape (batch, 1) or (batch,)
         logits: np.ndarray = outputs[0]  # type: ignore[assignment]
@@ -114,6 +124,10 @@ class ONNXReranker:
             if os.path.isdir(tokenizer_path):
                 tokenizer_file = os.path.join(tokenizer_path, "tokenizer.json")
             tokenizer = Tokenizer.from_file(tokenizer_file)
+            # Enable padding and truncation so batched encode produces
+            # rectangular arrays (candidates have different lengths).
+            tokenizer.enable_padding()
+            tokenizer.enable_truncation(max_length=512)
 
             self._sessions[cache_key] = (session, tokenizer)
 
