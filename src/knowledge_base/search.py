@@ -382,7 +382,7 @@ def search(
 
                 # Re-sort with updated scores
                 ranked = sorted(score_map.items(), key=lambda x: x[1], reverse=True)
-        except Exception:
+        except (ImportError, RuntimeError, ValueError, OSError):
             # Graceful degradation: if reranker fails (missing deps,
             # bad model path, inference error), fall back to RRF ordering.
             logger.warning(

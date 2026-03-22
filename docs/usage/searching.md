@@ -160,7 +160,7 @@ Without reranking the pipeline completes in ~55 ms. The cross-encoder adds ~100 
 
 - Simple keyword lookups ("ResNet-50 ImageNet top-1") -- RRF is already precise enough
 - Latency-sensitive batch pipelines where the extra ~100 ms per query matters
-- When `onnxruntime` or the ONNX model is not available -- the flag is silently ignored if the reranker is not configured
+- When `onnxruntime` or the ONNX model is not available -- the reranker logs a warning and falls back to RRF ordering
 
 ## Source Type Filtering
 

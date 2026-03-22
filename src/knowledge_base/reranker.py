@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from onnxruntime import InferenceSession
+    from tokenizers import Tokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class ONNXReranker:
     """
 
     def __init__(self) -> None:
-        self._sessions: dict[tuple[str, str], tuple[InferenceSession, Any]] = {}
+        self._sessions: dict[tuple[str, str], tuple[InferenceSession, Tokenizer]] = {}
 
     def rerank(self, query: str, candidates: list[str]) -> list[float]:
         import numpy as np
@@ -85,7 +86,7 @@ class ONNXReranker:
         scores: list[float] = [_sigmoid(float(x)) for x in logits]
         return scores
 
-    def _get_session(self) -> tuple[InferenceSession, object]:
+    def _get_session(self) -> tuple[InferenceSession, Tokenizer]:
         model_path = os.environ.get("ONNX_RERANK_MODEL_PATH", "")
         tokenizer_path = os.environ.get("ONNX_RERANK_TOKENIZER_PATH", "")
         cache_key = (model_path, tokenizer_path)
