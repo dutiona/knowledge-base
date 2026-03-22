@@ -85,7 +85,7 @@ def _validate_bib_path(output_path: str) -> Path:
         )
     home = Path.home().resolve()
     cwd = Path.cwd().resolve()
-    if not (str(p).startswith(str(home)) or str(p).startswith(str(cwd))):
+    if not (p.is_relative_to(home) or p.is_relative_to(cwd)):
         raise ValueError(
             f"output_path must be under home ({home}) or cwd ({cwd}), got: {p}"
         )
