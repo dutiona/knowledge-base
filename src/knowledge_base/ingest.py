@@ -87,6 +87,10 @@ def _content_hash(text: str) -> str:
 def _chunk_text(
     text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
 ) -> list[str]:
+    if size <= 0:
+        size = CHUNK_SIZE
+    if overlap >= size:
+        overlap = 0
     if len(text) <= size:
         return [text] if text.strip() else []
     chunks = []
@@ -1787,12 +1791,23 @@ def ingest_url(
         return {"error": f"URL scheme must be http or https, got: {parsed.scheme!r}"}
     if not parsed.hostname:
         return {"error": "URL must include a hostname"}
+    if _is_private_ip(parsed.hostname):
+        return {"error": f"URL points to a private/internal address: {parsed.hostname}"}
 
+    # SSRF defense: pre-fetch check blocks direct requests to private IPs.
+    # Post-redirect check below prevents processing data from redirect-based SSRF.
+    # Note: httpx still follows the redirect (the request reaches the target).
+    # Full per-hop validation requires a custom transport — tracked in #232.
     try:
         response = httpx.get(url, follow_redirects=True, timeout=30.0)
         response.raise_for_status()
     except httpx.HTTPError as e:
         return {"error": f"Failed to fetch {url}: {e}"}
+
+    # Validate post-redirect URL — prevents processing data from internal hosts
+    final_host = urlparse(str(response.url)).hostname
+    if final_host and _is_private_ip(final_host):
+        return {"error": f"URL redirected to a private/internal address: {final_host}"}
 
     html = response.text
     text = trafilatura.extract(html, include_links=False, include_tables=True) or ""
