@@ -198,7 +198,7 @@ Returns document pairs ordered by number of shared sessions. Pairs that co-occur
 
 ## Embedding
 
-Chunks are embedded automatically during ingestion using the configured embedding provider and model. Embeddings are stored in the `chunks_vec` virtual table. The model, dimension, and provider can be checked with the `embed_config` tool and changed with `re_embed_tool` (which re-embeds all existing chunks).
+Chunks are embedded automatically during ingestion using the configured embedding provider and model. Embeddings are stored in the **active embedding space's** vec table (typically `chunks_vec` for the default space, or `chunks_vec_<name>` for named spaces). The model, dimension, and provider can be checked with the `embed_config` tool. To switch models, use `re_embed_tool` (convenience wrapper) or the granular space lifecycle tools -- see [Embedding Spaces](embedding-spaces.md) for the full workflow.
 
 ### Embedding Providers
 

@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Complete reference for all 36 MCP tools exposed by the knowledge-base server.
+Complete reference for all 43 MCP tools exposed by the knowledge-base server.
 
 Return values are JSON strings unless noted otherwise.
 
@@ -115,13 +115,14 @@ Tools for querying the index.
 
 Search the research index using hybrid semantic + keyword search.
 
-| Parameter     | Type          | Required | Default    | Description                                                                 |
-| ------------- | ------------- | -------- | ---------- | --------------------------------------------------------------------------- |
-| `query`            | `str`         | yes      | --         | Natural language search query                                               |
-| `top_k`            | `int`         | no       | `10`       | Number of results to return                                                 |
-| `source_type`      | `str \| None` | no       | `None`     | Filter results by type (`pdf`, `markdown`, `code`, `web`, `note`, `figure`) |
-| `mode`             | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)          |
-| `chunk_strategy`   | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all. |
+| Parameter        | Type          | Required | Default    | Description                                                                 |
+| ---------------- | ------------- | -------- | ---------- | --------------------------------------------------------------------------- |
+| `query`          | `str`         | yes      | --         | Natural language search query                                               |
+| `top_k`          | `int`         | no       | `10`       | Number of results to return                                                 |
+| `source_type`    | `str \| None` | no       | `None`     | Filter results by type (`pdf`, `markdown`, `code`, `web`, `note`, `figure`) |
+| `mode`           | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)          |
+| `chunk_strategy` | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all. |
+| `space_name`     | `str \| None` | no       | `None`     | Search a specific embedding space instead of the active one.                |
 
 **Returns:** Array of result objects:
 
@@ -571,10 +572,11 @@ Get current embedding model configuration (model name and dimension).
 
 Re-embed all chunks with a new embedding model. Drops and recreates the vector table with new dimensions, then re-embeds all existing chunks. This is expensive -- use only when switching models.
 
-| Parameter | Type  | Required | Default | Description                                                      |
-| --------- | ----- | -------- | ------- | ---------------------------------------------------------------- |
-| `model`   | `str` | yes      | --      | Ollama model name (e.g. `mxbai-embed-large`, `nomic-embed-text`) |
-| `dim`     | `int` | yes      | --      | Embedding dimension for the new model                            |
+| Parameter             | Type          | Required | Default | Description                                                                                                                                                                                                      |
+| --------------------- | ------------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`               | `str`         | yes      | --      | Ollama model name (e.g. `mxbai-embed-large`, `nomic-embed-text`)                                                                                                                                                 |
+| `dim`                 | `int`         | yes      | --      | Embedding dimension for the new model                                                                                                                                                                            |
+| `matryoshka_base_dim` | `int \| None` | no       | `None`  | Native model dimension for Matryoshka truncation. Embeds at this dim, truncates to `dim`, L2 re-normalizes. Must be > `dim`. MRL models only (e.g. Qwen3-Embedding, nomic-embed-text-v2-moe, mxbai-embed-large). |
 
 **Returns:** Summary with chunk count and timing.
 
@@ -582,8 +584,8 @@ Re-embed all chunks with a new embedding model. Drops and recreates the vector t
 
 Configure the chunking strategy for PDF ingestion.
 
-| Parameter  | Type          | Required | Default | Description                                                              |
-| ---------- | ------------- | -------- | ------- | ------------------------------------------------------------------------ |
+| Parameter  | Type          | Required | Default | Description                                                                      |
+| ---------- | ------------- | -------- | ------- | -------------------------------------------------------------------------------- |
 | `strategy` | `str \| None` | no       | `None`  | `mechanical` (8K, fixed-size) or `semantic` (32K, section-level). Omit to query. |
 
 With no arguments, returns the current strategy. Non-PDF content always uses mechanical chunking regardless of this setting.
@@ -665,6 +667,188 @@ With no arguments, returns current configuration.
     "endpoint": "ws://localhost:3000",
     "venv": "/path/to/venv"
   }
+}
+```
+
+---
+
+## Embedding Spaces
+
+Tools for managing embedding spaces -- multiple embedding models coexisting with independent vec tables. See [Embedding Spaces](../usage/embedding-spaces.md) for the full workflow.
+
+### list_embed_spaces_tool
+
+List all embedding spaces with status, progress, and chunk strategy.
+
+| Parameter | Type | Required | Default | Description |
+| --------- | ---- | -------- | ------- | ----------- |
+| _(none)_  | --   | --       | --      | --          |
+
+**Returns:** Array of space objects with `name`, `model`, `provider`, `dim`, `chunk_strategy`, `status`, `table_name`, `created_at`, `chunk_count`, `total_chunks`.
+
+### create_embed_space_tool
+
+Create a new embedding space in `populating` status.
+
+| Parameter             | Type          | Required | Default        | Description                                                                                                                                                                                                      |
+| --------------------- | ------------- | -------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                | `str`         | yes      | --             | Unique space name (alphanumeric + underscores only)                                                                                                                                                              |
+| `model`               | `str`         | yes      | --             | Embedding model name (e.g. `bge-m3`, `qwen3-embedding`)                                                                                                                                                          |
+| `dim`                 | `int`         | yes      | --             | Embedding dimension (e.g. 768, 1024)                                                                                                                                                                             |
+| `provider`            | `str`         | yes      | --             | Embedding provider (`ollama`, `openai`, `onnx`)                                                                                                                                                                  |
+| `chunk_strategy`      | `str`         | no       | `"mechanical"` | Which chunks to embed: `mechanical` or `semantic` (from #100)                                                                                                                                                    |
+| `matryoshka_base_dim` | `int \| None` | no       | `None`         | Native model dimension for Matryoshka truncation. Embeds at this dim, truncates to `dim`, L2 re-normalizes. Must be > `dim`. MRL models only (e.g. Qwen3-Embedding, nomic-embed-text-v2-moe, mxbai-embed-large). |
+
+**Returns:**
+
+```json
+{
+  "space": "bge_m3_1024",
+  "table_name": "chunks_vec_bge_m3_1024",
+  "status": "populating",
+  "total_chunks": 1500
+}
+```
+
+### backfill_embed_space_tool
+
+Backfill an embedding space with chunk embeddings. Resumable -- interrupted backfills pick up where they left off.
+
+| Parameter    | Type  | Required | Default | Description                                             |
+| ------------ | ----- | -------- | ------- | ------------------------------------------------------- |
+| `name`       | `str` | yes      | --      | Name of the space to backfill (must be in `populating`) |
+| `batch_size` | `int` | no       | `32`    | Number of chunks per embedding batch                    |
+
+**Returns:**
+
+```json
+{ "space": "bge_m3_1024", "chunks_processed": 1500, "total_chunks": 1500 }
+```
+
+### promote_embed_space_tool
+
+Promote an embedding space to active. Deprecates the current active space and syncs config.
+
+| Parameter | Type  | Required | Default | Description                  |
+| --------- | ----- | -------- | ------- | ---------------------------- |
+| `name`    | `str` | yes      | --      | Name of the space to promote |
+
+**Returns:**
+
+```json
+{
+  "promoted": "bge_m3_1024",
+  "deprecated": "default",
+  "note": "All 'similar' relationships removed (embedding space changed). Run scan_relationships() to recompute."
+}
+```
+
+### deprecate_embed_space_tool
+
+Mark an embedding space as deprecated.
+
+| Parameter | Type  | Required | Default | Description                                             |
+| --------- | ----- | -------- | ------- | ------------------------------------------------------- |
+| `name`    | `str` | yes      | --      | Name of the space to deprecate (cannot be active space) |
+
+**Returns:**
+
+```json
+{ "deprecated": "experimental_model" }
+```
+
+### cleanup_embed_space_tool
+
+Drop a deprecated space's vec table and remove its registry entry.
+
+| Parameter | Type  | Required | Default | Description                              |
+| --------- | ----- | -------- | ------- | ---------------------------------------- |
+| `name`    | `str` | yes      | --      | Name of the deprecated space to clean up |
+
+**Returns:**
+
+```json
+{ "cleaned": "old_model_768" }
+```
+
+---
+
+## Comparison
+
+Tools for A/B comparison of embedding spaces. See [Embedding Spaces: Comparing spaces](../usage/embedding-spaces.md#comparing-spaces) for usage guidance.
+
+### compare_spaces_tool
+
+Compare search results for a query across two embedding spaces. Returns side-by-side results with overlap metrics and rank correlation.
+
+| Parameter | Type  | Required | Default | Description                                                     |
+| --------- | ----- | -------- | ------- | --------------------------------------------------------------- |
+| `query`   | `str` | yes      | --      | Search query to compare                                         |
+| `space_a` | `str` | yes      | --      | Name of the first embedding space                               |
+| `space_b` | `str` | yes      | --      | Name of the second embedding space                              |
+| `top_k`   | `int` | no       | `10`    | Number of results per space                                     |
+| `mode`    | `str` | no       | `"vec"` | Search mode: `vec` (default for comparison), `hybrid`, or `fts` |
+
+**Returns:**
+
+```json
+{
+  "query": "attention mechanism",
+  "space_a": {
+    "name": "bge_m3_1024",
+    "model": "bge-m3",
+    "dim": 1024,
+    "result_count": 10,
+    "results": []
+  },
+  "space_b": {
+    "name": "qwen3_512",
+    "model": "qwen3-embedding",
+    "dim": 512,
+    "result_count": 10,
+    "results": []
+  },
+  "metrics": {
+    "overlap_count": 7,
+    "overlap_at_k": 0.7,
+    "jaccard": 0.5385,
+    "rank_correlation": 0.8214
+  },
+  "warnings": []
+}
+```
+
+Emits a cross-strategy warning when spaces use different `chunk_strategy` values.
+
+### batch_compare_spaces_tool
+
+Batch-compare two embedding spaces with multiple queries. Returns aggregated statistics.
+
+| Parameter | Type        | Required | Default | Description                           |
+| --------- | ----------- | -------- | ------- | ------------------------------------- |
+| `space_a` | `str`       | yes      | --      | Name of the first embedding space     |
+| `space_b` | `str`       | yes      | --      | Name of the second embedding space    |
+| `queries` | `list[str]` | yes      | --      | List of search queries to compare     |
+| `top_k`   | `int`       | no       | `10`    | Number of results per space per query |
+| `mode`    | `str`       | no       | `"vec"` | Search mode (default `vec`)           |
+
+**Returns:**
+
+```json
+{
+  "space_a": "bge_m3_1024",
+  "space_b": "qwen3_512",
+  "queries_analyzed": 5,
+  "overlap_at_k": { "mean": 0.72, "std": 0.15, "min": 0.5, "max": 0.9 },
+  "jaccard": { "mean": 0.55, "std": 0.12, "min": 0.38, "max": 0.7 },
+  "rank_correlation": {
+    "mean": 0.81,
+    "std": 0.1,
+    "min": 0.65,
+    "max": 0.95,
+    "valid_count": 4
+  },
+  "warnings": []
 }
 ```
 

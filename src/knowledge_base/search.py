@@ -7,9 +7,13 @@ import sqlite3
 import struct
 from dataclasses import dataclass
 
-from .db import _batched_select
+from .db import (
+    _batched_select,
+    get_active_space,
+    get_vec_table_name,
+)
 from .embed_swap import get_embed_config
-from .embeddings import embed_single
+from .embeddings import embed_single, truncate_embedding
 from .keywords import build_fts_query, extract_keywords
 
 
@@ -29,30 +33,55 @@ def _serialize_f32(vec: list[float]) -> bytes:
 
 
 def _fts_search(
-    conn: sqlite3.Connection, query: str, limit: int
+    conn: sqlite3.Connection,
+    query: str,
+    limit: int,
+    chunk_strategy: str | None = None,
 ) -> list[tuple[int, float]]:
-    """BM25 full-text search. Returns (chunk_id, bm25_score) pairs."""
-    rows = conn.execute(
-        """
-        SELECT rowid, bm25(chunks_fts) AS score
-        FROM chunks_fts
-        WHERE chunks_fts MATCH ?
-        ORDER BY score
-        LIMIT ?
-        """,
-        (query, limit),
-    ).fetchall()
+    """BM25 full-text search. Returns (chunk_id, bm25_score) pairs.
+
+    When *chunk_strategy* is given, only chunks matching that strategy are
+    returned (requires the ``chunk_strategy`` column on ``chunks``).
+    """
+    if chunk_strategy is not None:
+        rows = conn.execute(
+            """
+            SELECT c.id AS rowid, bm25(chunks_fts) AS score
+            FROM chunks_fts
+            JOIN chunks c ON c.id = chunks_fts.rowid
+            WHERE chunks_fts MATCH ?
+              AND c.chunk_strategy = ?
+            ORDER BY score
+            LIMIT ?
+            """,
+            (query, chunk_strategy, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT rowid, bm25(chunks_fts) AS score
+            FROM chunks_fts
+            WHERE chunks_fts MATCH ?
+            ORDER BY score
+            LIMIT ?
+            """,
+            (query, limit),
+        ).fetchall()
     return [(row["rowid"], row["score"]) for row in rows]
 
 
 def _vec_search(
-    conn: sqlite3.Connection, query_embedding: list[float], limit: int
+    conn: sqlite3.Connection,
+    query_embedding: list[float],
+    limit: int,
+    table_name: str | None = None,
 ) -> list[tuple[int, float]]:
     """Vector similarity search. Returns (chunk_id, distance) pairs."""
+    vec_table = table_name or get_vec_table_name(conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT chunk_id, distance
-        FROM chunks_vec
+        FROM [{vec_table}]
         WHERE embedding MATCH ?
         ORDER BY distance
         LIMIT ?
@@ -150,6 +179,7 @@ def search(
     mode: str = "hybrid",
     keyword_prefilter: bool = False,
     chunk_strategy: str | None = None,
+    space_name: str | None = None,
 ) -> list[SearchResult]:
     """
     Hybrid search over indexed chunks.
@@ -164,10 +194,36 @@ def search(
             specific filler. Only affects hybrid and fts modes.
         chunk_strategy: Filter by chunk strategy ('mechanical' or 'semantic').
             None (default) returns all chunks regardless of strategy.
+        space_name: Search against a specific embedding space instead of the
+            active one. The space's own model/dim/provider are used for query
+            embedding. Folder boost is disabled for non-active spaces.
     """
     fetch_limit = top_k * 3  # over-fetch for RRF merge
-    # When filtering by chunk_strategy, over-fetch to compensate for
-    # candidates that will be filtered out before RRF merge.
+
+    # Resolve space configuration — either specific space or active
+    if space_name:
+        from .embed_swap import get_space
+
+        space = get_space(conn, space_name)
+        space_cfg = {
+            "model": space["model"],
+            "dim": space["dim"],
+            "provider": space["provider"],
+        }
+        space_base_dim = space.get("matryoshka_base_dim")
+        vec_table: str | None = space["table_name"]
+        # Only skip folder boost if the space differs from the active one
+        # (folder_summaries_vec is always at the active space's dim)
+        active = get_active_space(conn)
+        skip_folder_boost = not active or space["name"] != active["name"]
+    else:
+        space_cfg = get_embed_config(conn)
+        active = get_active_space(conn)
+        space_base_dim = active.get("matryoshka_base_dim") if active else None
+        vec_table = None  # use active space default
+        skip_folder_boost = False
+
+    # Strategy filtering: only apply when the caller explicitly requests it.
     strategy_fetch_limit = fetch_limit * 5 if chunk_strategy else fetch_limit
 
     fts_results: list[tuple[int, float]] = []
@@ -182,36 +238,49 @@ def search(
             fts_query = query
         if fts_query:
             try:
-                fts_results = _fts_search(conn, fts_query, strategy_fetch_limit)
+                fts_results = _fts_search(
+                    conn, fts_query, strategy_fetch_limit, chunk_strategy=chunk_strategy
+                )
             except Exception:
                 # FTS query syntax error — skip FTS leg
                 pass
 
     if mode in ("hybrid", "vec"):
-        cfg = get_embed_config(conn)
-        query_embedding = embed_single(
-            query,
-            model=cfg["model"],
-            expected_dim=cfg["dim"],
-            _provider_name=cfg["provider"],
+        # Use space-specific config for query embedding
+        if space_base_dim:
+            query_embedding = embed_single(
+                query,
+                model=space_cfg["model"],
+                expected_dim=space_base_dim,
+                _provider_name=space_cfg["provider"],
+            )
+            query_embedding = truncate_embedding(query_embedding, space_cfg["dim"])
+        else:
+            query_embedding = embed_single(
+                query,
+                model=space_cfg["model"],
+                expected_dim=space_cfg["dim"],
+                _provider_name=space_cfg["provider"],
+            )
+        vec_results = _vec_search(
+            conn, query_embedding, strategy_fetch_limit, table_name=vec_table
         )
-        vec_results = _vec_search(conn, query_embedding, strategy_fetch_limit)
 
     # --- chunk_strategy filter (pre-RRF) ---
     if chunk_strategy:
-        # Filter both result sets by joining against chunks table
+        # Filter both result sets by joining against chunks table (batched
+        # to stay under SQLite's 999 variable limit for large candidate sets)
         all_candidate_ids = list(
             {cid for cid, _ in fts_results} | {cid for cid, _ in vec_results}
         )
         if all_candidate_ids:
-            placeholders = ",".join("?" * len(all_candidate_ids))
-            valid_ids = {
-                row["id"]
-                for row in conn.execute(
-                    f"SELECT id FROM chunks WHERE id IN ({placeholders}) AND chunk_strategy = ?",
-                    [*all_candidate_ids, chunk_strategy],
-                ).fetchall()
-            }
+            valid_rows = _batched_select(
+                conn,
+                "SELECT id FROM chunks WHERE id IN ({ph}) AND chunk_strategy = ?",
+                all_candidate_ids,
+                extra_params=[chunk_strategy],
+            )
+            valid_ids = {row["id"] for row in valid_rows}
             fts_results = [(cid, s) for cid, s in fts_results if cid in valid_ids]
             vec_results = [(cid, s) for cid, s in vec_results if cid in valid_ids]
 
@@ -238,7 +307,11 @@ def search(
     pre_boost_ids = [cid for cid, _ in merged[:boost_window]]
     score_map = dict(merged[:boost_window])
 
-    if mode in ("hybrid", "vec") and query_embedding is not None:
+    if (
+        mode in ("hybrid", "vec")
+        and query_embedding is not None
+        and not skip_folder_boost
+    ):
         score_map = _folder_boost(conn, query_embedding, pre_boost_ids, score_map)
 
     # Re-sort after boost and take top_k
@@ -254,15 +327,16 @@ def search(
     if source_type:
         type_filter = " AND source_type = ?"
         params.append(source_type)
+    strategy_filter = ""
     if chunk_strategy:
-        type_filter += " AND chunk_strategy = ?"
+        strategy_filter = " AND chunk_strategy = ?"
         params.append(chunk_strategy)
 
     rows = conn.execute(
         f"""
         SELECT id, content, source_type, source_uri, chunk_index
         FROM chunks
-        WHERE id IN ({placeholders}){type_filter}
+        WHERE id IN ({placeholders}){type_filter}{strategy_filter}
         """,
         params,
     ).fetchall()

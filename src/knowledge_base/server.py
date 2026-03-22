@@ -14,8 +14,24 @@ from .conclusions import (
     record_conclusion,
     supersede_conclusion,
 )
-from .db import DEFAULT_DB_PATH, co_occurrence_pairs, get_connection, init_schema
-from .embed_swap import get_embed_config, re_embed
+from .db import (
+    DEFAULT_DB_PATH,
+    co_occurrence_pairs,
+    get_active_space,
+    get_connection,
+    init_schema,
+)
+from .comparison import batch_compare_spaces, compare_spaces
+from .embed_swap import (
+    get_embed_config,
+    re_embed,
+    create_space,
+    backfill_space,
+    promote_space,
+    deprecate_space,
+    cleanup_space,
+    list_spaces,
+)
 from .extraction import (
     _MAX_WORKERS_LIMIT,
     compare_papers,
@@ -218,6 +234,7 @@ def search_index(
     mode: str = "hybrid",
     keyword_prefilter: bool = False,
     chunk_strategy: str | None = None,
+    space_name: str | None = None,
 ) -> str:
     """Search the knowledge base using hybrid semantic + keyword search.
 
@@ -231,6 +248,8 @@ def search_index(
             queries by stripping stopwords and filler. Default false.
         chunk_strategy: Filter by chunking strategy ('mechanical' or 'semantic').
             None (default) returns all chunks regardless of strategy.
+        space_name: Search a specific embedding space instead of the active one.
+            Useful for A/B comparison before promoting a new space.
     """
     conn = _get_conn()
     results = search(
@@ -241,6 +260,7 @@ def search_index(
         mode=mode,
         keyword_prefilter=keyword_prefilter,
         chunk_strategy=chunk_strategy,
+        space_name=space_name,
     )
     detect_and_log(conn, query, results, source_type_filter=source_type, mode=mode)
 
@@ -322,6 +342,12 @@ def status() -> str:
     ).fetchall():
         job_counts[row["status"]] = row["count"]
 
+    space_counts = {}
+    for row in conn.execute(
+        "SELECT status, COUNT(*) as count FROM embed_spaces GROUP BY status"
+    ).fetchall():
+        space_counts[row["status"]] = row["count"]
+
     return json.dumps(
         {
             "total_chunks": total,
@@ -335,6 +361,7 @@ def status() -> str:
             "metrics": metric_count,
             "prediction_errors": get_prediction_error_count(conn),
             "jobs": job_counts,
+            "embed_spaces": space_counts,
             "embed_config": get_embed_config(conn),
             "chunk_strategy": (lambda r: r["value"] if r else "mechanical")(
                 conn.execute(
@@ -360,11 +387,18 @@ def status() -> str:
 def embed_config() -> str:
     """Get current embedding model configuration (model name and dimension)."""
     conn = _get_conn()
-    return json.dumps(get_embed_config(conn))
+    config = get_embed_config(conn)
+    active = get_active_space(conn)
+    if active:
+        config["active_space"] = active["name"]
+        config["chunk_strategy"] = active["chunk_strategy"]
+        if active.get("matryoshka_base_dim"):
+            config["matryoshka_base_dim"] = active["matryoshka_base_dim"]
+    return json.dumps(config)
 
 
 @mcp.tool()
-def re_embed_tool(model: str, dim: int) -> str:
+def re_embed_tool(model: str, dim: int, matryoshka_base_dim: int | None = None) -> str:
     """Re-embed all chunks with a new embedding model.
 
     Drops and recreates the vector table with new dimensions, then re-embeds
@@ -372,20 +406,191 @@ def re_embed_tool(model: str, dim: int) -> str:
 
     Args:
         model: Ollama model name (e.g. 'mxbai-embed-large', 'nomic-embed-text').
-        dim: Embedding dimension for the new model.
+        dim: Embedding dimension for the new model. For Matryoshka models,
+            this is the truncated storage dimension.
+        matryoshka_base_dim: Native embedding dimension when using Matryoshka
+            truncation. Must be greater than ``dim``. See
+            ``create_embed_space_tool`` for details.
     """
     conn = _get_conn()
-    result = re_embed(conn, model, dim)
+    result = re_embed(conn, model, dim, matryoshka_base_dim=matryoshka_base_dim)
 
     # All "similar" relationships are invalid after embedding space change
     conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
     conn.commit()
     result["note"] = (
         "All 'similar' relationships removed (embedding space changed). "
-        "Run scan_relationships() to recompute."
+        "Run scan_relationships() to recompute. "
+        "Use list_embed_spaces_tool() to see all spaces."
     )
 
     return json.dumps(result)
+
+
+@mcp.tool()
+def list_embed_spaces_tool() -> str:
+    """List all embedding spaces with status, progress, and chunk strategy."""
+    conn = _get_conn()
+    return json.dumps(list_spaces(conn))
+
+
+@mcp.tool()
+def create_embed_space_tool(
+    name: str,
+    model: str,
+    dim: int,
+    provider: str,
+    chunk_strategy: str = "mechanical",
+    matryoshka_base_dim: int | None = None,
+) -> str:
+    """Create a new embedding space in 'populating' status.
+
+    Args:
+        name: Unique space name (alphanumeric + underscores only).
+        model: Embedding model name (e.g. 'qwen3-embedding').
+        dim: Embedding dimension (e.g. 768, 1024). For Matryoshka models,
+            this is the truncated storage dimension.
+        provider: Embedding provider ('ollama', 'openai', 'onnx').
+        chunk_strategy: Which chunks to embed ('mechanical' or 'semantic').
+        matryoshka_base_dim: Native embedding dimension of the model when using
+            Matryoshka truncation. The provider embeds at this dimension, then
+            the system truncates to ``dim`` and L2 re-normalizes before storage.
+            Must be greater than ``dim``. Only useful with MRL-capable models
+            (e.g. Qwen3-Embedding, nomic-embed-text-v2-moe).
+    """
+    conn = _get_conn()
+    try:
+        result = create_space(
+            conn, name, model, dim, provider, chunk_strategy, matryoshka_base_dim
+        )
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def backfill_embed_space_tool(name: str, batch_size: int = 32) -> str:
+    """Backfill an embedding space with chunk embeddings. Resumable.
+
+    Args:
+        name: Name of the space to backfill (must be in 'populating' status).
+        batch_size: Number of chunks per embedding batch (default 32).
+    """
+    conn = _get_conn()
+    try:
+        result = backfill_space(conn, name, batch_size)
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def promote_embed_space_tool(name: str) -> str:
+    """Promote an embedding space to active. Deprecates the current active space.
+
+    Also updates config (embed_model, embed_dim, embed_provider, chunk_strategy)
+    and invalidates all 'similar' relationships.
+
+    Args:
+        name: Name of the space to promote.
+    """
+    conn = _get_conn()
+    try:
+        result = promote_space(conn, name)
+        # Invalidate similarity relationships (same as re_embed)
+        conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
+        conn.commit()
+        result["note"] = (
+            "All 'similar' relationships removed (embedding space changed). "
+            "Run scan_relationships() to recompute."
+        )
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def deprecate_embed_space_tool(name: str) -> str:
+    """Mark an embedding space as deprecated.
+
+    Args:
+        name: Name of the space to deprecate (cannot be the active space).
+    """
+    conn = _get_conn()
+    try:
+        result = deprecate_space(conn, name)
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def cleanup_embed_space_tool(name: str) -> str:
+    """Drop a deprecated space's vec table and remove its registry entry.
+
+    Args:
+        name: Name of the deprecated space to clean up.
+    """
+    conn = _get_conn()
+    try:
+        result = cleanup_space(conn, name)
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def compare_spaces_tool(
+    query: str,
+    space_a: str,
+    space_b: str,
+    top_k: int = 10,
+    mode: str = "vec",
+) -> str:
+    """Compare search results for a query across two embedding spaces.
+
+    Returns side-by-side results with overlap metrics and rank correlation.
+
+    Args:
+        query: Search query to compare.
+        space_a: Name of the first embedding space.
+        space_b: Name of the second embedding space.
+        top_k: Number of results per space (default 10).
+        mode: Search mode - 'vec' (default for comparison), 'hybrid', or 'fts'.
+    """
+    conn = _get_conn()
+    try:
+        result = compare_spaces(conn, query, space_a, space_b, top_k, mode)
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def batch_compare_spaces_tool(
+    space_a: str,
+    space_b: str,
+    queries: list[str],
+    top_k: int = 10,
+    mode: str = "vec",
+) -> str:
+    """Batch-compare two embedding spaces with multiple queries.
+
+    Returns aggregated overlap, Jaccard, and rank correlation metrics.
+
+    Args:
+        space_a: Name of the first embedding space.
+        space_b: Name of the second embedding space.
+        queries: List of search queries to compare.
+        top_k: Number of results per space per query (default 10).
+        mode: Search mode (default 'vec').
+    """
+    conn = _get_conn()
+    try:
+        result = batch_compare_spaces(conn, space_a, space_b, queries, top_k, mode)
+        return json.dumps(result)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
 
 
 @mcp.tool()

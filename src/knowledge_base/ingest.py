@@ -12,7 +12,6 @@ import re
 import shutil
 import socket
 import sqlite3
-import struct
 import subprocess
 import tempfile
 from pathlib import Path
@@ -22,9 +21,15 @@ import fitz  # pymupdf
 import httpx
 import trafilatura
 
-from .db import _batched_execute, _batched_select
+from .db import (
+    _batched_execute,
+    _batched_select,
+    delete_chunk_vecs,
+    get_active_space,
+    insert_chunk_vec,
+)
 from .embed_swap import get_embed_config
-from .embeddings import embed
+from .embeddings import embed, truncate_embedding
 from .folder_summaries import update_folder_summary
 
 
@@ -72,6 +77,16 @@ def _detect_source_type(path: Path) -> str:
 def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[float]]:
     """Call embed() using the model, dim, and provider from the config table."""
     cfg = get_embed_config(conn)
+    active = get_active_space(conn)
+    base_dim = active.get("matryoshka_base_dim") if active else None
+    if base_dim:
+        vecs = embed(
+            texts,
+            model=cfg["model"],
+            expected_dim=base_dim,
+            _provider_name=cfg["provider"],
+        )
+        return [truncate_embedding(v, cfg["dim"]) for v in vecs]
     return embed(
         texts,
         model=cfg["model"],
@@ -482,10 +497,6 @@ def _get_chunk_strategy(conn: sqlite3.Connection) -> str:
     return row["value"] if row else "mechanical"
 
 
-def _serialize_f32(vec: list[float]) -> bytes:
-    return struct.pack(f"{len(vec)}f", *vec)
-
-
 def _extract_pdf_text(path: Path) -> str:
     """Flat text extraction — fallback when pymupdf4llm is unavailable."""
     doc = fitz.open(str(path))
@@ -815,10 +826,7 @@ def ingest_file(
                 "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
                 (chunk_id, session_id),
             )
-        conn.execute(
-            "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
-            (chunk_id, _serialize_f32(emb_vec), chunk_id),
-        )
+        insert_chunk_vec(conn, chunk_id, emb_vec)
 
     conn.commit()
     if not _skip_folder_summary:
@@ -923,7 +931,7 @@ def reingest_file(
 
     # --- Delete old chunks (triggers handle FTS cleanup) ---
     # Delete from vec table first (no trigger)
-    _batched_execute(conn, "DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_ids)
+    delete_chunk_vecs(conn, old_ids)
     # Delete from chunks (triggers clean up FTS)
     conn.execute(
         "DELETE FROM chunks WHERE source_uri = ?",
@@ -1050,10 +1058,7 @@ def reingest_file(
                 "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
                 (chunk_id, sid),
             )
-        conn.execute(
-            "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
-            (chunk_id, _serialize_f32(emb_vec), chunk_id),
-        )
+        insert_chunk_vec(conn, chunk_id, emb_vec)
 
     # --- Re-link papers whose abstract_chunk_id was nullified ---
     if affected_paper_ids:
@@ -1433,9 +1438,7 @@ def _extract_html_images(
     ]
     if old_ids:
         _cleanup_figure_fk_refs(conn, old_ids)
-        _batched_execute(
-            conn, "DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_ids
-        )
+        delete_chunk_vecs(conn, old_ids)
         _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
 
     # --- Insert new figure chunks ---
@@ -1457,10 +1460,7 @@ def _extract_html_images(
             (chunk_hash, desc, source_url, chunk_index, meta_json),
         )
         chunk_id = cursor.lastrowid
-        conn.execute(
-            "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
-            (chunk_id, _serialize_f32(emb_vec), chunk_id),
-        )
+        insert_chunk_vec(conn, chunk_id, emb_vec)
         figures_added += 1
 
     if figures_added or old_ids:
@@ -1732,9 +1732,7 @@ def _extract_web_figures(
     ]
     if old_fig_ids:
         _cleanup_figure_fk_refs(conn, old_fig_ids)
-        _batched_execute(
-            conn, "DELETE FROM chunks_vec WHERE chunk_id IN ({ph})", old_fig_ids
-        )
+        delete_chunk_vecs(conn, old_fig_ids)
         _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_fig_ids)
 
     figures_added = 0
@@ -1765,10 +1763,7 @@ def _extract_web_figures(
             (chunk_hash, desc, source_url, chunk_index, meta_json),
         )
         chunk_id = cursor.lastrowid
-        conn.execute(
-            "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
-            (chunk_id, _serialize_f32(emb_vec), chunk_id),
-        )
+        insert_chunk_vec(conn, chunk_id, emb_vec)
         figures_added += 1
 
     if figures_added:
@@ -1922,10 +1917,7 @@ def ingest_url(
                 "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
                 (chunk_id, session_id),
             )
-        conn.execute(
-            "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
-            (chunk_id, _serialize_f32(emb_vec), chunk_id),
-        )
+        insert_chunk_vec(conn, chunk_id, emb_vec)
 
     conn.commit()
     return {

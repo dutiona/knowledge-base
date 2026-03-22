@@ -89,11 +89,12 @@ def test_search_index_chunk_strategy_passthrough(tmp_path):
     conn.commit()
 
     with patch("knowledge_base.search.embed_single", _fake_embed_single):
-        # No filter — both returned
+        # Default (no filter) returns both — vec leg filters implicitly
+        # but FTS mode returns all strategies
         all_results = search(conn, "graph neural", mode="fts")
         assert len(all_results) == 2
 
-        # Filter to semantic only
+        # Explicit filter to semantic only
         sem_results = search(
             conn, "graph neural", mode="fts", chunk_strategy="semantic"
         )
