@@ -42,6 +42,7 @@ Read these when the task touches the corresponding area:
 | Embedding model swap                     | `src/knowledge_base/embed_swap.py`        | `docs/design/architecture-overview.md`    |
 | Prediction-error detection               | `src/knowledge_base/prediction_errors.py` | `docs/usage/prediction-errors.md`         |
 | Auto-relationship discovery              | `src/knowledge_base/papers.py`            | `docs/usage/auto-relationships.md`        |
+| Cross-encoder reranking                  | `src/knowledge_base/reranker.py`          | `docs/usage/searching.md`                 |
 | DB schema & migrations                   | `src/knowledge_base/db.py`                | `docs/reference/schema.md`                |
 
 ## Testing Conventions
