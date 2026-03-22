@@ -477,7 +477,10 @@ def _resolve_entities(
         raw = _llm_call(prompt, cfg=conn_or_cfg)
     else:
         raw = _llm_call(prompt, conn=conn_or_cfg)
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Entity resolution returned invalid JSON: {e}") from e
 
 
 def _clear_previous_extraction(conn: sqlite3.Connection, paper_id: int) -> None:
@@ -1059,7 +1062,8 @@ def _sanitize_url(url: str) -> str:
         port = f":{parsed.port}" if parsed.port else ""
         return urlunparse((parsed.scheme, f"{host}{port}", parsed.path, "", "", ""))
     except Exception:
-        return url
+        # Conservative fallback: strip credentials and query params
+        return url.split("@")[-1].split("?")[0] if "@" in url else url.split("?")[0]
 
 
 _CONNECTIVITY_TIMEOUT = 3

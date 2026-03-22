@@ -434,8 +434,7 @@ def _render_page(pdf_path: str, page_num: int) -> bytes:
     Raises:
         IndexError: If page_num is out of range.
     """
-    doc = fitz.open(pdf_path)
-    try:
+    with fitz.open(pdf_path) as doc:
         if page_num < 0 or page_num >= len(doc):
             raise IndexError(
                 f"Page {page_num} out of range for document with {len(doc)} pages"
@@ -443,8 +442,6 @@ def _render_page(pdf_path: str, page_num: int) -> bytes:
         page = doc[page_num]
         pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
         return pix.tobytes("png")
-    finally:
-        doc.close()
 
 
 # ---------------------------------------------------------------------------
@@ -463,8 +460,7 @@ def _heuristic_filter(pdf_path: str) -> list[int]:
 
     Falls back to all pages if no candidates found.
     """
-    doc = fitz.open(pdf_path)
-    try:
+    with fitz.open(pdf_path) as doc:
         n = len(doc)
         if n == 0:
             return []
@@ -506,8 +502,6 @@ def _heuristic_filter(pdf_path: str) -> list[int]:
             candidates = list(range(n))
 
         return candidates
-    finally:
-        doc.close()
 
 
 # ---------------------------------------------------------------------------
@@ -658,8 +652,7 @@ def _detect_vector_pages(
     Returns:
         Sorted list of 0-indexed page numbers needing fallback rendering.
     """
-    doc = fitz.open(pdf_path)
-    try:
+    with fitz.open(pdf_path) as doc:
         result = []
         for i, page in enumerate(doc):
             if i in pages_with_extracted_images:
@@ -667,8 +660,6 @@ def _detect_vector_pages(
             if len(page.get_drawings()) > _VECTOR_DRAWING_THRESHOLD:
                 result.append(i)
         return result
-    finally:
-        doc.close()
 
 
 # ---------------------------------------------------------------------------
@@ -756,9 +747,8 @@ def estimate_figures_time(
         return {"error": f"Source is not an existing PDF: {source_uri}"}
 
     if pages is not None:
-        doc = fitz.open(str(pdf_path))
-        total_pages = len(doc)
-        doc.close()
+        with fitz.open(str(pdf_path)) as doc:
+            total_pages = len(doc)
         for p in pages:
             if p < 0 or p >= total_pages:
                 return {
@@ -836,9 +826,8 @@ def extract_figures(
     if pages is not None:
         if not pages:
             return {"pages_processed": 0, "figures_found": 0, "chunks_created": 0}
-        doc = fitz.open(str(pdf_path))
-        total_pages = len(doc)
-        doc.close()
+        with fitz.open(str(pdf_path)) as doc:
+            total_pages = len(doc)
         for p in pages:
             if p < 0 or p >= total_pages:
                 return {
@@ -898,14 +887,11 @@ def extract_figures(
     if vector_pages:
         if on_progress:
             on_progress(f"rendering {len(vector_pages)} vector-figure pages...")
-        doc = fitz.open(str(pdf_path))
-        try:
+        with fitz.open(str(pdf_path)) as doc:
             for page_num in vector_pages:
                 page = doc[page_num]
                 pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
                 rendered[page_num] = pix.tobytes("png")
-        finally:
-            doc.close()
 
     # 6. Read vision config once (main thread)
     config = _get_vision_config(conn)
