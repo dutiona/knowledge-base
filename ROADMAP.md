@@ -2,7 +2,7 @@
 
 > Last updated: 2026-03-22
 
-112 open issues (107 actionable + 5 reference/stale) across 8 workstreams. This document establishes priority, ordering,
+111 open issues (106 actionable + 5 reference/stale) across 8 workstreams. This document establishes priority, ordering,
 dependency chains, and parallelism opportunities.
 
 ## Issue Index
@@ -30,7 +30,7 @@ dependency chains, and parallelism opportunities.
 | 100 | dual chunking strategy (8K + 32K)                        | Embedding   | 2     | ✔                                                 |
 | 105 | auto-relationship discovery via similarity               | Search      | 2     | ✔                                                 |
 | 139 | chunk_sessions join table for N:M session tracking       | Search      | 2     | ✔                                                 |
-| 106 | stage-2 reranking in hybrid search                       | Search      | 2     | ⏳ in-progress                                    |
+| 106 | stage-2 reranking in hybrid search                       | Search      | 2     | ✔                                                 |
 | 163 | bug: qwen3.5 thinking-mode empty extraction              | Extraction  | 2.5a  |                                                   |
 | 160 | fix: zombie conclusions after FK cleanup                 | Extraction  | 2.5a  |                                                   |
 | 152 | fix: stale inline image chunks on re-ingest              | Ingest      | 2.5a  |                                                   |
@@ -153,6 +153,7 @@ dependency chains, and parallelism opportunities.
 | 174 | plan: Phase 2 — Matryoshka truncation support          |
 | 177 | plan: Phase 3 — A/B embedding space comparison tooling |
 | 178 | perf: search query optimization opportunities (#172)   |
+| 248 | plan: stage-2 cross-encoder reranking (#106)           |
 
 ---
 
@@ -182,7 +183,7 @@ dependency chains, and parallelism opportunities.
 
 ---
 
-## Phase 2 — Embedding Architecture + Search Quality (12/13 done)
+## Phase 2 — Embedding Architecture + Search Quality ✔
 
 **Goal:** Upgrade the embedding and search infrastructure.
 
@@ -200,13 +201,10 @@ dependency chains, and parallelism opportunities.
 - ~~#99~~ multi-space embedding architecture (PR #172)
 - ~~#100~~ dual chunking strategy (PR #170)
 - ~~#139~~ chunk_sessions N:M (PR #169)
+- ~~#106~~ stage-2 cross-encoder reranking (PR #249)
 
-**Remaining:**
-
-- ⏳ **#106 (reranking)** — in-progress in a side session.
-
-**Exit criteria:** #106 lands. Multiple embedding models coexist, Matryoshka
-truncation works, search quality measurably improves via reranking.
+**All items complete.** Multiple embedding models coexist, Matryoshka truncation
+works, search quality improves via opt-in cross-encoder reranking.
 
 ---
 
@@ -388,7 +386,7 @@ polish ingest pipelines with follow-up enhancements.
 #125 (BM25-seeded HNSW)     ─── depends on #99 (done)
 #124 (build/serve pattern)  ─── independent
 
-#129 (retrieval plan IR)    ─── benefits from #106 (in-progress)
+#129 (retrieval plan IR)    ─── benefits from #106 (done)
 
 #162 (folder summary + ingest_url) ─── depends on #126 (done)
 #161 (keyword compound terms)      ─── depends on #130 (done)
@@ -492,14 +490,14 @@ PR #89 ──┐                      ✔ #99               #152, #151          
                                 ✔ #99
                                 ✔ #100
                                 ✔ #139
-                                ⏳ #106
+                                ✔ #106
 
 Phase 3                         Phase 4
 ────────                        ────────
 #102 ──┬──▶ #103                #108, #109, #247
        └──▶ #104                #107 (epic)
 #94, #125 (need ✔#99)          #12, #65, #80
-#124, #129 (after #106)
+#124, #129 (after ✔#106)
 #162, #161, #147+#179
 #146, #145, #149, #164
 #131 ──▶ #132
