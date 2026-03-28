@@ -1,8 +1,8 @@
 # Roadmap
 
-> Last updated: 2026-03-22
+> Last updated: 2026-03-27
 
-111 open issues (106 actionable + 5 reference/stale) across 8 workstreams. This document establishes priority, ordering,
+124 open issues (106 actionable + 5 reference/stale) across 8 workstreams. This document establishes priority, ordering,
 dependency chains, and parallelism opportunities.
 
 ## Issue Index
@@ -126,6 +126,19 @@ dependency chains, and parallelism opportunities.
 | 104 | memory → wisdom consolidation                            | Integration | 3     |                                                   |
 | 173 | N:M chunk-to-source mapping for cross-source dedup       | Ingest      | 3     |                                                   |
 | 246 | retrieval budget annotations to MCP tool descriptions    | Search      | 3     |                                                   |
+| 250 | build retrieval coverage golden set (100+ questions)     | Search      | 2.5   |                                                   |
+| 251 | graph-expand search mode (relationship edges)            | Search      | 3     |                                                   |
+| 252 | entity-overlap signal in SearchResult                    | Search      | 3     |                                                   |
+| 253 | query-type classifier in keywords.py                     | Search      | 3     |                                                   |
+| 254 | reasoning hints in search MCP tool response              | Search      | 3     |                                                   |
+| 255 | cross-reference resolution at ingestion time             | Ingest      | 3+    |                                                   |
+| 256 | evaluate olmOCR-bench for vision pipeline                | Vision      | 3     |                                                   |
+| 257 | reasoning-aware context preparation (Table 7)            | Search      | 3+    |                                                   |
+| 258 | abstention diagnostic MCP tool (diagnose_abstention)     | Search      | 3     |                                                   |
+| 259 | chunk strategy exposure by reasoning intent              | Search      | 3     |                                                   |
+| 260 | figure-in-context chunking (caption+figure fused)        | Ingest      | 3+    |                                                   |
+| 261 | staged Bayesian pipeline optimization (Optuna/NSGA-II)   | Search      | 3+    |                                                   |
+| 262 | multimodal embedding as secondary retrieval signal       | Embedding   | 4+    |                                                   |
 | 108 | OCR preprocessing for scanned documents                  | Ingest      | 4     |                                                   |
 | 109 | evaluate IBM docling Tableformer for tables              | Ingest      | 4     |                                                   |
 | 247 | research: evaluate Kreuzberg v4.50                       | Ingest      | 4     |                                                   |
@@ -401,6 +414,22 @@ polish ingest pipelines with follow-up enhancements.
 #64 (workspace tagging)     ─── independent
 #173 (N:M chunk-to-source)  ─── independent schema evolution
 #246 (retrieval budget MCP) ─── independent, zero-code-change quick win
+
+# Search quality improvements (from research notes 18-21, March 2026)
+#250 (golden set)           ─── prerequisite for all below
+#251 (graph-expand search)  ─── uses existing papers.py relationships
+#252 (entity-overlap)       ─── independent, low effort
+#253 (query-type classifier)─── independent, low effort
+#254 (reasoning hints)      ─── depends on #252, #253
+#258 (abstention diagnostic)─── depends on #252
+#259 (chunk strategy intent)─── depends on #253
+#257 (reasoning-aware ctx)  ─── depends on #253, #259
+#261 (Bayesian optimization)─── depends on #250 (golden set)
+
+# Ingest improvements (from notes 20-21)
+#255 (cross-ref resolution) ─── independent
+#256 (olmOCR-bench eval)    ─── independent
+#260 (figure-in-context)    ─── independent
 ```
 
 **Dependency chains:**
@@ -448,6 +477,7 @@ enhancements from Phase 2 are landed.
 #12 (neo4j migration)  ─── independent
 #65 (LanceDB eval)     ─── independent
 #80 (web UI)           ─── independent
+#262 (multimodal embed)─── depends on Ollama #5304 or ONNX image path
 ```
 
 These are **exploratory and high-effort** items. Each is independent and can be
