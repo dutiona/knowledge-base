@@ -388,10 +388,12 @@ def auto_relate(
 
     # Fetch candidate paper IDs.  When only_compare_higher is set (full-scan
     # mode), restrict to id > paper_id so each pair is compared exactly once.
-    op = ">" if only_compare_higher else "!="
-    other_papers = conn.execute(
-        f"SELECT id FROM papers WHERE id {op} ?", (paper_id,)
-    ).fetchall()
+    query = (
+        "SELECT id FROM papers WHERE id > ?"
+        if only_compare_higher
+        else "SELECT id FROM papers WHERE id != ?"
+    )
+    other_papers = conn.execute(query, (paper_id,)).fetchall()
 
     if not other_papers:
         return {"skipped": "no other papers", "relationships_created": 0}

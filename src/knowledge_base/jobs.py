@@ -245,7 +245,7 @@ class _JobWorker:
                 conn,
                 job["paper_id"],
                 on_progress=on_progress,
-                only_compare_higher=job.get("only_compare_higher", False),
+                only_compare_higher=params.get("only_compare_higher", False),
             )
         else:
             raise ValueError(f"Unknown job type: {job['job_type']}")

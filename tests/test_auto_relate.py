@@ -545,6 +545,29 @@ class TestJobDispatch:
         assert row["job_type"] == "auto_relate"
         assert row["status"] == "pending"
 
+    def test_dispatch_passes_only_compare_higher(self, conn):
+        """Worker dispatch path correctly reads only_compare_higher from params."""
+        import json
+
+        from knowledge_base.jobs import _JobWorker
+
+        pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
+        pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
+        assert pa < pb
+
+        # Simulate a job row with only_compare_higher in params
+        job = {
+            "job_type": "auto_relate",
+            "paper_id": pb,
+            "params": json.dumps({"paper_id": pb, "only_compare_higher": True}),
+        }
+        worker = _JobWorker()
+        result = worker._dispatch(conn, job, on_progress=lambda msg: None)
+
+        # B is the higher ID; with only_compare_higher=True, no papers above B exist
+        assert result["relationships_created"] == 0
+        assert "skipped" in result
+
     def test_auto_relate_job_dedup(self, conn):
         """Submitting twice for same paper → only one job."""
         from knowledge_base.jobs import submit_job
