@@ -20,7 +20,12 @@ import httpx
 
 from .embeddings import _get_ollama_url
 from .db import get_vec_table_name, insert_chunk_vec
-from .ingest import _content_hash, _embed_with_config, pdf_image_dir
+from .ingest import (
+    _cleanup_figure_fk_refs,
+    _content_hash,
+    _embed_with_config,
+    pdf_image_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1158,19 +1163,19 @@ def extract_figures(
 
     vec_table = get_vec_table_name(conn)
     try:
-        # Clean up FK references before deleting figure chunks (#53)
-        conn.execute(
-            f"DELETE FROM entity_mentions WHERE chunk_id IN {fig_chunk_subquery}",
-            fig_delete_params,
-        )
-        conn.execute(
-            f"UPDATE methods SET chunk_id = NULL WHERE chunk_id IN {fig_chunk_subquery}",
-            fig_delete_params,
-        )
-        conn.execute(
-            f"UPDATE datasets SET chunk_id = NULL WHERE chunk_id IN {fig_chunk_subquery}",
-            fig_delete_params,
-        )
+        # Collect IDs of figure chunks about to be deleted, then clean ALL
+        # FK references (conclusions, papers, relationships, metrics,
+        # methods, datasets, entity_mentions) via the shared helper (#276).
+        fig_chunk_ids = [
+            r["id"]
+            for r in conn.execute(
+                "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'"
+                + (page_filter if candidate_pages else ""),
+                fig_delete_params,
+            ).fetchall()
+        ]
+        _cleanup_figure_fk_refs(conn, fig_chunk_ids)
+
         # Count vec rows before deleting for bookkeeping
         vec_del_count = conn.execute(
             f"SELECT COUNT(*) FROM [{vec_table}] WHERE chunk_id IN {fig_chunk_subquery}",
