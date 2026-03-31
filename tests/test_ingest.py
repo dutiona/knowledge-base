@@ -31,7 +31,11 @@ from knowledge_base.papers import (
     add_relationship,
     get_relationships,
 )
-from knowledge_base.conclusions import record_conclusion, get_conclusions
+from knowledge_base.conclusions import (
+    record_conclusion,
+    get_conclusions,
+    supersede_conclusion,
+)
 from knowledge_base.extraction import record_method, record_dataset, record_metric
 
 
@@ -388,6 +392,32 @@ def test_reingest_keeps_conclusion_with_remaining_chunk_refs(tmp_path):
     assert len(conclusions) == 1, "Conclusion with surviving evidence should be kept"
     assert chunk_id_1 not in conclusions[0]["source_chunk_ids"]
     assert chunk_id_2 in conclusions[0]["source_chunk_ids"]
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_reingest_zombie_deletion_clears_superseded_by_fk(tmp_path):
+    """Deleting a zombie must not violate superseded_by FK constraint (#160)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "source.md"
+    md.write_text("Evidence for original claim.\n")
+    ingest_file(conn, md)
+    chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    # v1 → superseded by v2 (both reference the same chunk)
+    v1 = record_conclusion(conn, "Original claim", 0.9, [chunk_id])
+    supersede_conclusion(conn, v1["conclusion_id"], "Revised claim", 0.95, [chunk_id])
+
+    # Reingest deletes the chunk — both conclusions lose all evidence
+    md.write_text("Completely different content.\n")
+    reingest_file(conn, md)
+
+    # Both zombies should be deleted without IntegrityError
+    conclusions = get_conclusions(conn, include_superseded=True)
+    assert len(conclusions) == 0, "Both zombie conclusions should be deleted"
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)

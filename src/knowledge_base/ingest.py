@@ -905,6 +905,11 @@ def reingest_file(
                     (json.dumps(filtered), row["id"]),
                 )
             else:
+                conn.execute(
+                    "UPDATE conclusions SET superseded_by = NULL "
+                    "WHERE superseded_by = ?",
+                    (row["id"],),
+                )
                 conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
 
     # 4. methods/datasets/metrics.chunk_id → SET NULL (track for re-linking)
@@ -1244,6 +1249,11 @@ def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> N
                     (json.dumps(filtered), row["id"]),
                 )
             else:
+                conn.execute(
+                    "UPDATE conclusions SET superseded_by = NULL "
+                    "WHERE superseded_by = ?",
+                    (row["id"],),
+                )
                 conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
 
     for table in ("methods", "datasets", "metrics"):
