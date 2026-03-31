@@ -1288,6 +1288,8 @@ def _extract_html_images(
         return 0
 
     if not parser.images:
+        # Page has no <img> tags — clean up any stale inline image chunks (#152)
+        _cleanup_stale_inline_images(conn, source_url)
         return 0
 
     # --- Pre-filter ---
@@ -1336,6 +1338,8 @@ def _extract_html_images(
         candidates.append((resolved, alt))
 
     if not candidates:
+        # Images exist but none qualify — clean up stale chunks (#152)
+        _cleanup_stale_inline_images(conn, source_url)
         return 0
 
     # Cap
@@ -1890,22 +1894,14 @@ def ingest_url(
                         shutil.rmtree(tmpdir, ignore_errors=True)
 
     # Extract inline images from HTML (skip when screenshot figures already extracted)
-    inline_extraction_ok = False
     if figures_extracted == 0:
         try:
             inline_figures = _extract_html_images(
                 conn, html, source_url=url, base_url=str(response.url)
             )
             figures_extracted += inline_figures
-            inline_extraction_ok = True
         except Exception:
             logger.warning("Inline image extraction failed for %s", url, exc_info=True)
-
-        # Clean orphaned inline image chunks when extraction succeeded but found
-        # no new images.  Only safe when the pipeline actually ran to completion;
-        # on failure we must preserve existing chunks to avoid data loss (#152).
-        if figures_extracted == 0 and inline_extraction_ok:
-            _cleanup_stale_inline_images(conn, url)
 
     _base_result: dict = {
         "url": url,
