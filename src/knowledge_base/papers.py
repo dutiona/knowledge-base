@@ -310,9 +310,14 @@ def add_relationship(
 def _get_paper_embeddings(
     conn: sqlite3.Connection, paper_id: int
 ) -> list[tuple[int, bytes]]:
-    """Return [(chunk_id, embedding_blob), ...] for a paper's non-figure chunks."""
+    """Return [(chunk_id, embedding_blob), ...] for a paper's non-figure chunks.
+
+    Primary path: join through paper_paths to find chunks by source_uri.
+    Fallback: if no paper_paths row exists (e.g. duplicate source_uri conflict),
+    resolve source_uri via papers.abstract_chunk_id → chunks.source_uri.
+    """
     vec_table = get_vec_table_name(conn)
-    return conn.execute(
+    rows = conn.execute(
         f"""SELECT cv.chunk_id, cv.embedding
            FROM [{vec_table}] cv
            JOIN chunks c ON c.id = cv.chunk_id
@@ -320,6 +325,25 @@ def _get_paper_embeddings(
            WHERE pp.paper_id = ?
              AND c.source_type != 'figure'""",
         (paper_id,),
+    ).fetchall()
+    if rows:
+        return rows
+
+    # Fallback: resolve source_uri via abstract_chunk_id
+    uri_row = conn.execute(
+        "SELECT source_uri FROM chunks WHERE id = "
+        "(SELECT abstract_chunk_id FROM papers WHERE id = ?)",
+        (paper_id,),
+    ).fetchone()
+    if not uri_row:
+        return []
+    return conn.execute(
+        f"""SELECT cv.chunk_id, cv.embedding
+           FROM [{vec_table}] cv
+           JOIN chunks c ON c.id = cv.chunk_id
+           WHERE c.source_uri = ?
+             AND c.source_type != 'figure'""",
+        (uri_row["source_uri"],),
     ).fetchall()
 
 
@@ -345,6 +369,7 @@ def auto_relate(
     if not source_rows:
         return {"skipped": "no embeddings", "relationships_created": 0}
 
+    source_chunk_ids = {row["chunk_id"] for row in source_rows}
     source_vecs = [
         (row["chunk_id"], np.frombuffer(bytes(row["embedding"]), dtype=np.float32))
         for row in source_rows
@@ -380,6 +405,12 @@ def auto_relate(
         # Fetch other paper embeddings
         other_rows = _get_paper_embeddings(conn, other_id)
         if not other_rows:
+            skipped += 1
+            continue
+
+        # Skip papers that share chunks (e.g. duplicate source_uri registrations)
+        other_chunk_ids = {row["chunk_id"] for row in other_rows}
+        if source_chunk_ids & other_chunk_ids:
             skipped += 1
             continue
 
@@ -561,16 +592,21 @@ def _query_papers(
 ) -> list:
     """Query papers with optional filters. Shared by export and sync."""
     if paper_ids:
-        placeholders = ",".join("?" * len(paper_ids))
+        from .db import _batched_select
+
+        return _batched_select(
+            conn, "SELECT * FROM papers WHERE id IN ({ph})", paper_ids
+        )
+    if title_pattern:
+        # Escape LIKE wildcards to prevent injection/unexpected matches
+        escaped = (
+            title_pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
         return conn.execute(
-            f"SELECT * FROM papers WHERE id IN ({placeholders})", paper_ids
+            "SELECT * FROM papers WHERE title LIKE ? ESCAPE '\\'",
+            (f"%{escaped}%",),
         ).fetchall()
-    elif title_pattern:
-        return conn.execute(
-            "SELECT * FROM papers WHERE title LIKE ?", (f"%{title_pattern}%",)
-        ).fetchall()
-    else:
-        return conn.execute("SELECT * FROM papers").fetchall()
+    return conn.execute("SELECT * FROM papers").fetchall()
 
 
 def export_bibtex(
