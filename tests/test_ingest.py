@@ -2296,6 +2296,64 @@ def test_cleanup_stale_inline_images_noop_when_none(tmp_path):
     assert deleted == 0
 
 
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+@patch("knowledge_base.ingest._is_private_ip", return_value=False)
+@patch("knowledge_base.ingest.httpx.stream")
+@patch("knowledge_base.ingest.httpx.get")
+def test_ingest_url_preserves_figures_on_extraction_failure(
+    mock_get, mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+):
+    """ingest_url must NOT delete stale figures when _extract_html_images raises."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    mock_vision_cfg.return_value = _VISION_CFG
+    mock_vision_call.return_value = _FIGURE_RESPONSE
+
+    source_url = "https://example.com/article"
+    html_with_img = (
+        "<html><head><title>Page</title></head><body>"
+        "<p>" + "word " * 80 + "</p>"
+        '<img src="https://example.com/fig.png">'
+        "</body></html>"
+    )
+
+    # First ingest: create a figure chunk via _extract_html_images
+    png_bytes = _make_test_png()
+    mock_stream.return_value = _mock_image_stream(png_bytes)
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.text = html_with_img
+    resp.url = source_url
+    resp.raise_for_status = MagicMock()
+    mock_get.return_value = resp
+    result = ingest_url(conn, source_url)
+    assert result.get("figures_extracted", 0) >= 1
+
+    before = conn.execute(
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? "
+        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        (source_url,),
+    ).fetchone()["cnt"]
+    assert before >= 1
+
+    # Second ingest: _extract_html_images raises — figures must be preserved
+    with patch(
+        "knowledge_base.ingest._extract_html_images",
+        side_effect=Exception("vision unavailable"),
+    ):
+        mock_get.return_value = resp
+        ingest_url(conn, source_url)
+
+    after = conn.execute(
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? "
+        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        (source_url,),
+    ).fetchone()["cnt"]
+    assert after == before, "Figures deleted despite extraction failure — data loss!"
+
+
 # --- Integration with ingest_url ---
 
 
