@@ -54,7 +54,7 @@ dependency chains, and parallelism opportunities.
 | 203 | \_validate_bib_path return value discarded               | Papers      | 2.5a  |                                                   |
 | 204 | supersede_conclusion no rollback                         | Extraction  | 2.5a  |                                                   |
 | 212 | PIL Image not closed in \_crop_regions                   | Vision      | 2.5a  |                                                   |
-| 276 | fix(vision): extract_figures missing conclusions cleanup | Vision      | 2.5a  |                                                   |
+| 276 | fix(vision): extract_figures missing conclusions cleanup | Vision      | 2.5a  | done                                              |
 | 277 | perf: optimize full table scan in conclusion FK cleanup  | Extraction  | 2.5b  |                                                   |
 | 278 | refactor: consolidate conclusion FK cleanup into utility | Ingest      | 2.5b  |                                                   |
 | 236 | unified \_insert_chunks helper (5 call sites)            | Ingest      | 2.5b  |                                                   |
