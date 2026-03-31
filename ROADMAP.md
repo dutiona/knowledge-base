@@ -42,10 +42,10 @@ dependency chains, and parallelism opportunities.
 | 152 | fix: stale inline image chunks on re-ingest              | Ingest      | 2.5a  |                                                   |
 | 151 | fix: getaddrinfo for SSRF IP check                       | Ingest      | 2.5a  | ✔ PR #270                                         |
 | 150 | improve zero-norm embedding vector handling              | Embedding   | 2.5a  | ✔ PR #274                                         |
-| 165 | auto_relate: fallback to abstract_chunk_id               | Search      | 2.5a  |                                                   |
-| 166 | scan_relationships: avoid redundant pairwise comparisons | Search      | 2.5a  |                                                   |
+| 165 | auto_relate: fallback to abstract_chunk_id               | Search      | 2.5a  | ✔ PR #280                                         |
+| 166 | scan_relationships: avoid redundant pairwise comparisons | Search      | 2.5a  | ✔ PR #283                                         |
 | 180 | no rollback on embedding failure in ingest_file          | Ingest      | 2.5a  |                                                   |
-| 182 | relocate_paper lacks transaction safety                  | Papers      | 2.5a  |                                                   |
+| 182 | relocate_paper lacks transaction safety                  | Papers      | 2.5a  | ✔ PR #281                                         |
 | 195 | path_conflict referenced before assignment               | Ingest      | 2.5a  |                                                   |
 | 197 | LIKE wildcard injection in title search                  | Papers      | 2.5a  |                                                   |
 | 198 | cursor.lastrowid falsy check by accident                 | Papers      | 2.5a  |                                                   |
@@ -251,7 +251,7 @@ before adding features or refactoring.
 ✔ #165 (auto_relate fallback)          ─── fix, depends on #105 (done) ✔ PR #280
 ✔ #166 (scan_relationships 2x)         ─── perf, depends on #105 (done) ✔ PR #283
 #180 (no rollback on embed failure)  ─── bug, independent
-#182 (relocate_paper no transaction) ─── bug, independent
+✔ #182 (relocate_paper no transaction) ─── bug, independent ✔ PR #281
 #195 (path_conflict unbound)         ─── bug, independent
 #197 (LIKE wildcard injection)       ─── bug, independent
 #198 (lastrowid falsy check)         ─── bug, independent
@@ -583,7 +583,7 @@ Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a          Phas
 PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151       #236, #238, #239         #181, #199, #200
 #85 ─────┤                      ✔ #100               ✔ #150, ✔ #165         #240, #243               #205–#211, #213
 #78 ─────┼──▶ ✔ #71            ✔ #15                ✔ #166, #180        Step 2 (needs #236):    Security:
-#46 ─────┤                      ✔ #110               #182, #195           #234, #235, #237         #187–#193
+#46 ─────┤                      ✔ #110               ✔ #182, #195           #234, #235, #237         #187–#193
 #45 ─────┤    ✔ #101           ✔ #82                #197, #198          Step 3 (needs Step 2):  Quality:
 #16 ─────┘                      ✔ #126               #201, #202           #241, #242               #194, #196, #214
                                 ✔ #127               #203, #204          Parallel:                #218–#221
@@ -637,7 +637,7 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 ## Quick Wins (< 1 session each)
 
 **Phase 2.5a items** (all independent, all small scope):
-✔ #163, ✔ #160, ✔ #152, ✔ #151, ✔ #150, ✔ #165, ✔ #166, #180, #182, #195, #197, #198, #201,
+✔ #163, ✔ #160, ✔ #152, ✔ #151, ✔ #150, ✔ #165, ✔ #166, #180, ✔ #182, #195, #197, #198, #201,
 #202, #203, #204, #212, #276
 
 **Phase 2.5b parallel items** (independent of decomposition ordering):
