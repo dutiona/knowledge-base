@@ -269,11 +269,19 @@ def _strip_think_tags(text: str) -> str:
     wrap_match = _THINK_WRAP_RE.match(text)
     if wrap_match:
         inner = wrap_match.group(2).strip()
-        # Look for JSON inside the think block
-        for i, ch in enumerate(inner):
-            if ch in ("{", "["):
-                return inner[i:]
-        # No JSON inside — model only reasoned
+        # Use raw_decode to find the first complete JSON value, ignoring
+        # reasoning text before/after it (e.g. "[2] passes" or trailing "Done.")
+        # Prefer objects over arrays — reasoning text often has stray brackets.
+        decoder = json.JSONDecoder()
+        for target in ("{", "["):
+            for i, ch in enumerate(inner):
+                if ch == target:
+                    try:
+                        _, end = decoder.raw_decode(inner, i)
+                        return inner[i:end]
+                    except json.JSONDecodeError:
+                        continue
+        # No valid JSON inside — model only reasoned
         return ""
 
     # Find the start of JSON content

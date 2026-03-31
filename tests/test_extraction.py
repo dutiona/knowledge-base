@@ -903,6 +903,21 @@ def test_get_entities(tmp_path):
             '<thinking>{"data": [1, 2]}</thinking>',
             '{"data": [1, 2]}',
         ),
+        # Brackets in reasoning before JSON — must skip to real JSON
+        (
+            '<think>Need [2] passes before I emit JSON. {"methods": []}</think>',
+            '{"methods": []}',
+        ),
+        # Multiple JSON objects — returns first complete one
+        (
+            '<think>Example object: {"draft": true}\n{"methods": []}</think>',
+            '{"draft": true}',
+        ),
+        # Trailing text after JSON inside think block
+        (
+            '<think>Reasoning only\n{"methods": []}\nDone.</think>',
+            '{"methods": []}',
+        ),
         # No tags, just whitespace — preserves stripped result
         ('  {"x": 1}  ', '{"x": 1}'),
         # Literal <think> inside JSON field — must NOT be corrupted
@@ -927,6 +942,9 @@ def test_get_entities(tmp_path):
         "json_inside_think_tags",
         "reasoning_plus_json_inside_think",
         "thinking_variant_json_inside",
+        "brackets_in_reasoning_before_json",
+        "multiple_json_objects_returns_first",
+        "trailing_text_after_json",
         "whitespace_only",
         "literal_think_in_json",
         "preamble_plus_literal_in_json",
