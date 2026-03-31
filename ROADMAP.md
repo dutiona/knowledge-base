@@ -248,7 +248,7 @@ before adding features or refactoring.
 ✔ #152 (stale inline image chunks)   ─── bug, depends on #82 (done) ✔ PR #271
 #151 (getaddrinfo SSRF)              ─── bug, depends on #82 (done) ✔ PR #270
 ✔ #150 (zero-norm embeddings)          ─── fix, independent ✔ PR #274
-#165 (auto_relate fallback)          ─── fix, depends on #105 (done)
+✔ #165 (auto_relate fallback)          ─── fix, depends on #105 (done) ✔ PR #280
 #166 (scan_relationships 2x)         ─── perf, depends on #105 (done)
 #180 (no rollback on embed failure)  ─── bug, independent
 #182 (relocate_paper no transaction) ─── bug, independent
@@ -581,7 +581,7 @@ Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a          Phas
 ────────        ────────        ────────             ────────            ────────                ────────
                                 ✔ #95                ✔ #163, #160        Step 1:                 Perf:
 PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151       #236, #238, #239         #181, #199, #200
-#85 ─────┤                      ✔ #100               ✔ #150, #165         #240, #243               #205–#211, #213
+#85 ─────┤                      ✔ #100               ✔ #150, ✔ #165         #240, #243               #205–#211, #213
 #78 ─────┼──▶ ✔ #71            ✔ #15                #166, #180          Step 2 (needs #236):    Security:
 #46 ─────┤                      ✔ #110               #182, #195           #234, #235, #237         #187–#193
 #45 ─────┤    ✔ #101           ✔ #82                #197, #198          Step 3 (needs Step 2):  Quality:
@@ -637,7 +637,7 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 ## Quick Wins (< 1 session each)
 
 **Phase 2.5a items** (all independent, all small scope):
-✔ #163, ✔ #160, ✔ #152, ✔ #151, ✔ #150, #165, #166, #180, #182, #195, #197, #198, #201,
+✔ #163, ✔ #160, ✔ #152, ✔ #151, ✔ #150, ✔ #165, #166, #180, #182, #195, #197, #198, #201,
 #202, #203, #204, #212, #276
 
 **Phase 2.5b parallel items** (independent of decomposition ordering):
