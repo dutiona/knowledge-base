@@ -246,9 +246,14 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
 _THINK_TAG_RE = re.compile(r"<(think(?:ing)?)>.*?</\1>", re.DOTALL)
 
 _SYSTEM_JSON_DIRECTIVE = (
+    "/no_think\n"
     "Respond directly with valid JSON. "
+    "Do NOT use thinking mode or <think> tags. "
     "Output only the JSON object, with no preamble, tags, or commentary."
 )
+
+
+_THINK_WRAP_RE = re.compile(r"\A\s*<(think(?:ing)?)>(.*)</\1>\s*\Z", re.DOTALL)
 
 
 def _strip_think_tags(text: str) -> str:
@@ -256,7 +261,21 @@ def _strip_think_tags(text: str) -> str:
 
     Only strips tags outside the JSON payload to avoid corrupting literal
     <think> text inside JSON string fields.
+
+    Also handles models (e.g. qwen3.5) that wrap their entire response —
+    including JSON — inside a single think block (#163).
     """
+    # Fast path: entire response is one think block (qwen3.5 thinking-mode)
+    wrap_match = _THINK_WRAP_RE.match(text)
+    if wrap_match:
+        inner = wrap_match.group(2).strip()
+        # Look for JSON inside the think block
+        for i, ch in enumerate(inner):
+            if ch in ("{", "["):
+                return inner[i:]
+        # No JSON inside — model only reasoned
+        return ""
+
     # Find the start of JSON content
     json_start = -1
     for i, ch in enumerate(text):

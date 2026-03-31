@@ -887,6 +887,22 @@ def test_get_entities(tmp_path):
         ),
         # Only thinking tags, no JSON — should return empty string
         ("<think>just thinking</think>", ""),
+        # JSON entirely inside think tags (qwen3.5 thinking-mode, issue #163)
+        (
+            '<think>{"methods": [{"name": "ResNet"}]}</think>',
+            '{"methods": [{"name": "ResNet"}]}',
+        ),
+        # Reasoning + JSON inside think tags (qwen3.5 verbose thinking)
+        (
+            "<think>\nLet me analyze this...\n"
+            '{"methods": [], "datasets": [], "metrics": []}\n</think>',
+            '{"methods": [], "datasets": [], "metrics": []}',
+        ),
+        # <thinking> variant with JSON inside
+        (
+            '<thinking>{"data": [1, 2]}</thinking>',
+            '{"data": [1, 2]}',
+        ),
         # No tags, just whitespace — preserves stripped result
         ('  {"x": 1}  ', '{"x": 1}'),
         # Literal <think> inside JSON field — must NOT be corrupted
@@ -908,6 +924,9 @@ def test_get_entities(tmp_path):
         "thinking_variant",
         "multiline_thinking",
         "only_thinking_no_json",
+        "json_inside_think_tags",
+        "reasoning_plus_json_inside_think",
+        "thinking_variant_json_inside",
         "whitespace_only",
         "literal_think_in_json",
         "preamble_plus_literal_in_json",
@@ -939,6 +958,33 @@ def test_llm_call_empty_response_raises(tmp_path):
     with patch("knowledge_base.extraction.httpx.post", _mock_post):
         with pytest.raises(ValueError, match="empty response"):
             _llm_call("test prompt", conn=conn)
+
+
+def test_llm_call_recovers_json_from_inside_think_tags(tmp_path):
+    """_llm_call recovers JSON when model wraps entire response in think tags (#163)."""
+    conn = _setup(tmp_path)
+
+    def _mock_post(*args, **kwargs):
+        class FakeResp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "response": (
+                        "<think>\nLet me analyze this paper...\n"
+                        '{"methods": [{"name": "ResNet"}]}\n</think>'
+                    )
+                }
+
+        return FakeResp()
+
+    with patch("knowledge_base.extraction.httpx.post", _mock_post):
+        result = _llm_call("test prompt", conn=conn)
+    parsed = json.loads(result)
+    assert parsed == {"methods": [{"name": "ResNet"}]}
 
 
 def test_llm_call_strips_tags_returns_json(tmp_path):
