@@ -77,6 +77,18 @@ def _l2_normalize(vec: list[float]) -> list[float]:
     return [x / norm for x in vec]
 
 
+def _normalize_or_none(emb: list[float], provider_name: str) -> list[float] | None:
+    """L2-normalize an embedding, returning None on zero norm."""
+    try:
+        return _l2_normalize(emb)
+    except ZeroNormError:
+        logger.warning(
+            "%s returned zero-norm embedding — skipping vector storage",
+            provider_name,
+        )
+        return None
+
+
 def truncate_embedding(vec: list[float], target_dim: int) -> list[float]:
     """Truncate a Matryoshka embedding and L2 re-normalize.
 
@@ -97,8 +109,8 @@ class EmbeddingProvider(Protocol):
         texts: list[str],
         model: str,
         expected_dim: int | None = None,
-    ) -> list[list[float]]:
-        """Embed a batch of texts. Returns L2-normalized vectors."""
+    ) -> list[list[float] | None]:
+        """Embed a batch of texts. Returns L2-normalized vectors, or None for zero-norm."""
         ...
 
 
@@ -110,7 +122,7 @@ class OllamaProvider:
         texts: list[str],
         model: str = "bge-m3",
         expected_dim: int | None = None,
-    ) -> list[list[float]]:
+    ) -> list[list[float] | None]:
         dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
         url = _get_ollama_url()
         results = []
@@ -127,13 +139,7 @@ class OllamaProvider:
             for emb in embeddings:
                 if len(emb) != dim:
                     raise ValueError(f"Expected {dim} dims, got {len(emb)}")
-                try:
-                    results.append(_l2_normalize(emb))
-                except ZeroNormError:
-                    logger.warning(
-                        "Ollama returned zero-norm embedding — skipping vector storage"
-                    )
-                    results.append(None)
+                results.append(_normalize_or_none(emb, "Ollama"))
         return results
 
 
@@ -149,7 +155,7 @@ class OpenAIProvider:
         texts: list[str],
         model: str = "text-embedding-3-large",
         expected_dim: int | None = None,
-    ) -> list[list[float]]:
+    ) -> list[list[float] | None]:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError(
@@ -163,13 +169,7 @@ class OpenAIProvider:
             for emb in raw_embeddings:
                 if expected_dim is not None and len(emb) != expected_dim:
                     raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
-                try:
-                    results.append(_l2_normalize(emb))
-                except ZeroNormError:
-                    logger.warning(
-                        "OpenAI returned zero-norm embedding — skipping vector storage"
-                    )
-                    results.append(None)
+                results.append(_normalize_or_none(emb, "OpenAI"))
         return results
 
     def _call_api(
@@ -178,7 +178,7 @@ class OpenAIProvider:
         texts: list[str],
         model: str,
         dimensions: int | None,
-    ) -> list[list[float]]:
+    ) -> list[list[float] | None]:
         body: dict = {"model": model, "input": texts}
         if dimensions is not None:
             body["dimensions"] = dimensions
@@ -213,7 +213,7 @@ class ONNXProvider:
         texts: list[str],
         model: str = "bge-m3",
         expected_dim: int | None = None,
-    ) -> list[list[float]]:
+    ) -> list[list[float] | None]:
         import numpy as np
 
         session = self._get_session(model)
@@ -226,13 +226,7 @@ class ONNXProvider:
             for emb in embeddings:
                 if expected_dim is not None and len(emb) != expected_dim:
                     raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
-                try:
-                    results.append(_l2_normalize(emb))
-                except ZeroNormError:
-                    logger.warning(
-                        "ONNX returned zero-norm embedding — skipping vector storage"
-                    )
-                    results.append(None)
+                results.append(_normalize_or_none(emb, "ONNX"))
         return results
 
     def _get_session(self, model: str) -> InferenceSession:
@@ -303,7 +297,7 @@ def embed(
     expected_dim: int | None = None,
     *,
     _provider_name: str = "ollama",
-) -> list[list[float]]:
+) -> list[list[float] | None]:
     """Embed a batch of texts using the named provider."""
     provider = get_provider(_provider_name)
     return provider.embed(texts, model=model, expected_dim=expected_dim)
@@ -315,8 +309,8 @@ def embed_single(
     expected_dim: int | None = None,
     *,
     _provider_name: str = "ollama",
-) -> list[float]:
-    """Embed a single text using the named provider."""
+) -> list[float] | None:
+    """Embed a single text using the named provider. Returns None for zero-norm."""
     return embed(
         [text], model=model, expected_dim=expected_dim, _provider_name=_provider_name
     )[0]
