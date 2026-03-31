@@ -180,9 +180,14 @@ def backfill_space(
         embeddings = embed_provider.embed(texts, model=model, expected_dim=embed_dim)
 
         if matryoshka_base_dim:
-            embeddings = [truncate_embedding(e, dim) for e in embeddings]
+            embeddings = [
+                truncate_embedding(e, dim) if e is not None else None
+                for e in embeddings
+            ]
 
         for chunk_id, emb_vec in zip(ids, embeddings):
+            if emb_vec is None:
+                continue
             conn.execute(
                 f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
                 (chunk_id, _serialize_f32(emb_vec), chunk_id),
@@ -458,9 +463,13 @@ def _re_embed_folder_summaries(
     if matryoshka_base_dim:
         from .embeddings import truncate_embedding
 
-        embeddings = [truncate_embedding(e, dim) for e in embeddings]
+        embeddings = [
+            truncate_embedding(e, dim) if e is not None else None for e in embeddings
+        ]
 
     for row, emb in zip(folder_rows, embeddings):
+        if emb is None:
+            continue
         conn.execute(
             "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
             (_serialize_f32(emb), row["folder_path"]),

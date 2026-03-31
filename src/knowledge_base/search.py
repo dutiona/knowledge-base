@@ -273,7 +273,8 @@ def search(
                 expected_dim=space_base_dim,
                 _provider_name=space_cfg["provider"],
             )
-            query_embedding = truncate_embedding(query_embedding, space_cfg["dim"])
+            if query_embedding is not None:
+                query_embedding = truncate_embedding(query_embedding, space_cfg["dim"])
         else:
             query_embedding = embed_single(
                 query,
@@ -281,9 +282,10 @@ def search(
                 expected_dim=space_cfg["dim"],
                 _provider_name=space_cfg["provider"],
             )
-        vec_results = _vec_search(
-            conn, query_embedding, strategy_fetch_limit, table_name=vec_table
-        )
+        if query_embedding is not None:
+            vec_results = _vec_search(
+                conn, query_embedding, strategy_fetch_limit, table_name=vec_table
+            )
 
     # --- chunk_strategy filter (pre-RRF) ---
     if chunk_strategy:

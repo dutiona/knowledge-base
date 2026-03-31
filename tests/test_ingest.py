@@ -3080,3 +3080,45 @@ def test_ingest_file_semantic_nonpdf(tmp_path):
     ).fetchall()
     assert len(rows) >= 1
     assert all(r["chunk_strategy"] == "mechanical" for r in rows)
+
+
+# --- Zero-norm embedding handling (#150) ---
+
+
+def _fake_embed_with_zero(texts, model="bge-m3", expected_dim=None, **_kwargs):
+    """Return None for the second text to simulate a zero-norm embedding."""
+    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    result = []
+    for i, _ in enumerate(texts):
+        if i == 1:
+            result.append(None)
+        else:
+            result.append([0.1] * dim)
+    return result
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed_with_zero)
+def test_ingest_skips_vec_for_none_embedding(tmp_path):
+    """Chunks with None embeddings get FTS-indexed but no vec row."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md_file = tmp_path / "multi.md"
+    # Each section needs >1000 chars to force separate chunks
+    md_file.write_text(
+        "# Section A\n\n" + "First chunk content. " * 80 + "\n\n"
+        "# Section B\n\n" + "Second chunk zero-norm. " * 80 + "\n\n"
+        "# Section C\n\n" + "Third chunk content ok. " * 80 + "\n"
+    )
+
+    ingest_file(conn, md_file)
+
+    # All chunks should be in FTS (text table)
+    chunk_count = conn.execute("SELECT COUNT(*) as c FROM chunks").fetchone()["c"]
+    assert chunk_count >= 3
+
+    # But vec table should have one fewer entry than chunks
+    vec_count = conn.execute("SELECT COUNT(*) as c FROM chunks_vec").fetchone()["c"]
+    assert vec_count == chunk_count - 1

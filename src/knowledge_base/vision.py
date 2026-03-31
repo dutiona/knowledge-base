@@ -1240,7 +1240,10 @@ def extract_figures(
                 )
                 chunk_id = cursor.lastrowid
                 assert chunk_id is not None
-                insert_chunk_vec(conn, chunk_id, embeddings[i], table_name=vec_table)
+                if embeddings[i] is not None:
+                    insert_chunk_vec(
+                        conn, chunk_id, embeddings[i], table_name=vec_table
+                    )
                 chunks_created += 1
 
         conn.commit()

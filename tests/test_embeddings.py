@@ -289,11 +289,52 @@ class TestTruncateEmbedding:
 
 
 class TestL2Normalize:
-    def test_zero_vector_warns(self, caplog):
-        """Zero vectors should log a warning (indicates upstream problem)."""
+    def test_zero_vector_raises(self):
+        """Zero-norm vectors must raise ZeroNormError, not silently pass through."""
+        from knowledge_base.embeddings import ZeroNormError, _l2_normalize
+
+        with pytest.raises(ZeroNormError):
+            _l2_normalize([0.0, 0.0, 0.0])
+
+    def test_normal_vector_unchanged(self):
+        """Non-zero vectors should still normalize correctly."""
         from knowledge_base.embeddings import _l2_normalize
 
+        result = _l2_normalize([3.0, 4.0, 0.0])
+        norm = math.sqrt(sum(x * x for x in result))
+        assert abs(norm - 1.0) < 1e-6
+
+
+class TestProviderZeroNormHandling:
+    """Providers must return None for embeddings that produce zero-norm vectors."""
+
+    @patch("knowledge_base.embeddings.httpx.post")
+    def test_ollama_zero_norm_returns_none(self, mock_post):
+        """OllamaProvider returns None for zero-norm embeddings in a batch."""
+        mock_post.return_value = MagicMock(
+            json=lambda: {
+                "embeddings": [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+            },
+            raise_for_status=lambda: None,
+        )
+        provider = OllamaProvider()
+        result = provider.embed(
+            ["good", "bad", "good2"], model="bge-m3", expected_dim=3
+        )
+        assert len(result) == 3
+        assert result[0] is not None
+        assert result[1] is None
+        assert result[2] is not None
+
+    @patch("knowledge_base.embeddings.httpx.post")
+    def test_ollama_zero_norm_logs_warning(self, mock_post, caplog):
+        """Zero-norm embeddings should log a warning with context."""
+        mock_post.return_value = MagicMock(
+            json=lambda: {"embeddings": [[0.0, 0.0, 0.0]]},
+            raise_for_status=lambda: None,
+        )
+        provider = OllamaProvider()
         with caplog.at_level(logging.WARNING):
-            result = _l2_normalize([0.0, 0.0, 0.0])
-        assert result == [0.0, 0.0, 0.0]
+            result = provider.embed(["empty"], model="bge-m3", expected_dim=3)
+        assert result[0] is None
         assert "zero" in caplog.text.lower()
