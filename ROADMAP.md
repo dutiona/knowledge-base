@@ -37,7 +37,7 @@ dependency chains, and parallelism opportunities.
 | 105 | auto-relationship discovery via similarity               | Search      | 2     | ✔                                                 |
 | 139 | chunk_sessions join table for N:M session tracking       | Search      | 2     | ✔                                                 |
 | 106 | stage-2 reranking in hybrid search                       | Search      | 2     | ✔                                                 |
-| 163 | bug: qwen3.5 thinking-mode empty extraction              | Extraction  | 2.5a  |                                                   |
+| 163 | bug: qwen3.5 thinking-mode empty extraction              | Extraction  | 2.5a  | ✔ done                                            |
 | 160 | fix: zombie conclusions after FK cleanup                 | Extraction  | 2.5a  |                                                   |
 | 152 | fix: stale inline image chunks on re-ingest              | Ingest      | 2.5a  |                                                   |
 | 151 | fix: getaddrinfo for SSRF IP check                       | Ingest      | 2.5a  | ✔ PR #270                                         |
@@ -240,7 +240,7 @@ works, search quality improves via opt-in cross-encoder reranking.
 before adding features or refactoring.
 
 ```
-#163 (qwen3.5 thinking-mode)        ─── bug, independent
+✔ #163 (qwen3.5 thinking-mode)      ─── bug, independent (done)
 #160 (zombie conclusions)            ─── bug, independent
 #152 (stale inline image chunks)     ─── bug, depends on #82 (done)
 #151 (getaddrinfo SSRF)              ─── bug, depends on #82 (done) ✔ PR #270
@@ -576,7 +576,7 @@ has enough content to warrant visual exploration.
 ```
 Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a          Phase 2.5b              Phase 2.5c
 ────────        ────────        ────────             ────────            ────────                ────────
-                                ✔ #95                #163, #160          Step 1:                 Perf:
+                                ✔ #95                ✔ #163, #160        Step 1:                 Perf:
 PR #89 ──┐                      ✔ #99               #152, ✔ #151         #236, #238, #239         #181, #199, #200
 #85 ─────┤                      ✔ #100               #150, #165           #240, #243               #205–#211, #213
 #78 ─────┼──▶ ✔ #71            ✔ #15                #166, #180          Step 2 (needs #236):    Security:
@@ -634,7 +634,7 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 ## Quick Wins (< 1 session each)
 
 **Phase 2.5a items** (all independent, all small scope):
-#163, #160, #152, ✔ #151, #150, #165, #166, #180, #182, #195, #197, #198, #201,
+✔ #163, #160, #152, ✔ #151, #150, #165, #166, #180, #182, #195, #197, #198, #201,
 #202, #203, #204, #212
 
 **Phase 2.5b parallel items** (independent of decomposition ordering):
