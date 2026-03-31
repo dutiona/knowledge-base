@@ -21,6 +21,11 @@ from .db import DEFAULT_EMBED_DIM
 
 logger = logging.getLogger(__name__)
 
+
+class ZeroNormError(ValueError):
+    """Raised when a vector has zero norm and cannot be L2-normalized."""
+
+
 _OLLAMA_URL: str | None = None
 
 
@@ -59,11 +64,16 @@ def _get_ollama_url() -> str:
 
 
 def _l2_normalize(vec: list[float]) -> list[float]:
-    """L2-normalize a vector to unit length."""
+    """L2-normalize a vector to unit length.
+
+    Raises ZeroNormError if the vector has zero norm (all zeros),
+    since zero vectors produce undefined cosine similarity.
+    """
     norm = math.sqrt(sum(x * x for x in vec))
     if norm == 0:
-        logger.warning("Zero-norm embedding vector — upstream model returned all zeros")
-        return vec
+        raise ZeroNormError(
+            "Zero-norm embedding vector — upstream model returned all zeros"
+        )
     return [x / norm for x in vec]
 
 
@@ -117,7 +127,13 @@ class OllamaProvider:
             for emb in embeddings:
                 if len(emb) != dim:
                     raise ValueError(f"Expected {dim} dims, got {len(emb)}")
-                results.append(_l2_normalize(emb))
+                try:
+                    results.append(_l2_normalize(emb))
+                except ZeroNormError:
+                    logger.warning(
+                        "Ollama returned zero-norm embedding — skipping vector storage"
+                    )
+                    results.append(None)
         return results
 
 
@@ -147,7 +163,13 @@ class OpenAIProvider:
             for emb in raw_embeddings:
                 if expected_dim is not None and len(emb) != expected_dim:
                     raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
-                results.append(_l2_normalize(emb))
+                try:
+                    results.append(_l2_normalize(emb))
+                except ZeroNormError:
+                    logger.warning(
+                        "OpenAI returned zero-norm embedding — skipping vector storage"
+                    )
+                    results.append(None)
         return results
 
     def _call_api(
@@ -204,7 +226,13 @@ class ONNXProvider:
             for emb in embeddings:
                 if expected_dim is not None and len(emb) != expected_dim:
                     raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
-                results.append(_l2_normalize(emb))
+                try:
+                    results.append(_l2_normalize(emb))
+                except ZeroNormError:
+                    logger.warning(
+                        "ONNX returned zero-norm embedding — skipping vector storage"
+                    )
+                    results.append(None)
         return results
 
     def _get_session(self, model: str) -> InferenceSession:

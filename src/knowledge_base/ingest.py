@@ -74,8 +74,13 @@ def _detect_source_type(path: Path) -> str:
     return "markdown"
 
 
-def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[float]]:
-    """Call embed() using the model, dim, and provider from the config table."""
+def _embed_with_config(
+    conn: sqlite3.Connection, texts: list[str]
+) -> list[list[float] | None]:
+    """Call embed() using the model, dim, and provider from the config table.
+
+    Returns None entries for texts whose embeddings had zero norm.
+    """
     cfg = get_embed_config(conn)
     active = get_active_space(conn)
     base_dim = active.get("matryoshka_base_dim") if active else None
@@ -86,7 +91,9 @@ def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[
             expected_dim=base_dim,
             _provider_name=cfg["provider"],
         )
-        return [truncate_embedding(v, cfg["dim"]) for v in vecs]
+        return [
+            truncate_embedding(v, cfg["dim"]) if v is not None else None for v in vecs
+        ]
     return embed(
         texts,
         model=cfg["model"],
@@ -826,7 +833,8 @@ def ingest_file(
                 "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
                 (chunk_id, session_id),
             )
-        insert_chunk_vec(conn, chunk_id, emb_vec)
+        if emb_vec is not None:
+            insert_chunk_vec(conn, chunk_id, emb_vec)
 
     conn.commit()
     if not _skip_folder_summary:
@@ -1058,7 +1066,8 @@ def reingest_file(
                 "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
                 (chunk_id, sid),
             )
-        insert_chunk_vec(conn, chunk_id, emb_vec)
+        if emb_vec is not None:
+            insert_chunk_vec(conn, chunk_id, emb_vec)
 
     # --- Re-link papers whose abstract_chunk_id was nullified ---
     if affected_paper_ids:
@@ -1460,7 +1469,8 @@ def _extract_html_images(
             (chunk_hash, desc, source_url, chunk_index, meta_json),
         )
         chunk_id = cursor.lastrowid
-        insert_chunk_vec(conn, chunk_id, emb_vec)
+        if emb_vec is not None:
+            insert_chunk_vec(conn, chunk_id, emb_vec)
         figures_added += 1
 
     if figures_added or old_ids:
@@ -1763,7 +1773,8 @@ def _extract_web_figures(
             (chunk_hash, desc, source_url, chunk_index, meta_json),
         )
         chunk_id = cursor.lastrowid
-        insert_chunk_vec(conn, chunk_id, emb_vec)
+        if emb_vec is not None:
+            insert_chunk_vec(conn, chunk_id, emb_vec)
         figures_added += 1
 
     if figures_added:
@@ -1917,7 +1928,8 @@ def ingest_url(
                 "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
                 (chunk_id, session_id),
             )
-        insert_chunk_vec(conn, chunk_id, emb_vec)
+        if emb_vec is not None:
+            insert_chunk_vec(conn, chunk_id, emb_vec)
 
     conn.commit()
     return {
