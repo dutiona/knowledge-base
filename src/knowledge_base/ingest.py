@@ -106,6 +106,17 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
+def _flush_deferred_session_links(
+    conn: sqlite3.Connection, chunk_ids: list[int], session_id: str | None
+) -> None:
+    """Batch-insert deferred chunk_sessions rows for deduped chunks."""
+    if chunk_ids and session_id is not None:
+        conn.executemany(
+            "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
+            [(cid, session_id) for cid in chunk_ids],
+        )
+
+
 def _chunk_text(
     text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
 ) -> list[str]:
@@ -784,11 +795,7 @@ def ingest_file(
 
     if not new_chunks:
         # All chunks deduped — safe to flush session links (no embedding needed)
-        for cid in deferred_session_links:
-            conn.execute(
-                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                (cid, session_id),
-            )
+        _flush_deferred_session_links(conn, deferred_session_links, session_id)
         conn.commit()
         result = {"file": str(path), "chunks_added": 0, "chunks_skipped": skipped}
         if skipped > 0:
@@ -839,11 +846,7 @@ def ingest_file(
             insert_chunk_vec(conn, chunk_id, emb_vec)
 
     # Embeddings succeeded — now flush deferred session links for deduped chunks
-    for cid in deferred_session_links:
-        conn.execute(
-            "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-            (cid, session_id),
-        )
+    _flush_deferred_session_links(conn, deferred_session_links, session_id)
 
     conn.commit()
     if not _skip_folder_summary:
@@ -1974,11 +1977,7 @@ def ingest_url(
         new_chunks.append((i, chunk, h))
 
     if not new_chunks:
-        for cid in deferred_session_links:
-            conn.execute(
-                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                (cid, session_id),
-            )
+        _flush_deferred_session_links(conn, deferred_session_links, session_id)
         conn.commit()
         return {**_base_result, "chunks_added": 0, "chunks_skipped": skipped}
 
@@ -2000,11 +1999,7 @@ def ingest_url(
             insert_chunk_vec(conn, chunk_id, emb_vec)
 
     # Embeddings succeeded — flush deferred session links for deduped chunks
-    for cid in deferred_session_links:
-        conn.execute(
-            "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-            (cid, session_id),
-        )
+    _flush_deferred_session_links(conn, deferred_session_links, session_id)
 
     conn.commit()
     return {
