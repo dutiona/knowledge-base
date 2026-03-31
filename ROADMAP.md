@@ -44,7 +44,7 @@ dependency chains, and parallelism opportunities.
 | 150 | improve zero-norm embedding vector handling              | Embedding   | 2.5a  | ✔ PR #274                                         |
 | 165 | auto_relate: fallback to abstract_chunk_id               | Search      | 2.5a  | ✔ PR #280                                         |
 | 166 | scan_relationships: avoid redundant pairwise comparisons | Search      | 2.5a  | ✔ PR #283                                         |
-| 180 | no rollback on embedding failure in ingest_file          | Ingest      | 2.5a  |                                                   |
+| 180 | no rollback on embedding failure in ingest_file          | Ingest      | 2.5a  | ✔ PR #282                                         |
 | 182 | relocate_paper lacks transaction safety                  | Papers      | 2.5a  | ✔ PR #281                                         |
 | 195 | path_conflict referenced before assignment               | Ingest      | 2.5a  |                                                   |
 | 197 | LIKE wildcard injection in title search                  | Papers      | 2.5a  |                                                   |
