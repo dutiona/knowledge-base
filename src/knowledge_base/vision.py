@@ -1169,9 +1169,7 @@ def extract_figures(
         fig_chunk_ids = [
             r["id"]
             for r in conn.execute(
-                "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'"
-                + (page_filter if candidate_pages else ""),
-                fig_delete_params,
+                fig_chunk_subquery[1:-1], fig_delete_params
             ).fetchall()
         ]
         _cleanup_figure_fk_refs(conn, fig_chunk_ids)
