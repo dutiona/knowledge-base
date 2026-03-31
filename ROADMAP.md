@@ -2,7 +2,7 @@
 
 > Last updated: 2026-03-31
 
-124 open issues (116 actionable + 5 reference/stale) across 8 workstreams. This document establishes priority, ordering,
+126 open issues (118 actionable + 5 reference/stale) across 8 workstreams. This document establishes priority, ordering,
 dependency chains, and parallelism opportunities.
 
 > **Gap Analysis Integration (2026-03-31):** Seven new Phase 3 issues and five
@@ -38,7 +38,7 @@ dependency chains, and parallelism opportunities.
 | 139 | chunk_sessions join table for N:M session tracking       | Search      | 2     | ✔                                                 |
 | 106 | stage-2 reranking in hybrid search                       | Search      | 2     | ✔                                                 |
 | 163 | bug: qwen3.5 thinking-mode empty extraction              | Extraction  | 2.5a  | ✔ done                                            |
-| 160 | fix: zombie conclusions after FK cleanup                 | Extraction  | 2.5a  |                                                   |
+| 160 | fix: zombie conclusions after FK cleanup                 | Extraction  | 2.5a  | ✔                                                 |
 | 152 | fix: stale inline image chunks on re-ingest              | Ingest      | 2.5a  |                                                   |
 | 151 | fix: getaddrinfo for SSRF IP check                       | Ingest      | 2.5a  | ✔ PR #270                                         |
 | 150 | improve zero-norm embedding vector handling              | Embedding   | 2.5a  | ✔ PR #274                                         |
@@ -54,6 +54,9 @@ dependency chains, and parallelism opportunities.
 | 203 | \_validate_bib_path return value discarded               | Papers      | 2.5a  |                                                   |
 | 204 | supersede_conclusion no rollback                         | Extraction  | 2.5a  |                                                   |
 | 212 | PIL Image not closed in \_crop_regions                   | Vision      | 2.5a  |                                                   |
+| 276 | fix(vision): extract_figures missing conclusions cleanup | Vision      | 2.5a  |                                                   |
+| 277 | perf: optimize full table scan in conclusion FK cleanup  | Extraction  | 2.5b  |                                                   |
+| 278 | refactor: consolidate conclusion FK cleanup into utility | Ingest      | 2.5b  |                                                   |
 | 236 | unified \_insert_chunks helper (5 call sites)            | Ingest      | 2.5b  |                                                   |
 | 238 | extract bibtex module (papers.py → bibtex.py)            | Papers      | 2.5b  |                                                   |
 | 239 | extract auto_relate module (papers.py → auto_relate.py)  | Papers      | 2.5b  |                                                   |
@@ -634,11 +637,14 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 ## Quick Wins (< 1 session each)
 
 **Phase 2.5a items** (all independent, all small scope):
-✔ #163, #160, ✔ #152, ✔ #151, ✔ #150, #165, #166, #180, #182, #195, #197, #198, #201,
-#202, #203, #204, #212
+✔ #163, ✔ #160, ✔ #152, ✔ #151, ✔ #150, #165, #166, #180, #182, #195, #197, #198, #201,
+#202, #203, #204, #212, #276
 
 **Phase 2.5b parallel items** (independent of decomposition ordering):
-#141, #140, #154, #158, #243
+#141, #140, #154, #158, #243, #277, #278
+
+**Dependency:** #278 (consolidate cleanup) subsumes #276 (vision.py fix) and #277 (perf optimization).
+Do #276 first (quick fix), then #278 absorbs the shared utility + perf work.
 
 **Phase 2.5c doc/test gaps** (independent, low risk):
 #222, #223, #224, #225, #226, #227, #229, #230, #231

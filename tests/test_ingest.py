@@ -31,7 +31,11 @@ from knowledge_base.papers import (
     add_relationship,
     get_relationships,
 )
-from knowledge_base.conclusions import record_conclusion, get_conclusions
+from knowledge_base.conclusions import (
+    record_conclusion,
+    get_conclusions,
+    supersede_conclusion,
+)
 from knowledge_base.extraction import record_method, record_dataset, record_metric
 
 
@@ -335,7 +339,8 @@ def test_reingest_nullifies_relationship_evidence(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-def test_reingest_cleans_conclusion_chunk_refs(tmp_path):
+def test_reingest_deletes_zombie_conclusion_with_empty_chunk_refs(tmp_path):
+    """Conclusion whose *all* source_chunk_ids are removed should be deleted (#160)."""
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
@@ -351,9 +356,68 @@ def test_reingest_cleans_conclusion_chunk_refs(tmp_path):
     reingest_file(conn, md)
 
     conclusions = get_conclusions(conn)
-    assert len(conclusions) == 1
-    # The deleted chunk_id should be removed from source_chunk_ids
-    assert chunk_id not in conclusions[0]["source_chunk_ids"]
+    assert len(conclusions) == 0, "Zombie conclusion with no evidence should be deleted"
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_reingest_keeps_conclusion_with_remaining_chunk_refs(tmp_path):
+    """Conclusion with some surviving source_chunk_ids should be kept (#160)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Ingest two separate files so we get chunk_ids from different sources
+    md1 = tmp_path / "evidence1.md"
+    md1.write_text("First piece of evidence.\n")
+    ingest_file(conn, md1)
+    chunk_id_1 = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (str(md1.resolve()),)
+    ).fetchone()["id"]
+
+    md2 = tmp_path / "evidence2.md"
+    md2.write_text("Second piece of evidence.\n")
+    ingest_file(conn, md2)
+    chunk_id_2 = conn.execute(
+        "SELECT id FROM chunks WHERE source_uri = ?", (str(md2.resolve()),)
+    ).fetchone()["id"]
+
+    record_conclusion(conn, "Multi-evidence claim", 0.9, [chunk_id_1, chunk_id_2])
+
+    # Reingest only md1 — chunk_id_1 is replaced, chunk_id_2 survives
+    md1.write_text("Rewritten evidence.\n")
+    reingest_file(conn, md1)
+
+    conclusions = get_conclusions(conn)
+    assert len(conclusions) == 1, "Conclusion with surviving evidence should be kept"
+    assert chunk_id_1 not in conclusions[0]["source_chunk_ids"]
+    assert chunk_id_2 in conclusions[0]["source_chunk_ids"]
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_reingest_zombie_deletion_clears_superseded_by_fk(tmp_path):
+    """Deleting a zombie must not violate superseded_by FK constraint (#160)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "source.md"
+    md.write_text("Evidence for original claim.\n")
+    ingest_file(conn, md)
+    chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
+
+    # v1 → superseded by v2 (both reference the same chunk)
+    v1 = record_conclusion(conn, "Original claim", 0.9, [chunk_id])
+    supersede_conclusion(conn, v1["conclusion_id"], "Revised claim", 0.95, [chunk_id])
+
+    # Reingest deletes the chunk — both conclusions lose all evidence
+    md.write_text("Completely different content.\n")
+    reingest_file(conn, md)
+
+    # Both zombies should be deleted without IntegrityError
+    conclusions = get_conclusions(conn, include_superseded=True)
+    assert len(conclusions) == 0, "Both zombie conclusions should be deleted"
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
@@ -723,13 +787,9 @@ def test_reingest_batches_in_clauses(tmp_path):
     rels = get_relationships(conn, paper["paper_id"])
     assert rels[0]["evidence_chunk_id"] is None
 
-    # Conclusion chunk refs should have old IDs removed
+    # Conclusion with all source_chunk_ids removed should be deleted (#160)
     conclusions = get_conclusions(conn)
-    chunk_ids = conclusions[0]["source_chunk_ids"]
-    if isinstance(chunk_ids, str):
-        chunk_ids = json.loads(chunk_ids)
-    for old_id in old_ids[:3]:
-        assert old_id not in chunk_ids
+    assert len(conclusions) == 0
 
     # Methods/datasets/metrics should be nullified
     assert (
