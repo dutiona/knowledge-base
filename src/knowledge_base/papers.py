@@ -351,6 +351,8 @@ def auto_relate(
     conn: sqlite3.Connection,
     paper_id: int,
     on_progress: object = None,
+    *,
+    only_compare_higher: bool = False,
 ) -> dict:
     """Discover 'similar' relationships by comparing chunk embeddings."""
     import heapq
@@ -384,10 +386,14 @@ def auto_relate(
     if not source_normed:
         return {"skipped": "no valid embeddings", "relationships_created": 0}
 
-    # Fetch all other paper IDs
-    other_papers = conn.execute(
-        "SELECT id FROM papers WHERE id != ?", (paper_id,)
-    ).fetchall()
+    # Fetch candidate paper IDs.  When only_compare_higher is set (full-scan
+    # mode), restrict to id > paper_id so each pair is compared exactly once.
+    query = (
+        "SELECT id FROM papers WHERE id > ?"
+        if only_compare_higher
+        else "SELECT id FROM papers WHERE id != ?"
+    )
+    other_papers = conn.execute(query, (paper_id,)).fetchall()
 
     if not other_papers:
         return {"skipped": "no other papers", "relationships_created": 0}

@@ -858,11 +858,17 @@ def scan_relationships(paper_id: int | None = None) -> str:
         job_id = submit_job(conn, paper_id, "auto_relate", {"paper_id": paper_id})
         return json.dumps({"job_id": job_id})
 
-    # Full scan: one job per paper
+    # Full scan: one job per paper, each comparing only against higher IDs
+    # to avoid redundant pairwise comparisons (#166).
     papers = conn.execute("SELECT id FROM papers").fetchall()
     submitted = 0
     for row in papers:
-        submit_job(conn, row["id"], "auto_relate", {"paper_id": row["id"]})
+        submit_job(
+            conn,
+            row["id"],
+            "auto_relate",
+            {"paper_id": row["id"], "only_compare_higher": True},
+        )
         submitted += 1
     return json.dumps({"jobs_submitted": submitted})
 
