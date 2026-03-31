@@ -883,6 +883,116 @@ def test_extract_figures_idempotent_with_fk_references(
 
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
+def test_extract_figures_cleans_conclusions_and_other_fk_refs(
+    mock_vision, mock_embed, tmp_path
+):
+    """Re-extracting figures must clean up conclusions (zombie deletion),
+    papers.abstract_chunk_id, relationships.evidence_chunk_id, and
+    metrics.chunk_id — not just entity_mentions/methods/datasets (#276)."""
+    from knowledge_base.vision import extract_figures
+
+    mock_figures = [
+        {
+            "figure_type": "diagram",
+            "description": "Original figure",
+            "title": "Fig 1",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_vision.return_value = mock_figures
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
+
+    # First extraction — creates figure chunks
+    result1 = extract_figures(conn, paper_id=paper_id, pages=[0])
+    assert result1["chunks_created"] == 1
+
+    fig_chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()["id"]
+
+    # --- Create FK references to the figure chunk in ALL missing tables ---
+
+    # 1. conclusion with source_chunk_ids pointing to figure chunk
+    conn.execute(
+        "INSERT INTO conclusions (claim, source_chunk_ids) "
+        "VALUES ('Figure shows X', ?)",
+        (json.dumps([fig_chunk_id]),),
+    )
+
+    # 2. papers.abstract_chunk_id pointing to figure chunk
+    conn.execute(
+        "UPDATE papers SET abstract_chunk_id = ? WHERE id = ?",
+        (fig_chunk_id, paper_id),
+    )
+
+    # 3. relationship with evidence_chunk_id pointing to figure chunk
+    #    (need two papers for a relationship)
+    conn.execute(
+        "INSERT INTO papers (title) VALUES ('Other paper')",
+    )
+    other_paper_id = conn.execute(
+        "SELECT id FROM papers WHERE title = 'Other paper'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type, evidence_chunk_id) "
+        "VALUES (?, ?, 'cites', ?)",
+        (paper_id, other_paper_id, fig_chunk_id),
+    )
+
+    # 4. metrics.chunk_id pointing to figure chunk
+    conn.execute(
+        "INSERT INTO metrics (paper_id, name, value, chunk_id) "
+        "VALUES (?, 'accuracy', '0.95', ?)",
+        (paper_id, fig_chunk_id),
+    )
+    conn.commit()
+
+    # Re-extract — this triggers chunk deletion. Without full FK cleanup,
+    # this raises sqlite3.IntegrityError: FOREIGN KEY constraint failed
+    mock_figures_2 = [
+        {
+            "figure_type": "diagram",
+            "description": "Updated figure v2",
+            "title": "Fig 1 updated",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_vision.return_value = mock_figures_2
+    result2 = extract_figures(conn, paper_id=paper_id, pages=[0])
+    assert result2["chunks_created"] == 1
+
+    # conclusion should be DELETED (zombie — all source_chunk_ids removed)
+    conclusion_count = conn.execute(
+        "SELECT COUNT(*) as c FROM conclusions WHERE claim = 'Figure shows X'",
+    ).fetchone()["c"]
+    assert conclusion_count == 0, "Zombie conclusion should be deleted"
+
+    # papers.abstract_chunk_id should be NULLed
+    abstract_cid = conn.execute(
+        "SELECT abstract_chunk_id FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()["abstract_chunk_id"]
+    assert abstract_cid is None, "abstract_chunk_id should be NULLed"
+
+    # relationships.evidence_chunk_id should be NULLed
+    rel = conn.execute(
+        "SELECT evidence_chunk_id FROM relationships "
+        "WHERE source_paper_id = ? AND target_paper_id = ?",
+        (paper_id, other_paper_id),
+    ).fetchone()
+    assert rel["evidence_chunk_id"] is None, "evidence_chunk_id should be NULLed"
+
+    # metrics.chunk_id should be NULLed
+    metric = conn.execute(
+        "SELECT chunk_id FROM metrics WHERE paper_id = ? AND name = 'accuracy'",
+        (paper_id,),
+    ).fetchone()
+    assert metric["chunk_id"] is None, "metrics.chunk_id should be NULLed"
+
+
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
 def test_extract_figures_pages_hint(mock_vision, mock_embed, tmp_path):
     """Passing specific pages processes only those pages."""
     from knowledge_base.vision import extract_figures
