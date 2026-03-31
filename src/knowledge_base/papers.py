@@ -369,6 +369,7 @@ def auto_relate(
     if not source_rows:
         return {"skipped": "no embeddings", "relationships_created": 0}
 
+    source_chunk_ids = {row["chunk_id"] for row in source_rows}
     source_vecs = [
         (row["chunk_id"], np.frombuffer(bytes(row["embedding"]), dtype=np.float32))
         for row in source_rows
@@ -404,6 +405,12 @@ def auto_relate(
         # Fetch other paper embeddings
         other_rows = _get_paper_embeddings(conn, other_id)
         if not other_rows:
+            skipped += 1
+            continue
+
+        # Skip papers that share chunks (e.g. duplicate source_uri registrations)
+        other_chunk_ids = {row["chunk_id"] for row in other_rows}
+        if source_chunk_ids & other_chunk_ids:
             skipped += 1
             continue
 
@@ -585,16 +592,21 @@ def _query_papers(
 ) -> list:
     """Query papers with optional filters. Shared by export and sync."""
     if paper_ids:
-        placeholders = ",".join("?" * len(paper_ids))
+        from .db import _batched_select
+
+        return _batched_select(
+            conn, "SELECT * FROM papers WHERE id IN ({ph})", paper_ids
+        )
+    if title_pattern:
+        # Escape LIKE wildcards to prevent injection/unexpected matches
+        escaped = (
+            title_pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
         return conn.execute(
-            f"SELECT * FROM papers WHERE id IN ({placeholders})", paper_ids
+            "SELECT * FROM papers WHERE title LIKE ? ESCAPE '\\'",
+            (f"%{escaped}%",),
         ).fetchall()
-    elif title_pattern:
-        return conn.execute(
-            "SELECT * FROM papers WHERE title LIKE ?", (f"%{title_pattern}%",)
-        ).fetchall()
-    else:
-        return conn.execute("SELECT * FROM papers").fetchall()
+    return conn.execute("SELECT * FROM papers").fetchall()
 
 
 def export_bibtex(

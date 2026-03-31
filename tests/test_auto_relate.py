@@ -424,6 +424,24 @@ class TestAutoRelateFallback:
         assert row is not None
         assert {row["source_paper_id"], row["target_paper_id"]} == {pa, pb}
 
+    def test_skips_duplicate_source_uri_papers(self, conn):
+        """Papers sharing the same source_uri (duplicate registrations) are skipped."""
+        from knowledge_base.papers import auto_relate
+
+        # Paper A owns /tmp/shared.pdf via paper_paths
+        pa, _ = _paper_with_chunks(conn, "A", "/tmp/shared.pdf", [_VEC_A])
+        # Paper B also points to /tmp/shared.pdf but via abstract_chunk_id only
+        pb, _ = _paper_with_chunks_no_path(conn, "B", "/tmp/shared.pdf", [_VEC_B])
+
+        result = auto_relate(conn, pa)
+        # Should NOT create a relationship — same underlying chunks
+        assert result["relationships_created"] == 0
+
+        count = conn.execute(
+            "SELECT count(*) FROM relationships WHERE relation_type = 'similar'"
+        ).fetchone()[0]
+        assert count == 0
+
 
 # ---------------------------------------------------------------------------
 # 5c. Job dispatch tests
