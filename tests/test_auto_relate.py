@@ -444,6 +444,87 @@ class TestAutoRelateFallback:
 
 
 # ---------------------------------------------------------------------------
+# 5b-perf. Upper-triangle scan optimisation (#166)
+# ---------------------------------------------------------------------------
+
+
+class TestOnlyCompareHigher:
+    def test_only_compare_higher_skips_lower_ids(self, conn):
+        """With only_compare_higher=True, auto_relate skips papers with id < paper_id."""
+        from knowledge_base.papers import auto_relate
+
+        pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
+        pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
+        assert pa < pb  # sanity: A was created first
+
+        # From B's perspective with only_compare_higher=True, A (lower id) is skipped
+        result = auto_relate(conn, pb, only_compare_higher=True)
+        assert result["relationships_created"] == 0
+        # No higher-id papers exist, so auto_relate skips early
+        assert "skipped" in result
+
+    def test_only_compare_higher_includes_higher_ids(self, conn):
+        """With only_compare_higher=True, auto_relate still compares higher-id papers."""
+        from knowledge_base.papers import auto_relate
+
+        pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
+        pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
+        assert pa < pb
+
+        # From A's perspective, B (higher id) is included
+        result = auto_relate(conn, pa, only_compare_higher=True)
+        assert result["papers_compared"] == 1
+        assert result["relationships_created"] >= 1
+
+    def test_full_scan_halves_comparisons(self, conn):
+        """scan_relationships full scan does N*(N-1)/2 comparisons, not N*(N-1)."""
+        from knowledge_base.papers import auto_relate
+
+        pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
+        pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
+        pc, _ = _paper_with_chunks(conn, "C", "/tmp/c.pdf", [_VEC_A])
+
+        # Call auto_relate for each paper with only_compare_higher=True
+        # (simulating what scan_relationships should do)
+        total_compared = 0
+        for pid in [pa, pb, pc]:
+            result = auto_relate(conn, pid, only_compare_higher=True)
+            total_compared += result.get("papers_compared", 0)
+
+        # 3 papers → 3 unique pairs, not 6
+        assert total_compared == 3  # (A→B, A→C, B→C)
+
+    def test_scan_relationships_passes_only_compare_higher(self, conn):
+        """scan_relationships(paper_id=None) submits jobs with only_compare_higher=True."""
+        from unittest.mock import patch
+
+        from knowledge_base.jobs import submit_job
+
+        pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
+        pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
+
+        calls = []
+        original_submit = submit_job
+
+        def spy_submit(c, paper_id, job_type, params=None):
+            calls.append(params)
+            return original_submit(c, paper_id, job_type, params)
+
+        from knowledge_base.server import scan_relationships
+
+        with (
+            patch("knowledge_base.jobs.submit_job", side_effect=spy_submit),
+            patch("knowledge_base.server._get_conn", return_value=conn),
+        ):
+            scan_relationships()
+
+        # All full-scan jobs should have only_compare_higher=True
+        assert len(calls) == 2
+        for call_params in calls:
+            assert call_params.get("only_compare_higher") is True
+
+
+# ---------------------------------------------------------------------------
 # 5c. Job dispatch tests
 # ---------------------------------------------------------------------------
 
@@ -463,6 +544,29 @@ class TestJobDispatch:
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         assert row["job_type"] == "auto_relate"
         assert row["status"] == "pending"
+
+    def test_dispatch_passes_only_compare_higher(self, conn):
+        """Worker dispatch path correctly reads only_compare_higher from params."""
+        import json
+
+        from knowledge_base.jobs import _JobWorker
+
+        pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
+        pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
+        assert pa < pb
+
+        # Simulate a job row with only_compare_higher in params
+        job = {
+            "job_type": "auto_relate",
+            "paper_id": pb,
+            "params": json.dumps({"paper_id": pb, "only_compare_higher": True}),
+        }
+        worker = _JobWorker()
+        result = worker._dispatch(conn, job, on_progress=lambda msg: None)
+
+        # B is the higher ID; with only_compare_higher=True, no papers above B exist
+        assert result["relationships_created"] == 0
+        assert "skipped" in result
 
     def test_auto_relate_job_dedup(self, conn):
         """Submitting twice for same paper → only one job."""
