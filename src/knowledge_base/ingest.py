@@ -1288,6 +1288,8 @@ def _extract_html_images(
         return 0
 
     if not parser.images:
+        # Page has no <img> tags — clean up any stale inline image chunks (#152)
+        _cleanup_stale_inline_images(conn, source_url)
         return 0
 
     # --- Pre-filter ---
@@ -1336,6 +1338,8 @@ def _extract_html_images(
         candidates.append((resolved, alt))
 
     if not candidates:
+        # Images exist but none qualify — clean up stale chunks (#152)
+        _cleanup_stale_inline_images(conn, source_url)
         return 0
 
     # Cap
@@ -1775,6 +1779,33 @@ def _extract_web_figures(
     if figures_added:
         conn.commit()
     return figures_added
+
+
+def _cleanup_stale_inline_images(conn: sqlite3.Connection, source_uri: str) -> int:
+    """Delete orphaned inline image chunks for *source_uri*.
+
+    Called when ``_extract_html_images`` returns 0 for a page that may have had
+    images during a previous ingestion.  Without this, stale figure chunks with
+    ``chunk_index >= _WEB_IMAGE_CHUNK_INDEX_START`` would persist indefinitely.
+
+    Returns the number of chunks deleted.
+    """
+    old_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM chunks WHERE source_uri = ? "
+            "AND source_type = 'figure' AND chunk_index >= ?",
+            (source_uri, _WEB_IMAGE_CHUNK_INDEX_START),
+        ).fetchall()
+    ]
+    if not old_ids:
+        return 0
+    _cleanup_figure_fk_refs(conn, old_ids)
+    delete_chunk_vecs(conn, old_ids)
+    _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
+    conn.commit()
+    logger.info("Cleaned %d stale inline image chunks for %s", len(old_ids), source_uri)
+    return len(old_ids)
 
 
 def ingest_url(
