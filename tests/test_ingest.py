@@ -1,6 +1,7 @@
 """Tests for ingest pipeline (embeddings mocked)."""
 
 import json
+import socket
 import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -1845,6 +1846,36 @@ def test_is_private_ip_literals():
     assert _is_private_ip("10.0.0.1") is True
     assert _is_private_ip("169.254.169.254") is True
     assert _is_private_ip("localhost") is True
+
+
+@patch("knowledge_base.ingest.socket.getaddrinfo")
+def test_is_private_ip_rejects_mixed_resolution(mock_getaddrinfo):
+    """_is_private_ip rejects hostnames that resolve to any private IP (#151)."""
+    # Simulate DNS returning both a public and a private address
+    mock_getaddrinfo.return_value = [
+        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.1", 0)),
+    ]
+    assert _is_private_ip("multi-homed.example.com") is True
+
+
+@patch("knowledge_base.ingest.socket.getaddrinfo")
+def test_is_private_ip_allows_all_public(mock_getaddrinfo):
+    """_is_private_ip allows hostnames where all resolved IPs are public."""
+    mock_getaddrinfo.return_value = [
+        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.35", 0)),
+    ]
+    assert _is_private_ip("safe.example.com") is False
+
+
+@patch("knowledge_base.ingest.socket.getaddrinfo")
+def test_is_private_ip_rejects_ipv6_loopback(mock_getaddrinfo):
+    """_is_private_ip rejects hostnames resolving to IPv6 loopback (#151)."""
+    mock_getaddrinfo.return_value = [
+        (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::1", 0, 0, 0)),
+    ]
+    assert _is_private_ip("ipv6-loopback.example.com") is True
 
 
 def test_validate_image_url():
