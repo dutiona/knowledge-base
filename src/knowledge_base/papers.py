@@ -128,15 +128,19 @@ def relocate_paper(
             "actual": content_hash,
         }
 
-    conn.execute(
-        "UPDATE paper_paths SET path = ?, content_hash = ? WHERE id = ?",
-        (new_path, content_hash, current["id"]),
-    )
-    conn.execute(
-        "UPDATE chunks SET source_uri = ? WHERE source_uri = ?",
-        (new_path, old_path),
-    )
-    conn.commit()
+    try:
+        conn.execute(
+            "UPDATE paper_paths SET path = ?, content_hash = ? WHERE id = ?",
+            (new_path, content_hash, current["id"]),
+        )
+        conn.execute(
+            "UPDATE chunks SET source_uri = ? WHERE source_uri = ?",
+            (new_path, old_path),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return {"paper_id": paper_id, "old_path": old_path, "new_path": new_path}
 
 

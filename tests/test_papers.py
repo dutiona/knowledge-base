@@ -3,6 +3,8 @@
 import hashlib
 from unittest.mock import patch
 
+import pytest
+
 from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from knowledge_base.ingest import ingest_file
 from knowledge_base.papers import (
@@ -912,3 +914,49 @@ def test_relocate_paper_no_entry(tmp_path):
     conn.commit()
     result = relocate_paper(conn, pid, "/new/path")
     assert "error" in result
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_relocate_paper_rolls_back_on_partial_failure(tmp_path):
+    """If the chunks UPDATE fails, the paper_paths UPDATE must be rolled back."""
+    import sqlite3
+
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Some content.\n")
+    ingest_file(conn, md)
+
+    result = register_paper(conn, "Rollback Test", source_uri=str(md.resolve()))
+    paper_id = result["paper_id"]
+
+    old_path = get_paper_paths(conn, paper_id)[0]["path"]
+
+    new_dir = tmp_path / "moved"
+    new_dir.mkdir()
+    new_path = new_dir / "paper.md"
+    md.rename(new_path)
+
+    # Install a trigger that makes the chunks UPDATE fail via RAISE(ABORT)
+    conn.execute(
+        """
+        CREATE TRIGGER _test_fail_chunks_update
+        BEFORE UPDATE OF source_uri ON chunks
+        BEGIN
+            SELECT RAISE(ABORT, 'simulated chunk update failure');
+        END
+        """
+    )
+    conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="simulated chunk update"):
+        relocate_paper(conn, paper_id, str(new_path.resolve()))
+
+    # Connection must be clean (not left in a dirty transaction)
+    assert not conn.in_transaction, "connection left dirty after partial failure"
+
+    # paper_paths must be unchanged — the first UPDATE was rolled back
+    paths = get_paper_paths(conn, paper_id)
+    assert paths[0]["path"] == old_path, (
+        "paper_paths was not rolled back after partial failure"
+    )
