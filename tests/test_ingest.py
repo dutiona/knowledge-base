@@ -3068,6 +3068,71 @@ def test_multi_session_dedup_co_occurrence(tmp_path):
     assert len(pairs_3) == 0
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_embed_failure_does_not_leave_orphan_session_rows(tmp_path):
+    """If _embed_with_config raises, no chunk_sessions rows from the failed call persist.
+
+    Scenario: file has 2 chunks. First ingest succeeds (session-1). File is then
+    modified to keep one existing chunk and add a new one. Second ingest (session-2)
+    deduplicates the first chunk (writing a chunk_sessions row), then calls
+    _embed_with_config for the new chunk — which raises. The chunk_sessions row
+    from the dedup phase must not persist.  Regression test for #180.
+    """
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    test_file = tmp_path / "doc.md"
+    # Two chunks worth of content (each chunk is ~2000 chars by default)
+    chunk_a = "# Shared Section\n\n" + ("Existing content. " * 120)
+    chunk_b = "# Original Section\n\n" + ("Original content. " * 120)
+    test_file.write_text(chunk_a + "\n\n" + chunk_b)
+
+    # First ingest — succeeds
+    r1 = ingest_file(conn, test_file, session_id="session-1")
+    assert r1["chunks_added"] >= 2, f"Expected >=2 chunks, got {r1['chunks_added']}"
+
+    # Verify session-1 rows exist
+    s1_rows = conn.execute(
+        "SELECT COUNT(*) as cnt FROM chunk_sessions WHERE session_id = 'session-1'"
+    ).fetchone()["cnt"]
+    assert s1_rows >= 2
+
+    # Modify file: keep chunk_a (will be deduped), replace chunk_b (new chunk)
+    chunk_c = "# Brand New Section\n\n" + ("Completely new content. " * 120)
+    test_file.write_text(chunk_a + "\n\n" + chunk_c)
+
+    # Patch _embed_with_config to raise after chunk_sessions writes happen
+    with patch(
+        "knowledge_base.ingest._embed_with_config",
+        side_effect=RuntimeError("Ollama down"),
+    ):
+        try:
+            ingest_file(conn, test_file, session_id="session-2")
+        except RuntimeError:
+            pass  # Expected
+
+    # The critical assertion: no session-2 rows should exist in chunk_sessions
+    s2_rows = conn.execute(
+        "SELECT COUNT(*) as cnt FROM chunk_sessions WHERE session_id = 'session-2'"
+    ).fetchone()["cnt"]
+    assert s2_rows == 0, (
+        f"Expected 0 chunk_sessions rows for failed session-2, got {s2_rows}. "
+        "Orphan session rows leaked from a failed embed call."
+    )
+
+    # Session-1 rows must be unaffected
+    s1_after = conn.execute(
+        "SELECT COUNT(*) as cnt FROM chunk_sessions WHERE session_id = 'session-1'"
+    ).fetchone()["cnt"]
+    assert s1_after == s1_rows, "session-1 rows were corrupted by the failed session-2"
+
+    # No new chunks should have been inserted
+    total_chunks = conn.execute("SELECT COUNT(*) as cnt FROM chunks").fetchone()["cnt"]
+    assert total_chunks == r1["chunks_added"], "Chunks leaked from failed embed call"
+
+
 # --- chunk_strategy dispatch tests ---
 
 

@@ -106,6 +106,17 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
+def _flush_deferred_session_links(
+    conn: sqlite3.Connection, chunk_ids: list[int], session_id: str | None
+) -> None:
+    """Batch-insert deferred chunk_sessions rows for deduped chunks."""
+    if chunk_ids and session_id is not None:
+        conn.executemany(
+            "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
+            [(cid, session_id) for cid in chunk_ids],
+        )
+
+
 def _chunk_text(
     text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
 ) -> list[str]:
@@ -697,6 +708,10 @@ def ingest_file(
         "semantic" if source_type == "pdf" and strategy == "semantic" else "mechanical"
     )
 
+    # Defer chunk_sessions writes until after embeddings succeed (#180).
+    # If _embed_with_config raises, no orphan session rows are left behind.
+    deferred_session_links: list[int] = []
+
     if ast_chunks:
         # AST-aware path: each chunk has metadata
         new_chunks = []
@@ -708,10 +723,7 @@ def ingest_file(
             ).fetchone()
             if existing:
                 if session_id is not None:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                        (existing["id"], session_id),
-                    )
+                    deferred_session_links.append(existing["id"])
                 skipped += 1
                 continue
             meta = {
@@ -753,10 +765,7 @@ def ingest_file(
             ).fetchone()
             if existing:
                 if session_id is not None:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                        (existing["id"], session_id),
-                    )
+                    deferred_session_links.append(existing["id"])
                 skipped += 1
                 continue
             # Collect verified image basenames from chunk text
@@ -779,15 +788,15 @@ def ingest_file(
             ).fetchone()
             if existing:
                 if session_id is not None:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                        (existing["id"], session_id),
-                    )
+                    deferred_session_links.append(existing["id"])
                 skipped += 1
                 continue
             new_chunks.append((i, chunk, h, "{}"))
 
     if not new_chunks:
+        # All chunks deduped — safe to flush session links (no embedding needed)
+        _flush_deferred_session_links(conn, deferred_session_links, session_id)
+        conn.commit()
         result = {"file": str(path), "chunks_added": 0, "chunks_skipped": skipped}
         if skipped > 0:
             from .papers import compute_file_hash
@@ -835,6 +844,9 @@ def ingest_file(
             )
         if emb_vec is not None:
             insert_chunk_vec(conn, chunk_id, emb_vec)
+
+    # Embeddings succeeded — now flush deferred session links for deduped chunks
+    _flush_deferred_session_links(conn, deferred_session_links, session_id)
 
     conn.commit()
     if not _skip_folder_summary:
@@ -1946,9 +1958,11 @@ def ingest_url(
     if not chunks:
         return {**_base_result, "chunks_added": 0, "chunks_skipped": 0}
 
-    # Compute content hashes, skip duplicates
+    # Compute content hashes, skip duplicates.
+    # Defer chunk_sessions writes until after embeddings succeed (#180).
     new_chunks = []
     skipped = 0
+    deferred_session_links: list[int] = []
     meta_json = json.dumps({"title": extracted_title} if extracted_title else {})
     for i, chunk in enumerate(chunks):
         h = _content_hash(chunk)
@@ -1957,15 +1971,14 @@ def ingest_url(
         ).fetchone()
         if existing:
             if session_id is not None:
-                conn.execute(
-                    "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                    (existing["id"], session_id),
-                )
+                deferred_session_links.append(existing["id"])
             skipped += 1
             continue
         new_chunks.append((i, chunk, h))
 
     if not new_chunks:
+        _flush_deferred_session_links(conn, deferred_session_links, session_id)
+        conn.commit()
         return {**_base_result, "chunks_added": 0, "chunks_skipped": skipped}
 
     texts_to_embed = [c[1] for c in new_chunks]
@@ -1984,6 +1997,9 @@ def ingest_url(
             )
         if emb_vec is not None:
             insert_chunk_vec(conn, chunk_id, emb_vec)
+
+    # Embeddings succeeded — flush deferred session links for deduped chunks
+    _flush_deferred_session_links(conn, deferred_session_links, session_id)
 
     conn.commit()
     return {
