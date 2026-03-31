@@ -79,6 +79,29 @@ def _paper_with_chunks(conn, title, source_uri, embeddings):
     return paper_id, chunk_ids
 
 
+def _paper_with_chunks_no_path(conn, title, source_uri, embeddings):
+    """Create paper linked via abstract_chunk_id only (no paper_paths row).
+
+    Simulates a paper registered with a source_uri conflict —
+    paper_paths row is missing but chunks are reachable via
+    papers.abstract_chunk_id → chunks.source_uri.
+    """
+    # Create the first chunk (will become abstract_chunk_id)
+    first_cid = _add_chunk(conn, source_uri, f"{title} chunk 0", 0, embeddings[0])
+    # Insert paper with abstract_chunk_id, NO paper_paths entry
+    cursor = conn.execute(
+        "INSERT INTO papers (title, abstract_chunk_id) VALUES (?, ?)",
+        (title, first_cid),
+    )
+    paper_id = cursor.lastrowid
+    conn.commit()
+    chunk_ids = [first_cid]
+    for i, emb in enumerate(embeddings[1:], start=1):
+        cid = _add_chunk(conn, source_uri, f"{title} chunk {i}", i, emb)
+        chunk_ids.append(cid)
+    return paper_id, chunk_ids
+
+
 # ---------------------------------------------------------------------------
 # 5f. Schema migration tests
 # ---------------------------------------------------------------------------
@@ -341,6 +364,65 @@ class TestAutoRelate:
         ).fetchone()
         assert row is not None
         assert row["confidence"] >= 0.95
+
+
+# ---------------------------------------------------------------------------
+# 5b2. Fallback to abstract_chunk_id when paper_paths is missing (#165)
+# ---------------------------------------------------------------------------
+
+
+class TestAutoRelateFallback:
+    def test_source_paper_without_paper_paths(self, conn):
+        """auto_relate finds embeddings for source paper via abstract_chunk_id fallback."""
+        from knowledge_base.papers import auto_relate
+
+        # Source paper has no paper_paths row — only abstract_chunk_id
+        pa, _ = _paper_with_chunks_no_path(conn, "A", "/tmp/a.pdf", [_VEC_A])
+        # Target paper has normal paper_paths
+        pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
+
+        result = auto_relate(conn, pa)
+        assert result["relationships_created"] >= 1
+
+        row = conn.execute(
+            "SELECT * FROM relationships WHERE relation_type = 'similar'"
+        ).fetchone()
+        assert row is not None
+        assert {row["source_paper_id"], row["target_paper_id"]} == {pa, pb}
+
+    def test_target_paper_without_paper_paths(self, conn):
+        """auto_relate discovers target paper via abstract_chunk_id fallback."""
+        from knowledge_base.papers import auto_relate
+
+        # Source paper has normal paper_paths
+        pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
+        # Target paper has no paper_paths row — only abstract_chunk_id
+        pb, _ = _paper_with_chunks_no_path(conn, "B", "/tmp/b.pdf", [_VEC_B])
+
+        result = auto_relate(conn, pa)
+        assert result["relationships_created"] >= 1
+
+        row = conn.execute(
+            "SELECT * FROM relationships WHERE relation_type = 'similar'"
+        ).fetchone()
+        assert row is not None
+        assert {row["source_paper_id"], row["target_paper_id"]} == {pa, pb}
+
+    def test_both_papers_without_paper_paths(self, conn):
+        """auto_relate works when both papers lack paper_paths rows."""
+        from knowledge_base.papers import auto_relate
+
+        pa, _ = _paper_with_chunks_no_path(conn, "A", "/tmp/a.pdf", [_VEC_A])
+        pb, _ = _paper_with_chunks_no_path(conn, "B", "/tmp/b.pdf", [_VEC_B])
+
+        result = auto_relate(conn, pa)
+        assert result["relationships_created"] >= 1
+
+        row = conn.execute(
+            "SELECT * FROM relationships WHERE relation_type = 'similar'"
+        ).fetchone()
+        assert row is not None
+        assert {row["source_paper_id"], row["target_paper_id"]} == {pa, pb}
 
 
 # ---------------------------------------------------------------------------

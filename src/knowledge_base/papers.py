@@ -310,9 +310,14 @@ def add_relationship(
 def _get_paper_embeddings(
     conn: sqlite3.Connection, paper_id: int
 ) -> list[tuple[int, bytes]]:
-    """Return [(chunk_id, embedding_blob), ...] for a paper's non-figure chunks."""
+    """Return [(chunk_id, embedding_blob), ...] for a paper's non-figure chunks.
+
+    Primary path: join through paper_paths to find chunks by source_uri.
+    Fallback: if no paper_paths row exists (e.g. duplicate source_uri conflict),
+    resolve source_uri via papers.abstract_chunk_id → chunks.source_uri.
+    """
     vec_table = get_vec_table_name(conn)
-    return conn.execute(
+    rows = conn.execute(
         f"""SELECT cv.chunk_id, cv.embedding
            FROM [{vec_table}] cv
            JOIN chunks c ON c.id = cv.chunk_id
@@ -320,6 +325,25 @@ def _get_paper_embeddings(
            WHERE pp.paper_id = ?
              AND c.source_type != 'figure'""",
         (paper_id,),
+    ).fetchall()
+    if rows:
+        return rows
+
+    # Fallback: resolve source_uri via abstract_chunk_id
+    uri_row = conn.execute(
+        "SELECT source_uri FROM chunks WHERE id = "
+        "(SELECT abstract_chunk_id FROM papers WHERE id = ?)",
+        (paper_id,),
+    ).fetchone()
+    if not uri_row:
+        return []
+    return conn.execute(
+        f"""SELECT cv.chunk_id, cv.embedding
+           FROM [{vec_table}] cv
+           JOIN chunks c ON c.id = cv.chunk_id
+           WHERE c.source_uri = ?
+             AND c.source_type != 'figure'""",
+        (uri_row["source_uri"],),
     ).fetchall()
 
 
