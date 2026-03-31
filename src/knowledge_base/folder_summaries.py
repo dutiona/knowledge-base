@@ -113,7 +113,8 @@ def update_folder_summary(
             expected_dim=base_dim,
             _provider_name=provider_name,
         )[0]
-        embedding = truncate_embedding(embedding, cfg["dim"])
+        if embedding is not None:
+            embedding = truncate_embedding(embedding, cfg["dim"])
     else:
         embedding = embed(
             [summary],
@@ -138,10 +139,11 @@ def update_folder_summary(
         "DELETE FROM folder_summaries_vec WHERE folder_path = ?",
         (folder_path,),
     )
-    conn.execute(
-        "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
-        (_serialize_f32(embedding), folder_path),
-    )
+    if embedding is not None:
+        conn.execute(
+            "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
+            (_serialize_f32(embedding), folder_path),
+        )
 
     conn.commit()
     return True
