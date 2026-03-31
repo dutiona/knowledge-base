@@ -8,6 +8,7 @@ from unittest.mock import patch, MagicMock
 
 from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from knowledge_base.ingest import (
+    _cleanup_stale_inline_images,
     _extract_html_images,
     _extract_pdf_markdown,
     _extract_web_figures,
@@ -2243,6 +2244,56 @@ def test_extract_html_images_embed_failure_preserves_old(
         (source_url,),
     ).fetchone()["cnt"]
     assert total == 1
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+@patch("knowledge_base.ingest._is_private_ip", return_value=False)
+@patch("knowledge_base.ingest.httpx.stream")
+def test_cleanup_stale_inline_images_on_zero_new(
+    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+):
+    """Stale inline image chunks are deleted when page loses all images (#152)."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    mock_vision_cfg.return_value = _VISION_CFG
+    mock_vision_call.return_value = _FIGURE_RESPONSE
+
+    png_bytes = _make_test_png()
+    source_url = "https://example.com/page"
+
+    # First ingestion: page has one image → 1 figure chunk created
+    mock_stream.return_value = _mock_image_stream(png_bytes)
+    html_with_img = '<html><body><img src="https://example.com/fig.png"></body></html>'
+    count = _extract_html_images(conn, html_with_img, source_url)
+    assert count == 1
+
+    before = conn.execute(
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? "
+        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        (source_url,),
+    ).fetchone()["cnt"]
+    assert before == 1
+
+    # Page now has no images — _cleanup_stale_inline_images should remove the chunk
+    deleted = _cleanup_stale_inline_images(conn, source_url)
+    assert deleted == 1
+
+    after = conn.execute(
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? "
+        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        (source_url,),
+    ).fetchone()["cnt"]
+    assert after == 0
+
+
+def test_cleanup_stale_inline_images_noop_when_none(tmp_path):
+    """No-op when there are no stale inline image chunks."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    deleted = _cleanup_stale_inline_images(conn, "https://example.com/no-images")
+    assert deleted == 0
 
 
 # --- Integration with ingest_url ---

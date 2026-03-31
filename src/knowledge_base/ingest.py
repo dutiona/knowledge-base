@@ -1777,6 +1777,33 @@ def _extract_web_figures(
     return figures_added
 
 
+def _cleanup_stale_inline_images(conn: sqlite3.Connection, source_uri: str) -> int:
+    """Delete orphaned inline image chunks for *source_uri*.
+
+    Called when ``_extract_html_images`` returns 0 for a page that may have had
+    images during a previous ingestion.  Without this, stale figure chunks with
+    ``chunk_index >= _WEB_IMAGE_CHUNK_INDEX_START`` would persist indefinitely.
+
+    Returns the number of chunks deleted.
+    """
+    old_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM chunks WHERE source_uri = ? "
+            "AND source_type = 'figure' AND chunk_index >= ?",
+            (source_uri, _WEB_IMAGE_CHUNK_INDEX_START),
+        ).fetchall()
+    ]
+    if not old_ids:
+        return 0
+    _cleanup_figure_fk_refs(conn, old_ids)
+    delete_chunk_vecs(conn, old_ids)
+    _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
+    conn.commit()
+    logger.info("Cleaned %d stale inline image chunks for %s", len(old_ids), source_uri)
+    return len(old_ids)
+
+
 def ingest_url(
     conn: sqlite3.Connection,
     url: str,
@@ -1871,6 +1898,12 @@ def ingest_url(
             figures_extracted += inline_figures
         except Exception:
             logger.warning("Inline image extraction failed for %s", url, exc_info=True)
+
+        # Clean orphaned inline image chunks when no new images were extracted.
+        # _extract_html_images only cleans stale chunks when it has replacements;
+        # if the page lost all images, stale figure chunks would persist (#152).
+        if figures_extracted == 0:
+            _cleanup_stale_inline_images(conn, url)
 
     _base_result: dict = {
         "url": url,
