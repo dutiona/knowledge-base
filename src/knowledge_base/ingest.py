@@ -1164,25 +1164,27 @@ class _ImgTagParser(html.parser.HTMLParser):
 
 
 def _is_private_ip(hostname: str) -> bool:
-    """Reject private/loopback/link-local IPs to prevent SSRF.
+    """Reject non-global IPs to prevent SSRF.
 
-    Resolves hostnames to ALL IPs via getaddrinfo to catch DNS rebinding
-    (e.g., 127.0.0.1.nip.io) and multi-homed hosts with mixed public/private addresses.
+    Uses ``not is_global`` to block private, loopback, link-local, multicast,
+    reserved, and unspecified addresses.  Resolves hostnames to ALL IPs via
+    getaddrinfo to catch DNS rebinding (e.g., 127.0.0.1.nip.io) and
+    multi-homed hosts with mixed public/private addresses.
     """
     try:
         addr = ipaddress.ip_address(hostname)
-        return addr.is_private or addr.is_loopback or addr.is_link_local
+        return not addr.is_global
     except ValueError:
         pass  # Not an IP literal — fall through to DNS resolution
-    # Resolve hostname to ALL IPs — reject if any is private
+    # Resolve hostname to ALL IPs — reject if any is non-global
     try:
         infos = socket.getaddrinfo(hostname, None)
         for _family, _type, _proto, _canonname, sockaddr in infos:
             addr = ipaddress.ip_address(sockaddr[0])
-            if addr.is_private or addr.is_loopback or addr.is_link_local:
+            if not addr.is_global:
                 return True
         return False
-    except (socket.gaierror, ValueError):
+    except (OSError, ValueError):
         return True  # Can't resolve → reject
 
 

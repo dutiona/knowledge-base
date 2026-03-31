@@ -1840,12 +1840,14 @@ def test_extract_html_images_rejects_private_ip(mock_stream, mock_vision_cfg, tm
 
 
 def test_is_private_ip_literals():
-    """_is_private_ip correctly identifies private/loopback IPs."""
+    """_is_private_ip correctly identifies non-global IPs."""
     assert _is_private_ip("127.0.0.1") is True
     assert _is_private_ip("192.168.1.1") is True
     assert _is_private_ip("10.0.0.1") is True
     assert _is_private_ip("169.254.169.254") is True
     assert _is_private_ip("localhost") is True
+    # is_global coverage: unspecified address
+    assert _is_private_ip("0.0.0.0") is True
 
 
 @patch("knowledge_base.ingest.socket.getaddrinfo")
