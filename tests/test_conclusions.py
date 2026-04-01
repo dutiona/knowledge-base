@@ -3,7 +3,10 @@
 import sqlite3
 from unittest.mock import patch
 
+import pytest
+
 from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.exceptions import NotFoundError, ValidationError
 from knowledge_base.ingest import ingest_file
 from knowledge_base.conclusions import (
     get_conclusion_chain,
@@ -66,9 +69,8 @@ def test_record_conclusion_with_evidence(tmp_path):
 
 def test_record_conclusion_invalid_chunk_ids(tmp_path):
     conn = _setup(tmp_path)
-    result = record_conclusion(conn, "Bad claim", source_chunk_ids=[999, 1000])
-    assert "error" in result
-    assert "999" in result["error"]
+    with pytest.raises(NotFoundError, match="999"):
+        record_conclusion(conn, "Bad claim", source_chunk_ids=[999, 1000])
 
 
 # --- get_conclusions ---
@@ -137,24 +139,23 @@ def test_supersede_already_superseded(tmp_path):
     conn = _setup(tmp_path)
     r1 = record_conclusion(conn, "Original", 0.5)
     supersede_conclusion(conn, r1["conclusion_id"], "Updated", 0.8)
-    result = supersede_conclusion(conn, r1["conclusion_id"], "Double supersede attempt")
-    assert "error" in result
-    assert "already superseded" in result["error"]
+    with pytest.raises(ValidationError, match="already superseded"):
+        supersede_conclusion(conn, r1["conclusion_id"], "Double supersede attempt")
 
 
 def test_conclusion_confidence_range(tmp_path):
     conn = _setup(tmp_path)
-    result = record_conclusion(conn, "Too confident", confidence=1.5)
-    assert "error" in result
+    with pytest.raises(ValidationError, match="confidence"):
+        record_conclusion(conn, "Too confident", confidence=1.5)
 
-    result = record_conclusion(conn, "Negative", confidence=-0.1)
-    assert "error" in result
+    with pytest.raises(ValidationError, match="confidence"):
+        record_conclusion(conn, "Negative", confidence=-0.1)
 
 
 def test_supersede_nonexistent(tmp_path):
     conn = _setup(tmp_path)
-    result = supersede_conclusion(conn, 999, "New claim")
-    assert "error" in result
+    with pytest.raises(NotFoundError, match="999"):
+        supersede_conclusion(conn, 999, "New claim")
 
 
 def test_supersede_rolls_back_on_failure(tmp_path):
@@ -191,15 +192,13 @@ def test_supersede_rolls_back_on_failure(tmp_path):
 
 
 def test_supersede_rolls_back_on_validation_error(tmp_path):
-    """If record_conclusion returns an error, no partial INSERT is left behind."""
+    """If record_conclusion raises, no partial INSERT is left behind."""
     conn = _setup(tmp_path)
     r1 = record_conclusion(conn, "Original finding", 0.8)
     old_id = r1["conclusion_id"]
 
-    result = supersede_conclusion(
-        conn, old_id, "Bad supersede", source_chunk_ids=[999]
-    )
-    assert "error" in result
+    with pytest.raises(NotFoundError):
+        supersede_conclusion(conn, old_id, "Bad supersede", source_chunk_ids=[999])
 
     # Original must remain untouched, no orphan rows
     all_rows = conn.execute("SELECT * FROM conclusions").fetchall()

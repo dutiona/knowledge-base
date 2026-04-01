@@ -10,6 +10,7 @@ import hashlib
 import logging
 import sqlite3
 
+from .exceptions import NotFoundError
 from .search import SearchResult
 
 logger = logging.getLogger(__name__)
@@ -144,7 +145,7 @@ def resolve_prediction_error(conn: sqlite3.Connection, error_id: int) -> dict:
     )
     conn.commit()
     if cursor.rowcount == 0:
-        return {"error": f"prediction error {error_id} not found"}
+        raise NotFoundError(f"prediction error {error_id} not found")
     return {"resolved": error_id}
 
 

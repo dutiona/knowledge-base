@@ -4,10 +4,29 @@ from __future__ import annotations
 
 import re
 import sqlite3
-import struct
 from pathlib import Path
 
 import sqlite_vec
+
+from .utils import serialize_f32 as _serialize_f32  # shared vec serialization
+
+__all__ = [
+    "DEFAULT_DB_PATH",
+    "DEFAULT_EMBED_DIM",
+    "DEFAULT_EMBED_MODEL",
+    "DEFAULT_EMBED_PROVIDER",
+    "RELATIONSHIP_TYPES",
+    "co_occurrence_pairs",
+    "delete_chunk_vecs",
+    "delete_chunks_cascade",
+    "escape_like",
+    "get_active_space",
+    "get_connection",
+    "get_vec_table_name",
+    "init_schema",
+    "insert_chunk_vec",
+    "space_table_name",
+]
 
 DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "knowledge-base" / "knowledge.db"
 # Bootstrap defaults for fresh databases. Existing databases read from the
@@ -347,11 +366,6 @@ def _migrate_chunk_sessions(conn: sqlite3.Connection) -> None:
 _SPACE_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 
 
-def _serialize_f32(vec: list[float]) -> bytes:
-    """Serialize a float vector to bytes for sqlite-vec."""
-    return struct.pack(f"{len(vec)}f", *vec)
-
-
 def space_table_name(name: str) -> str:
     """Deterministic vec table name for an embedding space."""
     sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
@@ -418,14 +432,39 @@ def delete_chunk_vecs(
     if not chunk_ids:
         return
     tbl = table_name or get_vec_table_name(conn)
+    # Count actual rows before deletion — not all chunks may have embeddings
+    count_rows = _batched_select(
+        conn, f"SELECT COUNT(*) AS n FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids
+    )
+    actual_deleted = sum(r["n"] for r in count_rows)
     _batched_execute(conn, f"DELETE FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids)
     # Keep embed_spaces.chunk_count in sync
-    deleted = len(chunk_ids)
-    conn.execute(
-        "UPDATE embed_spaces SET chunk_count = MAX(0, chunk_count - ?) "
-        "WHERE table_name = ?",
-        (deleted, tbl),
-    )
+    if actual_deleted:
+        conn.execute(
+            "UPDATE embed_spaces SET chunk_count = MAX(0, chunk_count - ?) "
+            "WHERE table_name = ?",
+            (actual_deleted, tbl),
+        )
+
+
+def delete_chunks_cascade(
+    conn: sqlite3.Connection,
+    chunk_ids: list[int],
+    table_name: str | None = None,
+) -> int:
+    """Delete chunks and their associated vec embeddings.
+
+    Handles the two-step cascade: vec rows first (no trigger), then chunk
+    rows (whose DELETE trigger cleans up FTS). Callers are responsible for
+    any FK cleanup (papers, relationships, conclusions) before calling this.
+
+    Returns the number of chunks deleted.
+    """
+    if not chunk_ids:
+        return 0
+    delete_chunk_vecs(conn, chunk_ids, table_name=table_name)
+    _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", chunk_ids)
+    return len(chunk_ids)
 
 
 def _migrate_embed_spaces_matryoshka(conn: sqlite3.Connection) -> None:

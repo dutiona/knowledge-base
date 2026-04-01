@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from knowledge_base.db import get_connection, init_schema, DEFAULT_EMBED_DIM
+from knowledge_base.exceptions import NotFoundError, ValidationError
 from knowledge_base.vision import _FIGURE_BASE, _FIGS_PER_PAGE
 
 
@@ -665,9 +666,8 @@ def test_extract_figures_paper_not_found(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    result = extract_figures(conn, paper_id=9999)
-    assert "error" in result
-    assert "not found" in result["error"]
+    with pytest.raises(NotFoundError, match="not found"):
+        extract_figures(conn, paper_id=9999)
 
 
 def test_extract_figures_eta_gate(tmp_path):
@@ -1255,14 +1255,12 @@ def test_extract_figures_page_out_of_range(tmp_path):
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0 text", "Page 1 text"])
 
     # Page 2 is out of range for a 2-page document (0-indexed)
-    result = extract_figures(conn, paper_id=paper_id, pages=[2])
-    assert "error" in result
-    assert "out of range" in result["error"]
+    with pytest.raises(ValidationError, match="out of range"):
+        extract_figures(conn, paper_id=paper_id, pages=[2])
 
     # Negative page is also out of range
-    result_neg = extract_figures(conn, paper_id=paper_id, pages=[-1])
-    assert "error" in result_neg
-    assert "out of range" in result_neg["error"]
+    with pytest.raises(ValidationError, match="out of range"):
+        extract_figures(conn, paper_id=paper_id, pages=[-1])
 
 
 def test_extract_figures_zero_indexed_boundary(tmp_path):
@@ -1285,9 +1283,8 @@ def test_extract_figures_zero_indexed_boundary(tmp_path):
     assert "error" not in result
 
     # Page 3 (0-indexed) is out of range for a 3-page doc
-    result_bad = extract_figures(conn, paper_id=paper_id, pages=[3])
-    assert "error" in result_bad
-    assert "out of range" in result_bad["error"]
+    with pytest.raises(ValidationError, match="out of range"):
+        extract_figures(conn, paper_id=paper_id, pages=[3])
 
 
 # ---------------------------------------------------------------------------
@@ -1444,8 +1441,8 @@ def test_configure_omniparser_invalid_path(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    result = configure_omniparser(conn, "/nonexistent/path")
-    assert "error" in result
+    with pytest.raises(ValidationError, match="not found"):
+        configure_omniparser(conn, "/nonexistent/path")
 
 
 def test_configure_omniparser_disable(tmp_path):

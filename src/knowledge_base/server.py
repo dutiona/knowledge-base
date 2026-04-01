@@ -14,6 +14,7 @@ from .conclusions import (
     record_conclusion,
     supersede_conclusion,
 )
+from .exceptions import ExtractionError, KnowledgeBaseError
 from .db import (
     DEFAULT_DB_PATH,
     co_occurrence_pairs,
@@ -185,10 +186,11 @@ def reingest(
     if not p.exists():
         return json.dumps({"error": f"Path does not exist: {p}"})
 
-    result = reingest_file(conn, p, source_type, session_id=session_id)
-
-    if "error" in result:
-        return json.dumps(result)
+    try:
+        result = reingest_file(conn, p, source_type, session_id=session_id)
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
     # Invalidate stale "similar" relationships for all papers linked to this file
     source_uri = str(p)
@@ -222,7 +224,11 @@ def ingest_url(url: str, session_id: str | None = None) -> str:
         session_id: Optional session ID for co-occurrence tracking.
     """
     conn = _get_conn()
-    return json.dumps(_ingest_url(conn, url, session_id=session_id))
+    try:
+        return json.dumps(_ingest_url(conn, url, session_id=session_id))
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -664,16 +670,20 @@ def add_relationship_tool(
         evidence_chunk_id: Optional chunk ID containing evidence for this relationship.
     """
     conn = _get_conn()
-    return json.dumps(
-        add_relationship(
-            conn,
-            source_paper_id,
-            target_paper_id,
-            relation_type,
-            confidence,
-            evidence_chunk_id,
+    try:
+        return json.dumps(
+            add_relationship(
+                conn,
+                source_paper_id,
+                target_paper_id,
+                relation_type,
+                confidence,
+                evidence_chunk_id,
+            )
         )
-    )
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -709,9 +719,15 @@ def record_conclusion_tool(
         session_context: Context about why this conclusion was drawn.
     """
     conn = _get_conn()
-    return json.dumps(
-        record_conclusion(conn, claim, confidence, source_chunk_ids, session_context)
-    )
+    try:
+        return json.dumps(
+            record_conclusion(
+                conn, claim, confidence, source_chunk_ids, session_context
+            )
+        )
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -751,16 +767,20 @@ def supersede_conclusion_tool(
         session_context: Context for why the conclusion changed.
     """
     conn = _get_conn()
-    return json.dumps(
-        supersede_conclusion(
-            conn,
-            old_conclusion_id,
-            new_claim,
-            confidence,
-            source_chunk_ids,
-            session_context,
+    try:
+        return json.dumps(
+            supersede_conclusion(
+                conn,
+                old_conclusion_id,
+                new_claim,
+                confidence,
+                source_chunk_ids,
+                session_context,
+            )
         )
-    )
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -882,7 +902,11 @@ def relocate_paper_tool(paper_id: int, new_path: str) -> str:
         new_path: The new absolute path to the file.
     """
     conn = _get_conn()
-    return json.dumps(relocate_paper(conn, paper_id, new_path))
+    try:
+        return json.dumps(relocate_paper(conn, paper_id, new_path))
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -987,21 +1011,31 @@ def extract_structure_tool(
             Increase to match your LLM server's parallel capacity.
     """
     conn = _get_conn()
-    est = estimate_extraction_time(conn, paper_id)
-    if "error" in est:
-        return json.dumps(est)
+    try:
+        est = estimate_extraction_time(conn, paper_id)
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
     # Short doc: run inline (fast path) — reuse chunks from estimate
     if not est["is_long"]:
-        return json.dumps(
-            extract_structure(
-                conn,
-                paper_id,
-                confirmed=True,
-                max_workers=max_workers,
-                _prefetched_chunks=est["chunks"],
+        try:
+            return json.dumps(
+                extract_structure(
+                    conn,
+                    paper_id,
+                    confirmed=True,
+                    max_workers=max_workers,
+                    _prefetched_chunks=est["chunks"],
+                )
             )
-        )
+        except ExtractionError as e:
+            result = {"error": str(e)}
+            if e.errors:
+                result["errors"] = e.errors
+            if e.raw:
+                result["raw"] = e.raw
+            return json.dumps(result)
 
     # Long doc, not confirmed: ETA warning (adjust for parallelism)
     effective_workers = min(max(max_workers, 1), est["chunk_count"], _MAX_WORKERS_LIMIT)
@@ -1056,7 +1090,11 @@ def configure_llm_tool(
         api_key: Optional API key for authenticated endpoints.
     """
     conn = _get_conn()
-    return json.dumps(configure_llm(conn, provider, base_url, model, api_key))
+    try:
+        return json.dumps(configure_llm(conn, provider, base_url, model, api_key))
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -1131,9 +1169,11 @@ def extract_figures_tool(
             return json.dumps({"error": f"Pages must be >= 1 (got {invalid})"})
         pages_0 = [p - 1 for p in pages]
 
-    est = estimate_figures_time(conn, paper_id, pages=pages_0)
-    if "error" in est:
-        return json.dumps(est)
+    try:
+        est = estimate_figures_time(conn, paper_id, pages=pages_0)
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
     # ETA gate
     if est["estimated_seconds"] > 120 and not confirmed:
@@ -1185,7 +1225,11 @@ def configure_omniparser_tool(path: str | None = None) -> str:
         path: Absolute path to OmniParser directory (None to query, empty string to disable).
     """
     conn = _get_conn()
-    return json.dumps(configure_omniparser(conn, path))
+    try:
+        return json.dumps(configure_omniparser(conn, path))
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -1226,9 +1270,13 @@ def configure_browser_tool(
             Pass both as empty string to disable browser rendering.
     """
     conn = _get_conn()
-    return json.dumps(
-        configure_browser(conn, cdp_endpoint=cdp_endpoint, venv_path=venv_path)
-    )
+    try:
+        return json.dumps(
+            configure_browser(conn, cdp_endpoint=cdp_endpoint, venv_path=venv_path)
+        )
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -1285,7 +1333,11 @@ def resolve_prediction_error_tool(error_id: int) -> str:
         error_id: ID of the prediction error to resolve.
     """
     conn = _get_conn()
-    return json.dumps(resolve_prediction_error(conn, error_id))
+    try:
+        return json.dumps(resolve_prediction_error(conn, error_id))
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 def main():

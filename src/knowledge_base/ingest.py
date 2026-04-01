@@ -25,12 +25,15 @@ from .db import (
     _batched_execute,
     _batched_select,
     delete_chunk_vecs,
+    delete_chunks_cascade,
     get_active_space,
     insert_chunk_vec,
 )
 from .embed_swap import get_embed_config
 from .embeddings import embed, truncate_embedding
+from .exceptions import NotFoundError, ValidationError
 from .folder_summaries import update_folder_summary
+from .utils import content_hash as _content_hash
 
 
 def _update_folder_summary_safe(conn: sqlite3.Connection, path: Path) -> None:
@@ -44,6 +47,17 @@ def _update_folder_summary_safe(conn: sqlite3.Connection, path: Path) -> None:
 
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "CHUNK_OVERLAP",
+    "CHUNK_SIZE",
+    "configure_browser",
+    "ingest_directory",
+    "ingest_file",
+    "ingest_url",
+    "pdf_image_dir",
+    "reingest_file",
+]
 
 CHUNK_SIZE = 1000  # characters
 CHUNK_OVERLAP = 200
@@ -100,10 +114,6 @@ def _embed_with_config(
         expected_dim=cfg["dim"],
         _provider_name=cfg["provider"],
     )
-
-
-def _content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
 def _flush_deferred_session_links(
@@ -931,7 +941,7 @@ def reingest_file(
         "SELECT id FROM chunks WHERE source_uri = ?", (source_uri,)
     ).fetchall()
     if not existing:
-        return {"error": f"No chunks found for source_uri: {source_uri}"}
+        raise NotFoundError(f"No chunks found for source_uri: {source_uri}")
 
     old_ids = [r["id"] for r in existing]
     old_id_set = set(old_ids)
@@ -1011,14 +1021,8 @@ def reingest_file(
         ).fetchall()
     }
 
-    # --- Delete old chunks (triggers handle FTS cleanup) ---
-    # Delete from vec table first (no trigger)
-    delete_chunk_vecs(conn, old_ids)
-    # Delete from chunks (triggers clean up FTS)
-    conn.execute(
-        "DELETE FROM chunks WHERE source_uri = ?",
-        (source_uri,),
-    )
+    # --- Delete old chunks (vec + chunk rows) ---
+    delete_chunks_cascade(conn, old_ids)
 
     # --- Re-ingest ---
     if source_type is None:
@@ -1531,8 +1535,7 @@ def _extract_html_images(
     ]
     if old_ids:
         _cleanup_figure_fk_refs(conn, old_ids)
-        delete_chunk_vecs(conn, old_ids)
-        _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
+        delete_chunks_cascade(conn, old_ids)
 
     # --- Insert new figure chunks ---
     figures_added = 0
@@ -1632,18 +1635,18 @@ def configure_browser(
 
     # CDP without venv is an error
     if cdp_endpoint and not venv_path:
-        return {
-            "error": "venv_path is required (playwright Python client must be installed)"
-        }
+        raise ValidationError(
+            "venv_path is required (playwright Python client must be installed)"
+        )
 
     # Validate venv
     if venv_path:
         resolved = Path(venv_path).resolve()
         if not resolved.is_absolute():
-            return {"error": "venv_path must be an absolute path"}
+            raise ValidationError("venv_path must be an absolute path")
         venv_python = _find_venv_python(resolved)
         if not venv_python:
-            return {"error": f"Python executable not found in venv at {venv_path}"}
+            raise ValidationError(f"Python executable not found in venv at {venv_path}")
 
     # Determine mode
     if cdp_endpoint:
@@ -1651,9 +1654,9 @@ def configure_browser(
 
         parsed = urlparse(cdp_endpoint)
         if parsed.scheme not in ("ws", "wss"):
-            return {
-                "error": f"CDP endpoint must use ws:// or wss://, got {parsed.scheme}://"
-            }
+            raise ValidationError(
+                f"CDP endpoint must use ws:// or wss://, got {parsed.scheme}://"
+            )
         mode = "cdp"
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('browser_endpoint', ?)",
@@ -1907,11 +1910,15 @@ def ingest_url(
     """
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_URL_SCHEMES:
-        return {"error": f"URL scheme must be http or https, got: {parsed.scheme!r}"}
+        raise ValidationError(
+            f"URL scheme must be http or https, got: {parsed.scheme!r}"
+        )
     if not parsed.hostname:
-        return {"error": "URL must include a hostname"}
+        raise ValidationError("URL must include a hostname")
     if _is_private_ip(parsed.hostname):
-        return {"error": f"URL points to a private/internal address: {parsed.hostname}"}
+        raise ValidationError(
+            f"URL points to a private/internal address: {parsed.hostname}"
+        )
 
     # SSRF defense: pre-fetch check blocks direct requests to private IPs.
     # Post-redirect check below prevents processing data from redirect-based SSRF.
@@ -1921,12 +1928,14 @@ def ingest_url(
         response = httpx.get(url, follow_redirects=True, timeout=30.0)
         response.raise_for_status()
     except httpx.HTTPError as e:
-        return {"error": f"Failed to fetch {url}: {e}"}
+        raise ValidationError(f"Failed to fetch {url}: {e}") from e
 
     # Validate post-redirect URL — prevents processing data from internal hosts
     final_host = urlparse(str(response.url)).hostname
     if final_host and _is_private_ip(final_host):
-        return {"error": f"URL redirected to a private/internal address: {final_host}"}
+        raise ValidationError(
+            f"URL redirected to a private/internal address: {final_host}"
+        )
 
     html = response.text
     text = trafilatura.extract(html, include_links=False, include_tables=True) or ""

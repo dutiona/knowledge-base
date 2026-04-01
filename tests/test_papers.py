@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.exceptions import NotFoundError, ValidationError
 from knowledge_base.ingest import ingest_file
 from knowledge_base.papers import (
     add_relationship,
@@ -145,8 +146,8 @@ def test_relationship_invalid_type(tmp_path):
     p1 = register_paper(conn, "Paper A")["paper_id"]
     p2 = register_paper(conn, "Paper B")["paper_id"]
 
-    result = add_relationship(conn, p1, p2, "invalid_type")
-    assert "error" in result
+    with pytest.raises(ValidationError, match="Invalid relation_type"):
+        add_relationship(conn, p1, p2, "invalid_type")
 
 
 def test_relationship_direction_filter(tmp_path):
@@ -256,11 +257,11 @@ def test_relationship_confidence_range(tmp_path):
     p1 = register_paper(conn, "Paper A")["paper_id"]
     p2 = register_paper(conn, "Paper B")["paper_id"]
 
-    result = add_relationship(conn, p1, p2, "cites", confidence=1.5)
-    assert "error" in result
+    with pytest.raises(ValidationError, match="confidence"):
+        add_relationship(conn, p1, p2, "cites", confidence=1.5)
 
-    result = add_relationship(conn, p1, p2, "cites", confidence=-0.1)
-    assert "error" in result
+    with pytest.raises(ValidationError, match="confidence"):
+        add_relationship(conn, p1, p2, "cites", confidence=-0.1)
 
 
 def test_suggest_no_chunks(tmp_path):
@@ -688,8 +689,8 @@ def test_relocate_paper_no_entry(tmp_path):
     pid = register_paper(conn, "No Path Paper")["paper_id"]
     conn.execute("DELETE FROM paper_paths WHERE paper_id = ?", (pid,))
     conn.commit()
-    result = relocate_paper(conn, pid, "/new/path")
-    assert "error" in result
+    with pytest.raises(NotFoundError, match="No paper_paths entry"):
+        relocate_paper(conn, pid, "/new/path")
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)

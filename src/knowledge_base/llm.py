@@ -19,6 +19,7 @@ import sqlite3
 import httpx
 
 from .embeddings import _get_ollama_url
+from .exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -294,17 +295,19 @@ def configure_llm(
     (e.g. ``keyring`` library) before exposing this tool over a network.
     """
     if provider not in ("ollama", "openai_compat"):
-        return {
-            "error": f"Unknown provider: {provider}. Use 'ollama' or 'openai_compat'."
-        }
+        raise ValidationError(
+            f"Unknown provider: {provider}. Use 'ollama' or 'openai_compat'."
+        )
     if provider == "openai_compat" and not base_url:
-        return {"error": "base_url is required for openai_compat provider"}
+        raise ValidationError("base_url is required for openai_compat provider")
     if base_url:
         from urllib.parse import urlparse
 
         parsed = urlparse(base_url)
         if parsed.scheme not in ("http", "https"):
-            return {"error": f"Invalid URL scheme: {parsed.scheme}. Use http or https."}
+            raise ValidationError(
+                f"Invalid URL scheme: {parsed.scheme}. Use http or https."
+            )
 
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_provider', ?)",

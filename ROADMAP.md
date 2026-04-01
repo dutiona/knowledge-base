@@ -61,7 +61,7 @@ dependency chains, and parallelism opportunities.
 | 238 | extract bibtex module (papers.py → bibtex.py)            | Papers      | 2.5b  | ✔ PR #293                                         |
 | 239 | extract auto_relate module (papers.py → auto_relate.py)  | Papers      | 2.5b  | ✔ PR #292                                         |
 | 240 | extract LLM module (extraction.py → llm.py)              | Extraction  | 2.5b  | ✔ PR #294                                         |
-| 243 | light improvements (7 items)                             | Foundation  | 2.5b  |                                                   |
+| 243 | light improvements (7 items)                             | Foundation  | 2.5b  | ✔ PR #296                                         |
 | 234 | extract chunking module (ingest.py → chunking.py)        | Ingest      | 2.5b  |                                                   |
 | 235 | extract web ingestion module (ingest.py → web.py)        | Ingest      | 2.5b  |                                                   |
 | 237 | shared reingest/ingest logic                             | Ingest      | 2.5b  |                                                   |
@@ -283,7 +283,7 @@ review.
 ✔ #238 (bibtex.py from papers.py)       ─── ✔ PR #293
 ✔ #239 (auto_relate.py from papers.py)  ─── ✔ PR #292
 ✔ #240 (llm.py from extraction.py)    ─── ✔ PR #294
-#243 (light improvements, 7 items)    ─── scattered, low conflict risk
+✔ #243 (light improvements, 7 items)    ─── ✔ PR #296
 ```
 
 **Step 2 — Ingest decomposition (depends on Step 1, specifically #236):**
@@ -581,7 +581,7 @@ Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a          Phas
 ────────        ────────        ────────             ────────            ────────                ────────
                                 ✔ #95                ✔ #163, #160        Step 1:                 Perf:
 PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151       ✔ #236, ✔ #238, ✔ #239       #181, #199, #200
-#85 ─────┤                      ✔ #100               ✔ #150, ✔ #165         ✔ #240, #243               #205–#211, #213
+#85 ─────┤                      ✔ #100               ✔ #150, ✔ #165         ✔ #240, ✔ #243             #205–#211, #213
 #78 ─────┼──▶ ✔ #71            ✔ #15                ✔ #166, ✔ #180      Step 2 (needs ✔ #236):    Security:
 #46 ─────┤                      ✔ #110               ✔ #182, #195           #234, #235, #237         #187–#193
 #45 ─────┤    ✔ #101           ✔ #82                #197, ✔ #198        Step 3 (needs Step 2):  Quality:
@@ -641,7 +641,7 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 ✔ #202, ✔ #203, ✔ #204, ✔ #212, #276
 
 **Phase 2.5b parallel items** (independent of decomposition ordering):
-#141, #140, #154, #158, #243, #277, #278
+#141, #140, #154, #158, ✔ #243, #277, #278
 
 **Dependency:** #278 (consolidate cleanup) subsumes #276 (vision.py fix) and #277 (perf optimization).
 Do #276 first (quick fix), then #278 absorbs the shared utility + perf work.

@@ -9,15 +9,13 @@ from __future__ import annotations
 import hashlib
 import posixpath
 import sqlite3
-import struct
 
 from .db import escape_like, get_active_space
 from .embed_swap import get_embed_config
 from .embeddings import embed, truncate_embedding
+from .utils import serialize_f32 as _serialize_f32
 
-
-def _serialize_f32(vec: list[float]) -> bytes:
-    return struct.pack(f"{len(vec)}f", *vec)
+__all__ = ["update_folder_summary"]
 
 
 def _folder_like_params(folder_path: str) -> tuple[str, str]:
