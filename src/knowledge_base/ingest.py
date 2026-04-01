@@ -198,29 +198,28 @@ def _chunk_markdown(
     if not text.strip():
         return []
 
-    # Split on heading boundaries, keeping the heading with its section
-    raw_sections = _HEADING_RE.split(text)
-    # re.split with a group produces: [pre, hashes1, rest1, hashes2, rest2, ...]
-    # Reconstruct sections
+    # Use finditer to get exact heading positions — no offset arithmetic needed
+    heading_matches = list(_HEADING_RE.finditer(text))
     sections: list[tuple[str, int]] = []  # (section_text, char_offset)
-    offset = 0
 
-    if raw_sections:
-        # First element is text before the first heading (preamble)
-        preamble = raw_sections[0]
+    if heading_matches:
+        # Text before the first heading (preamble)
+        preamble = text[: heading_matches[0].start()]
         if preamble.strip():
             sections.append((preamble, 0))
-        offset = len(preamble)
 
-        # Pairs: (hashes, rest_of_section)
-        i = 1
-        while i < len(raw_sections) - 1:
-            hashes = raw_sections[i]
-            rest = raw_sections[i + 1]
-            section_text = hashes + " " + rest
-            sections.append((section_text, offset))
-            offset += len(section_text)
-            i += 2
+        # Each heading runs from its match.start() to the next heading's start()
+        for i, m in enumerate(heading_matches):
+            end = (
+                heading_matches[i + 1].start()
+                if i + 1 < len(heading_matches)
+                else len(text)
+            )
+            sections.append((text[m.start() : end], m.start()))
+    else:
+        # No headings — treat entire text as one section
+        if text.strip():
+            sections.append((text, 0))
 
     if not sections:
         # No headings at all — fall back to _chunk_text
