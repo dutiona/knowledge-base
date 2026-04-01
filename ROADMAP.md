@@ -51,7 +51,7 @@ dependency chains, and parallelism opportunities.
 | 198 | cursor.lastrowid falsy check by accident                 | Papers      | 2.5a  | ✔ direct commit                                   |
 | 201 | folder boost bug when best_distance==0                   | Search      | 2.5a  | ✔ PR #287                                         |
 | 202 | offset drift in \_chunk_markdown                         | Ingest      | 2.5a  | ✔ PR #290                                         |
-| 203 | \_validate_bib_path return value discarded               | Papers      | 2.5a  |                                                   |
+| 203 | \_validate_bib_path return value discarded               | Papers      | 2.5a  | ✔ PR #291                                         |
 | 204 | supersede_conclusion no rollback                         | Extraction  | 2.5a  | ✔ PR #289                                         |
 | 212 | PIL Image not closed in \_crop_regions                   | Vision      | 2.5a  |                                                   |
 | 276 | fix(vision): extract_figures missing conclusions cleanup | Vision      | 2.5a  | done                                              |
@@ -257,7 +257,7 @@ before adding features or refactoring.
 ✔ #198 (lastrowid falsy check)       ─── bug, independent
 ✔ #201 (folder boost div-by-zero)    ─── bug, depends on #126 (done) ✔ PR #287
 #202 (offset drift in chunking)      ─── bug, independent
-#203 (_validate_bib_path discarded)  ─── bug, independent
+✔ #203 (_validate_bib_path discarded)  ─── bug, independent ✔ PR #291
 #204 (supersede_conclusion rollback) ─── bug, independent
 #212 (PIL Image not closed)          ─── bug, independent
 ```
@@ -586,7 +586,7 @@ PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151  
 #46 ─────┤                      ✔ #110               ✔ #182, #195           #234, #235, #237         #187–#193
 #45 ─────┤    ✔ #101           ✔ #82                #197, ✔ #198        Step 3 (needs Step 2):  Quality:
 #16 ─────┘                      ✔ #126               ✔ #201, ✔ #202           #241, #242               #194, #196, #214
-                                ✔ #127               #203, #204          Parallel:                #218–#221
+                                ✔ #127               ✔ #203, #204        Parallel:                #218–#221
                                 ✔ #128               #212                 #141, #140, #154, #158  Docs/Tests:
                                 ✔ #130                                                            #217, #222–#231
                                 ✔ #105
@@ -638,7 +638,7 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 
 **Phase 2.5a items** (all independent, all small scope):
 ✔ #163, ✔ #160, ✔ #152, ✔ #151, ✔ #150, ✔ #165, ✔ #166, ✔ #180, ✔ #182, ✔ #195, #197, ✔ #198, ✔ #201,
-✔ #202, #203, ✔ #204, #212, #276
+✔ #202, ✔ #203, ✔ #204, #212, #276
 
 **Phase 2.5b parallel items** (independent of decomposition ordering):
 #141, #140, #154, #158, #243, #277, #278
