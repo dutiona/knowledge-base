@@ -52,7 +52,7 @@ dependency chains, and parallelism opportunities.
 | 201 | folder boost bug when best_distance==0                   | Search      | 2.5a  | ✔ PR #287                                         |
 | 202 | offset drift in \_chunk_markdown                         | Ingest      | 2.5a  | ✔ PR #290                                         |
 | 203 | \_validate_bib_path return value discarded               | Papers      | 2.5a  |                                                   |
-| 204 | supersede_conclusion no rollback                         | Extraction  | 2.5a  |                                                   |
+| 204 | supersede_conclusion no rollback                         | Extraction  | 2.5a  | ✔ PR #289                                         |
 | 212 | PIL Image not closed in \_crop_regions                   | Vision      | 2.5a  |                                                   |
 | 276 | fix(vision): extract_figures missing conclusions cleanup | Vision      | 2.5a  | done                                              |
 | 277 | perf: optimize full table scan in conclusion FK cleanup  | Extraction  | 2.5b  |                                                   |
@@ -638,7 +638,7 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 
 **Phase 2.5a items** (all independent, all small scope):
 ✔ #163, ✔ #160, ✔ #152, ✔ #151, ✔ #150, ✔ #165, ✔ #166, ✔ #180, ✔ #182, ✔ #195, #197, ✔ #198, ✔ #201,
-✔ #202, #203, #204, #212, #276
+✔ #202, #203, ✔ #204, #212, #276
 
 **Phase 2.5b parallel items** (independent of decomposition ordering):
 #141, #140, #154, #158, #243, #277, #278
