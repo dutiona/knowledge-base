@@ -1319,18 +1319,18 @@ def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path)
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
-    from knowledge_base.db import insert_chunk_vec as original_insert
+    from knowledge_base.ingest import _insert_chunk as original_insert_chunk
 
     call_count = 0
 
-    def failing_insert(conn, chunk_id, embedding, table_name=None):
+    def failing_insert(*args, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count >= 2:
             raise RuntimeError("Simulated insert failure")
-        return original_insert(conn, chunk_id, embedding, table_name=table_name)
+        return original_insert_chunk(*args, **kwargs)
 
-    with patch("knowledge_base.vision.insert_chunk_vec", side_effect=failing_insert):
+    with patch("knowledge_base.vision._insert_chunk", side_effect=failing_insert):
         with pytest.raises(RuntimeError, match="Simulated insert failure"):
             extract_figures(conn, paper_id=paper_id, pages=[0])
 

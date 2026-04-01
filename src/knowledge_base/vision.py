@@ -19,11 +19,12 @@ import fitz
 import httpx
 
 from .embeddings import _get_ollama_url
-from .db import get_vec_table_name, insert_chunk_vec
+from .db import get_vec_table_name
 from .ingest import (
     _cleanup_figure_fk_refs,
     _content_hash,
     _embed_with_config,
+    _insert_chunk,
     pdf_image_dir,
 )
 
@@ -1236,17 +1237,17 @@ def extract_figures(
                     meta_dict["omniparser_elements"] = figure["_omniparser_elements"]
                 metadata = json.dumps(meta_dict)
 
-                cursor = conn.execute(
-                    "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
-                    "VALUES (?, ?, 'figure', ?, ?, ?)",
-                    (content_hash, content, source_uri, chunk_index, metadata),
+                _insert_chunk(
+                    conn,
+                    content_hash=content_hash,
+                    content=content,
+                    source_type="figure",
+                    source_uri=source_uri,
+                    chunk_index=chunk_index,
+                    embedding=embeddings[i],
+                    metadata=metadata,
+                    vec_table=vec_table,
                 )
-                chunk_id = cursor.lastrowid
-                assert chunk_id is not None
-                if embeddings[i] is not None:
-                    insert_chunk_vec(
-                        conn, chunk_id, embeddings[i], table_name=vec_table
-                    )
                 chunks_created += 1
 
         conn.commit()

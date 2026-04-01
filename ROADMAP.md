@@ -57,7 +57,7 @@ dependency chains, and parallelism opportunities.
 | 276 | fix(vision): extract_figures missing conclusions cleanup | Vision      | 2.5a  | done                                              |
 | 277 | perf: optimize full table scan in conclusion FK cleanup  | Extraction  | 2.5b  |                                                   |
 | 278 | refactor: consolidate conclusion FK cleanup into utility | Ingest      | 2.5b  |                                                   |
-| 236 | unified \_insert_chunks helper (5 call sites)            | Ingest      | 2.5b  |                                                   |
+| 236 | unified \_insert_chunks helper (5 call sites)            | Ingest      | 2.5b  | ✔ PR #295                                         |
 | 238 | extract bibtex module (papers.py → bibtex.py)            | Papers      | 2.5b  | ✔ PR #293                                         |
 | 239 | extract auto_relate module (papers.py → auto_relate.py)  | Papers      | 2.5b  | ✔ PR #292                                         |
 | 240 | extract LLM module (extraction.py → llm.py)              | Extraction  | 2.5b  |                                                   |
@@ -169,7 +169,7 @@ dependency chains, and parallelism opportunities.
 | --- | ----------------------------------------------- | ---------------------- |
 | 183 | god module — ingest.py 1950 LOC, 5 concerns     | #234, #235, #236, #237 |
 | 184 | 250-line duplication ingest_file/reingest_file  | #237                   |
-| 185 | chunk insert+dedup boilerplate repeated 5 times | #236                   |
+| 185 | chunk insert+dedup boilerplate repeated 5 times | ✔ #236                 |
 | 186 | extract_figures() 500-LOC god function          | #241                   |
 | 215 | papers.py god module — 5 responsibilities       | #238, #239             |
 | 216 | server.py god module — 38 tools in 1083 LOC     | #242                   |
@@ -279,8 +279,8 @@ review.
 **Step 1 — Leaf extractions (all parallel):**
 
 ```
-#236 (unified _insert_chunks)         ─── touches ingest.py
-✔ #238 (bibtex.py from papers.py)       ─── touches papers.py
+✔ #236 (unified _insert_chunks)         ─── touches ingest.py  ✔ PR #295
+✔ #238 (bibtex.py from papers.py)       ─── touches papers.py  ✔ PR #293
 ✔ #239 (auto_relate.py from papers.py)  ─── touches papers.py (coordinate with #238)
 #240 (llm.py from extraction.py)      ─── touches extraction.py
 #243 (light improvements, 7 items)    ─── scattered, low conflict risk
@@ -580,9 +580,9 @@ has enough content to warrant visual exploration.
 Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a          Phase 2.5b              Phase 2.5c
 ────────        ────────        ────────             ────────            ────────                ────────
                                 ✔ #95                ✔ #163, #160        Step 1:                 Perf:
-PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151       #236, ✔ #238, ✔ #239       #181, #199, #200
+PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151       ✔ #236, ✔ #238, ✔ #239       #181, #199, #200
 #85 ─────┤                      ✔ #100               ✔ #150, ✔ #165         #240, #243               #205–#211, #213
-#78 ─────┼──▶ ✔ #71            ✔ #15                ✔ #166, ✔ #180      Step 2 (needs #236):    Security:
+#78 ─────┼──▶ ✔ #71            ✔ #15                ✔ #166, ✔ #180      Step 2 (needs ✔ #236):    Security:
 #46 ─────┤                      ✔ #110               ✔ #182, #195           #234, #235, #237         #187–#193
 #45 ─────┤    ✔ #101           ✔ #82                #197, ✔ #198        Step 3 (needs Step 2):  Quality:
 #16 ─────┘                      ✔ #126               ✔ #201, ✔ #202           #241, #242               #194, #196, #214
