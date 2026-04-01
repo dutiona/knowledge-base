@@ -11,7 +11,7 @@ import posixpath
 import sqlite3
 import struct
 
-from .db import get_active_space
+from .db import escape_like, get_active_space
 from .embed_swap import get_embed_config
 from .embeddings import embed, truncate_embedding
 
@@ -29,12 +29,13 @@ def compute_folder_hash(conn: sqlite3.Connection, folder_path: str) -> str:
     when the folder contains no indexed chunks.
     """
     prefix = folder_path.rstrip("/") + "/"
+    escaped = escape_like(prefix)
     rows = conn.execute(
-        """SELECT DISTINCT content_hash FROM chunks
-           WHERE source_uri LIKE ? || '%'
-             AND source_uri NOT LIKE ? || '%/%'
+        r"""SELECT DISTINCT content_hash FROM chunks
+           WHERE source_uri LIKE ? ESCAPE '\'
+             AND source_uri NOT LIKE ? ESCAPE '\'
            ORDER BY content_hash""",
-        (prefix, prefix),
+        (f"{escaped}%", f"{escaped}%/%"),
     ).fetchall()
     if not rows:
         return ""
@@ -49,13 +50,14 @@ def _build_folder_summary(conn: sqlite3.Connection, folder_path: str) -> str:
     (truncated to 200 chars each), separated by newlines.
     """
     prefix = folder_path.rstrip("/") + "/"
+    escaped = escape_like(prefix)
     rows = conn.execute(
-        """SELECT source_uri, content FROM chunks
-           WHERE source_uri LIKE ? || '%'
-             AND source_uri NOT LIKE ? || '%/%'
+        r"""SELECT source_uri, content FROM chunks
+           WHERE source_uri LIKE ? ESCAPE '\'
+             AND source_uri NOT LIKE ? ESCAPE '\'
              AND chunk_index = 0
            ORDER BY source_uri""",
-        (prefix, prefix),
+        (f"{escaped}%", f"{escaped}%/%"),
     ).fetchall()
     parts = []
     for row in rows:

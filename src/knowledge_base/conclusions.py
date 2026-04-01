@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from .db import escape_like
+
 
 def record_conclusion(
     conn: sqlite3.Connection,
@@ -55,8 +57,8 @@ def get_conclusions(
         conditions.append("superseded_by IS NULL")
 
     if keyword:
-        conditions.append("claim LIKE ?")
-        params.append(f"%{keyword}%")
+        conditions.append("claim LIKE ? ESCAPE '\\'")
+        params.append(f"%{escape_like(keyword)}%")
 
     where = " AND ".join(conditions)
     rows = conn.execute(

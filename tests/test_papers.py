@@ -94,6 +94,25 @@ def test_get_paper_no_match(tmp_path):
     assert get_paper(conn) == []
 
 
+def test_get_paper_title_pattern_escapes_like_wildcards(tmp_path):
+    """LIKE wildcards % and _ in user input must be treated as literals."""
+    conn = _setup(tmp_path)
+    register_paper(conn, "100% Accurate Object Detection")
+    register_paper(conn, "Totally Different Topic")
+
+    # '%' in search should be literal, not a wildcard
+    papers = get_paper(conn, title_pattern="100%")
+    assert len(papers) == 1
+    assert papers[0]["title"] == "100% Accurate Object Detection"
+
+    # '_' in search should be literal single-char, not wildcard
+    register_paper(conn, "A_B Method for Classification")
+    register_paper(conn, "AXB Method for Classification")
+    papers = get_paper(conn, title_pattern="A_B")
+    assert len(papers) == 1
+    assert papers[0]["title"] == "A_B Method for Classification"
+
+
 # --- add_relationship / get_relationships ---
 
 

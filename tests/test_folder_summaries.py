@@ -322,6 +322,37 @@ def test_folder_summary_ignores_subdirectory_files(tmp_path):
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_folder_hash_escapes_like_wildcards(tmp_path):
+    """Underscores in folder names must not act as LIKE wildcards."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Folder with underscore: without LIKE escaping, "a_c/" matches "aXc/"
+    folder_a = tmp_path / "a_c"
+    folder_a.mkdir()
+    (folder_a / "file.md").write_text("Content in underscore folder.\n")
+    ingest_file(conn, folder_a / "file.md")
+
+    # Record hash BEFORE adding a similarly-named folder
+    hash_before = compute_folder_hash(conn, str(folder_a))
+
+    # Add a folder that only differs at the _ position
+    folder_b = tmp_path / "aXc"
+    folder_b.mkdir()
+    (folder_b / "file.md").write_text("Different content in X folder.\n")
+    ingest_file(conn, folder_b / "file.md")
+
+    # Hash must not change — folder_a's query should not pick up folder_b's chunks
+    hash_after = compute_folder_hash(conn, str(folder_a))
+    assert hash_before == hash_after, (
+        "Folder hash changed after adding unrelated folder — "
+        "_ in folder name is being treated as LIKE wildcard"
+    )
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 def test_ingest_directory_batches_folder_summaries(tmp_path):
     """ingest_directory updates folder summaries once per folder, not per file."""
     from knowledge_base.ingest import ingest_directory
