@@ -1,5 +1,6 @@
 """Tests for conclusion recording, retrieval, supersession, and chains."""
 
+import sqlite3
 from unittest.mock import patch
 
 from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
@@ -154,6 +155,56 @@ def test_supersede_nonexistent(tmp_path):
     conn = _setup(tmp_path)
     result = supersede_conclusion(conn, 999, "New claim")
     assert "error" in result
+
+
+def test_supersede_rolls_back_on_failure(tmp_path):
+    """If the UPDATE step fails, the INSERT from record_conclusion is rolled back."""
+    conn = _setup(tmp_path)
+    r1 = record_conclusion(conn, "Original finding", 0.8)
+    old_id = r1["conclusion_id"]
+
+    class _FailingUpdate:
+        """Proxy that raises on the superseded_by UPDATE."""
+
+        def __init__(self, real_conn):
+            self._conn = real_conn
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        def execute(self, sql, params=()):
+            if "UPDATE conclusions SET superseded_by" in sql:
+                raise sqlite3.OperationalError("simulated failure")
+            return self._conn.execute(sql, params)
+
+    proxy = _FailingUpdate(conn)
+    try:
+        supersede_conclusion(proxy, old_id, "Should be rolled back", 0.9)
+    except sqlite3.OperationalError:
+        pass
+
+    # The new conclusion must NOT have been persisted
+    all_rows = conn.execute("SELECT * FROM conclusions").fetchall()
+    assert len(all_rows) == 1
+    assert all_rows[0]["claim"] == "Original finding"
+    assert all_rows[0]["superseded_by"] is None
+
+
+def test_supersede_rolls_back_on_validation_error(tmp_path):
+    """If record_conclusion returns an error, no partial INSERT is left behind."""
+    conn = _setup(tmp_path)
+    r1 = record_conclusion(conn, "Original finding", 0.8)
+    old_id = r1["conclusion_id"]
+
+    result = supersede_conclusion(
+        conn, old_id, "Bad supersede", source_chunk_ids=[999]
+    )
+    assert "error" in result
+
+    # Original must remain untouched, no orphan rows
+    all_rows = conn.execute("SELECT * FROM conclusions").fetchall()
+    assert len(all_rows) == 1
+    assert all_rows[0]["superseded_by"] is None
 
 
 # --- get_conclusion_chain ---
