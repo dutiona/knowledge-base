@@ -184,7 +184,7 @@ _VEC_C = [0.0, 1.0]  # cos = 0.0
 
 class TestAutoRelate:
     def test_creates_similar_relationship(self, conn):
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
         pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
@@ -199,7 +199,7 @@ class TestAutoRelate:
         assert {row["source_paper_id"], row["target_paper_id"]} == {pa, pb}
 
     def test_skips_dissimilar_papers(self, conn):
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
         _paper_with_chunks(conn, "C", "/tmp/c.pdf", [_VEC_C])
@@ -209,7 +209,7 @@ class TestAutoRelate:
 
     def test_upserts_existing_similar(self, conn):
         """Re-running auto_relate updates confidence on existing similar edges."""
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
         pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
@@ -236,7 +236,7 @@ class TestAutoRelate:
 
     def test_rethreshold_deletes_stale_edge(self, conn):
         """Raising threshold removes edges that no longer qualify."""
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
         _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
@@ -260,7 +260,7 @@ class TestAutoRelate:
         assert count == 0
 
     def test_coexists_with_other_types(self, conn):
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
         pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
@@ -282,7 +282,7 @@ class TestAutoRelate:
         assert similar is not None
 
     def test_respects_thresholds(self, conn):
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         conn.execute(
             "UPDATE config SET value = '0.999' "
@@ -297,7 +297,7 @@ class TestAutoRelate:
         assert result["relationships_created"] == 0
 
     def test_normalizes_direction(self, conn):
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
         pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
@@ -313,7 +313,7 @@ class TestAutoRelate:
         assert row["source_paper_id"] < row["target_paper_id"]
 
     def test_stores_evidence_chunk(self, conn):
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
         _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
@@ -328,7 +328,7 @@ class TestAutoRelate:
         assert row["evidence_chunk_id"] is not None
 
     def test_no_embeddings_skips(self, conn):
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa = _make_paper(conn, "A", "/tmp/a.pdf")
         _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
@@ -338,7 +338,7 @@ class TestAutoRelate:
 
     def test_top_k_averaging(self, conn):
         """Top-3 average ignores the orthogonal chunk."""
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A, _VEC_A])
         # 3 similar + 1 orthogonal → top-3 avg should still exceed threshold
@@ -351,7 +351,7 @@ class TestAutoRelate:
 
     def test_auto_accept_vs_propose(self, conn):
         """Nearly identical → confidence >= accept_threshold."""
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
         # cos([1,0], [0.9999, 0.001]) ≈ 1.0
@@ -374,7 +374,7 @@ class TestAutoRelate:
 class TestAutoRelateFallback:
     def test_source_paper_without_paper_paths(self, conn):
         """auto_relate finds embeddings for source paper via abstract_chunk_id fallback."""
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         # Source paper has no paper_paths row — only abstract_chunk_id
         pa, _ = _paper_with_chunks_no_path(conn, "A", "/tmp/a.pdf", [_VEC_A])
@@ -392,7 +392,7 @@ class TestAutoRelateFallback:
 
     def test_target_paper_without_paper_paths(self, conn):
         """auto_relate discovers target paper via abstract_chunk_id fallback."""
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         # Source paper has normal paper_paths
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
@@ -410,7 +410,7 @@ class TestAutoRelateFallback:
 
     def test_both_papers_without_paper_paths(self, conn):
         """auto_relate works when both papers lack paper_paths rows."""
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks_no_path(conn, "A", "/tmp/a.pdf", [_VEC_A])
         pb, _ = _paper_with_chunks_no_path(conn, "B", "/tmp/b.pdf", [_VEC_B])
@@ -426,7 +426,7 @@ class TestAutoRelateFallback:
 
     def test_skips_duplicate_source_uri_papers(self, conn):
         """Papers sharing the same source_uri (duplicate registrations) are skipped."""
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         # Paper A owns /tmp/shared.pdf via paper_paths
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/shared.pdf", [_VEC_A])
@@ -451,7 +451,7 @@ class TestAutoRelateFallback:
 class TestOnlyCompareHigher:
     def test_only_compare_higher_skips_lower_ids(self, conn):
         """With only_compare_higher=True, auto_relate skips papers with id < paper_id."""
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
         pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
@@ -465,7 +465,7 @@ class TestOnlyCompareHigher:
 
     def test_only_compare_higher_includes_higher_ids(self, conn):
         """With only_compare_higher=True, auto_relate still compares higher-id papers."""
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
         pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
@@ -478,7 +478,7 @@ class TestOnlyCompareHigher:
 
     def test_full_scan_halves_comparisons(self, conn):
         """scan_relationships full scan does N*(N-1)/2 comparisons, not N*(N-1)."""
-        from knowledge_base.papers import auto_relate
+        from knowledge_base.auto_relate import auto_relate
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
         pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])

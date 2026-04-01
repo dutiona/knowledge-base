@@ -239,7 +239,7 @@ class _JobWorker:
                 on_progress=on_progress,
             )
         elif job["job_type"] == "auto_relate":
-            from .papers import auto_relate
+            from .auto_relate import auto_relate
 
             return auto_relate(
                 conn,
