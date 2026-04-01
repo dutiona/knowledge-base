@@ -46,7 +46,7 @@ dependency chains, and parallelism opportunities.
 | 166 | scan_relationships: avoid redundant pairwise comparisons | Search      | 2.5a  | ✔ PR #283                                         |
 | 180 | no rollback on embedding failure in ingest_file          | Ingest      | 2.5a  | ✔ PR #282                                         |
 | 182 | relocate_paper lacks transaction safety                  | Papers      | 2.5a  | ✔ PR #281                                         |
-| 195 | path_conflict referenced before assignment               | Ingest      | 2.5a  | ✔ PR #284                                         |
+| 195 | path_conflict referenced before assignment               | Ingest      | 2.5a  | ✔ PR #286                                         |
 | 197 | LIKE wildcard injection in title search                  | Papers      | 2.5a  |                                                   |
 | 198 | cursor.lastrowid falsy check by accident                 | Papers      | 2.5a  | ✔ direct commit                                   |
 | 201 | folder boost bug when best_distance==0                   | Search      | 2.5a  |                                                   |
@@ -252,7 +252,7 @@ before adding features or refactoring.
 ✔ #166 (scan_relationships 2x)         ─── perf, depends on #105 (done) ✔ PR #283
 ✔ #180 (no rollback on embed failure) ─── bug, independent ✔ PR #282
 ✔ #182 (relocate_paper no transaction) ─── bug, independent ✔ PR #281
-✔ #195 (path_conflict unbound)       ─── bug, independent ✔ PR #284
+✔ #195 (path_conflict unbound)       ─── bug, independent ✔ PR #286
 #197 (LIKE wildcard injection)       ─── bug, independent
 ✔ #198 (lastrowid falsy check)       ─── bug, independent
 #201 (folder boost div-by-zero)      ─── bug, depends on #126 (done)
