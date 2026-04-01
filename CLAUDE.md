@@ -24,7 +24,7 @@ ruff format src/ tests/          # format
 
 ## Architecture
 
-Twelve modules behind `server.py`, each owning its domain. All share a single SQLite file via thread-local connections with double-checked locking for schema init.
+Fifteen modules behind `server.py`, each owning its domain. All share a single SQLite file via thread-local connections with double-checked locking for schema init.
 
 Read these when the task touches the corresponding area:
 
