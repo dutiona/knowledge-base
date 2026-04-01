@@ -367,6 +367,14 @@ def get_relationships(
     return results
 
 
+# Re-export bibtex symbols for backward compatibility
+from .bibtex import (  # noqa: E402, F401
+    _bibtex_key,
+    export_bibtex,
+    sync_bibtex,
+)
+
+
 def _extract_author_year_citations(text: str) -> list[tuple[str, int]]:
     """Extract (surname, year) pairs from parenthetical and narrative citations.
 
