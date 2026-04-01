@@ -792,8 +792,7 @@ def export_bibtex_tool(
     bibtex = export_bibtex(conn, paper_ids, title_pattern)
     if output_path:
         try:
-            _validate_bib_path(output_path)
-            p = Path(output_path).expanduser().resolve()
+            p = _validate_bib_path(output_path)
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(bibtex, encoding="utf-8")
             return json.dumps({"written_to": str(p), "entries": bibtex.count("@")})
@@ -816,12 +815,12 @@ def sync_bibtex_tool(
         title_pattern: Sync papers matching title substring.
     """
     try:
-        _validate_bib_path(output_path)
+        p = _validate_bib_path(output_path)
     except ValueError as e:
         return json.dumps({"error": str(e)})
     conn = _get_conn()
     try:
-        result = sync_bibtex(conn, output_path, paper_ids, title_pattern)
+        result = sync_bibtex(conn, str(p), paper_ids, title_pattern)
         return json.dumps(result)
     except OSError as e:
         return json.dumps({"error": f"Failed to sync {output_path}: {e}"})
