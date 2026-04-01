@@ -149,9 +149,10 @@ def _folder_boost(
 
     # Use the top folder's distance as threshold — boost folders within 2x of best
     best_distance = folder_rows[0]["distance"]
+    threshold = best_distance * 2 if best_distance > 0 else 1e-6
     boosted_folders = set()
     for row in folder_rows:
-        if best_distance == 0 or row["distance"] <= best_distance * 2:
+        if row["distance"] <= threshold:
             boosted_folders.add(row["folder_path"])
 
     if not boosted_folders:
