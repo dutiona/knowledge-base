@@ -316,10 +316,10 @@ def _crop_regions(
             px2 = min(w, px2 + pad_x)
             py2 = min(h, py2 + pad_y)
 
-            cropped = img.crop((px1, py1, px2, py2))
-            buf = io.BytesIO()
-            cropped.save(buf, format="PNG")
-            crops.append(buf.getvalue())
+            with img.crop((px1, py1, px2, py2)) as cropped:
+                buf = io.BytesIO()
+                cropped.save(buf, format="PNG")
+                crops.append(buf.getvalue())
 
     return crops
 
