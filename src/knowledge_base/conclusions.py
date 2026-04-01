@@ -118,18 +118,23 @@ def supersede_conclusion(
         }
 
     # Atomic: insert new + update old in one transaction
-    result = record_conclusion(
-        conn, new_claim, confidence, source_chunk_ids, session_context, _commit=False
-    )
-    if "error" in result:
-        return result
+    try:
+        result = record_conclusion(
+            conn, new_claim, confidence, source_chunk_ids, session_context, _commit=False
+        )
+        if "error" in result:
+            conn.rollback()
+            return result
 
-    new_id = result["conclusion_id"]
-    conn.execute(
-        "UPDATE conclusions SET superseded_by = ? WHERE id = ?",
-        (new_id, old_conclusion_id),
-    )
-    conn.commit()
+        new_id = result["conclusion_id"]
+        conn.execute(
+            "UPDATE conclusions SET superseded_by = ? WHERE id = ?",
+            (new_id, old_conclusion_id),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        raise
     return {"old_conclusion_id": old_conclusion_id, "new_conclusion_id": new_id}
 
 
