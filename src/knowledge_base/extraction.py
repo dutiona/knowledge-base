@@ -586,7 +586,7 @@ def _store_resolved(
                 (canonical, etype, paper_id, data["description"]),
             )
             eid = cursor.lastrowid
-            if not eid:
+            if cursor.rowcount == 0:
                 eid = conn.execute(
                     "SELECT id FROM entities WHERE canonical_name = ? AND entity_type = ? AND paper_id = ?",
                     (canonical, etype, paper_id),
