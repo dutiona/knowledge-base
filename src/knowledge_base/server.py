@@ -823,7 +823,7 @@ def sync_bibtex_tool(
         result = sync_bibtex(conn, str(p), paper_ids, title_pattern)
         return json.dumps(result)
     except OSError as e:
-        return json.dumps({"error": f"Failed to sync {output_path}: {e}"})
+        return json.dumps({"error": f"Failed to sync {p}: {e}"})
 
 
 @mcp.tool()
