@@ -48,7 +48,7 @@ dependency chains, and parallelism opportunities.
 | 182 | relocate_paper lacks transaction safety                  | Papers      | 2.5a  | ✔ PR #281                                         |
 | 195 | path_conflict referenced before assignment               | Ingest      | 2.5a  |                                                   |
 | 197 | LIKE wildcard injection in title search                  | Papers      | 2.5a  |                                                   |
-| 198 | cursor.lastrowid falsy check by accident                 | Papers      | 2.5a  |                                                   |
+| 198 | cursor.lastrowid falsy check by accident                 | Papers      | 2.5a  | ✔ direct commit                                   |
 | 201 | folder boost bug when best_distance==0                   | Search      | 2.5a  |                                                   |
 | 202 | offset drift in \_chunk_markdown                         | Ingest      | 2.5a  |                                                   |
 | 203 | \_validate_bib_path return value discarded               | Papers      | 2.5a  |                                                   |
@@ -254,7 +254,7 @@ before adding features or refactoring.
 ✔ #182 (relocate_paper no transaction) ─── bug, independent ✔ PR #281
 #195 (path_conflict unbound)         ─── bug, independent
 #197 (LIKE wildcard injection)       ─── bug, independent
-#198 (lastrowid falsy check)         ─── bug, independent
+✔ #198 (lastrowid falsy check)       ─── bug, independent
 #201 (folder boost div-by-zero)      ─── bug, depends on #126 (done)
 #202 (offset drift in chunking)      ─── bug, independent
 #203 (_validate_bib_path discarded)  ─── bug, independent
@@ -582,9 +582,9 @@ Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a          Phas
                                 ✔ #95                ✔ #163, #160        Step 1:                 Perf:
 PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151       #236, #238, #239         #181, #199, #200
 #85 ─────┤                      ✔ #100               ✔ #150, ✔ #165         #240, #243               #205–#211, #213
-#78 ─────┼──▶ ✔ #71            ✔ #15                ✔ #166, #180        Step 2 (needs #236):    Security:
+#78 ─────┼──▶ ✔ #71            ✔ #15                ✔ #166, ✔ #180      Step 2 (needs #236):    Security:
 #46 ─────┤                      ✔ #110               ✔ #182, #195           #234, #235, #237         #187–#193
-#45 ─────┤    ✔ #101           ✔ #82                #197, #198          Step 3 (needs Step 2):  Quality:
+#45 ─────┤    ✔ #101           ✔ #82                #197, ✔ #198        Step 3 (needs Step 2):  Quality:
 #16 ─────┘                      ✔ #126               #201, #202           #241, #242               #194, #196, #214
                                 ✔ #127               #203, #204          Parallel:                #218–#221
                                 ✔ #128               #212                 #141, #140, #154, #158  Docs/Tests:
@@ -637,7 +637,7 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 ## Quick Wins (< 1 session each)
 
 **Phase 2.5a items** (all independent, all small scope):
-✔ #163, ✔ #160, ✔ #152, ✔ #151, ✔ #150, ✔ #165, ✔ #166, #180, ✔ #182, #195, #197, #198, #201,
+✔ #163, ✔ #160, ✔ #152, ✔ #151, ✔ #150, ✔ #165, ✔ #166, ✔ #180, ✔ #182, #195, #197, ✔ #198, #201,
 #202, #203, #204, #212, #276
 
 **Phase 2.5b parallel items** (independent of decomposition ordering):
