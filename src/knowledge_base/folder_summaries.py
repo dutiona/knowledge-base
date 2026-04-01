@@ -20,6 +20,16 @@ def _serialize_f32(vec: list[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
 
 
+def _folder_like_params(folder_path: str) -> tuple[str, str]:
+    """Return (direct_children, exclude_subdirs) LIKE params for a folder.
+
+    Handles escaping of ``%``, ``_``, and ``\\`` in the folder path.
+    Callers must include ``ESCAPE '\\'`` in the SQL statement.
+    """
+    escaped = escape_like(folder_path.rstrip("/") + "/")
+    return f"{escaped}%", f"{escaped}%/%"
+
+
 def compute_folder_hash(conn: sqlite3.Connection, folder_path: str) -> str:
     """Compute a content hash for a folder from its chunks' content hashes.
 
@@ -28,14 +38,13 @@ def compute_folder_hash(conn: sqlite3.Connection, folder_path: str) -> str:
     documents changed, the hash stays the same.  Returns empty string
     when the folder contains no indexed chunks.
     """
-    prefix = folder_path.rstrip("/") + "/"
-    escaped = escape_like(prefix)
+    like, not_like = _folder_like_params(folder_path)
     rows = conn.execute(
         r"""SELECT DISTINCT content_hash FROM chunks
            WHERE source_uri LIKE ? ESCAPE '\'
              AND source_uri NOT LIKE ? ESCAPE '\'
            ORDER BY content_hash""",
-        (f"{escaped}%", f"{escaped}%/%"),
+        (like, not_like),
     ).fetchall()
     if not rows:
         return ""
@@ -49,15 +58,14 @@ def _build_folder_summary(conn: sqlite3.Connection, folder_path: str) -> str:
     Concatenates the first chunk of each unique source_uri in the folder
     (truncated to 200 chars each), separated by newlines.
     """
-    prefix = folder_path.rstrip("/") + "/"
-    escaped = escape_like(prefix)
+    like, not_like = _folder_like_params(folder_path)
     rows = conn.execute(
         r"""SELECT source_uri, content FROM chunks
            WHERE source_uri LIKE ? ESCAPE '\'
              AND source_uri NOT LIKE ? ESCAPE '\'
              AND chunk_index = 0
            ORDER BY source_uri""",
-        (f"{escaped}%", f"{escaped}%/%"),
+        (like, not_like),
     ).fetchall()
     parts = []
     for row in rows:
