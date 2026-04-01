@@ -83,6 +83,23 @@ def test_get_conclusions_keyword_filter(tmp_path):
     assert "Attention" in results[0]["claim"]
 
 
+def test_get_conclusions_keyword_escapes_like_wildcards(tmp_path):
+    """LIKE wildcards % and _ in keyword must be treated as literals."""
+    conn = _setup(tmp_path)
+    record_conclusion(conn, "Achieves 100% recall on MNIST")
+    record_conclusion(conn, "Totally unrelated finding")
+
+    results = get_conclusions(conn, keyword="100%")
+    assert len(results) == 1
+    assert "100%" in results[0]["claim"]
+
+    record_conclusion(conn, "Method A_B outperforms baseline")
+    record_conclusion(conn, "Method AXB outperforms baseline")
+    results = get_conclusions(conn, keyword="A_B")
+    assert len(results) == 1
+    assert "A_B" in results[0]["claim"]
+
+
 def test_get_conclusions_confidence_filter(tmp_path):
     conn = _setup(tmp_path)
     record_conclusion(conn, "High confidence claim", 0.9)

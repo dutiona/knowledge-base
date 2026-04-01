@@ -28,6 +28,14 @@ RELATIONSHIP_TYPES = (
 )
 
 
+def escape_like(value: str) -> str:
+    r"""Escape ``%``, ``_``, and ``\`` for use in a ``LIKE`` clause.
+
+    The caller must add ``ESCAPE '\'`` to the SQL statement.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _relationship_check_constraint() -> str:
     values = ", ".join(f"'{t}'" for t in RELATIONSHIP_TYPES)
     return f"CHECK(relation_type IN ({values}))"
