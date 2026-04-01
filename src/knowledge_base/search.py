@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import posixpath
 import sqlite3
-import struct
 from dataclasses import dataclass
 
 from .db import (
@@ -16,6 +15,7 @@ from .db import (
 from .embed_swap import get_embed_config
 from .embeddings import embed_single, truncate_embedding
 from .keywords import build_fts_query, extract_keywords
+from .utils import serialize_f32 as _serialize_f32
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,30 @@ class SearchResult:
     match_type: str  # 'fts', 'vec', 'hybrid', 'reranked'
 
 
-def _serialize_f32(vec: list[float]) -> bytes:
-    return struct.pack(f"{len(vec)}f", *vec)
+__all__ = [
+    "SearchResult",
+    "search",
+]
+
+# Default parameters for Reciprocal Rank Fusion merge
+RRF_K = 60
+
+# Folder-boost defaults: multiply scores for chunks in semantically relevant folders
+FOLDER_BOOST_FACTOR = 1.15
+FOLDER_BOOST_TOP_N = 5
+
+# Over-fetch multiplier: fetch more candidates than top_k for RRF merge quality
+SEARCH_OVERFETCH_MULTIPLIER = 3
+
+# Strategy-filtered searches need even more over-fetching
+STRATEGY_OVERFETCH_MULTIPLIER = 5
+
+# Folder boost window: consider this many top results for re-ranking
+BOOST_WINDOW_MULTIPLIER = 2
+
+# Default search parameters
+DEFAULT_TOP_K = 10
+DEFAULT_RERANK_TOP_N = 20
 
 
 def _fts_search(
@@ -97,7 +119,7 @@ def _vec_search(
 def _rrf_merge(
     fts_results: list[tuple[int, float]],
     vec_results: list[tuple[int, float]],
-    k: int = 60,
+    k: int = RRF_K,
 ) -> list[tuple[int, float]]:
     """Reciprocal Rank Fusion. Returns (chunk_id, rrf_score) sorted descending."""
     scores: dict[int, float] = {}
@@ -116,8 +138,8 @@ def _folder_boost(
     query_embedding: list[float],
     chunk_ids: list[int],
     scores: dict[int, float],
-    boost_factor: float = 1.15,
-    top_folders: int = 5,
+    boost_factor: float = FOLDER_BOOST_FACTOR,
+    top_folders: int = FOLDER_BOOST_TOP_N,
 ) -> dict[int, float]:
     """Apply a score multiplier to chunks from semantically relevant folders.
 
@@ -188,14 +210,14 @@ def _fetch_chunk_contents(
 def search(
     conn: sqlite3.Connection,
     query: str,
-    top_k: int = 10,
+    top_k: int = DEFAULT_TOP_K,
     source_type: str | None = None,
     mode: str = "hybrid",
     keyword_prefilter: bool = False,
     chunk_strategy: str | None = None,
     space_name: str | None = None,
     rerank: bool = False,
-    rerank_top_n: int = 20,
+    rerank_top_n: int = DEFAULT_RERANK_TOP_N,
 ) -> list[SearchResult]:
     """
     Hybrid search over indexed chunks.
@@ -218,7 +240,7 @@ def search(
         rerank_top_n: Number of candidates to feed into the reranker.
             Larger values improve recall at the cost of latency.
     """
-    fetch_limit = top_k * 3  # over-fetch for RRF merge
+    fetch_limit = top_k * SEARCH_OVERFETCH_MULTIPLIER
 
     # Resolve space configuration — either specific space or active
     if space_name:
@@ -244,7 +266,9 @@ def search(
         skip_folder_boost = False
 
     # Strategy filtering: only apply when the caller explicitly requests it.
-    strategy_fetch_limit = fetch_limit * 5 if chunk_strategy else fetch_limit
+    strategy_fetch_limit = (
+        fetch_limit * STRATEGY_OVERFETCH_MULTIPLIER if chunk_strategy else fetch_limit
+    )
 
     fts_results: list[tuple[int, float]] = []
     vec_results: list[tuple[int, float]] = []
@@ -312,12 +336,12 @@ def search(
         match_type = "hybrid"
     elif fts_results:
         merged = [
-            (cid, 1.0 / (60 + rank + 1)) for rank, (cid, _) in enumerate(fts_results)
+            (cid, 1.0 / (RRF_K + rank + 1)) for rank, (cid, _) in enumerate(fts_results)
         ]
         match_type = "fts"
     elif vec_results:
         merged = [
-            (cid, 1.0 / (60 + rank + 1)) for rank, (cid, _) in enumerate(vec_results)
+            (cid, 1.0 / (RRF_K + rank + 1)) for rank, (cid, _) in enumerate(vec_results)
         ]
         match_type = "vec"
     else:
@@ -325,7 +349,7 @@ def search(
 
     # --- Folder boost (#126) ---
     # Over-fetch slightly so folder boost can re-rank within a larger window
-    boost_window = min(len(merged), top_k * 2)
+    boost_window = min(len(merged), top_k * BOOST_WINDOW_MULTIPLIER)
     pre_boost_ids = [cid for cid, _ in merged[:boost_window]]
     score_map = dict(merged[:boost_window])
 

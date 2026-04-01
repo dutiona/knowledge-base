@@ -15,23 +15,12 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-# Common English stopwords — deliberately compact.
-# Not exhaustive: FTS5's porter stemmer handles morphological variants,
-# and BM25 naturally down-weights high-frequency terms.
-_STOPWORDS: frozenset[str] = frozenset(
-    "a about above after again against all am an and any are aren't as at be "
-    "because been before being below between both but by can could did didn't "
-    "do does doesn't doing don't down during each few for from further get got "
-    "had has have having he her here hers herself him himself his how i if in "
-    "into is it its itself just let me more most my myself no nor not of off on "
-    "once only or other our ours ourselves out over own same she should so some "
-    "such than that the their theirs them themselves then there these they this "
-    "those through to too under until up very was we were what when where which "
-    "while who whom why will with would you your yours yourself yourselves "
-    "also use used using can't won't shall may might must need vs "
-    "best better good well many much several "
-    "won don doesn didn shouldn couldn wouldn isn aren hasn weren".split()
-)
+from .utils import STOPWORDS as _STOPWORDS
+
+__all__ = [
+    "build_fts_query",
+    "extract_keywords",
+]
 
 # Pattern: split on whitespace and strip surrounding punctuation, but keep
 # internal hyphens and dots (e.g. "ResNet-50", "GPT-3.5").

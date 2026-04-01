@@ -179,12 +179,14 @@ def test_rate_limiting_different_filters(tmp_path):
 
 
 def test_resolve_nonexistent(tmp_path):
-    """Resolving a non-existent error returns an error dict."""
+    """Resolving a non-existent error raises NotFoundError."""
     from knowledge_base.prediction_errors import resolve_prediction_error
+    from knowledge_base.exceptions import NotFoundError
+    import pytest
 
     conn = _setup_db(tmp_path)
-    result = resolve_prediction_error(conn, 9999)
-    assert "error" in result
+    with pytest.raises(NotFoundError, match="9999"):
+        resolve_prediction_error(conn, 9999)
 
 
 def test_resolve(tmp_path):
