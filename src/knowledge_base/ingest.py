@@ -136,48 +136,42 @@ def _insert_chunk(
 
     Returns the new chunk id.
     """
+    columns = [
+        "content_hash",
+        "content",
+        "source_type",
+        "source_uri",
+        "chunk_index",
+        "session_id",
+        "metadata",
+    ]
+    values: list[str | int | None] = [
+        content_hash,
+        content,
+        source_type,
+        source_uri,
+        chunk_index,
+        session_id,
+        metadata,
+    ]
     if chunk_strategy is not None:
-        cursor = conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri,"
-            " chunk_index, session_id, chunk_strategy, metadata)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                content_hash,
-                content,
-                source_type,
-                source_uri,
-                chunk_index,
-                session_id,
-                chunk_strategy,
-                metadata,
-            ),
-        )
-    else:
-        cursor = conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri,"
-            " chunk_index, session_id, metadata)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                content_hash,
-                content,
-                source_type,
-                source_uri,
-                chunk_index,
-                session_id,
-                metadata,
-            ),
-        )
+        columns.append("chunk_strategy")
+        values.append(chunk_strategy)
+
+    placeholders = ", ".join("?" for _ in columns)
+    sql = f"INSERT INTO chunks ({', '.join(columns)}) VALUES ({placeholders})"
+    cursor = conn.execute(sql, values)
     chunk_id = cursor.lastrowid
     assert chunk_id is not None
 
-    # Link to sessions via junction table
-    effective_sessions = session_ids if session_ids is not None else set()
-    if session_id is not None and not effective_sessions:
-        effective_sessions = {session_id}
-    for sid in effective_sessions:
-        conn.execute(
+    # Link to sessions via junction table — union session_id into session_ids
+    effective_sessions = set(session_ids) if session_ids else set()
+    if session_id is not None:
+        effective_sessions.add(session_id)
+    if effective_sessions:
+        conn.executemany(
             "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-            (chunk_id, sid),
+            [(chunk_id, sid) for sid in effective_sessions],
         )
 
     if embedding is not None:
