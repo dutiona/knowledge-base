@@ -255,6 +255,59 @@ def test_folder_boost_multiplies_scores(tmp_path):
     assert boosted[2] == scores[2]
 
 
+def test_folder_boost_zero_distance_does_not_boost_all(tmp_path):
+    """When best_distance==0, only near-exact folder matches should be boosted."""
+    from knowledge_base.search import _folder_boost, _serialize_f32
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    dim = DEFAULT_EMBED_DIM
+    # Query and matching folder share the same vector → L2 distance = 0
+    exact_vec = [0.1] * dim
+    # Distant folder uses a very different vector → large L2 distance
+    distant_vec = [0.9] * dim
+
+    # Two chunks in different folders
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
+        " VALUES (?, ?, ?, ?, ?)",
+        ("h1", "ml content", "markdown", "/papers/ml/a.md", 0),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
+        " VALUES (?, ?, ?, ?, ?)",
+        ("h2", "bio content", "markdown", "/papers/bio/b.md", 0),
+    )
+
+    # Two folder summaries: one exact match, one distant
+    conn.execute(
+        "INSERT INTO folder_summaries (folder_path, summary, content_hash) VALUES (?, ?, ?)",
+        ("/papers/ml", "ml summary", "hash_ml"),
+    )
+    conn.execute(
+        "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
+        (_serialize_f32(exact_vec), "/papers/ml"),
+    )
+    conn.execute(
+        "INSERT INTO folder_summaries (folder_path, summary, content_hash) VALUES (?, ?, ?)",
+        ("/papers/bio", "bio summary", "hash_bio"),
+    )
+    conn.execute(
+        "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
+        (_serialize_f32(distant_vec), "/papers/bio"),
+    )
+    conn.commit()
+
+    scores = {1: 0.5, 2: 0.5}
+    boosted = _folder_boost(conn, exact_vec, [1, 2], scores)
+
+    # Only the exact-match folder (/papers/ml) should be boosted
+    assert boosted[1] > scores[1], "exact-match folder chunk should be boosted"
+    assert boosted[2] == scores[2], "distant folder chunk should NOT be boosted"
+
+
 def test_folder_boost_no_folders_is_noop(tmp_path):
     """_folder_boost returns original scores when no folder summaries exist."""
     from knowledge_base.search import _folder_boost
