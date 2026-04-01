@@ -35,7 +35,6 @@ from .embed_swap import (
 from .extraction import (
     _MAX_WORKERS_LIMIT,
     compare_papers,
-    configure_llm,
     estimate_extraction_time,
     extract_structure,
     get_entities,
@@ -43,6 +42,7 @@ from .extraction import (
     record_method,
     record_metric,
 )
+from .llm import configure_llm
 from .jobs import get_job, list_jobs as _list_jobs, submit_job
 from .ingest import (
     configure_browser,
