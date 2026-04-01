@@ -60,7 +60,7 @@ dependency chains, and parallelism opportunities.
 | 236 | unified \_insert_chunks helper (5 call sites)            | Ingest      | 2.5b  | ✔ PR #295                                         |
 | 238 | extract bibtex module (papers.py → bibtex.py)            | Papers      | 2.5b  | ✔ PR #293                                         |
 | 239 | extract auto_relate module (papers.py → auto_relate.py)  | Papers      | 2.5b  | ✔ PR #292                                         |
-| 240 | extract LLM module (extraction.py → llm.py)              | Extraction  | 2.5b  |                                                   |
+| 240 | extract LLM module (extraction.py → llm.py)              | Extraction  | 2.5b  | ✔ PR #294                                         |
 | 243 | light improvements (7 items)                             | Foundation  | 2.5b  |                                                   |
 | 234 | extract chunking module (ingest.py → chunking.py)        | Ingest      | 2.5b  |                                                   |
 | 235 | extract web ingestion module (ingest.py → web.py)        | Ingest      | 2.5b  |                                                   |
@@ -279,10 +279,10 @@ review.
 **Step 1 — Leaf extractions (all parallel):**
 
 ```
-✔ #236 (unified _insert_chunks)         ─── touches ingest.py  ✔ PR #295
-✔ #238 (bibtex.py from papers.py)       ─── touches papers.py  ✔ PR #293
-✔ #239 (auto_relate.py from papers.py)  ─── touches papers.py (coordinate with #238)
-#240 (llm.py from extraction.py)      ─── touches extraction.py
+✔ #236 (unified _insert_chunks)         ─── ✔ PR #295
+✔ #238 (bibtex.py from papers.py)       ─── ✔ PR #293
+✔ #239 (auto_relate.py from papers.py)  ─── ✔ PR #292
+✔ #240 (llm.py from extraction.py)    ─── ✔ PR #294
 #243 (light improvements, 7 items)    ─── scattered, low conflict risk
 ```
 
@@ -581,7 +581,7 @@ Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a          Phas
 ────────        ────────        ────────             ────────            ────────                ────────
                                 ✔ #95                ✔ #163, #160        Step 1:                 Perf:
 PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151       ✔ #236, ✔ #238, ✔ #239       #181, #199, #200
-#85 ─────┤                      ✔ #100               ✔ #150, ✔ #165         #240, #243               #205–#211, #213
+#85 ─────┤                      ✔ #100               ✔ #150, ✔ #165         ✔ #240, #243               #205–#211, #213
 #78 ─────┼──▶ ✔ #71            ✔ #15                ✔ #166, ✔ #180      Step 2 (needs ✔ #236):    Security:
 #46 ─────┤                      ✔ #110               ✔ #182, #195           #234, #235, #237         #187–#193
 #45 ─────┤    ✔ #101           ✔ #82                #197, ✔ #198        Step 3 (needs Step 2):  Quality:
