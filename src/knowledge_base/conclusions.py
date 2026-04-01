@@ -132,7 +132,7 @@ def supersede_conclusion(
             (new_id, old_conclusion_id),
         )
         conn.commit()
-    except Exception:
+    except sqlite3.Error:
         conn.rollback()
         raise
     return {"old_conclusion_id": old_conclusion_id, "new_conclusion_id": new_id}
