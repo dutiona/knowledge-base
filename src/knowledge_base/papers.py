@@ -178,6 +178,7 @@ def register_paper(
     )
 
     # Populate paper_paths for the new paper
+    path_conflict = None  # hoisted: used after the if-block
     if source_uri:
         file_hash = None
         p = Path(source_uri)
@@ -191,7 +192,6 @@ def register_paper(
         existing_path = conn.execute(
             "SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)
         ).fetchone()
-        path_conflict = None
         if not existing_path:
             conn.execute(
                 "INSERT INTO paper_paths (paper_id, path, content_hash, is_primary) "
