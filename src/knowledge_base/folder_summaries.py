@@ -11,13 +11,23 @@ import posixpath
 import sqlite3
 import struct
 
-from .db import get_active_space
+from .db import escape_like, get_active_space
 from .embed_swap import get_embed_config
 from .embeddings import embed, truncate_embedding
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
+
+
+def _folder_like_params(folder_path: str) -> tuple[str, str]:
+    """Return (direct_children, exclude_subdirs) LIKE params for a folder.
+
+    Handles escaping of ``%``, ``_``, and ``\\`` in the folder path.
+    Callers must include ``ESCAPE '\\'`` in the SQL statement.
+    """
+    escaped = escape_like(folder_path.rstrip("/") + "/")
+    return f"{escaped}%", f"{escaped}%/%"
 
 
 def compute_folder_hash(conn: sqlite3.Connection, folder_path: str) -> str:
@@ -28,13 +38,13 @@ def compute_folder_hash(conn: sqlite3.Connection, folder_path: str) -> str:
     documents changed, the hash stays the same.  Returns empty string
     when the folder contains no indexed chunks.
     """
-    prefix = folder_path.rstrip("/") + "/"
+    like, not_like = _folder_like_params(folder_path)
     rows = conn.execute(
-        """SELECT DISTINCT content_hash FROM chunks
-           WHERE source_uri LIKE ? || '%'
-             AND source_uri NOT LIKE ? || '%/%'
+        r"""SELECT DISTINCT content_hash FROM chunks
+           WHERE source_uri LIKE ? ESCAPE '\'
+             AND source_uri NOT LIKE ? ESCAPE '\'
            ORDER BY content_hash""",
-        (prefix, prefix),
+        (like, not_like),
     ).fetchall()
     if not rows:
         return ""
@@ -48,14 +58,14 @@ def _build_folder_summary(conn: sqlite3.Connection, folder_path: str) -> str:
     Concatenates the first chunk of each unique source_uri in the folder
     (truncated to 200 chars each), separated by newlines.
     """
-    prefix = folder_path.rstrip("/") + "/"
+    like, not_like = _folder_like_params(folder_path)
     rows = conn.execute(
-        """SELECT source_uri, content FROM chunks
-           WHERE source_uri LIKE ? || '%'
-             AND source_uri NOT LIKE ? || '%/%'
+        r"""SELECT source_uri, content FROM chunks
+           WHERE source_uri LIKE ? ESCAPE '\'
+             AND source_uri NOT LIKE ? ESCAPE '\'
              AND chunk_index = 0
            ORDER BY source_uri""",
-        (prefix, prefix),
+        (like, not_like),
     ).fetchall()
     parts = []
     for row in rows:

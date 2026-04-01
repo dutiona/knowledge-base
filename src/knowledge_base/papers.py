@@ -8,7 +8,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from .db import RELATIONSHIP_TYPES, get_vec_table_name
+from .db import RELATIONSHIP_TYPES, escape_like, get_vec_table_name
 
 
 def compute_file_hash(path: Path) -> str:
@@ -221,7 +221,8 @@ def get_paper(
         rows = conn.execute("SELECT * FROM papers WHERE doi = ?", (doi,)).fetchall()
     elif title_pattern is not None:
         rows = conn.execute(
-            "SELECT * FROM papers WHERE title LIKE ?", (f"%{title_pattern}%",)
+            "SELECT * FROM papers WHERE title LIKE ? ESCAPE '\\'",
+            (f"%{escape_like(title_pattern)}%",),
         ).fetchall()
     else:
         return []
@@ -608,13 +609,9 @@ def _query_papers(
             conn, "SELECT * FROM papers WHERE id IN ({ph})", paper_ids
         )
     if title_pattern:
-        # Escape LIKE wildcards to prevent injection/unexpected matches
-        escaped = (
-            title_pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        )
         return conn.execute(
             "SELECT * FROM papers WHERE title LIKE ? ESCAPE '\\'",
-            (f"%{escaped}%",),
+            (f"%{escape_like(title_pattern)}%",),
         ).fetchall()
     return conn.execute("SELECT * FROM papers").fetchall()
 
