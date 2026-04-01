@@ -130,8 +130,11 @@ def relocate_paper(
 
     if current["content_hash"] and content_hash != current["content_hash"]:
         raise ValidationError(
-            f"Content hash mismatch — file at new_path has different content "
-            f"(expected {current['content_hash']}, got {content_hash})"
+            "Content hash mismatch — file at new_path has different content",
+            details={
+                "expected": current["content_hash"],
+                "actual": content_hash,
+            },
         )
 
     try:

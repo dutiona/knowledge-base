@@ -189,7 +189,8 @@ def reingest(
     try:
         result = reingest_file(conn, p, source_type, session_id=session_id)
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
     # Invalidate stale "similar" relationships for all papers linked to this file
     source_uri = str(p)
@@ -226,7 +227,8 @@ def ingest_url(url: str, session_id: str | None = None) -> str:
     try:
         return json.dumps(_ingest_url(conn, url, session_id=session_id))
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -680,7 +682,8 @@ def add_relationship_tool(
             )
         )
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -723,7 +726,8 @@ def record_conclusion_tool(
             )
         )
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -775,7 +779,8 @@ def supersede_conclusion_tool(
             )
         )
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -900,7 +905,8 @@ def relocate_paper_tool(paper_id: int, new_path: str) -> str:
     try:
         return json.dumps(relocate_paper(conn, paper_id, new_path))
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -1008,7 +1014,8 @@ def extract_structure_tool(
     try:
         est = estimate_extraction_time(conn, paper_id)
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
     # Short doc: run inline (fast path) — reuse chunks from estimate
     if not est["is_long"]:
@@ -1086,7 +1093,8 @@ def configure_llm_tool(
     try:
         return json.dumps(configure_llm(conn, provider, base_url, model, api_key))
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -1164,7 +1172,8 @@ def extract_figures_tool(
     try:
         est = estimate_figures_time(conn, paper_id, pages=pages_0)
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
     # ETA gate
     if est["estimated_seconds"] > 120 and not confirmed:
@@ -1219,7 +1228,8 @@ def configure_omniparser_tool(path: str | None = None) -> str:
     try:
         return json.dumps(configure_omniparser(conn, path))
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -1265,7 +1275,8 @@ def configure_browser_tool(
             configure_browser(conn, cdp_endpoint=cdp_endpoint, venv_path=venv_path)
         )
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()
@@ -1325,7 +1336,8 @@ def resolve_prediction_error_tool(error_id: int) -> str:
     try:
         return json.dumps(resolve_prediction_error(conn, error_id))
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e)})
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 def main():

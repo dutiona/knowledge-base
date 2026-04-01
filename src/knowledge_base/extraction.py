@@ -10,7 +10,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .exceptions import ExtractionError, NotFoundError, ValidationError
+from .exceptions import ExtractionError, NotFoundError
 from .llm import _get_llm_config, _llm_call
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,9 @@ __all__ = [
 ]
 
 
+_ENTITY_TABLES = frozenset({"methods", "datasets"})
+
+
 def _record_entity(
     conn: sqlite3.Connection,
     table: str,
@@ -42,6 +45,8 @@ def _record_entity(
     commit: bool = True,
 ) -> int:
     """Insert-or-update a named entity (method/dataset) and return its ID."""
+    if table not in _ENTITY_TABLES:
+        raise ValueError(f"Invalid entity table: {table!r}")
     conn.execute(
         f"""INSERT INTO {table} (name, paper_id, description, chunk_id)
            VALUES (?, ?, ?, ?)
@@ -54,6 +59,8 @@ def _record_entity(
     row = conn.execute(
         f"SELECT id FROM {table} WHERE name = ? AND paper_id = ?", (name, paper_id)
     ).fetchone()
+    if row is None:
+        raise RuntimeError(f"Failed to retrieve {table} entity after upsert")
     return row["id"]
 
 

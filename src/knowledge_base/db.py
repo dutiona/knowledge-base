@@ -432,14 +432,19 @@ def delete_chunk_vecs(
     if not chunk_ids:
         return
     tbl = table_name or get_vec_table_name(conn)
+    # Count actual rows before deletion — not all chunks may have embeddings
+    count_rows = _batched_select(
+        conn, f"SELECT COUNT(*) AS n FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids
+    )
+    actual_deleted = sum(r["n"] for r in count_rows)
     _batched_execute(conn, f"DELETE FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids)
     # Keep embed_spaces.chunk_count in sync
-    deleted = len(chunk_ids)
-    conn.execute(
-        "UPDATE embed_spaces SET chunk_count = MAX(0, chunk_count - ?) "
-        "WHERE table_name = ?",
-        (deleted, tbl),
-    )
+    if actual_deleted:
+        conn.execute(
+            "UPDATE embed_spaces SET chunk_count = MAX(0, chunk_count - ?) "
+            "WHERE table_name = ?",
+            (actual_deleted, tbl),
+        )
 
 
 def delete_chunks_cascade(

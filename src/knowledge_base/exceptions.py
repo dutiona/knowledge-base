@@ -15,7 +15,15 @@ __all__ = [
 
 
 class KnowledgeBaseError(Exception):
-    """Base exception for all knowledge-base domain errors."""
+    """Base exception for all knowledge-base domain errors.
+
+    Optional ``details`` dict carries structured data that the server.py
+    boundary merges into the JSON error response for backward compatibility.
+    """
+
+    def __init__(self, message: str, *, details: dict | None = None) -> None:
+        super().__init__(message)
+        self.details: dict = details or {}
 
 
 class NotFoundError(KnowledgeBaseError):
