@@ -117,6 +117,69 @@ def _flush_deferred_session_links(
         )
 
 
+def _insert_chunk(
+    conn: sqlite3.Connection,
+    *,
+    content_hash: str,
+    content: str,
+    source_type: str,
+    source_uri: str,
+    chunk_index: int,
+    embedding: list[float] | None = None,
+    session_id: str | None = None,
+    session_ids: set[str] | None = None,
+    chunk_strategy: str | None = None,
+    metadata: str = "{}",
+    vec_table: str | None = None,
+) -> int:
+    """Insert a single chunk row, its embedding, and session links.
+
+    Returns the new chunk id.
+    """
+    columns = [
+        "content_hash",
+        "content",
+        "source_type",
+        "source_uri",
+        "chunk_index",
+        "session_id",
+        "metadata",
+    ]
+    values: list[str | int | None] = [
+        content_hash,
+        content,
+        source_type,
+        source_uri,
+        chunk_index,
+        session_id,
+        metadata,
+    ]
+    if chunk_strategy is not None:
+        columns.append("chunk_strategy")
+        values.append(chunk_strategy)
+
+    placeholders = ", ".join("?" for _ in columns)
+    sql = f"INSERT INTO chunks ({', '.join(columns)}) VALUES ({placeholders})"
+    cursor = conn.execute(sql, values)
+    chunk_id = cursor.lastrowid
+    assert chunk_id is not None
+
+    # Link to sessions via junction table — union session_id into session_ids
+    effective_sessions = set(session_ids) if session_ids else set()
+    if session_id is not None:
+        effective_sessions.add(session_id)
+    if effective_sessions:
+        conn.executemany(
+            "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
+            [(chunk_id, sid) for sid in effective_sessions],
+        )
+
+    if embedding is not None:
+        insert_chunk_vec(conn, chunk_id, embedding, table_name=vec_table)
+
+    return chunk_id
+
+
 def _chunk_text(
     text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
 ) -> list[str]:
@@ -822,27 +885,18 @@ def ingest_file(
     for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(
         new_chunks, embeddings
     ):
-        cursor = conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, chunk_strategy, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                chunk_hash,
-                chunk_text,
-                source_type,
-                source_uri,
-                idx,
-                session_id,
-                effective_strategy,
-                meta_json,
-            ),
+        _insert_chunk(
+            conn,
+            content_hash=chunk_hash,
+            content=chunk_text,
+            source_type=source_type,
+            source_uri=source_uri,
+            chunk_index=idx,
+            embedding=emb_vec,
+            session_id=session_id,
+            chunk_strategy=effective_strategy,
+            metadata=meta_json,
         )
-        chunk_id = cursor.lastrowid
-        if session_id is not None:
-            conn.execute(
-                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                (chunk_id, session_id),
-            )
-        if emb_vec is not None:
-            insert_chunk_vec(conn, chunk_id, emb_vec)
 
     # Embeddings succeeded — now flush deferred session links for deduped chunks
     _flush_deferred_session_links(conn, deferred_session_links, session_id)
@@ -1067,27 +1121,19 @@ def reingest_file(
     for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(
         insert_items, embeddings
     ):
-        cursor = conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, chunk_strategy, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                chunk_hash,
-                chunk_text,
-                source_type,
-                source_uri,
-                idx,
-                session_id,
-                effective_strategy,
-                meta_json,
-            ),
+        _insert_chunk(
+            conn,
+            content_hash=chunk_hash,
+            content=chunk_text,
+            source_type=source_type,
+            source_uri=source_uri,
+            chunk_index=idx,
+            embedding=emb_vec,
+            session_id=session_id,
+            session_ids=all_sessions,
+            chunk_strategy=effective_strategy,
+            metadata=meta_json,
         )
-        chunk_id = cursor.lastrowid
-        for sid in all_sessions:
-            conn.execute(
-                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                (chunk_id, sid),
-            )
-        if emb_vec is not None:
-            insert_chunk_vec(conn, chunk_id, emb_vec)
 
     # --- Re-link papers whose abstract_chunk_id was nullified ---
     if affected_paper_ids:
@@ -1500,15 +1546,16 @@ def _extract_html_images(
 
         meta_json = json.dumps(meta)
         chunk_index = _WEB_IMAGE_CHUNK_INDEX_START + idx
-        cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
-               chunk_index, metadata)
-               VALUES (?, ?, 'figure', ?, ?, ?)""",
-            (chunk_hash, desc, source_url, chunk_index, meta_json),
+        _insert_chunk(
+            conn,
+            content_hash=chunk_hash,
+            content=desc,
+            source_type="figure",
+            source_uri=source_url,
+            chunk_index=chunk_index,
+            embedding=emb_vec,
+            metadata=meta_json,
         )
-        chunk_id = cursor.lastrowid
-        if emb_vec is not None:
-            insert_chunk_vec(conn, chunk_id, emb_vec)
         figures_added += 1
 
     if figures_added or old_ids:
@@ -1804,15 +1851,16 @@ def _extract_web_figures(
         )
 
         chunk_index = _WEB_FIGURE_CHUNK_INDEX_START + idx
-        cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
-               chunk_index, metadata)
-               VALUES (?, ?, 'figure', ?, ?, ?)""",
-            (chunk_hash, desc, source_url, chunk_index, meta_json),
+        _insert_chunk(
+            conn,
+            content_hash=chunk_hash,
+            content=desc,
+            source_type="figure",
+            source_uri=source_url,
+            chunk_index=chunk_index,
+            embedding=emb_vec,
+            metadata=meta_json,
         )
-        chunk_id = cursor.lastrowid
-        if emb_vec is not None:
-            insert_chunk_vec(conn, chunk_id, emb_vec)
         figures_added += 1
 
     if figures_added:
@@ -1984,18 +2032,17 @@ def ingest_url(
     embeddings = _embed_with_config(conn, texts_to_embed)
 
     for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings):
-        cursor = conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, metadata) VALUES (?, ?, 'web', ?, ?, ?, ?)",
-            (chunk_hash, chunk_text, url, idx, session_id, meta_json),
+        _insert_chunk(
+            conn,
+            content_hash=chunk_hash,
+            content=chunk_text,
+            source_type="web",
+            source_uri=url,
+            chunk_index=idx,
+            embedding=emb_vec,
+            session_id=session_id,
+            metadata=meta_json,
         )
-        chunk_id = cursor.lastrowid
-        if session_id is not None:
-            conn.execute(
-                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                (chunk_id, session_id),
-            )
-        if emb_vec is not None:
-            insert_chunk_vec(conn, chunk_id, emb_vec)
 
     # Embeddings succeeded — flush deferred session links for deduped chunks
     _flush_deferred_session_links(conn, deferred_session_links, session_id)
