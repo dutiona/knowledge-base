@@ -51,16 +51,15 @@ from .ingest import (
     ingest_url as _ingest_url,
     reingest_file,
 )
+from .bibtex import export_bibtex, sync_bibtex
 from .papers import (
     add_relationship,
-    export_bibtex,
     get_paper,
     get_paper_paths,
     get_relationships,
     register_paper,
     relocate_paper,
     suggest_relationships,
-    sync_bibtex,
 )
 from .prediction_errors import (
     detect_and_log,
