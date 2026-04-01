@@ -33,6 +33,7 @@ Read these when the task touches the corresponding area:
 | Ingestion (PDF, code, web, markdown)     | `src/knowledge_base/ingest.py`            | `docs/usage/ingesting-documents.md`       |
 | Hybrid search (FTS5 + vec + RRF)         | `src/knowledge_base/search.py`            | `docs/usage/searching.md`                 |
 | Keyword intent extraction                | `src/knowledge_base/keywords.py`          | `docs/usage/searching.md`                 |
+| LLM config, calling & connectivity       | `src/knowledge_base/llm.py`               | `docs/usage/structured-extraction.md`     |
 | LLM extraction (map-reduce)              | `src/knowledge_base/extraction.py`        | `docs/usage/structured-extraction.md`     |
 | Vision/figure extraction                 | `src/knowledge_base/vision.py`            | `docs/usage/figure-extraction.md`         |
 | Paper metadata & relationships           | `src/knowledge_base/papers.py`            | `docs/usage/relationships-conclusions.md` |
