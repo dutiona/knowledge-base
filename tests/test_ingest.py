@@ -36,7 +36,9 @@ from knowledge_base.conclusions import (
     get_conclusions,
     supersede_conclusion,
 )
+from knowledge_base.exceptions import NotFoundError, ValidationError
 from knowledge_base.extraction import record_method, record_dataset, record_metric
+import pytest
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
@@ -672,8 +674,8 @@ def test_reingest_nonexistent_source(tmp_path):
     md = tmp_path / "never_ingested.md"
     md.write_text("Some content.\n")
 
-    result = reingest_file(conn, md)
-    assert result["error"] is not None
+    with pytest.raises(NotFoundError, match="No chunks found"):
+        reingest_file(conn, md)
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
@@ -901,8 +903,8 @@ def test_ingest_url_http_error(tmp_path):
         raise httpx.HTTPError("Connection refused")
 
     with patch("knowledge_base.ingest.httpx.get", _mock_get_error):
-        result = ingest_url(conn, "https://example.com/down")
-    assert "error" in result
+        with pytest.raises(ValidationError, match="Failed to fetch"):
+            ingest_url(conn, "https://example.com/down")
 
 
 def test_ingest_url_rejects_non_http_schemes(tmp_path):
@@ -910,11 +912,11 @@ def test_ingest_url_rejects_non_http_schemes(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    result = ingest_url(conn, "file:///etc/passwd")
-    assert "error" in result
+    with pytest.raises(ValidationError, match="http or https"):
+        ingest_url(conn, "file:///etc/passwd")
 
-    result = ingest_url(conn, "ftp://internal/data")
-    assert "error" in result
+    with pytest.raises(ValidationError, match="http or https"):
+        ingest_url(conn, "ftp://internal/data")
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
@@ -1175,7 +1177,7 @@ def test_configure_browser_local_venv(tmp_path):
 
 
 def test_configure_browser_invalid_cdp(tmp_path):
-    """Non-ws:// CDP endpoint returns an error."""
+    """Non-ws:// CDP endpoint raises ValidationError."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
@@ -1183,28 +1185,28 @@ def test_configure_browser_invalid_cdp(tmp_path):
     (venv / "bin").mkdir(parents=True)
     (venv / "bin" / "python").write_text("#!/bin/sh\n")
 
-    result = configure_browser(
-        conn, cdp_endpoint="http://localhost:3000", venv_path=str(venv)
-    )
-    assert "error" in result
+    with pytest.raises(ValidationError, match="ws://"):
+        configure_browser(
+            conn, cdp_endpoint="http://localhost:3000", venv_path=str(venv)
+        )
 
 
 def test_configure_browser_invalid_venv(tmp_path):
-    """Nonexistent venv path returns an error."""
+    """Nonexistent venv path raises ValidationError."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
-    result = configure_browser(conn, venv_path="/nonexistent/venv")
-    assert "error" in result
+    with pytest.raises(ValidationError, match="Python executable not found"):
+        configure_browser(conn, venv_path="/nonexistent/venv")
 
 
 def test_configure_browser_cdp_without_venv(tmp_path):
-    """CDP endpoint without venv returns an error."""
+    """CDP endpoint without venv raises ValidationError."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
-    result = configure_browser(conn, cdp_endpoint="ws://localhost:3000")
-    assert "error" in result
+    with pytest.raises(ValidationError, match="venv_path is required"):
+        configure_browser(conn, cdp_endpoint="ws://localhost:3000")
 
 
 def test_configure_browser_disable(tmp_path):

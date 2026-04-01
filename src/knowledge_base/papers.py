@@ -2,22 +2,29 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sqlite3
 from pathlib import Path
 
 from .db import RELATIONSHIP_TYPES, escape_like
+from .exceptions import NotFoundError, ValidationError
+from .utils import TITLE_STOPWORDS as _STOPWORDS, compute_file_hash  # re-export
 
-
-def compute_file_hash(path: Path) -> str:
-    """SHA-256 hex digest of file bytes."""
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(8192), b""):
-            h.update(block)
-    return h.hexdigest()
+__all__ = [
+    "add_relationship",
+    "compute_file_hash",
+    "export_bibtex",
+    "get_paper",
+    "get_paper_chunks",
+    "get_paper_paths",
+    "get_paper_source_uri",
+    "get_relationships",
+    "register_paper",
+    "relocate_paper",
+    "suggest_relationships",
+    "sync_bibtex",
+]
 
 
 def get_paper_paths(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
@@ -98,35 +105,34 @@ def relocate_paper(
         (paper_id,),
     ).fetchone()
     if not current:
-        return {"error": f"No paper_paths entry for paper {paper_id}"}
+        raise NotFoundError(f"No paper_paths entry for paper {paper_id}")
 
     old_path = current["path"]
 
     p = Path(new_path)
     if not p.exists():
-        return {"error": f"New path does not exist: {new_path}"}
+        raise ValidationError(f"New path does not exist: {new_path}")
 
     conflict = conn.execute(
         "SELECT paper_id FROM paper_paths WHERE path = ? AND paper_id != ?",
         (new_path, paper_id),
     ).fetchone()
     if conflict:
-        return {
-            "error": f"Path already owned by paper {conflict['paper_id']}: {new_path}"
-        }
+        raise ValidationError(
+            f"Path already owned by paper {conflict['paper_id']}: {new_path}"
+        )
 
     if content_hash is None:
         try:
             content_hash = compute_file_hash(p)
         except OSError as e:
-            return {"error": f"Cannot read file for hashing: {e}"}
+            raise ValidationError(f"Cannot read file for hashing: {e}") from e
 
     if current["content_hash"] and content_hash != current["content_hash"]:
-        return {
-            "error": "Content hash mismatch — file at new_path has different content",
-            "expected": current["content_hash"],
-            "actual": content_hash,
-        }
+        raise ValidationError(
+            f"Content hash mismatch — file at new_path has different content "
+            f"(expected {current['content_hash']}, got {content_hash})"
+        )
 
     try:
         conn.execute(
@@ -285,10 +291,10 @@ def add_relationship(
     """Add a typed relationship between two papers. Upserts on conflict."""
     valid_types = set(RELATIONSHIP_TYPES)
     if relation_type not in valid_types:
-        return {"error": f"Invalid relation_type. Must be one of: {valid_types}"}
+        raise ValidationError(f"Invalid relation_type. Must be one of: {valid_types}")
 
     if not 0.0 <= confidence <= 1.0:
-        return {"error": "confidence must be between 0.0 and 1.0"}
+        raise ValidationError("confidence must be between 0.0 and 1.0")
 
     conn.execute(
         """INSERT INTO relationships (source_paper_id, target_paper_id, relation_type, confidence, evidence_chunk_id)
@@ -404,41 +410,6 @@ def _surname_from_author(author: str) -> str:
         return author.split(",")[0].strip().lower()
     parts = author.split()
     return parts[-1].lower() if parts else ""
-
-
-_STOPWORDS = frozenset(
-    {
-        "a",
-        "an",
-        "the",
-        "of",
-        "in",
-        "on",
-        "at",
-        "to",
-        "for",
-        "and",
-        "or",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "by",
-        "with",
-        "from",
-        "as",
-        "its",
-        "this",
-        "that",
-        "not",
-        "but",
-        "no",
-        "via",
-        "using",
-        "based",
-    }
-)
 
 
 def suggest_relationships(

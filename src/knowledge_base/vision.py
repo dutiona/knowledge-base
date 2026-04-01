@@ -19,7 +19,8 @@ import fitz
 import httpx
 
 from .embeddings import _get_ollama_url
-from .db import get_vec_table_name
+from .db import delete_chunks_cascade, get_vec_table_name
+from .exceptions import NotFoundError, ValidationError
 from .ingest import (
     _cleanup_figure_fk_refs,
     _content_hash,
@@ -29,6 +30,13 @@ from .ingest import (
 )
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "configure_omniparser",
+    "configure_vision",
+    "estimate_figures_time",
+    "extract_figures",
+]
 
 _CAPTION_RE = re.compile(r"(?:Figure|Fig\.|Table)\s+\d+", re.IGNORECASE)
 
@@ -109,9 +117,9 @@ def configure_omniparser(
     venv_python = omni_dir / ".venv" / "bin" / "python"
 
     if not parse_script.exists():
-        return {"error": f"parse.py not found at {parse_script}"}
+        raise ValidationError(f"parse.py not found at {parse_script}")
     if not venv_python.exists():
-        return {"error": f"venv python not found at {venv_python}"}
+        raise ValidationError(f"venv python not found at {venv_python}")
 
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_path', ?)",
@@ -743,24 +751,24 @@ def estimate_figures_time(
         "SELECT id FROM papers WHERE id = ?", (paper_id,)
     ).fetchone()
     if paper_row is None:
-        return {"error": f"Paper {paper_id} not found"}
+        raise NotFoundError(f"Paper {paper_id} not found")
 
     source_uri = _get_paper_source_uri(conn, paper_id)
     if source_uri is None:
-        return {"error": f"No source URI found for paper {paper_id}"}
+        raise NotFoundError(f"No source URI found for paper {paper_id}")
 
     pdf_path = Path(source_uri)
     if pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
-        return {"error": f"Source is not an existing PDF: {source_uri}"}
+        raise ValidationError(f"Source is not an existing PDF: {source_uri}")
 
     if pages is not None:
         with fitz.open(str(pdf_path)) as doc:
             total_pages = len(doc)
         for p in pages:
             if p < 0 or p >= total_pages:
-                return {
-                    "error": f"Page {p} out of range (document has {total_pages} pages)"
-                }
+                raise ValidationError(
+                    f"Page {p} out of range (document has {total_pages} pages)"
+                )
 
     # Collect extracted images
     image_dir = pdf_image_dir(pdf_path)
@@ -818,16 +826,16 @@ def extract_figures(
         "SELECT id, title FROM papers WHERE id = ?", (paper_id,)
     ).fetchone()
     if paper_row is None:
-        return {"error": f"Paper {paper_id} not found"}
+        raise NotFoundError(f"Paper {paper_id} not found")
 
     # 2. Resolve source URI
     source_uri = _get_paper_source_uri(conn, paper_id)
     if source_uri is None:
-        return {"error": f"No source URI found for paper {paper_id}"}
+        raise NotFoundError(f"No source URI found for paper {paper_id}")
 
     pdf_path = Path(source_uri)
     if pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
-        return {"error": f"Source is not an existing PDF: {source_uri}"}
+        raise ValidationError(f"Source is not an existing PDF: {source_uri}")
 
     # 3. Bounds-check explicit pages
     if pages is not None:
@@ -837,9 +845,9 @@ def extract_figures(
             total_pages = len(doc)
         for p in pages:
             if p < 0 or p >= total_pages:
-                return {
-                    "error": f"Page {p} out of range (document has {total_pages} pages)"
-                }
+                raise ValidationError(
+                    f"Page {p} out of range (document has {total_pages} pages)"
+                )
 
     # 3b. Read omniparser config
     omniparser_path = _get_omniparser_config(conn)
@@ -1175,32 +1183,7 @@ def extract_figures(
         ]
         _cleanup_figure_fk_refs(conn, fig_chunk_ids)
 
-        # Count vec rows before deleting for bookkeeping
-        vec_del_count = conn.execute(
-            f"SELECT COUNT(*) FROM [{vec_table}] WHERE chunk_id IN {fig_chunk_subquery}",
-            fig_delete_params,
-        ).fetchone()[0]
-        conn.execute(
-            f"DELETE FROM [{vec_table}] WHERE chunk_id IN {fig_chunk_subquery}",
-            fig_delete_params,
-        )
-        if vec_del_count:
-            conn.execute(
-                "UPDATE embed_spaces SET chunk_count = MAX(0, chunk_count - ?) "
-                "WHERE table_name = ?",
-                (vec_del_count, vec_table),
-            )
-        if candidate_pages is not None and candidate_pages:
-            conn.execute(
-                f"DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'"
-                f"{page_filter}",
-                (source_uri, *page_params),
-            )
-        else:
-            conn.execute(
-                "DELETE FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
-                (source_uri,),
-            )
+        delete_chunks_cascade(conn, fig_chunk_ids, table_name=vec_table)
 
         if all_figures:
             for i, (page_num, fig_idx, figure) in enumerate(all_figures):

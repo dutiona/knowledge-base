@@ -10,9 +10,51 @@ from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from .exceptions import ExtractionError, NotFoundError, ValidationError
 from .llm import _get_llm_config, _llm_call
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "AVG_SECONDS_PER_CHUNK",
+    "SINGLE_PASS_CHAR_LIMIT",
+    "compare_papers",
+    "estimate_extraction_time",
+    "extract_structure",
+    "get_datasets",
+    "get_entities",
+    "get_methods",
+    "get_metrics",
+    "record_dataset",
+    "record_method",
+    "record_metric",
+]
+
+
+def _record_entity(
+    conn: sqlite3.Connection,
+    table: str,
+    name: str,
+    paper_id: int,
+    description: str | None = None,
+    chunk_id: int | None = None,
+    *,
+    commit: bool = True,
+) -> int:
+    """Insert-or-update a named entity (method/dataset) and return its ID."""
+    conn.execute(
+        f"""INSERT INTO {table} (name, paper_id, description, chunk_id)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(name, paper_id)
+           DO UPDATE SET description = excluded.description, chunk_id = excluded.chunk_id""",
+        (name, paper_id, description, chunk_id),
+    )
+    if commit:
+        conn.commit()
+    row = conn.execute(
+        f"SELECT id FROM {table} WHERE name = ? AND paper_id = ?", (name, paper_id)
+    ).fetchone()
+    return row["id"]
 
 
 def record_method(
@@ -25,19 +67,10 @@ def record_method(
     commit: bool = True,
 ) -> dict:
     """Record or update a method for a paper."""
-    conn.execute(
-        """INSERT INTO methods (name, paper_id, description, chunk_id)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(name, paper_id)
-           DO UPDATE SET description = excluded.description, chunk_id = excluded.chunk_id""",
-        (name, paper_id, description, chunk_id),
+    eid = _record_entity(
+        conn, "methods", name, paper_id, description, chunk_id, commit=commit
     )
-    if commit:
-        conn.commit()
-    row = conn.execute(
-        "SELECT id FROM methods WHERE name = ? AND paper_id = ?", (name, paper_id)
-    ).fetchone()
-    return {"method_id": row["id"]}
+    return {"method_id": eid}
 
 
 def record_dataset(
@@ -50,19 +83,10 @@ def record_dataset(
     commit: bool = True,
 ) -> dict:
     """Record or update a dataset for a paper."""
-    conn.execute(
-        """INSERT INTO datasets (name, paper_id, description, chunk_id)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(name, paper_id)
-           DO UPDATE SET description = excluded.description, chunk_id = excluded.chunk_id""",
-        (name, paper_id, description, chunk_id),
+    eid = _record_entity(
+        conn, "datasets", name, paper_id, description, chunk_id, commit=commit
     )
-    if commit:
-        conn.commit()
-    row = conn.execute(
-        "SELECT id FROM datasets WHERE name = ? AND paper_id = ?", (name, paper_id)
-    ).fetchone()
-    return {"dataset_id": row["id"]}
+    return {"dataset_id": eid}
 
 
 def record_metric(
@@ -544,6 +568,9 @@ def _store_resolved(
 AVG_SECONDS_PER_CHUNK = 4
 _MAX_WORKERS_LIMIT = 32
 
+# Character threshold: docs below this use single-pass extraction
+SINGLE_PASS_CHAR_LIMIT = 8000
+
 
 def _get_paper_chunks(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
     """Get chunks for a paper via paper_paths (includes all chunk types)."""
@@ -561,11 +588,11 @@ def _extract_single_pass(
     try:
         raw = _llm_call(prompt, conn=conn)
     except Exception as e:
-        return {"error": f"LLM extraction failed: {e}"}
+        raise ExtractionError(f"LLM extraction failed: {e}") from e
     try:
         extracted = json.loads(raw)
-    except json.JSONDecodeError:
-        return {"error": "LLM returned invalid JSON", "raw": raw}
+    except json.JSONDecodeError as e:
+        raise ExtractionError("LLM returned invalid JSON", raw=raw) from e
 
     try:
         _clear_previous_extraction(conn, paper_id)
@@ -813,7 +840,7 @@ def _extract_map_reduce(
     ordered_results = [r for _, r in map_results]
 
     if not ordered_results:
-        return {"error": "All chunks failed extraction", "errors": errors}
+        raise ExtractionError("All chunks failed extraction", errors=errors)
 
     # Phase 2: Resolve
     total_raw = sum(
@@ -865,11 +892,11 @@ def estimate_extraction_time(conn: sqlite3.Connection, paper_id: int) -> dict:
     """
     paper = conn.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone()
     if not paper:
-        return {"error": f"Paper {paper_id} not found"}
+        raise NotFoundError(f"Paper {paper_id} not found")
 
     chunks = _get_paper_chunks(conn, paper_id)
     if not chunks:
-        return {"error": f"No chunks found for paper {paper_id}"}
+        raise NotFoundError(f"No chunks found for paper {paper_id}")
 
     total_chars = sum(len(c["content"]) for c in chunks)
     estimated_seconds = len(chunks) * AVG_SECONDS_PER_CHUNK
@@ -877,7 +904,7 @@ def estimate_extraction_time(conn: sqlite3.Connection, paper_id: int) -> dict:
         "total_chars": total_chars,
         "chunk_count": len(chunks),
         "estimated_seconds": estimated_seconds,
-        "is_long": total_chars > 8000,
+        "is_long": total_chars > SINGLE_PASS_CHAR_LIMIT,
         "chunks": chunks,
     }
 
@@ -893,7 +920,7 @@ def extract_structure(
 ) -> dict:
     """Extract methods, datasets, and metrics from a paper's chunks using LLM.
 
-    For short documents (<8000 chars), uses a single LLM call.
+    For short documents (<SINGLE_PASS_CHAR_LIMIT chars), uses a single LLM call.
     For long documents, uses map-reduce with entity resolution.
     The caller (tool layer) is responsible for ETA confirmation flow.
 
@@ -901,16 +928,16 @@ def extract_structure(
     """
     paper = conn.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone()
     if not paper:
-        return {"error": f"Paper {paper_id} not found"}
+        raise NotFoundError(f"Paper {paper_id} not found")
 
     chunks = _prefetched_chunks or _get_paper_chunks(conn, paper_id)
     if not chunks:
-        return {"error": f"No chunks found for paper {paper_id}"}
+        raise NotFoundError(f"No chunks found for paper {paper_id}")
 
     total_chars = sum(len(c["content"]) for c in chunks)
 
     # Fast path: short document
-    if total_chars <= 8000:
+    if total_chars <= SINGLE_PASS_CHAR_LIMIT:
         return _extract_single_pass(conn, paper_id, chunks)
 
     return _extract_map_reduce(

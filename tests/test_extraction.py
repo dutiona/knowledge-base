@@ -6,6 +6,7 @@ import re
 from unittest.mock import patch
 
 from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.exceptions import ExtractionError, NotFoundError
 import pytest
 
 from knowledge_base.extraction import (
@@ -208,8 +209,8 @@ def test_extract_structure_no_chunks(tmp_path):
     conn = _setup(tmp_path)
     p = register_paper(conn, "Empty Paper")["paper_id"]
 
-    result = extract_structure(conn, p)
-    assert "error" in result
+    with pytest.raises(NotFoundError, match="No chunks found"):
+        extract_structure(conn, p)
 
 
 def test_entity_tables_exist(tmp_path):
@@ -556,12 +557,14 @@ def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
         raise ValueError("LLM returned empty response (possible thinking-mode issue)")
 
     with patch("knowledge_base.extraction._llm_call", _mock_llm_empty):
-        result = extract_structure(conn, p, confirmed=True)
+        with pytest.raises(
+            ExtractionError, match="All chunks failed extraction"
+        ) as exc_info:
+            extract_structure(conn, p, confirmed=True)
 
-    assert "error" in result
-    assert result["error"] == "All chunks failed extraction"
-    assert len(result["errors"]) > 0
-    assert "empty response" in result["errors"][0]["error"]
+    assert exc_info.value.errors is not None
+    assert len(exc_info.value.errors) > 0
+    assert "empty response" in exc_info.value.errors[0]["error"]
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .db import get_connection, init_schema
+from .exceptions import ExtractionError
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +202,20 @@ class _JobWorker:
             )
             conn.commit()
             logger.info("Job %d completed", job_id)
+        except ExtractionError as exc:
+            # Preserve structured error data (per-chunk failures, raw LLM output)
+            result_data: dict[str, Any] = {"error": str(exc)}
+            if exc.errors:
+                result_data["errors"] = exc.errors
+            if exc.raw:
+                result_data["raw"] = exc.raw
+            conn.execute(
+                "UPDATE jobs SET status = 'failed', error = ?, result = ?, "
+                "completed_at = datetime('now') WHERE id = ?",
+                (str(exc), json.dumps(result_data), job_id),
+            )
+            conn.commit()
+            logger.error("Job %d failed: %s", job_id, exc)
         except Exception as exc:
             conn.execute(
                 "UPDATE jobs SET status = 'failed', error = ?, "

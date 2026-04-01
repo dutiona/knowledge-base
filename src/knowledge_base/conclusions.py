@@ -6,6 +6,14 @@ import json
 import sqlite3
 
 from .db import escape_like
+from .exceptions import KnowledgeBaseError, NotFoundError, ValidationError
+
+__all__ = [
+    "get_conclusion_chain",
+    "get_conclusions",
+    "record_conclusion",
+    "supersede_conclusion",
+]
 
 
 def record_conclusion(
@@ -18,7 +26,7 @@ def record_conclusion(
 ) -> dict:
     """Record a conclusion with evidence links to source chunks."""
     if not 0.0 <= confidence <= 1.0:
-        return {"error": "confidence must be between 0.0 and 1.0"}
+        raise ValidationError("confidence must be between 0.0 and 1.0")
 
     chunk_ids = source_chunk_ids or []
 
@@ -31,7 +39,7 @@ def record_conclusion(
         existing_ids = {row["id"] for row in existing}
         missing = [cid for cid in chunk_ids if cid not in existing_ids]
         if missing:
-            return {"error": f"Chunk IDs not found: {missing}"}
+            raise NotFoundError(f"Chunk IDs not found: {missing}")
 
     cursor = conn.execute(
         """INSERT INTO conclusions (claim, confidence, source_chunk_ids, session_context)
@@ -110,21 +118,23 @@ def supersede_conclusion(
         "SELECT id, superseded_by FROM conclusions WHERE id = ?", (old_conclusion_id,)
     ).fetchone()
     if not old:
-        return {"error": f"Conclusion {old_conclusion_id} not found"}
+        raise NotFoundError(f"Conclusion {old_conclusion_id} not found")
 
     if old["superseded_by"] is not None:
-        return {
-            "error": f"Conclusion {old_conclusion_id} is already superseded by {old['superseded_by']}"
-        }
+        raise ValidationError(
+            f"Conclusion {old_conclusion_id} is already superseded by {old['superseded_by']}"
+        )
 
     # Atomic: insert new + update old in one transaction
     try:
         result = record_conclusion(
-            conn, new_claim, confidence, source_chunk_ids, session_context, _commit=False
+            conn,
+            new_claim,
+            confidence,
+            source_chunk_ids,
+            session_context,
+            _commit=False,
         )
-        if "error" in result:
-            conn.rollback()
-            return result
 
         new_id = result["conclusion_id"]
         conn.execute(
@@ -132,7 +142,7 @@ def supersede_conclusion(
             (new_id, old_conclusion_id),
         )
         conn.commit()
-    except sqlite3.Error:
+    except (sqlite3.Error, KnowledgeBaseError):
         conn.rollback()
         raise
     return {"old_conclusion_id": old_conclusion_id, "new_conclusion_id": new_id}
