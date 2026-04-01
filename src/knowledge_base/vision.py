@@ -297,29 +297,29 @@ def _crop_regions(
     import io
     from PIL import Image
 
-    img = Image.open(io.BytesIO(png_bytes))
-    w, h = img.size
+    with Image.open(io.BytesIO(png_bytes)) as img:
+        w, h = img.size
 
-    crops = []
-    for x1, y1, x2, y2 in regions:
-        # Convert ratios to pixels
-        px1 = int(x1 * w)
-        py1 = int(y1 * h)
-        px2 = int(x2 * w)
-        py2 = int(y2 * h)
+        crops = []
+        for x1, y1, x2, y2 in regions:
+            # Convert ratios to pixels
+            px1 = int(x1 * w)
+            py1 = int(y1 * h)
+            px2 = int(x2 * w)
+            py2 = int(y2 * h)
 
-        # Add padding
-        pad_x = int((px2 - px1) * padding)
-        pad_y = int((py2 - py1) * padding)
-        px1 = max(0, px1 - pad_x)
-        py1 = max(0, py1 - pad_y)
-        px2 = min(w, px2 + pad_x)
-        py2 = min(h, py2 + pad_y)
+            # Add padding
+            pad_x = int((px2 - px1) * padding)
+            pad_y = int((py2 - py1) * padding)
+            px1 = max(0, px1 - pad_x)
+            py1 = max(0, py1 - pad_y)
+            px2 = min(w, px2 + pad_x)
+            py2 = min(h, py2 + pad_y)
 
-        cropped = img.crop((px1, py1, px2, py2))
-        buf = io.BytesIO()
-        cropped.save(buf, format="PNG")
-        crops.append(buf.getvalue())
+            with img.crop((px1, py1, px2, py2)) as cropped:
+                buf = io.BytesIO()
+                cropped.save(buf, format="PNG")
+                crops.append(buf.getvalue())
 
     return crops
 
