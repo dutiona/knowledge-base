@@ -268,7 +268,7 @@ def search(
                 fts_results = _fts_search(
                     conn, fts_query, strategy_fetch_limit, chunk_strategy=chunk_strategy
                 )
-            except Exception:
+            except sqlite3.OperationalError:
                 # FTS query syntax error — skip FTS leg
                 pass
 
