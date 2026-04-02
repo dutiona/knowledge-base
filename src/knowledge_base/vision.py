@@ -22,6 +22,7 @@ import httpx
 from .embeddings import _get_ollama_url
 from .db import delete_chunks_cascade, get_vec_table_name
 from .exceptions import NotFoundError, ValidationError
+from .utils import validate_base_url
 from .ingest import (
     _content_hash,
     _embed_with_config,
@@ -129,6 +130,7 @@ def configure_vision(
             (model,),
         )
     if base_url:
+        validate_base_url(base_url)
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('vision_base_url', ?)",
             (base_url,),

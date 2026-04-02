@@ -3,16 +3,72 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import socket
 import struct
 from pathlib import Path
+from urllib.parse import urlparse
+
+from knowledge_base.exceptions import ValidationError
 
 __all__ = [
     "STOPWORDS",
     "TITLE_STOPWORDS",
     "compute_file_hash",
     "content_hash",
+    "is_private_ip",
     "serialize_f32",
+    "validate_base_url",
 ]
+
+
+# ---------------------------------------------------------------------------
+# SSRF protection — shared by web.py, llm.py, vision.py
+# ---------------------------------------------------------------------------
+
+
+def is_private_ip(hostname: str) -> bool:
+    """Return True if *hostname* resolves to a non-global IP.
+
+    Uses ``not is_global`` to block private, loopback, link-local, multicast,
+    reserved, and unspecified addresses.  Resolves hostnames to ALL IPs via
+    getaddrinfo to catch DNS rebinding (e.g., 127.0.0.1.nip.io) and
+    multi-homed hosts with mixed public/private addresses.
+    """
+    try:
+        addr = ipaddress.ip_address(hostname)
+        return not addr.is_global
+    except ValueError:
+        pass  # Not an IP literal — fall through to DNS resolution
+    # Resolve hostname to ALL IPs — reject if any is non-global
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+        for _family, _type, _proto, _canonname, sockaddr in infos:
+            addr = ipaddress.ip_address(sockaddr[0])
+            if not addr.is_global:
+                return True
+        return False
+    except (OSError, ValueError):
+        return True  # Can't resolve → reject
+
+
+def validate_base_url(url: str) -> None:
+    """Validate a base URL for scheme and SSRF safety.
+
+    Raises :class:`~knowledge_base.exceptions.ValidationError` on failure.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValidationError(
+            f"Invalid URL scheme: {parsed.scheme!r}. Use http or https."
+        )
+    if not parsed.hostname:
+        raise ValidationError("URL must include a hostname.")
+    if is_private_ip(parsed.hostname):
+        raise ValidationError(
+            f"URL points to a private/reserved address ({parsed.hostname}). "
+            "Use a public IP or hostname."
+        )
 
 
 def compute_file_hash(path: Path) -> str:
