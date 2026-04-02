@@ -17,6 +17,80 @@ from .llm import _get_llm_config, _llm_call
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Schema validation for LLM JSON responses (#191)
+# ---------------------------------------------------------------------------
+
+_EXTRACTION_LIST_KEYS = ("methods", "datasets", "metrics")
+
+
+def _validate_extraction_schema(data: object, *, context: str = "") -> dict:
+    """Validate that *data* matches the extraction response schema.
+
+    Expected shape::
+
+        {"methods": [dict, ...], "datasets": [dict, ...], "metrics": [dict, ...]}
+
+    Each top-level key is optional (missing → treated as empty list downstream),
+    but if present it must be a list of dicts.
+
+    Raises ``ValueError`` with a human-readable message on mismatch.
+    """
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"{context}expected a JSON object (dict), got {type(data).__name__}"
+        )
+    for key in _EXTRACTION_LIST_KEYS:
+        value = data.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            raise ValueError(
+                f"{context}'{key}' must be a list, got {type(value).__name__}"
+            )
+        for i, item in enumerate(value):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"{context}'{key}[{i}]' must be a dict, got {type(item).__name__}"
+                )
+    return data
+
+
+def _validate_resolution_schema(data: object, *, context: str = "") -> dict:
+    """Validate that *data* matches the entity-resolution response schema.
+
+    Expected shape::
+
+        {"groups": [{"canonical": str, "type": str, "members": [str, ...]}, ...]}
+
+    Raises ``ValueError`` with a human-readable message on mismatch.
+    """
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"{context}expected a JSON object (dict), got {type(data).__name__}"
+        )
+    groups = data.get("groups")
+    if groups is None:
+        return data
+    if not isinstance(groups, list):
+        raise ValueError(
+            f"{context}'groups' must be a list, got {type(groups).__name__}"
+        )
+    for i, group in enumerate(groups):
+        if not isinstance(group, dict):
+            raise ValueError(
+                f"{context}'groups[{i}]' must be a dict, got {type(group).__name__}"
+            )
+        members = group.get("members")
+        if members is not None and not isinstance(members, list):
+            raise ValueError(
+                f"{context}'groups[{i}].members' must be a list, "
+                f"got {type(members).__name__}"
+            )
+    return data
+
+
 __all__ = [
     "AVG_SECONDS_PER_CHUNK",
     "SINGLE_PASS_CHAR_LIMIT",
@@ -298,6 +372,7 @@ def _map_extract(
         result = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ValueError(f"LLM returned invalid JSON for chunk {chunk_id}: {e}") from e
+    _validate_extraction_schema(result, context=f"chunk {chunk_id}: ")
     for item in result.get("methods") or []:
         item["chunk_id"] = chunk_id
     for item in result.get("datasets") or []:
@@ -375,9 +450,11 @@ def _resolve_entities(
     prompt = _RESOLVE_PROMPT.format(entities=json.dumps(entity_list, indent=2))
     raw = _llm_call(prompt, cfg=cfg, client=client)
     try:
-        return json.loads(raw)
+        result = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ValueError(f"Entity resolution returned invalid JSON: {e}") from e
+    _validate_resolution_schema(result)
+    return result
 
 
 def _clear_previous_extraction(conn: sqlite3.Connection, paper_id: int) -> None:
@@ -600,6 +677,10 @@ def _extract_single_pass(
         extracted = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ExtractionError("LLM returned invalid JSON", raw=raw) from e
+    try:
+        _validate_extraction_schema(extracted)
+    except ValueError as e:
+        raise ExtractionError(str(e), raw=raw) from e
 
     try:
         _clear_previous_extraction(conn, paper_id)

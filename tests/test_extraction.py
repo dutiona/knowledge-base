@@ -1561,3 +1561,200 @@ def test_max_workers_defaults_to_sequential(tmp_path):
 
     # Sequential: calls should be in order
     assert call_order == sorted(call_order)
+
+
+# --- Schema validation (#191) ---
+
+
+class TestValidateExtractionSchema:
+    """LLM JSON responses must conform to expected structure."""
+
+    def test_map_extract_rejects_non_dict(self, tmp_path):
+        """Top-level response must be a dict, not a list or string."""
+        _setup(tmp_path)
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps([{"name": "X"}]),
+        ):
+            with pytest.raises(ValueError, match="expected a JSON object"):
+                _map_extract(1, "text", 0, 1, cfg)
+
+    def test_map_extract_rejects_methods_not_list(self, tmp_path):
+        """'methods' must be a list, not a string or dict."""
+        _setup(tmp_path)
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps({"methods": "BERT", "datasets": [], "metrics": []}),
+        ):
+            with pytest.raises(ValueError, match="'methods'.*must be a list"):
+                _map_extract(1, "text", 0, 1, cfg)
+
+    def test_map_extract_rejects_datasets_not_list(self, tmp_path):
+        _setup(tmp_path)
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps(
+                {"methods": [], "datasets": {"name": "X"}, "metrics": []}
+            ),
+        ):
+            with pytest.raises(ValueError, match="'datasets'.*must be a list"):
+                _map_extract(1, "text", 0, 1, cfg)
+
+    def test_map_extract_rejects_metrics_not_list(self, tmp_path):
+        _setup(tmp_path)
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps(
+                {"methods": [], "datasets": [], "metrics": "95% accuracy"}
+            ),
+        ):
+            with pytest.raises(ValueError, match="'metrics'.*must be a list"):
+                _map_extract(1, "text", 0, 1, cfg)
+
+    def test_map_extract_rejects_method_item_not_dict(self, tmp_path):
+        _setup(tmp_path)
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps(
+                {"methods": ["BERT"], "datasets": [], "metrics": []}
+            ),
+        ):
+            with pytest.raises(ValueError, match="'methods\\[0\\]'.*must be a dict"):
+                _map_extract(1, "text", 0, 1, cfg)
+
+    def test_map_extract_accepts_valid_response(self, tmp_path):
+        """Valid schema passes without error."""
+        _setup(tmp_path)
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        valid = {
+            "methods": [{"name": "BERT", "description": "encoder"}],
+            "datasets": [],
+            "metrics": [
+                {
+                    "metric": "acc",
+                    "value": 0.9,
+                    "unit": "%",
+                    "method": "BERT",
+                    "dataset": "",
+                }
+            ],
+        }
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps(valid),
+        ):
+            result = _map_extract(1, "text", 0, 1, cfg)
+        assert len(result["methods"]) == 1
+
+    def test_map_extract_accepts_missing_optional_keys(self, tmp_path):
+        """Missing top-level keys are OK (treated as empty)."""
+        _setup(tmp_path)
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps({"methods": []}),
+        ):
+            result = _map_extract(1, "text", 0, 1, cfg)
+        assert result.get("datasets") is None or result.get("datasets") == []
+
+    def test_single_pass_rejects_non_dict(self, tmp_path):
+        conn = _setup(tmp_path)
+        p = register_paper(conn, "P")["paper_id"]
+        chunks = [{"id": 1, "content": "short text"}]
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps("just a string"),
+        ):
+            with pytest.raises(ExtractionError, match="expected a JSON object"):
+                _extract_single_pass(conn, p, chunks)
+
+    def test_single_pass_rejects_methods_not_list(self, tmp_path):
+        conn = _setup(tmp_path)
+        p = register_paper(conn, "P")["paper_id"]
+        chunks = [{"id": 1, "content": "short text"}]
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps({"methods": 42, "datasets": [], "metrics": []}),
+        ):
+            with pytest.raises(ExtractionError, match="'methods'.*must be a list"):
+                _extract_single_pass(conn, p, chunks)
+
+
+class TestValidateResolutionSchema:
+    """Entity resolution JSON must conform to expected structure."""
+
+    def test_resolve_rejects_non_dict(self, tmp_path):
+        _setup(tmp_path)
+        map_results = [
+            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
+        ]
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps([{"canonical": "X"}]),
+        ):
+            with pytest.raises(ValueError, match="expected a JSON object"):
+                _resolve_entities(map_results, cfg)
+
+    def test_resolve_rejects_groups_not_list(self, tmp_path):
+        _setup(tmp_path)
+        map_results = [
+            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
+        ]
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps({"groups": "not a list"}),
+        ):
+            with pytest.raises(ValueError, match="'groups'.*must be a list"):
+                _resolve_entities(map_results, cfg)
+
+    def test_resolve_rejects_group_item_not_dict(self, tmp_path):
+        _setup(tmp_path)
+        map_results = [
+            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
+        ]
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps({"groups": ["not a dict"]}),
+        ):
+            with pytest.raises(ValueError, match="'groups\\[0\\]'.*must be a dict"):
+                _resolve_entities(map_results, cfg)
+
+    def test_resolve_rejects_members_not_list(self, tmp_path):
+        _setup(tmp_path)
+        map_results = [
+            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
+        ]
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps(
+                {"groups": [{"canonical": "X", "type": "method", "members": "X"}]}
+            ),
+        ):
+            with pytest.raises(
+                ValueError, match="'groups\\[0\\]\\.members'.*must be a list"
+            ):
+                _resolve_entities(map_results, cfg)
+
+    def test_resolve_accepts_valid(self, tmp_path):
+        _setup(tmp_path)
+        map_results = [
+            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
+        ]
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps(
+                {"groups": [{"canonical": "X", "type": "method", "members": ["X"]}]}
+            ),
+        ):
+            result = _resolve_entities(map_results, cfg)
+        assert len(result["groups"]) == 1
