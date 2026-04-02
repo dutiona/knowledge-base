@@ -55,6 +55,9 @@ BOOST_WINDOW_MULTIPLIER = 2
 # Default search parameters
 DEFAULT_TOP_K = 10
 DEFAULT_RERANK_TOP_N = 20
+MAX_TOP_K = 500
+
+VALID_MODES = frozenset({"hybrid", "fts", "vec"})
 
 
 def _fts_search(
@@ -222,7 +225,16 @@ def search(
             candidates before final selection.
         rerank_top_n: Number of candidates to feed into the reranker.
             Larger values improve recall at the cost of latency.
+
+    Raises:
+        ValueError: If mode is not one of {hybrid, fts, vec} or
+            top_k is not in [1, MAX_TOP_K].
     """
+    if mode not in VALID_MODES:
+        raise ValueError(f"mode must be one of {sorted(VALID_MODES)}, got {mode!r}")
+    if top_k < 1 or top_k > MAX_TOP_K:
+        raise ValueError(f"top_k must be between 1 and {MAX_TOP_K}, got {top_k}")
+
     fetch_limit = top_k * SEARCH_OVERFETCH_MULTIPLIER
 
     # Resolve space configuration — either specific space or active

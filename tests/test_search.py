@@ -1,5 +1,6 @@
 """Tests for hybrid search (embeddings mocked)."""
 
+import pytest
 from unittest.mock import patch
 
 from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
@@ -238,3 +239,42 @@ def test_search_explicit_strategy_filter_both_directions(tmp_path):
     )
     assert len(mech_results) == 1
     assert mech_results[0].source_type == "markdown"
+
+
+# --- Input validation (issue #188) ---
+
+
+def test_search_rejects_invalid_mode():
+    """search() should reject mode values outside {hybrid, fts, vec}."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    with pytest.raises(ValueError, match="mode"):
+        search(conn, "test", mode="invalid")
+
+
+def test_search_rejects_negative_top_k():
+    """search() should reject top_k <= 0."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    with pytest.raises(ValueError, match="top_k"):
+        search(conn, "test", top_k=-1)
+
+
+def test_search_rejects_zero_top_k():
+    """search() should reject top_k == 0."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    with pytest.raises(ValueError, match="top_k"):
+        search(conn, "test", top_k=0)
+
+
+def test_search_rejects_excessive_top_k():
+    """search() should reject top_k above MAX_TOP_K (500)."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    with pytest.raises(ValueError, match="top_k"):
+        search(conn, "test", top_k=501)
