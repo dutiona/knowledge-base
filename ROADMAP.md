@@ -55,8 +55,8 @@ dependency chains, and parallelism opportunities.
 | 204 | supersede_conclusion no rollback                         | Extraction  | 2.5a  | ✔ PR #289                                         |
 | 212 | PIL Image not closed in \_crop_regions                   | Vision      | 2.5a  | ✔ PR #288                                         |
 | 276 | fix(vision): extract_figures missing conclusions cleanup | Vision      | 2.5a  | ✔                                                 |
-| 277 | perf: optimize full table scan in conclusion FK cleanup  | Extraction  | 2.5b  |                                                   |
-| 278 | refactor: consolidate conclusion FK cleanup into utility | Ingest      | 2.5b  |                                                   |
+| 277 | perf: optimize full table scan in conclusion FK cleanup  | Extraction  | 2.5b  | ✔ PR #304                                         |
+| 278 | refactor: consolidate conclusion FK cleanup into utility | Ingest      | 2.5b  | ✔ PR #304                                         |
 | 236 | unified \_insert_chunks helper (5 call sites)            | Ingest      | 2.5b  | ✔ PR #295                                         |
 | 238 | extract bibtex module (papers.py → bibtex.py)            | Papers      | 2.5b  | ✔ PR #293                                         |
 | 239 | extract auto_relate module (papers.py → auto_relate.py)  | Papers      | 2.5b  | ✔ PR #292                                         |
@@ -300,8 +300,8 @@ review.
 **Parallel with any step:**
 
 ```
-#277 (conclusion FK full table scan)  ─── perf, independent
-#278 (conclusion FK cleanup utility)  ─── refactor, depends on #277
+✔ #277 (conclusion FK full table scan)  ─── perf, ✔ PR #304
+✔ #278 (conclusion FK cleanup utility)  ─── refactor, ✔ PR #304
 #141 (unify SQL INSERTs)              ─── refactor, independent
 #140 (extraction cleanup from #15)    ─── refactor, depends on #15 (done)
 #154 (transaction consolidation)      ─── refactor, independent
@@ -639,10 +639,11 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 ✔ #202, ✔ #203, ✔ #204, ✔ #212, ✔ #276
 
 **Phase 2.5b parallel items** (independent of decomposition ordering):
-#141, #140, #154, #158, ✔ #243, #277, #278
+#141, #140, #154, #158, ✔ #243, ✔ #277, ✔ #278
 
 **Dependency:** #278 (consolidate cleanup) subsumes #276 (vision.py fix) and #277 (perf optimization).
 Do #276 first (quick fix), then #278 absorbs the shared utility + perf work.
+✔ All three landed: #276 (prior), #277 + #278 (PR #304).
 
 **Phase 2.5c doc/test gaps** (independent, low risk):
 #222, #223, #224, #225, #226, #227, #229, #230, #231
