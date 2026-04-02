@@ -47,7 +47,7 @@ from .utils import content_hash as _content_hash
 def _update_folder_summary_safe(conn: sqlite3.Connection, path: Path) -> None:
     """Update folder summary for the parent directory, swallowing errors."""
     try:
-        update_folder_summary(conn, str(path.parent))
+        update_folder_summary(conn, path.parent.as_posix())
     except Exception:
         logger.warning(
             "Failed to update folder summary for %s", path.parent, exc_info=True
@@ -352,7 +352,7 @@ def ingest_file(
                 image_dir=image_dir if page_map else None,
             )
         if not md_chunks:
-            return {"file": str(path), "chunks_added": 0, "chunks_skipped": 0}
+            return {"file": path.as_posix(), "chunks_added": 0, "chunks_skipped": 0}
         new_chunks = []
         skipped = 0
         # Build extractor version string
@@ -382,7 +382,7 @@ def ingest_file(
         # Fixed-size chunking path
         fixed_chunks = _chunk_text(text)
         if not fixed_chunks:
-            return {"file": str(path), "chunks_added": 0, "chunks_skipped": 0}
+            return {"file": path.as_posix(), "chunks_added": 0, "chunks_skipped": 0}
         new_chunks = []
         skipped = 0
         for i, chunk in enumerate(fixed_chunks):
@@ -401,7 +401,7 @@ def ingest_file(
         # All chunks deduped — safe to flush session links (no embedding needed)
         _flush_deferred_session_links(conn, deferred_session_links, session_id)
         conn.commit()
-        result = {"file": str(path), "chunks_added": 0, "chunks_skipped": skipped}
+        result = {"file": path.as_posix(), "chunks_added": 0, "chunks_skipped": skipped}
         if skipped > 0:
             from .papers import compute_file_hash
 
@@ -423,7 +423,7 @@ def ingest_file(
     embeddings = _embed_with_config(conn, texts_to_embed)
 
     # Insert
-    source_uri = str(path)
+    source_uri = path.as_posix()
     for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(
         new_chunks, embeddings
     ):
@@ -448,7 +448,7 @@ def ingest_file(
         _update_folder_summary_safe(conn, path)
 
     return {
-        "file": str(path),
+        "file": path.as_posix(),
         "chunks_added": len(new_chunks),
         "chunks_skipped": skipped,
     }
@@ -466,7 +466,7 @@ def reingest_file(
     before deleting chunks.
     """
     path = path.resolve()
-    source_uri = str(path)
+    source_uri = path.as_posix()
 
     # Check that this source_uri was previously ingested
     existing = conn.execute(

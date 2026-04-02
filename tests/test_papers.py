@@ -594,7 +594,7 @@ def test_register_paper_creates_paper_path(tmp_path):
     result = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))
     paths = get_paper_paths(conn, result["paper_id"])
     assert len(paths) == 1
-    assert paths[0]["path"] == str(md.resolve())
+    assert paths[0]["path"] == md.resolve().as_posix()
     assert paths[0]["is_primary"] == 1
     assert paths[0]["content_hash"] is not None
 

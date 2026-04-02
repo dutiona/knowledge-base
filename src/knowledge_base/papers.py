@@ -97,7 +97,7 @@ def relocate_paper(
     Validates: new_path must exist, must not be owned by another paper,
     and content hash must match if previous hash is known.
     """
-    new_path = str(Path(new_path).resolve())
+    new_path = Path(new_path).resolve().as_posix()
 
     current = conn.execute(
         "SELECT id, path, content_hash FROM paper_paths "
@@ -168,7 +168,7 @@ def register_paper(
 
     # Canonicalize source_uri before any lookups
     if source_uri:
-        source_uri = str(Path(source_uri).resolve())
+        source_uri = Path(source_uri).resolve().as_posix()
 
     # Link abstract to first chunk from this source_uri if available
     abstract_chunk_id = None

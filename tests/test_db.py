@@ -495,3 +495,33 @@ def test_co_occurrence_pairs_uses_join_table(tmp_path):
     assert pairs[0]["source_uri_a"] == "/tmp/a.md"
     assert pairs[0]["source_uri_b"] == "/tmp/b.md"
     assert pairs[0]["co_sessions"] == 1
+
+
+def test_migrate_normalize_source_uri(tmp_path):
+    """Migration normalizes backslash source_uris to forward slashes (#158)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Insert rows with Windows-style backslash paths
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
+        r" VALUES ('h1', 'c1', 'note', 'C:\Users\foo\papers\a.md', 0)"
+    )
+    conn.execute("INSERT INTO papers (title, authors) VALUES ('Test', '[]')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, is_primary)"
+        r" VALUES (1, 'C:\Users\foo\papers\a.md', TRUE)"
+    )
+    conn.commit()
+
+    # Re-run init_schema to trigger migration
+    init_schema(conn)
+
+    chunk_uri = conn.execute(
+        "SELECT source_uri FROM chunks WHERE content_hash = 'h1'"
+    ).fetchone()
+    assert chunk_uri["source_uri"] == "C:/Users/foo/papers/a.md"
+
+    pp = conn.execute("SELECT path FROM paper_paths WHERE paper_id = 1").fetchone()
+    assert pp["path"] == "C:/Users/foo/papers/a.md"
