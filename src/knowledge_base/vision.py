@@ -168,9 +168,9 @@ def _validate_omniparser_path(path: str) -> Path:
     parse_script = omni_dir / "parse.py"
     venv_python = omni_dir / ".venv" / "bin" / "python"
 
-    if not parse_script.exists():
+    if not parse_script.is_file():
         raise ValidationError(f"parse.py not found at {parse_script}")
-    if not venv_python.exists():
+    if not venv_python.is_file():
         raise ValidationError(f"venv python not found at {venv_python}")
     if not os.access(venv_python, os.X_OK):
         raise ValidationError(f"python binary is not executable at {venv_python}")
