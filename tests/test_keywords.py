@@ -59,8 +59,8 @@ def test_numeric_terms_preserved():
 
 def test_build_fts_query_from_keywords():
     result = build_fts_query(["rust", "error", "async"])
-    # Should produce OR-joined FTS5 query
-    assert result == "rust OR error OR async"
+    # Every term is unconditionally double-quoted
+    assert result == '"rust" OR "error" OR "async"'
 
 
 def test_build_fts_query_empty():
@@ -68,26 +68,35 @@ def test_build_fts_query_empty():
 
 
 def test_build_fts_query_single():
-    assert build_fts_query(["transformer"]) == "transformer"
+    assert build_fts_query(["transformer"]) == '"transformer"'
 
 
-def test_build_fts_query_escapes_special_chars():
-    # FTS5 special: AND, OR, NOT, NEAR, quotes, parens, asterisk, caret
+def test_build_fts_query_quotes_special_chars():
     result = build_fts_query(["self-supervised", "pre-training"])
-    # Hyphens inside terms should be quoted to prevent FTS5 treating them as operators
     assert '"self-supervised"' in result
     assert '"pre-training"' in result
 
 
-def test_build_fts_query_strips_fts_operators():
-    # If a keyword happens to be an FTS operator, skip it
+def test_build_fts_query_quotes_fts_operators():
+    # FTS5 operators are now safely quoted instead of stripped
     result = build_fts_query(["near", "transformer"])
-    assert "transformer" in result
-    assert "near" not in result.split()
+    assert '"near"' in result
+    assert '"transformer"' in result
 
 
-def test_build_fts_query_all_operators_returns_empty():
-    assert build_fts_query(["and", "or", "not", "near"]) == ""
+def test_build_fts_query_operators_not_stripped():
+    result = build_fts_query(["and", "or", "not", "near"])
+    assert result == '"and" OR "or" OR "not" OR "near"'
+
+
+def test_build_fts_query_escapes_embedded_quotes():
+    result = build_fts_query(['foo"bar'])
+    assert result == '"foo""bar"'
+
+
+def test_build_fts_query_neutralises_prefix_star():
+    result = build_fts_query(["transform*"])
+    assert result == '"transform*"'
 
 
 def test_unicode_terms_preserved():
