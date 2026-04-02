@@ -9,11 +9,47 @@ from .db import escape_like
 from .exceptions import KnowledgeBaseError, NotFoundError, ValidationError
 
 __all__ = [
+    "cleanup_conclusion_chunk_refs",
     "get_conclusion_chain",
     "get_conclusions",
     "record_conclusion",
     "supersede_conclusion",
 ]
+
+
+def cleanup_conclusion_chunk_refs(
+    conn: sqlite3.Connection,
+    chunk_ids_to_remove: set[int],
+) -> None:
+    """Remove *chunk_ids_to_remove* from every conclusion's ``source_chunk_ids``.
+
+    * If some IDs are removed but the array is still non-empty, update the row.
+    * If the array becomes empty (no remaining evidence), clear any
+      ``superseded_by`` FK pointing at this conclusion, then delete it.
+
+    This is the single source of truth for conclusion FK cleanup — called
+    by ``reingest_file`` and ``_cleanup_figure_fk_refs`` in ``ingest.py``.
+    """
+    if not chunk_ids_to_remove:
+        return
+
+    rows = conn.execute("SELECT id, source_chunk_ids FROM conclusions").fetchall()
+    for row in rows:
+        chunk_ids = json.loads(row["source_chunk_ids"])
+        filtered = [cid for cid in chunk_ids if cid not in chunk_ids_to_remove]
+        if len(filtered) == len(chunk_ids):
+            continue
+        if filtered:
+            conn.execute(
+                "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
+                (json.dumps(filtered), row["id"]),
+            )
+        else:
+            conn.execute(
+                "UPDATE conclusions SET superseded_by = NULL WHERE superseded_by = ?",
+                (row["id"],),
+            )
+            conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
 
 
 def record_conclusion(

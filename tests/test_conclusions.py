@@ -9,6 +9,7 @@ from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from knowledge_base.exceptions import NotFoundError, ValidationError
 from knowledge_base.ingest import ingest_file
 from knowledge_base.conclusions import (
+    cleanup_conclusion_chunk_refs,
     get_conclusion_chain,
     get_conclusions,
     record_conclusion,
@@ -239,3 +240,79 @@ def test_conclusion_chain_single(tmp_path):
     chain = get_conclusion_chain(conn, r["conclusion_id"])
     assert len(chain) == 1
     assert chain[0]["claim"] == "Standalone conclusion"
+
+
+# --- cleanup_conclusion_chunk_refs ---
+
+
+def _insert_stub_chunk(conn: sqlite3.Connection, n: int) -> int:
+    """Insert a minimal chunk row and return its id."""
+    cursor = conn.execute(
+        "INSERT INTO chunks (content, content_hash, source_uri, source_type, chunk_index)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (f"stub-{n}", f"hash-{n}", f"test://stub-{n}", "markdown", 0),
+    )
+    conn.commit()
+    assert cursor.lastrowid is not None
+    return cursor.lastrowid
+
+
+def test_cleanup_removes_deleted_ids_from_array(tmp_path):
+    conn = _setup(tmp_path)
+    c1 = _insert_stub_chunk(conn, 1)
+    c2 = _insert_stub_chunk(conn, 2)
+    record_conclusion(conn, "Multi-evidence", 0.9, [c1, c2])
+
+    cleanup_conclusion_chunk_refs(conn, {c1})
+
+    conclusions = get_conclusions(conn)
+    assert len(conclusions) == 1
+    assert c1 not in conclusions[0]["source_chunk_ids"]
+    assert c2 in conclusions[0]["source_chunk_ids"]
+
+
+def test_cleanup_deletes_zombie_when_all_ids_removed(tmp_path):
+    conn = _setup(tmp_path)
+    c1 = _insert_stub_chunk(conn, 1)
+    record_conclusion(conn, "Single-evidence", 0.9, [c1])
+
+    cleanup_conclusion_chunk_refs(conn, {c1})
+
+    conclusions = get_conclusions(conn)
+    assert len(conclusions) == 0
+
+
+def test_cleanup_clears_superseded_by_before_zombie_deletion(tmp_path):
+    conn = _setup(tmp_path)
+    c1 = _insert_stub_chunk(conn, 1)
+    v1 = record_conclusion(conn, "V1", 0.9, [c1])
+    supersede_conclusion(conn, v1["conclusion_id"], "V2", 0.95, [c1])
+
+    # Both reference only c1 — removing it should delete both without FK error
+    cleanup_conclusion_chunk_refs(conn, {c1})
+
+    conclusions = get_conclusions(conn, include_superseded=True)
+    assert len(conclusions) == 0
+
+
+def test_cleanup_noop_when_ids_dont_match(tmp_path):
+    conn = _setup(tmp_path)
+    c1 = _insert_stub_chunk(conn, 1)
+    record_conclusion(conn, "Unaffected", 0.9, [c1])
+
+    cleanup_conclusion_chunk_refs(conn, {9999})
+
+    conclusions = get_conclusions(conn)
+    assert len(conclusions) == 1
+    assert conclusions[0]["source_chunk_ids"] == [c1]
+
+
+def test_cleanup_noop_on_empty_set(tmp_path):
+    conn = _setup(tmp_path)
+    c1 = _insert_stub_chunk(conn, 1)
+    record_conclusion(conn, "Untouched", 0.9, [c1])
+
+    cleanup_conclusion_chunk_refs(conn, set())
+
+    conclusions = get_conclusions(conn)
+    assert len(conclusions) == 1

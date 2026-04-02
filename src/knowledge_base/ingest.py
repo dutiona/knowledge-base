@@ -29,6 +29,7 @@ from .db import (
     get_active_space,
     insert_chunk_vec,
 )
+from .conclusions import cleanup_conclusion_chunk_refs
 from .embed_swap import get_embed_config
 from .embeddings import embed, truncate_embedding
 from .exceptions import NotFoundError, ValidationError
@@ -969,23 +970,7 @@ def reingest_file(
 
     # 3. conclusions.source_chunk_ids — JSON array, remove deleted IDs;
     #    delete conclusion entirely if no evidence remains (#160)
-    rows = conn.execute("SELECT id, source_chunk_ids FROM conclusions").fetchall()
-    for row in rows:
-        chunk_ids = json.loads(row["source_chunk_ids"])
-        filtered = [cid for cid in chunk_ids if cid not in old_id_set]
-        if len(filtered) != len(chunk_ids):
-            if filtered:
-                conn.execute(
-                    "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
-                    (json.dumps(filtered), row["id"]),
-                )
-            else:
-                conn.execute(
-                    "UPDATE conclusions SET superseded_by = NULL "
-                    "WHERE superseded_by = ?",
-                    (row["id"],),
-                )
-                conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
+    cleanup_conclusion_chunk_refs(conn, old_id_set)
 
     # 4. methods/datasets/metrics.chunk_id → SET NULL (track for re-linking)
     affected_entities: dict[str, list[dict]] = {}
@@ -1299,23 +1284,7 @@ def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> N
         chunk_ids,
     )
 
-    rows = conn.execute("SELECT id, source_chunk_ids FROM conclusions").fetchall()
-    for row in rows:
-        cids = json.loads(row["source_chunk_ids"])
-        filtered = [cid for cid in cids if cid not in id_set]
-        if len(filtered) != len(cids):
-            if filtered:
-                conn.execute(
-                    "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
-                    (json.dumps(filtered), row["id"]),
-                )
-            else:
-                conn.execute(
-                    "UPDATE conclusions SET superseded_by = NULL "
-                    "WHERE superseded_by = ?",
-                    (row["id"],),
-                )
-                conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
+    cleanup_conclusion_chunk_refs(conn, id_set)
 
     for table in ("methods", "datasets", "metrics"):
         _batched_execute(
