@@ -87,7 +87,7 @@ dependency chains, and parallelism opportunities.
 | 189 | subprocess with user-configurable omniparser_path        | Vision      | 2.5c  | ✔ PR #316                                         |
 | 190 | LLM base_url SSRF — only scheme validated                | Extraction  | 2.5c  | ✔ PR #318                                         |
 | 191 | LLM JSON without structural validation                   | Extraction  | 2.5c  | ✔ PR #314                                         |
-| 192 | indirect prompt injection in LLM extraction              | Extraction  | 2.5c  |                                                   |
+| 192 | indirect prompt injection in LLM extraction              | Extraction  | 2.5c  | ✔ PR #317                                         |
 | 193 | FTS5 operator sanitization incomplete                    | Search      | 2.5c  | ✔ PR #315                                         |
 | 194 | f-string SQL assembly fragile pattern                    | Foundation  | 2.5c  |                                                   |
 | 196 | add_relationship error ignored by auto_relate            | Papers      | 2.5c  |                                                   |
@@ -340,7 +340,7 @@ compounding tech debt.
 #213 (single-pass entity duplication)  ─── independent
 ```
 
-### Security & Validation — 7 items
+### Security & Validation — 7 items ✔ (all complete)
 
 ```
 ✔ #187 (bare except swallows FTS errors) ─── independent (PR #312)
@@ -348,7 +348,7 @@ compounding tech debt.
 ✔ #189 (subprocess omniparser_path)      ─── independent (PR #316)
 ✔ #190 (LLM base_url SSRF)              ─── independent (PR #318)
 ✔ #191 (LLM JSON no structural valid.)   ─── independent (PR #314)
-#192 (indirect prompt injection)       ─── independent
+✔ #192 (indirect prompt injection)      ─── independent (PR #317)
 ✔ #193 (FTS5 sanitization incomplete)    ─── independent (PR #315)
 ```
 
@@ -584,7 +584,7 @@ Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a ✔        Ph
 PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151       ✔ #236, ✔ #238, ✔ #239       #181, #199, #200
 #85 ─────┤                      ✔ #100               ✔ #150, ✔ #165         ✔ #240, ✔ #243             #205–#211, #213
 #78 ─────┼──▶ ✔ #71            ✔ #15                ✔ #166, ✔ #180      Step 2 (needs ✔ #236):    Security:
-#46 ─────┤                      ✔ #110               ✔ #182, ✔ #195         ✔ #234, ✔ #235, ✔ #237     ✔ #187, ✔ #188, ✔ #189, #190–#192, ✔ #193
+#46 ─────┤                      ✔ #110               ✔ #182, ✔ #195         ✔ #234, ✔ #235, ✔ #237     ✔ #187, ✔ #188, ✔ #189, ✔ #190, ✔ #191, ✔ #192, ✔ #193
 #45 ─────┤    ✔ #101           ✔ #82                ✔ #197, ✔ #198      Step 3 (needs Step 2):  Quality:
 #16 ─────┘                      ✔ #126               ✔ #201, ✔ #202         ✔ #241, ✔ #242           #194, #196, #214
                                 ✔ #127               ✔ #203, ✔ #204      Parallel:                #218–#221
