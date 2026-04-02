@@ -234,7 +234,9 @@ def search(
             or top_k is not in [1, MAX_TOP_K].
     """
     if mode not in VALID_MODES:
-        raise ValidationError(f"mode must be one of {sorted(VALID_MODES)}, got {mode!r}")
+        raise ValidationError(
+            f"mode must be one of {sorted(VALID_MODES)}, got {mode!r}"
+        )
     if top_k < 1 or top_k > MAX_TOP_K:
         raise ValidationError(f"top_k must be between 1 and {MAX_TOP_K}, got {top_k}")
     if source_type and source_type not in VALID_SOURCE_TYPES:

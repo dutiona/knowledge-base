@@ -1,13 +1,15 @@
 """Tests for hybrid search (embeddings mocked)."""
 
-import pytest
-import sqlite3
+import json
 from unittest.mock import patch
 
+import pytest
+
 from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
-from knowledge_base.ingest import ingest_file
-from knowledge_base.search import search, _rrf_merge
 from knowledge_base.exceptions import ValidationError
+from knowledge_base.ingest import ingest_file
+from knowledge_base.routes.search import search_index
+from knowledge_base.search import search, _rrf_merge
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
@@ -246,29 +248,34 @@ def test_search_explicit_strategy_filter_both_directions(tmp_path):
 # --- Input validation (issue #188) ---
 
 
-def test_search_rejects_invalid_mode():
-    """search() should reject mode values outside {hybrid, fts, vec}."""
-    conn = sqlite3.connect(":memory:")
-    with pytest.raises(ValidationError, match="mode"):
-        search(conn, "test", mode="invalid")
+@pytest.mark.parametrize(
+    "param, value, match",
+    [
+        ("mode", "invalid", "mode"),
+        ("top_k", -1, "top_k"),
+        ("top_k", 0, "top_k"),
+        ("top_k", 501, "top_k"),
+        ("source_type", "invalid_type", "source_type"),
+        ("chunk_strategy", "invalid_strategy", "chunk_strategy"),
+    ],
+)
+def test_search_input_validation(tmp_path, param, value, match):
+    """search() should reject invalid parameter values."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+    with pytest.raises(ValidationError, match=match):
+        search(conn, "test", **{param: value})
 
 
-def test_search_rejects_negative_top_k():
-    """search() should reject top_k <= 0."""
-    conn = sqlite3.connect(":memory:")
-    with pytest.raises(ValidationError, match="top_k"):
-        search(conn, "test", top_k=-1)
+def test_search_index_tool_returns_json_error(tmp_path):
+    """search_index tool should return a JSON error instead of crashing on ValidationError."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
 
-
-def test_search_rejects_zero_top_k():
-    """search() should reject top_k == 0."""
-    conn = sqlite3.connect(":memory:")
-    with pytest.raises(ValidationError, match="top_k"):
-        search(conn, "test", top_k=0)
-
-
-def test_search_rejects_excessive_top_k():
-    """search() should reject top_k above MAX_TOP_K (500)."""
-    conn = sqlite3.connect(":memory:")
-    with pytest.raises(ValidationError, match="top_k"):
-        search(conn, "test", top_k=501)
+    with patch("knowledge_base.routes.search._get_conn", return_value=conn):
+        response_str = search_index("test", mode="invalid")
+        response = json.loads(response_str)
+        assert "error" in response
+        assert "mode must be one of" in response["error"]
