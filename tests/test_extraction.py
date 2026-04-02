@@ -1839,6 +1839,41 @@ class TestValidateExtraction:
         assert result["datasets"] == []
         assert result["metrics"] == []
 
+    def test_rejects_nan_metric_value(self):
+        from knowledge_base.extraction import _validate_extraction
+
+        data = {
+            "methods": [],
+            "datasets": [],
+            "metrics": [{"metric": "acc", "value": float("nan")}],
+        }
+        result = _validate_extraction(data)
+        assert len(result["metrics"]) == 0
+
+    def test_rejects_inf_metric_value(self):
+        from knowledge_base.extraction import _validate_extraction
+
+        data = {
+            "methods": [],
+            "datasets": [],
+            "metrics": [{"metric": "acc", "value": float("inf")}],
+        }
+        result = _validate_extraction(data)
+        assert len(result["metrics"]) == 0
+
+    def test_caps_surface_forms(self):
+        from knowledge_base.extraction import _validate_extraction, MAX_SURFACE_FORMS
+
+        data = {
+            "methods": [
+                {"name": "CNN", "surface_forms": [f"alias{i}" for i in range(100)]}
+            ],
+            "datasets": [],
+            "metrics": [],
+        }
+        result = _validate_extraction(data)
+        assert len(result["methods"][0]["surface_forms"]) <= MAX_SURFACE_FORMS
+
 
 class TestValidateResolution:
     """Tests for _validate_resolution — entity resolution output guard."""
@@ -1875,6 +1910,53 @@ class TestValidateResolution:
 
         result = _validate_resolution({})
         assert result["groups"] == []
+
+    def test_caps_group_count(self):
+        from knowledge_base.extraction import (
+            MAX_RESOLUTION_GROUPS,
+            _validate_resolution,
+        )
+
+        data = {
+            "groups": [
+                {"canonical": f"e{i}", "type": "method", "members": [f"e{i}"]}
+                for i in range(200)
+            ]
+        }
+        result = _validate_resolution(data)
+        assert len(result["groups"]) <= MAX_RESOLUTION_GROUPS
+
+    def test_caps_members_per_group(self):
+        from knowledge_base.extraction import (
+            MAX_MEMBERS_PER_GROUP,
+            _validate_resolution,
+        )
+
+        data = {
+            "groups": [
+                {
+                    "canonical": "CNN",
+                    "type": "method",
+                    "members": [f"alias{i}" for i in range(200)],
+                }
+            ]
+        }
+        result = _validate_resolution(data)
+        assert len(result["groups"][0]["members"]) <= MAX_MEMBERS_PER_GROUP
+
+    def test_drops_invalid_entity_type(self):
+        from knowledge_base.extraction import _validate_resolution
+
+        data = {
+            "groups": [
+                {"canonical": "CNN", "type": "invalid_type", "members": ["CNN"]},
+                {"canonical": "MNIST", "type": "dataset", "members": ["MNIST"]},
+            ]
+        }
+        result = _validate_resolution(data)
+        # First group should NOT have type (invalid was dropped)
+        assert "type" not in result["groups"][0]
+        assert result["groups"][1]["type"] == "dataset"
 
 
 class TestProvenanceColumn:

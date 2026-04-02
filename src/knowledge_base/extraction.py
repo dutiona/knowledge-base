@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import sqlite3
 import time
@@ -47,6 +48,9 @@ MAX_ENTITY_NAME_LEN = 200
 MAX_DESCRIPTION_LEN = 2000
 MAX_ENTITIES_PER_EXTRACTION = 50
 MAX_METRICS_PER_EXTRACTION = 200
+MAX_RESOLUTION_GROUPS = 100
+MAX_MEMBERS_PER_GROUP = 50
+MAX_SURFACE_FORMS = 20
 
 # Control-character pattern (keep tabs, newlines, carriage returns)
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -91,7 +95,7 @@ def _validate_extraction(data: object) -> dict:
             if "surface_forms" in item and isinstance(item["surface_forms"], list):
                 clean_item["surface_forms"] = [
                     _sanitize_str(sf, MAX_ENTITY_NAME_LEN)
-                    for sf in item["surface_forms"]
+                    for sf in item["surface_forms"][:MAX_SURFACE_FORMS]
                     if isinstance(sf, str)
                 ]
             if "chunk_id" in item:
@@ -113,6 +117,8 @@ def _validate_extraction(data: object) -> dict:
         try:
             value = float(value)
         except (ValueError, TypeError):
+            continue
+        if not math.isfinite(value):
             continue
         clean_met: dict = {
             "metric": _sanitize_str(metric_name.strip(), MAX_ENTITY_NAME_LEN),
@@ -142,8 +148,10 @@ def _validate_resolution(data: object) -> dict:
     if not isinstance(groups_raw, list):
         return {"groups": []}
 
+    _ALLOWED_ENTITY_TYPES = {"method", "dataset"}
+
     clean_groups = []
-    for group in groups_raw:
+    for group in groups_raw[:MAX_RESOLUTION_GROUPS]:
         if not isinstance(group, dict):
             continue
         canonical = group.get("canonical")
@@ -152,13 +160,14 @@ def _validate_resolution(data: object) -> dict:
         clean_group: dict = {
             "canonical": _sanitize_str(canonical.strip(), MAX_ENTITY_NAME_LEN),
         }
-        if isinstance(group.get("type"), str):
-            clean_group["type"] = group["type"]
+        etype = group.get("type")
+        if isinstance(etype, str) and etype in _ALLOWED_ENTITY_TYPES:
+            clean_group["type"] = etype
         members = group.get("members") or []
         if isinstance(members, list):
             clean_group["members"] = [
                 _sanitize_str(m, MAX_ENTITY_NAME_LEN)
-                for m in members
+                for m in members[:MAX_MEMBERS_PER_GROUP]
                 if isinstance(m, str)
             ]
         clean_groups.append(clean_group)
@@ -274,7 +283,7 @@ def record_metric(
 
 def get_methods(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
     rows = conn.execute(
-        "SELECT id, name, description, chunk_id FROM methods WHERE paper_id = ?",
+        "SELECT id, name, description, chunk_id, source FROM methods WHERE paper_id = ?",
         (paper_id,),
     ).fetchall()
     return [
@@ -283,6 +292,7 @@ def get_methods(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
             "name": r["name"],
             "description": r["description"],
             "chunk_id": r["chunk_id"],
+            "source": r["source"],
         }
         for r in rows
     ]
@@ -290,7 +300,7 @@ def get_methods(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
 
 def get_datasets(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
     rows = conn.execute(
-        "SELECT id, name, description, chunk_id FROM datasets WHERE paper_id = ?",
+        "SELECT id, name, description, chunk_id, source FROM datasets WHERE paper_id = ?",
         (paper_id,),
     ).fetchall()
     return [
@@ -299,6 +309,7 @@ def get_datasets(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
             "name": r["name"],
             "description": r["description"],
             "chunk_id": r["chunk_id"],
+            "source": r["source"],
         }
         for r in rows
     ]
@@ -306,7 +317,7 @@ def get_datasets(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
 
 def get_metrics(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
     rows = conn.execute(
-        "SELECT m.id, m.name, m.value, m.unit, m.chunk_id,"
+        "SELECT m.id, m.name, m.value, m.unit, m.chunk_id, m.source,"
         " mt.name as method_name, d.name as dataset_name"
         " FROM metrics m"
         " LEFT JOIN methods mt ON m.method_id = mt.id"
@@ -323,6 +334,7 @@ def get_metrics(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
             "method_name": r["method_name"],
             "dataset_name": r["dataset_name"],
             "chunk_id": r["chunk_id"],
+            "source": r["source"],
         }
         for r in rows
     ]
@@ -1076,7 +1088,7 @@ def extract_structure(
 def get_entities(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
     """List resolved entities for a paper with their mentions."""
     entities = conn.execute(
-        "SELECT id, canonical_name, entity_type, description FROM entities WHERE paper_id = ?",
+        "SELECT id, canonical_name, entity_type, description, source FROM entities WHERE paper_id = ?",
         (paper_id,),
     ).fetchall()
 
@@ -1092,6 +1104,7 @@ def get_entities(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
                 "canonical_name": e["canonical_name"],
                 "type": e["entity_type"],
                 "description": e["description"],
+                "source": e["source"],
                 "mentions": [
                     {
                         "surface_form": m["surface_form"],
