@@ -1099,8 +1099,6 @@ def _extract_html_images(
         )
         figures_added += 1
 
-    if figures_added or old_ids:
-        conn.commit()
     return figures_added
 
 
@@ -1404,8 +1402,6 @@ def _extract_web_figures(
         )
         figures_added += 1
 
-    if figures_added:
-        conn.commit()
     return figures_added
 
 
@@ -1431,7 +1427,6 @@ def _cleanup_stale_inline_images(conn: sqlite3.Connection, source_uri: str) -> i
     _cleanup_figure_fk_refs(conn, old_ids)
     delete_chunk_vecs(conn, old_ids)
     _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
-    conn.commit()
     logger.info("Cleaned %d stale inline image chunks for %s", len(old_ids), source_uri)
     return len(old_ids)
 
@@ -1546,10 +1541,12 @@ def ingest_url(
     }
 
     if not text.strip():
+        conn.commit()
         return {**_base_result, "chunks_added": 0, "chunks_skipped": 0}
 
     chunks = _chunk_text(text)
     if not chunks:
+        conn.commit()
         return {**_base_result, "chunks_added": 0, "chunks_skipped": 0}
 
     # Compute content hashes, skip duplicates.
