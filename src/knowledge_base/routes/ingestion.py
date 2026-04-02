@@ -104,12 +104,19 @@ def reingest(
 def ingest_url(url: str, session_id: str | None = None) -> str:
     """Ingest a web page by URL. Fetches the page, extracts main content, and indexes it.
 
+    Uses content-hash dedup — unchanged pages are skipped on re-ingest.
+    Use the reingest tool with the URL as path to force re-ingest.
+
     Args:
-        url: URL to ingest (http or https only).
+        url: The URL to fetch and ingest.
         session_id: Optional session ID for co-occurrence tracking.
     """
     conn = _get_conn()
-    return json.dumps(_ingest_url(conn, url, session_id=session_id))
+    try:
+        return json.dumps(_ingest_url(conn, url, session_id=session_id))
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()

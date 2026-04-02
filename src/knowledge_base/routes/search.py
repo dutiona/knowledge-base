@@ -170,5 +170,6 @@ def status() -> str:
                 for row in recent
             ],
             "db_size_mb": round(db_size_bytes / (1024 * 1024), 2),
+            "db_path": str(DEFAULT_DB_PATH),
         }
     )
