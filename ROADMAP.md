@@ -37,9 +37,9 @@ dependency chains, and parallelism opportunities.
 | 105 | auto-relationship discovery via similarity               | Search      | 2     | ✔                                                 |
 | 139 | chunk_sessions join table for N:M session tracking       | Search      | 2     | ✔                                                 |
 | 106 | stage-2 reranking in hybrid search                       | Search      | 2     | ✔                                                 |
-| 163 | bug: qwen3.5 thinking-mode empty extraction              | Extraction  | 2.5a  | ✔ done                                            |
-| 160 | fix: zombie conclusions after FK cleanup                 | Extraction  | 2.5a  | ✔                                                 |
-| 152 | fix: stale inline image chunks on re-ingest              | Ingest      | 2.5a  |                                                   |
+| 163 | bug: qwen3.5 thinking-mode empty extraction              | Extraction  | 2.5a  | ✔                                                 |
+| 160 | fix: zombie conclusions after FK cleanup                 | Extraction  | 2.5a  | ✔ PR #272                                         |
+| 152 | fix: stale inline image chunks on re-ingest              | Ingest      | 2.5a  | ✔ PR #271                                         |
 | 151 | fix: getaddrinfo for SSRF IP check                       | Ingest      | 2.5a  | ✔ PR #270                                         |
 | 150 | improve zero-norm embedding vector handling              | Embedding   | 2.5a  | ✔ PR #274                                         |
 | 165 | auto_relate: fallback to abstract_chunk_id               | Search      | 2.5a  | ✔ PR #280                                         |
@@ -48,13 +48,13 @@ dependency chains, and parallelism opportunities.
 | 182 | relocate_paper lacks transaction safety                  | Papers      | 2.5a  | ✔ PR #281                                         |
 | 195 | path_conflict referenced before assignment               | Ingest      | 2.5a  | ✔ PR #286                                         |
 | 197 | LIKE wildcard injection in title search                  | Papers      | 2.5a  | ✔ PR #285                                         |
-| 198 | cursor.lastrowid falsy check by accident                 | Papers      | 2.5a  | ✔ direct commit                                   |
+| 198 | cursor.lastrowid falsy check by accident                 | Papers      | 2.5a  | ✔                                                 |
 | 201 | folder boost bug when best_distance==0                   | Search      | 2.5a  | ✔ PR #287                                         |
 | 202 | offset drift in \_chunk_markdown                         | Ingest      | 2.5a  | ✔ PR #290                                         |
 | 203 | \_validate_bib_path return value discarded               | Papers      | 2.5a  | ✔ PR #291                                         |
 | 204 | supersede_conclusion no rollback                         | Extraction  | 2.5a  | ✔ PR #289                                         |
 | 212 | PIL Image not closed in \_crop_regions                   | Vision      | 2.5a  | ✔ PR #288                                         |
-| 276 | fix(vision): extract_figures missing conclusions cleanup | Vision      | 2.5a  | done                                              |
+| 276 | fix(vision): extract_figures missing conclusions cleanup | Vision      | 2.5a  | ✔                                                 |
 | 277 | perf: optimize full table scan in conclusion FK cleanup  | Extraction  | 2.5b  |                                                   |
 | 278 | refactor: consolidate conclusion FK cleanup into utility | Ingest      | 2.5b  |                                                   |
 | 236 | unified \_insert_chunks helper (5 call sites)            | Ingest      | 2.5b  | ✔ PR #295                                         |
@@ -300,6 +300,8 @@ review.
 **Parallel with any step:**
 
 ```
+#277 (conclusion FK full table scan)  ─── perf, independent
+#278 (conclusion FK cleanup utility)  ─── refactor, depends on #277
 #141 (unify SQL INSERTs)              ─── refactor, independent
 #140 (extraction cleanup from #15)    ─── refactor, depends on #15 (done)
 #154 (transaction consolidation)      ─── refactor, independent
