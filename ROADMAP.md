@@ -656,3 +656,6 @@ Do #276 first (quick fix), then #278 absorbs the shared utility + perf work.
 
 **Phase 3 gap-analysis additions** (independent, can start when Phase 3 begins):
 #263, #264, #265, #266
+
+**Phase 3 note-29 additions** (from Claude Code reverse-engineering, independent):
+#322 (content provenance gate), #323 (UX taxonomy overlay), #324 (pre-inject existing facts for dedup)
