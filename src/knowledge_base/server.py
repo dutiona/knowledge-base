@@ -46,12 +46,11 @@ from .extraction import (
 from .llm import configure_llm
 from .jobs import get_job, list_jobs as _list_jobs, submit_job
 from .ingest import (
-    configure_browser,
     ingest_directory,
     ingest_file,
-    ingest_url as _ingest_url,
     reingest_file,
 )
+from .web import configure_browser, ingest_url as _ingest_url
 from .bibtex import export_bibtex, sync_bibtex
 from .papers import (
     add_relationship,
