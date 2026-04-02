@@ -276,8 +276,7 @@ def test_get_vision_config_strips_v1(tmp_path, input_url, expected):
     assert cfg["base_url"] == expected
 
 
-@patch("knowledge_base.vision.validate_base_url")
-def test_configure_vision_roundtrip(_mock_validate, tmp_path):
+def test_configure_vision_roundtrip(tmp_path):
     """Set values, read them back."""
     from knowledge_base.vision import _get_vision_config, configure_vision
 

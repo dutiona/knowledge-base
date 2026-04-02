@@ -1947,7 +1947,7 @@ def test_extract_html_images_rejects_private_ip(mock_stream, mock_vision_cfg, tm
     mock_stream.assert_not_called()
 
 
-def testis_private_ip_literals():
+def test_is_private_ip_literals():
     """is_private_ip correctly identifies non-global IPs."""
     assert is_private_ip("127.0.0.1") is True
     assert is_private_ip("192.168.1.1") is True
@@ -1959,7 +1959,7 @@ def testis_private_ip_literals():
 
 
 @patch("knowledge_base.utils.socket.getaddrinfo")
-def testis_private_ip_rejects_mixed_resolution(mock_getaddrinfo):
+def test_is_private_ip_rejects_mixed_resolution(mock_getaddrinfo):
     """is_private_ip rejects hostnames that resolve to any private IP (#151)."""
     # Simulate DNS returning both a public and a private address
     mock_getaddrinfo.return_value = [
@@ -1970,7 +1970,7 @@ def testis_private_ip_rejects_mixed_resolution(mock_getaddrinfo):
 
 
 @patch("knowledge_base.utils.socket.getaddrinfo")
-def testis_private_ip_allows_all_public(mock_getaddrinfo):
+def test_is_private_ip_allows_all_public(mock_getaddrinfo):
     """is_private_ip allows hostnames where all resolved IPs are public."""
     mock_getaddrinfo.return_value = [
         (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
@@ -1980,7 +1980,7 @@ def testis_private_ip_allows_all_public(mock_getaddrinfo):
 
 
 @patch("knowledge_base.utils.socket.getaddrinfo")
-def testis_private_ip_rejects_ipv6_loopback(mock_getaddrinfo):
+def test_is_private_ip_rejects_ipv6_loopback(mock_getaddrinfo):
     """is_private_ip rejects hostnames resolving to IPv6 loopback (#151)."""
     mock_getaddrinfo.return_value = [
         (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::1", 0, 0, 0)),
