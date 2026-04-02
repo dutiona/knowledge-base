@@ -1480,118 +1480,125 @@ def ingest_url(
     browser_rendered = False
     figures_extracted = 0
 
-    # Browser fallback: if trafilatura got insufficient content, try rendering
-    if len(text.strip()) < _BROWSER_FALLBACK_MIN_CHARS:
-        browser_config = _get_browser_config(conn)
-        if browser_config:
-            render_result = _render_with_browser(url, browser_config)
-            if render_result:
-                try:
-                    rendered_text = (
-                        trafilatura.extract(
-                            render_result["html"],
-                            include_links=False,
-                            include_tables=True,
+    try:
+        # Browser fallback: if trafilatura got insufficient content, try rendering
+        if len(text.strip()) < _BROWSER_FALLBACK_MIN_CHARS:
+            browser_config = _get_browser_config(conn)
+            if browser_config:
+                render_result = _render_with_browser(url, browser_config)
+                if render_result:
+                    try:
+                        rendered_text = (
+                            trafilatura.extract(
+                                render_result["html"],
+                                include_links=False,
+                                include_tables=True,
+                            )
+                            or ""
                         )
-                        or ""
-                    )
-                    meta2 = trafilatura.extract_metadata(render_result["html"])
-                    if meta2 and meta2.title and not extracted_title:
-                        extracted_title = meta2.title
-                    # Only use rendered content if it's actually better
-                    if len(rendered_text.strip()) > len(text.strip()):
-                        text = rendered_text
-                        browser_rendered = True
+                        meta2 = trafilatura.extract_metadata(render_result["html"])
+                        if meta2 and meta2.title and not extracted_title:
+                            extracted_title = meta2.title
+                        # Only use rendered content if it's actually better
+                        if len(rendered_text.strip()) > len(text.strip()):
+                            text = rendered_text
+                            browser_rendered = True
 
-                    # Extract figures from screenshot (isolated from text ingest)
-                    screenshot = render_result.get("screenshot_path")
-                    if screenshot and screenshot.exists():
-                        try:
-                            figures_extracted = _extract_web_figures(
-                                conn, url, screenshot
-                            )
-                        except Exception:
-                            logger.warning(
-                                "Figure extraction failed for %s",
-                                url,
-                                exc_info=True,
-                            )
-                            figures_extracted = 0
-                finally:
-                    tmpdir = render_result.get("tmpdir")
-                    if tmpdir:
-                        shutil.rmtree(tmpdir, ignore_errors=True)
+                        # Extract figures from screenshot (isolated from text ingest)
+                        screenshot = render_result.get("screenshot_path")
+                        if screenshot and screenshot.exists():
+                            try:
+                                figures_extracted = _extract_web_figures(
+                                    conn, url, screenshot
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Figure extraction failed for %s",
+                                    url,
+                                    exc_info=True,
+                                )
+                                figures_extracted = 0
+                    finally:
+                        tmpdir = render_result.get("tmpdir")
+                        if tmpdir:
+                            shutil.rmtree(tmpdir, ignore_errors=True)
 
-    # Extract inline images from HTML (skip when screenshot figures already extracted)
-    if figures_extracted == 0:
-        try:
-            inline_figures = _extract_html_images(
-                conn, html, source_url=url, base_url=str(response.url)
+        # Extract inline images from HTML (skip when screenshot figures already extracted)
+        if figures_extracted == 0:
+            try:
+                inline_figures = _extract_html_images(
+                    conn, html, source_url=url, base_url=str(response.url)
+                )
+                figures_extracted += inline_figures
+            except Exception:
+                logger.warning(
+                    "Inline image extraction failed for %s", url, exc_info=True
+                )
+
+        _base_result: dict = {
+            "url": url,
+            "source_uri": url,
+            "source_type": "web",
+            "browser_rendered": browser_rendered,
+            "figures_extracted": figures_extracted,
+        }
+
+        if not text.strip():
+            conn.commit()
+            return {**_base_result, "chunks_added": 0, "chunks_skipped": 0}
+
+        chunks = _chunk_text(text)
+        if not chunks:
+            conn.commit()
+            return {**_base_result, "chunks_added": 0, "chunks_skipped": 0}
+
+        # Compute content hashes, skip duplicates.
+        # Defer chunk_sessions writes until after embeddings succeed (#180).
+        new_chunks = []
+        skipped = 0
+        deferred_session_links: list[int] = []
+        meta_json = json.dumps({"title": extracted_title} if extracted_title else {})
+        for i, chunk in enumerate(chunks):
+            h = _content_hash(chunk)
+            existing = conn.execute(
+                "SELECT id FROM chunks WHERE content_hash = ?", (h,)
+            ).fetchone()
+            if existing:
+                if session_id is not None:
+                    deferred_session_links.append(existing["id"])
+                skipped += 1
+                continue
+            new_chunks.append((i, chunk, h))
+
+        if not new_chunks:
+            _flush_deferred_session_links(conn, deferred_session_links, session_id)
+            conn.commit()
+            return {**_base_result, "chunks_added": 0, "chunks_skipped": skipped}
+
+        texts_to_embed = [c[1] for c in new_chunks]
+        embeddings = _embed_with_config(conn, texts_to_embed)
+
+        for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings):
+            _insert_chunk(
+                conn,
+                content_hash=chunk_hash,
+                content=chunk_text,
+                source_type="web",
+                source_uri=url,
+                chunk_index=idx,
+                embedding=emb_vec,
+                session_id=session_id,
+                metadata=meta_json,
             )
-            figures_extracted += inline_figures
-        except Exception:
-            logger.warning("Inline image extraction failed for %s", url, exc_info=True)
 
-    _base_result: dict = {
-        "url": url,
-        "source_uri": url,
-        "source_type": "web",
-        "browser_rendered": browser_rendered,
-        "figures_extracted": figures_extracted,
-    }
-
-    if not text.strip():
-        conn.commit()
-        return {**_base_result, "chunks_added": 0, "chunks_skipped": 0}
-
-    chunks = _chunk_text(text)
-    if not chunks:
-        conn.commit()
-        return {**_base_result, "chunks_added": 0, "chunks_skipped": 0}
-
-    # Compute content hashes, skip duplicates.
-    # Defer chunk_sessions writes until after embeddings succeed (#180).
-    new_chunks = []
-    skipped = 0
-    deferred_session_links: list[int] = []
-    meta_json = json.dumps({"title": extracted_title} if extracted_title else {})
-    for i, chunk in enumerate(chunks):
-        h = _content_hash(chunk)
-        existing = conn.execute(
-            "SELECT id FROM chunks WHERE content_hash = ?", (h,)
-        ).fetchone()
-        if existing:
-            if session_id is not None:
-                deferred_session_links.append(existing["id"])
-            skipped += 1
-            continue
-        new_chunks.append((i, chunk, h))
-
-    if not new_chunks:
+        # Embeddings succeeded — flush deferred session links for deduped chunks
         _flush_deferred_session_links(conn, deferred_session_links, session_id)
+
         conn.commit()
-        return {**_base_result, "chunks_added": 0, "chunks_skipped": skipped}
+    except Exception:
+        conn.rollback()
+        raise
 
-    texts_to_embed = [c[1] for c in new_chunks]
-    embeddings = _embed_with_config(conn, texts_to_embed)
-
-    for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings):
-        _insert_chunk(
-            conn,
-            content_hash=chunk_hash,
-            content=chunk_text,
-            source_type="web",
-            source_uri=url,
-            chunk_index=idx,
-            embedding=emb_vec,
-            session_id=session_id,
-            metadata=meta_json,
-        )
-
-    # Embeddings succeeded — flush deferred session links for deduped chunks
-    _flush_deferred_session_links(conn, deferred_session_links, session_id)
-
-    conn.commit()
     return {
         **_base_result,
         "chunks_added": len(new_chunks),
