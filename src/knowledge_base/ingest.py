@@ -1277,7 +1277,13 @@ def _cleanup_conclusion_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> 
         "WHERE j.value IN ({ph})",
         chunk_ids,
     )
+    # Deduplicate across batches: a conclusion referencing chunks in
+    # different batches would otherwise appear once per batch.
+    seen: set[int] = set()
     for row in rows:
+        if row["id"] in seen:
+            continue
+        seen.add(row["id"])
         filtered = [
             cid for cid in json.loads(row["source_chunk_ids"]) if cid not in id_set
         ]
