@@ -7,9 +7,11 @@ import httpx
 import pytest
 
 from knowledge_base.db import get_connection, init_schema
+from knowledge_base.exceptions import ValidationError
 from knowledge_base.llm import (
     _get_llm_config,
     _llm_call,
+    _ssrf_check_openai_compat,
     _strip_think_tags,
     configure_llm,
 )
@@ -110,8 +112,9 @@ def test_get_llm_config_ollama_preserves_v1(tmp_path):
 # --- configure_llm ---
 
 
+@patch("knowledge_base.llm.is_private_ip", return_value=False)
 @patch("knowledge_base.llm.httpx.get", _mock_get_ok)
-def test_configure_llm(tmp_path):
+def test_configure_llm(_mock_ip, tmp_path):
     conn = _setup(tmp_path)
 
     result = configure_llm(
@@ -131,8 +134,9 @@ def test_configure_llm(tmp_path):
     assert cfg["api_key"] == "sk-test-123"  # But stored correctly
 
 
+@patch("knowledge_base.llm.is_private_ip", return_value=False)
 @patch("knowledge_base.llm.httpx.get", _mock_get_ok)
-def test_configure_llm_switch_to_ollama_clears_stale(tmp_path):
+def test_configure_llm_switch_to_ollama_clears_stale(_mock_ip, tmp_path):
     """Switching from openai_compat to ollama clears stale base_url and api_key."""
     conn = _setup(tmp_path)
     # First configure openai_compat with base_url and api_key
@@ -213,7 +217,8 @@ def test_configure_llm_connectivity_ollama_default_url(mock_url, tmp_path):
     assert result["base_url"] == "http://auto-detected:11434"
 
 
-def test_configure_llm_connectivity_openai_reachable(tmp_path):
+@patch("knowledge_base.llm.is_private_ip", return_value=False)
+def test_configure_llm_connectivity_openai_reachable(_mock_ip, tmp_path):
     """OpenAI-compat reachable: reachable=True, auth header sent."""
     captured_headers = {}
 
@@ -240,7 +245,8 @@ def test_configure_llm_connectivity_openai_reachable(tmp_path):
     assert captured_headers.get("Authorization") == "Bearer sk-test"
 
 
-def test_configure_llm_connectivity_openai_auth_failure(tmp_path):
+@patch("knowledge_base.llm.is_private_ip", return_value=False)
+def test_configure_llm_connectivity_openai_auth_failure(_mock_ip, tmp_path):
     """OpenAI-compat 401: reachable=False, warning mentions auth."""
 
     def _mock_get_401(*args, **kwargs):
@@ -320,7 +326,8 @@ def test_configure_llm_connectivity_malformed_url(mock_get, tmp_path):
     assert "pass" not in result["warning"]
 
 
-def test_configure_llm_connectivity_openai_fallback_auth(tmp_path):
+@patch("knowledge_base.llm.is_private_ip", return_value=False)
+def test_configure_llm_connectivity_openai_fallback_auth(_mock_ip, tmp_path):
     """OpenAI 404 on /v1/models + 401 on fallback: warning mentions auth."""
     call_count = {"n": 0}
 
@@ -537,8 +544,9 @@ def test_llm_call_ollama_sends_system_directive(tmp_path):
     assert "JSON" in captured["system"]
 
 
+@patch("knowledge_base.llm.is_private_ip", return_value=False)
 @patch("knowledge_base.llm.httpx.get", _mock_get_ok)
-def test_llm_call_openai_sends_system_message(tmp_path):
+def test_llm_call_openai_sends_system_message(_mock_ip, tmp_path):
     """_llm_call sends system message for openai_compat provider."""
     conn = _setup(tmp_path)
     configure_llm(
@@ -575,3 +583,73 @@ def test_llm_call_requires_conn_or_cfg():
     """_llm_call raises ValueError when neither conn nor cfg is provided."""
     with pytest.raises(ValueError, match="Either conn or cfg"):
         _llm_call("test prompt")
+
+
+# --- SSRF protection for openai_compat (#190) ---
+
+
+def test_ssrf_check_blocks_private_ip():
+    """_ssrf_check_openai_compat rejects private/loopback addresses."""
+    with pytest.raises(ValidationError, match="private address"):
+        _ssrf_check_openai_compat("http://127.0.0.1:1234")
+    with pytest.raises(ValidationError, match="private address"):
+        _ssrf_check_openai_compat("http://192.168.1.41:1234")
+    with pytest.raises(ValidationError, match="private address"):
+        _ssrf_check_openai_compat("http://10.0.0.1:8080")
+    with pytest.raises(ValidationError, match="private address"):
+        _ssrf_check_openai_compat("http://169.254.169.254")
+
+
+@patch("knowledge_base.llm.is_private_ip", return_value=False)
+def test_ssrf_check_allows_public_ip(_mock_ip):
+    """_ssrf_check_openai_compat allows public addresses."""
+    _ssrf_check_openai_compat("http://api.example.com:1234")  # should not raise
+
+
+def test_ssrf_check_skipped_for_ollama(tmp_path):
+    """Ollama provider bypasses SSRF check — localhost is trusted."""
+    conn = _setup(tmp_path)
+
+    def _mock_get_ok_local(*args, **kwargs):
+        class FakeResp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {}
+
+        return FakeResp()
+
+    with patch("knowledge_base.llm.httpx.get", _mock_get_ok_local):
+        # This should NOT raise despite localhost being a private IP
+        result = configure_llm(
+            conn, provider="ollama", base_url="http://localhost:11434"
+        )
+    assert result["reachable"] is True
+
+
+def test_ssrf_blocks_openai_compat_connectivity(tmp_path):
+    """configure_llm with openai_compat + private IP: connectivity reports SSRF error."""
+    conn = _setup(tmp_path)
+    result = configure_llm(
+        conn,
+        provider="openai_compat",
+        base_url="http://169.254.169.254",
+        model="test",
+    )
+    # The SSRF check raises ValidationError which _test_llm_connectivity catches
+    assert result["reachable"] is False
+
+
+def test_ssrf_blocks_openai_compat_llm_call(tmp_path):
+    """_llm_call with openai_compat + private IP raises ValidationError."""
+    cfg = {
+        "provider": "openai_compat",
+        "base_url": "http://169.254.169.254",
+        "model": "test",
+        "api_key": None,
+    }
+    with pytest.raises(ValidationError, match="private address"):
+        _llm_call("test", cfg=cfg)

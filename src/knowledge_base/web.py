@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import html.parser
-import ipaddress
 import json
 import logging
 import re
 import shutil
-import socket
 import sqlite3
 import subprocess
 import tempfile
@@ -24,6 +22,7 @@ from .db import (
     delete_chunks_cascade,
 )
 from .exceptions import ValidationError
+from .utils import is_private_ip
 from .chunking import chunk_text as _chunk_text
 from .ingest import (
     _cleanup_conclusion_refs,
@@ -98,31 +97,6 @@ class _ImgTagParser(html.parser.HTMLParser):
                 self.images.append(d)
 
 
-def _is_private_ip(hostname: str) -> bool:
-    """Reject non-global IPs to prevent SSRF.
-
-    Uses ``not is_global`` to block private, loopback, link-local, multicast,
-    reserved, and unspecified addresses.  Resolves hostnames to ALL IPs via
-    getaddrinfo to catch DNS rebinding (e.g., 127.0.0.1.nip.io) and
-    multi-homed hosts with mixed public/private addresses.
-    """
-    try:
-        addr = ipaddress.ip_address(hostname)
-        return not addr.is_global
-    except ValueError:
-        pass  # Not an IP literal — fall through to DNS resolution
-    # Resolve hostname to ALL IPs — reject if any is non-global
-    try:
-        infos = socket.getaddrinfo(hostname, None)
-        for _family, _type, _proto, _canonname, sockaddr in infos:
-            addr = ipaddress.ip_address(sockaddr[0])
-            if not addr.is_global:
-                return True
-        return False
-    except (OSError, ValueError):
-        return True  # Can't resolve → reject
-
-
 def _validate_image_url(url: str) -> bool:
     """Validate an image URL is safe to fetch (scheme + SSRF check)."""
     parsed = urlparse(url)
@@ -130,7 +104,7 @@ def _validate_image_url(url: str) -> bool:
         return False
     if not parsed.hostname:
         return False
-    return not _is_private_ip(parsed.hostname)
+    return not is_private_ip(parsed.hostname)
 
 
 # ---------------------------------------------------------------------------
@@ -774,7 +748,7 @@ def ingest_url(
         )
     if not parsed.hostname:
         raise ValidationError("URL must include a hostname")
-    if _is_private_ip(parsed.hostname):
+    if is_private_ip(parsed.hostname):
         raise ValidationError(
             f"URL points to a private/internal address: {parsed.hostname}"
         )
@@ -791,7 +765,7 @@ def ingest_url(
 
     # Validate post-redirect URL — prevents processing data from internal hosts
     final_host = urlparse(str(response.url)).hostname
-    if final_host and _is_private_ip(final_host):
+    if final_host and is_private_ip(final_host):
         raise ValidationError(
             f"URL redirected to a private/internal address: {final_host}"
         )

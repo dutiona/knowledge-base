@@ -17,12 +17,12 @@ from knowledge_base.ingest import (
     pdf_image_dir,
     reingest_file,
 )
+from knowledge_base.utils import is_private_ip
 from knowledge_base.web import (
     _cleanup_stale_inline_images,
     _extract_html_images,
     _extract_web_figures,
     _get_browser_config,
-    _is_private_ip,
     _render_with_browser,
     _validate_image_url,
     configure_browser,
@@ -1714,7 +1714,7 @@ def _mock_image_stream(image_bytes, url="https://example.com/img.png"):
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_basic(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -1750,7 +1750,7 @@ def test_extract_html_images_basic(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_multiple(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -1792,7 +1792,7 @@ def test_extract_html_images_multiple(
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_filters_small_html_attrs(
     mock_stream, _mock_ip, mock_vision_cfg, tmp_path
@@ -1810,7 +1810,7 @@ def test_extract_html_images_filters_small_html_attrs(
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_filters_small_pixels(
     mock_stream, _mock_ip, mock_vision_cfg, tmp_path
@@ -1830,7 +1830,7 @@ def test_extract_html_images_filters_small_pixels(
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_filters_decorative_url(
     mock_stream, _mock_ip, mock_vision_cfg, tmp_path
@@ -1848,7 +1848,7 @@ def test_extract_html_images_filters_decorative_url(
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_filters_decorative_alt(
     mock_stream, _mock_ip, mock_vision_cfg, tmp_path
@@ -1866,7 +1866,7 @@ def test_extract_html_images_filters_decorative_alt(
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_filters_svg(
     mock_stream, _mock_ip, mock_vision_cfg, tmp_path
@@ -1884,7 +1884,7 @@ def test_extract_html_images_filters_svg(
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_filters_data_uri(
     mock_stream, _mock_ip, mock_vision_cfg, tmp_path
@@ -1906,7 +1906,7 @@ def test_extract_html_images_filters_data_uri(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_resolves_relative_urls(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -1948,44 +1948,44 @@ def test_extract_html_images_rejects_private_ip(mock_stream, mock_vision_cfg, tm
 
 
 def test_is_private_ip_literals():
-    """_is_private_ip correctly identifies non-global IPs."""
-    assert _is_private_ip("127.0.0.1") is True
-    assert _is_private_ip("192.168.1.1") is True
-    assert _is_private_ip("10.0.0.1") is True
-    assert _is_private_ip("169.254.169.254") is True
-    assert _is_private_ip("localhost") is True
+    """is_private_ip correctly identifies non-global IPs."""
+    assert is_private_ip("127.0.0.1") is True
+    assert is_private_ip("192.168.1.1") is True
+    assert is_private_ip("10.0.0.1") is True
+    assert is_private_ip("169.254.169.254") is True
+    assert is_private_ip("localhost") is True
     # is_global coverage: unspecified address
-    assert _is_private_ip("0.0.0.0") is True
+    assert is_private_ip("0.0.0.0") is True
 
 
-@patch("knowledge_base.web.socket.getaddrinfo")
+@patch("knowledge_base.utils.socket.getaddrinfo")
 def test_is_private_ip_rejects_mixed_resolution(mock_getaddrinfo):
-    """_is_private_ip rejects hostnames that resolve to any private IP (#151)."""
+    """is_private_ip rejects hostnames that resolve to any private IP (#151)."""
     # Simulate DNS returning both a public and a private address
     mock_getaddrinfo.return_value = [
         (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
         (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.1", 0)),
     ]
-    assert _is_private_ip("multi-homed.example.com") is True
+    assert is_private_ip("multi-homed.example.com") is True
 
 
-@patch("knowledge_base.web.socket.getaddrinfo")
+@patch("knowledge_base.utils.socket.getaddrinfo")
 def test_is_private_ip_allows_all_public(mock_getaddrinfo):
-    """_is_private_ip allows hostnames where all resolved IPs are public."""
+    """is_private_ip allows hostnames where all resolved IPs are public."""
     mock_getaddrinfo.return_value = [
         (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
         (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.35", 0)),
     ]
-    assert _is_private_ip("safe.example.com") is False
+    assert is_private_ip("safe.example.com") is False
 
 
-@patch("knowledge_base.web.socket.getaddrinfo")
+@patch("knowledge_base.utils.socket.getaddrinfo")
 def test_is_private_ip_rejects_ipv6_loopback(mock_getaddrinfo):
-    """_is_private_ip rejects hostnames resolving to IPv6 loopback (#151)."""
+    """is_private_ip rejects hostnames resolving to IPv6 loopback (#151)."""
     mock_getaddrinfo.return_value = [
         (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::1", 0, 0, 0)),
     ]
-    assert _is_private_ip("ipv6-loopback.example.com") is True
+    assert is_private_ip("ipv6-loopback.example.com") is True
 
 
 def test_validate_image_url():
@@ -2003,7 +2003,7 @@ def test_validate_image_url():
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
 @patch(
-    "knowledge_base.web._is_private_ip",
+    "knowledge_base.web.is_private_ip",
     side_effect=lambda h: h in ("169.254.169.254",),
 )
 @patch("knowledge_base.web.httpx.stream")
@@ -2036,7 +2036,7 @@ def test_extract_html_images_rejects_redirect_to_private(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_dedup_by_url(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -2064,7 +2064,7 @@ def test_extract_html_images_dedup_by_url(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_dedup_by_content_hash(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -2093,7 +2093,7 @@ def test_extract_html_images_dedup_by_content_hash(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_cross_page_content_hash(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -2124,7 +2124,7 @@ def test_extract_html_images_cross_page_content_hash(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_download_failure(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -2157,7 +2157,7 @@ def test_extract_html_images_download_failure(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_non_png_conversion(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -2185,7 +2185,7 @@ def test_extract_html_images_non_png_conversion(
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_oversized_download(
     mock_stream, _mock_ip, mock_vision_cfg, tmp_path
@@ -2217,7 +2217,7 @@ def test_extract_html_images_oversized_download(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_stale_cleanup(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -2274,7 +2274,7 @@ def test_extract_html_images_stale_cleanup(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_reingest_same_description(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -2308,7 +2308,7 @@ def test_extract_html_images_reingest_same_description(
 
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_embed_failure_preserves_old(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -2356,7 +2356,7 @@ def test_extract_html_images_embed_failure_preserves_old(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 def test_cleanup_stale_inline_images_on_zero_new(
     mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
@@ -2406,7 +2406,7 @@ def test_cleanup_stale_inline_images_noop_when_none(tmp_path):
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 @patch("knowledge_base.web.httpx.get")
 def test_ingest_url_preserves_figures_on_extraction_failure(
@@ -2488,7 +2488,7 @@ def _mock_httpx_get_with_images(url, **kwargs):
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 @patch("knowledge_base.web.httpx.get", _mock_httpx_get_with_images)
 def test_ingest_url_extracts_inline_images(
@@ -2560,7 +2560,7 @@ _EMPTY_HTML_WITH_IMG = """<html>
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 @patch("knowledge_base.web.httpx.get")
 def test_ingest_url_extracts_images_even_when_no_text(
@@ -2595,7 +2595,7 @@ def test_ingest_url_extracts_images_even_when_no_text(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web._is_private_ip", return_value=False)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 @patch("knowledge_base.web.httpx.get")
 def test_ingest_url_uses_response_url_for_base(

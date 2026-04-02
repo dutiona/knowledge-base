@@ -129,6 +129,13 @@ def configure_vision(
             (model,),
         )
     if base_url:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(base_url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValidationError(
+                f"Invalid URL scheme: {parsed.scheme!r}. Use http or https."
+            )
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('vision_base_url', ?)",
             (base_url,),

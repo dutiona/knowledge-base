@@ -85,7 +85,7 @@ dependency chains, and parallelism opportunities.
 | 187 | bare except swallows all FTS errors                      | Search      | 2.5c  | ✔ PR #312                                         |
 | 188 | no input validation on search params                     | Search      | 2.5c  | ✔ PR #313                                         |
 | 189 | subprocess with user-configurable omniparser_path        | Vision      | 2.5c  | ✔ PR #316                                         |
-| 190 | LLM base_url SSRF — only scheme validated                | Extraction  | 2.5c  |                                                   |
+| 190 | LLM base_url SSRF — only scheme validated                | Extraction  | 2.5c  | ✔ PR #318                                         |
 | 191 | LLM JSON without structural validation                   | Extraction  | 2.5c  | ✔ PR #314                                         |
 | 192 | indirect prompt injection in LLM extraction              | Extraction  | 2.5c  |                                                   |
 | 193 | FTS5 operator sanitization incomplete                    | Search      | 2.5c  | ✔ PR #315                                         |
@@ -346,7 +346,7 @@ compounding tech debt.
 ✔ #187 (bare except swallows FTS errors) ─── independent (PR #312)
 ✔ #188 (no input validation on search)   ─── independent (PR #313)
 ✔ #189 (subprocess omniparser_path)      ─── independent (PR #316)
-#190 (LLM base_url SSRF)              ─── independent
+✔ #190 (LLM base_url SSRF)              ─── independent (PR #318)
 ✔ #191 (LLM JSON no structural valid.)   ─── independent (PR #314)
 #192 (indirect prompt injection)       ─── independent
 ✔ #193 (FTS5 sanitization incomplete)    ─── independent (PR #315)
