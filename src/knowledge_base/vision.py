@@ -22,12 +22,12 @@ from .embeddings import _get_ollama_url
 from .db import delete_chunks_cascade, get_vec_table_name
 from .exceptions import NotFoundError, ValidationError
 from .ingest import (
-    _cleanup_figure_fk_refs,
     _content_hash,
     _embed_with_config,
     _insert_chunk,
     pdf_image_dir,
 )
+from .web import _cleanup_figure_fk_refs
 
 logger = logging.getLogger(__name__)
 
