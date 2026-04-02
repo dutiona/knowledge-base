@@ -137,24 +137,33 @@ def _strip_think_tags(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+_LLM_TIMEOUT = 120
+
+
 def _llm_call(
     prompt: str,
     *,
     conn: sqlite3.Connection | None = None,
     cfg: dict | None = None,
+    client: httpx.Client | None = None,
 ) -> str:
     """Call LLM to extract structured data. Supports Ollama and OpenAI-compatible APIs.
 
     Accepts either a ``conn`` (reads config from DB) or a pre-read ``cfg`` dict.
     The ``cfg`` path is preferred in hot loops to avoid threading issues.
+
+    When ``client`` is provided, uses that connection-pooled client instead of
+    creating a new connection per request (avoids TCP overhead in parallel loops).
     """
     if cfg is None:
         if conn is None:
             raise ValueError("Either conn or cfg must be provided to _llm_call")
         cfg = _get_llm_config(conn)
 
+    post = client.post if client is not None else httpx.post
+
     if cfg["provider"] == "ollama":
-        resp = httpx.post(
+        resp = post(
             f"{cfg['base_url']}/api/generate",
             json={
                 "model": cfg["model"],
@@ -163,7 +172,7 @@ def _llm_call(
                 "stream": False,
                 "format": "json",
             },
-            timeout=120,
+            timeout=_LLM_TIMEOUT,
         )
         resp.raise_for_status()
         raw = resp.json()["response"]
@@ -171,7 +180,7 @@ def _llm_call(
         headers = {}
         if cfg.get("api_key"):
             headers["Authorization"] = f"Bearer {cfg['api_key']}"
-        resp = httpx.post(
+        resp = post(
             f"{cfg['base_url']}/v1/chat/completions",
             headers=headers,
             json={
@@ -182,7 +191,7 @@ def _llm_call(
                 ],
                 "response_format": {"type": "json_object"},
             },
-            timeout=120,
+            timeout=_LLM_TIMEOUT,
         )
         resp.raise_for_status()
         raw = resp.json()["choices"][0]["message"]["content"]

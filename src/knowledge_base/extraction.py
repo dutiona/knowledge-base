@@ -10,6 +10,8 @@ from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import httpx
+
 from .exceptions import ExtractionError, NotFoundError
 from .llm import _get_llm_config, _llm_call
 
@@ -277,22 +279,21 @@ def _map_extract(
     chunk_text: str,
     chunk_index: int,
     total_chunks: int,
-    conn_or_cfg: sqlite3.Connection | dict,
+    cfg: dict,
+    *,
+    client: httpx.Client | None = None,
 ) -> dict:
     """Extract structured facts from a single chunk.
 
-    ``conn_or_cfg`` accepts either a Connection (legacy) or a pre-read config
-    dict (thread-safe path used by the parallel map phase).
+    ``cfg`` is a pre-read LLM config dict (from ``_get_llm_config``).
+    ``client`` is an optional connection-pooled httpx client for reuse.
     """
     prompt = _MAP_PROMPT.format(
         text=chunk_text,
         chunk_index=chunk_index + 1,
         total_chunks=total_chunks,
     )
-    if isinstance(conn_or_cfg, dict):
-        raw = _llm_call(prompt, cfg=conn_or_cfg)
-    else:
-        raw = _llm_call(prompt, conn=conn_or_cfg)
+    raw = _llm_call(prompt, cfg=cfg, client=client)
     try:
         result = json.loads(raw)
     except json.JSONDecodeError as e:
@@ -362,7 +363,9 @@ JSON:"""
 
 def _resolve_entities(
     all_extractions: list[dict],
-    conn_or_cfg: sqlite3.Connection | dict,
+    cfg: dict,
+    *,
+    client: httpx.Client | None = None,
 ) -> dict:
     """Merge entities across chunks by resolving aliases."""
     entity_list = _collect_entity_mentions(all_extractions)
@@ -370,10 +373,7 @@ def _resolve_entities(
         return {"groups": []}
 
     prompt = _RESOLVE_PROMPT.format(entities=json.dumps(entity_list, indent=2))
-    if isinstance(conn_or_cfg, dict):
-        raw = _llm_call(prompt, cfg=conn_or_cfg)
-    else:
-        raw = _llm_call(prompt, conn=conn_or_cfg)
+    raw = _llm_call(prompt, cfg=cfg, client=client)
     try:
         return json.loads(raw)
     except json.JSONDecodeError as e:
@@ -715,6 +715,10 @@ def _extract_map_reduce(
     phase.  Defaults to 1 (sequential, backward-compatible).  Set higher to
     match your LLM server's parallel capacity (e.g. Ollama
     ``OLLAMA_NUM_PARALLEL``, or an OpenAI-compatible endpoint's rate limit).
+
+    Uses ``ThreadPoolExecutor`` for both sequential and parallel modes —
+    ``max_workers=1`` has negligible overhead compared to 4s+ LLM calls.
+    A shared ``httpx.Client`` is used for connection pooling across workers.
     """
     cfg = _get_llm_config(conn)
     effective_workers = min(max(max_workers, 1), len(chunks), _MAX_WORKERS_LIMIT)
@@ -725,120 +729,69 @@ def _extract_map_reduce(
     phase_start = time.monotonic()
     completed_count = 0
 
-    if effective_workers == 1:
-        # Sequential fast-path: no thread overhead, preserves original logging
-        for i, chunk in enumerate(chunks):
-            start = time.monotonic()
-            try:
-                result = _map_extract(
-                    chunk["id"], chunk["content"], i, len(chunks), cfg
-                )
-                map_results.append((i, result))
-            except Exception as e:
-                errors.append(
-                    {"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)}
-                )
-                result = None
-
-            elapsed = time.monotonic() - start
+    logger.info(
+        "Starting map phase: %d chunks, %d workers",
+        len(chunks),
+        effective_workers,
+    )
+    with (
+        httpx.Client() as client,
+        ThreadPoolExecutor(max_workers=effective_workers) as executor,
+    ):
+        futures = {
+            executor.submit(
+                _map_extract,
+                chunk["id"],
+                chunk["content"],
+                i,
+                len(chunks),
+                cfg,
+                client=client,
+            ): (i, chunk)
+            for i, chunk in enumerate(chunks)
+        }
+        for future in as_completed(futures):
+            i, chunk = futures[future]
+            elapsed = time.monotonic() - phase_start
             completed_count += 1
-
-            if result is not None:
+            try:
+                result = future.result()
+                map_results.append((i, result))
                 m = len(result.get("methods", []))
                 d = len(result.get("datasets", []))
                 mt = len(result.get("metrics", []))
                 logger.info(
-                    "Chunk %3d/%d (%.1f%%) - %.1fs - methods=%d, datasets=%d, metrics=%d",
+                    "Chunk %3d/%d (%.1f%%) - methods=%d, datasets=%d, metrics=%d",
                     i + 1,
                     len(chunks),
-                    (i + 1) / len(chunks) * 100,
-                    elapsed,
+                    completed_count / len(chunks) * 100,
                     m,
                     d,
                     mt,
                 )
-            else:
+            except Exception as e:
+                errors.append(
+                    {"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)}
+                )
                 logger.info(
-                    "Chunk %3d/%d (%.1f%%) - %.1fs - FAILED",
+                    "Chunk %3d/%d (%.1f%%) - FAILED: %s",
                     i + 1,
                     len(chunks),
-                    (i + 1) / len(chunks) * 100,
-                    elapsed,
+                    completed_count / len(chunks) * 100,
+                    e,
                 )
 
             if on_progress:
-                on_progress(f"chunk {i + 1}/{len(chunks)}")
+                on_progress(f"chunk {completed_count}/{len(chunks)}")
 
-            total_elapsed = time.monotonic() - phase_start
             if completed_count % 5 == 0 or completed_count == len(chunks):
-                avg = total_elapsed / completed_count
+                avg = elapsed / completed_count
                 remaining = avg * (len(chunks) - completed_count)
                 logger.info(
-                    "  avg %.1fs/chunk - revised ETA: %.0fmin remaining",
+                    "  avg %.1fs/chunk (wall) - revised ETA: %.0fmin remaining",
                     avg,
                     remaining / 60,
                 )
-    else:
-        # Parallel path
-        logger.info(
-            "Starting parallel map phase: %d chunks, %d workers",
-            len(chunks),
-            effective_workers,
-        )
-        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
-            futures = {
-                executor.submit(
-                    _map_extract,
-                    chunk["id"],
-                    chunk["content"],
-                    i,
-                    len(chunks),
-                    cfg,
-                ): (i, chunk)
-                for i, chunk in enumerate(chunks)
-            }
-            for future in as_completed(futures):
-                i, chunk = futures[future]
-                elapsed = time.monotonic() - phase_start  # wall-clock since start
-                completed_count += 1
-                try:
-                    result = future.result()
-                    map_results.append((i, result))
-                    m = len(result.get("methods", []))
-                    d = len(result.get("datasets", []))
-                    mt = len(result.get("metrics", []))
-                    logger.info(
-                        "Chunk %3d/%d (%.1f%%) - methods=%d, datasets=%d, metrics=%d",
-                        i + 1,
-                        len(chunks),
-                        completed_count / len(chunks) * 100,
-                        m,
-                        d,
-                        mt,
-                    )
-                except Exception as e:
-                    errors.append(
-                        {"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)}
-                    )
-                    logger.info(
-                        "Chunk %3d/%d (%.1f%%) - FAILED: %s",
-                        i + 1,
-                        len(chunks),
-                        completed_count / len(chunks) * 100,
-                        e,
-                    )
-
-                if on_progress:
-                    on_progress(f"chunk {completed_count}/{len(chunks)}")
-
-                if completed_count % 5 == 0 or completed_count == len(chunks):
-                    avg = elapsed / completed_count
-                    remaining = avg * (len(chunks) - completed_count)
-                    logger.info(
-                        "  avg %.1fs/chunk (wall) - revised ETA: %.0fmin remaining",
-                        avg,
-                        remaining / 60,
-                    )
 
     total_elapsed = time.monotonic() - phase_start
 
