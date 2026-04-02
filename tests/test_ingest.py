@@ -8,6 +8,7 @@ from unittest.mock import patch, MagicMock
 
 from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from knowledge_base.ingest import (
+    _cleanup_conclusion_refs,
     _cleanup_stale_inline_images,
     _extract_html_images,
     _extract_pdf_markdown,
@@ -420,6 +421,32 @@ def test_reingest_zombie_deletion_clears_superseded_by_fk(tmp_path):
     # Both zombies should be deleted without IntegrityError
     conclusions = get_conclusions(conn, include_superseded=True)
     assert len(conclusions) == 0, "Both zombie conclusions should be deleted"
+
+
+def test_cleanup_conclusion_refs_only_touches_affected_rows(tmp_path):
+    """_cleanup_conclusion_refs must not modify conclusions unrelated to the deleted IDs (#277)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Two conclusions: one references chunk 10, the other references chunk 20
+    conn.execute(
+        "INSERT INTO conclusions (claim, source_chunk_ids) VALUES (?, ?)",
+        ("Affected claim", json.dumps([10, 20])),
+    )
+    conn.execute(
+        "INSERT INTO conclusions (claim, source_chunk_ids) VALUES (?, ?)",
+        ("Unrelated claim", json.dumps([30, 40])),
+    )
+
+    _cleanup_conclusion_refs(conn, [10])
+
+    rows = conn.execute(
+        "SELECT claim, source_chunk_ids FROM conclusions ORDER BY claim"
+    ).fetchall()
+    assert len(rows) == 2
+    assert json.loads(rows[0]["source_chunk_ids"]) == [20]  # 10 removed
+    assert json.loads(rows[1]["source_chunk_ids"]) == [30, 40]  # untouched
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
