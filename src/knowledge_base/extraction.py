@@ -54,6 +54,14 @@ def _validate_extraction_schema(data: object, *, context: str = "") -> dict:
                 raise ValueError(
                     f"{context}'{key}[{i}]' must be a dict, got {type(item).__name__}"
                 )
+            # Validate fields used with .strip()/.lower() downstream
+            str_field = "metric" if key == "metrics" else "name"
+            val = item.get(str_field)
+            if val is not None and not isinstance(val, str):
+                raise ValueError(
+                    f"{context}'{key}[{i}].{str_field}' must be a string, "
+                    f"got {type(val).__name__}"
+                )
     return data
 
 
@@ -88,6 +96,13 @@ def _validate_resolution_schema(data: object, *, context: str = "") -> dict:
                 f"{context}'groups[{i}].members' must be a list, "
                 f"got {type(members).__name__}"
             )
+        if isinstance(members, list):
+            for j, member in enumerate(members):
+                if not isinstance(member, str):
+                    raise ValueError(
+                        f"{context}'groups[{i}].members[{j}]' must be a string, "
+                        f"got {type(member).__name__}"
+                    )
     return data
 
 

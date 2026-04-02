@@ -1662,6 +1662,40 @@ class TestValidateExtractionSchema:
             result = _map_extract(1, "text", 0, 1, cfg)
         assert result.get("datasets") is None or result.get("datasets") == []
 
+    def test_map_extract_rejects_non_string_name(self, tmp_path):
+        """'name' field in method/dataset items must be a string."""
+        _setup(tmp_path)
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps(
+                {
+                    "methods": [{"name": 42, "description": "x"}],
+                    "datasets": [],
+                    "metrics": [],
+                }
+            ),
+        ):
+            with pytest.raises(
+                ValueError, match="'methods\\[0\\]\\.name'.*must be a string"
+            ):
+                _map_extract(1, "text", 0, 1, cfg)
+
+    def test_map_extract_rejects_non_string_metric(self, tmp_path):
+        """'metric' field in metric items must be a string."""
+        _setup(tmp_path)
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps(
+                {"methods": [], "datasets": [], "metrics": [{"metric": 99, "value": 1}]}
+            ),
+        ):
+            with pytest.raises(
+                ValueError, match="'metrics\\[0\\]\\.metric'.*must be a string"
+            ):
+                _map_extract(1, "text", 0, 1, cfg)
+
     def test_single_pass_rejects_non_dict(self, tmp_path):
         conn = _setup(tmp_path)
         p = register_paper(conn, "P")["paper_id"]
@@ -1741,6 +1775,23 @@ class TestValidateResolutionSchema:
         ):
             with pytest.raises(
                 ValueError, match="'groups\\[0\\]\\.members'.*must be a list"
+            ):
+                _resolve_entities(map_results, cfg)
+
+    def test_resolve_rejects_non_string_member(self, tmp_path):
+        _setup(tmp_path)
+        map_results = [
+            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
+        ]
+        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
+        with patch(
+            "knowledge_base.extraction._llm_call",
+            return_value=json.dumps(
+                {"groups": [{"canonical": "X", "type": "method", "members": [123]}]}
+            ),
+        ):
+            with pytest.raises(
+                ValueError, match="'groups\\[0\\]\\.members\\[0\\]'.*must be a string"
             ):
                 _resolve_entities(map_results, cfg)
 
