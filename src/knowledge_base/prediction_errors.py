@@ -82,25 +82,18 @@ def _detect_and_log_inner(
 
     # Rate limit: at most 1 per (query_hash, error_type, source_type_filter) per hour
     existing = conn.execute(
-        """
-        SELECT 1 FROM prediction_errors
-        WHERE query_hash = ?
-          AND error_type = ?
-          AND source_type_filter IS ?
-          AND detected_at > datetime('now', '-1 hour')
-        LIMIT 1
-        """,
+        "SELECT 1 FROM prediction_errors"
+        " WHERE query_hash = ? AND error_type = ? AND source_type_filter IS ?"
+        " AND detected_at > datetime('now', '-1 hour') LIMIT 1",
         (qhash, error_type, source_type_filter),
     ).fetchone()
     if existing:
         return
 
     conn.execute(
-        """
-        INSERT INTO prediction_errors
-            (query, query_hash, top_score, top_chunk_id, error_type, source_type_filter)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
+        "INSERT INTO prediction_errors"
+        " (query, query_hash, top_score, top_chunk_id, error_type, source_type_filter)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
         (
             _normalize_query(query),
             qhash,

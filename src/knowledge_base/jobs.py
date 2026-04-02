@@ -155,11 +155,11 @@ class _JobWorker:
         """Process one job or sleep."""
         # Atomic claim: UPDATE ... RETURNING
         row = conn.execute(
-            "UPDATE jobs SET status = 'running', started_at = datetime('now') "
-            "WHERE id = ("
-            "  SELECT id FROM jobs WHERE status = 'pending' "
-            "  ORDER BY created_at LIMIT 1"
-            ") RETURNING *"
+            "UPDATE jobs SET status = 'running', started_at = datetime('now')"
+            " WHERE id = ("
+            "   SELECT id FROM jobs WHERE status = 'pending'"
+            "   ORDER BY created_at LIMIT 1"
+            " ) RETURNING *"
         ).fetchone()
         conn.commit()
 

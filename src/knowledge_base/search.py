@@ -70,26 +70,17 @@ def _fts_search(
     """
     if chunk_strategy is not None:
         rows = conn.execute(
-            """
-            SELECT c.id AS rowid, bm25(chunks_fts) AS score
-            FROM chunks_fts
-            JOIN chunks c ON c.id = chunks_fts.rowid
-            WHERE chunks_fts MATCH ?
-              AND c.chunk_strategy = ?
-            ORDER BY score
-            LIMIT ?
-            """,
+            "SELECT c.id AS rowid, bm25(chunks_fts) AS score"
+            " FROM chunks_fts"
+            " JOIN chunks c ON c.id = chunks_fts.rowid"
+            " WHERE chunks_fts MATCH ? AND c.chunk_strategy = ?"
+            " ORDER BY score LIMIT ?",
             (query, chunk_strategy, limit),
         ).fetchall()
     else:
         rows = conn.execute(
-            """
-            SELECT rowid, bm25(chunks_fts) AS score
-            FROM chunks_fts
-            WHERE chunks_fts MATCH ?
-            ORDER BY score
-            LIMIT ?
-            """,
+            "SELECT rowid, bm25(chunks_fts) AS score FROM chunks_fts"
+            " WHERE chunks_fts MATCH ? ORDER BY score LIMIT ?",
             (query, limit),
         ).fetchall()
     return [(row["rowid"], row["score"]) for row in rows]
@@ -104,13 +95,8 @@ def _vec_search(
     """Vector similarity search. Returns (chunk_id, distance) pairs."""
     vec_table = table_name or get_vec_table_name(conn)
     rows = conn.execute(
-        f"""
-        SELECT chunk_id, distance
-        FROM [{vec_table}]
-        WHERE embedding MATCH ?
-        ORDER BY distance
-        LIMIT ?
-        """,
+        f"SELECT chunk_id, distance FROM [{vec_table}]"
+        " WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
         (_serialize_f32(query_embedding), limit),
     ).fetchall()
     return [(row["chunk_id"], row["distance"]) for row in rows]
@@ -159,11 +145,8 @@ def _folder_boost(
 
     # Find top matching folders
     folder_rows = conn.execute(
-        """SELECT folder_path, distance
-           FROM folder_summaries_vec
-           WHERE embedding MATCH ?
-           ORDER BY distance
-           LIMIT ?""",
+        "SELECT folder_path, distance FROM folder_summaries_vec"
+        " WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
         (_serialize_f32(query_embedding), top_folders),
     ).fetchall()
     if not folder_rows:
@@ -433,11 +416,8 @@ def search(
         params.append(chunk_strategy)
 
     rows = conn.execute(
-        f"""
-        SELECT id, content, source_type, source_uri, chunk_index
-        FROM chunks
-        WHERE id IN ({placeholders}){type_filter}{strategy_filter}
-        """,
+        f"SELECT id, content, source_type, source_uri, chunk_index"
+        f" FROM chunks WHERE id IN ({placeholders}){type_filter}{strategy_filter}",
         params,
     ).fetchall()
 
