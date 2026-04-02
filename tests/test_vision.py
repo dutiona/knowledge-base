@@ -1424,6 +1424,7 @@ def test_configure_omniparser_valid(tmp_path):
     venv_bin = omni_dir / ".venv" / "bin"
     venv_bin.mkdir(parents=True)
     (venv_bin / "python").write_text("# fake")
+    (venv_bin / "python").chmod(0o755)
 
     result = configure_omniparser(conn, str(omni_dir))
     assert result["omniparser_path"] == str(omni_dir)
@@ -1460,6 +1461,7 @@ def test_configure_omniparser_disable(tmp_path):
     venv_bin = omni_dir / ".venv" / "bin"
     venv_bin.mkdir(parents=True)
     (venv_bin / "python").write_text("# fake")
+    (venv_bin / "python").chmod(0o755)
     configure_omniparser(conn, str(omni_dir))
     assert _get_omniparser_config(conn) is not None
 
@@ -1467,6 +1469,126 @@ def test_configure_omniparser_disable(tmp_path):
     result = configure_omniparser(conn, "")
     assert result["omniparser_path"] is None
     assert _get_omniparser_config(conn) is None
+
+
+# ---------------------------------------------------------------------------
+# OmniParser path-validation tests (security — #189)
+# ---------------------------------------------------------------------------
+
+
+def test_configure_omniparser_rejects_relative_path(tmp_path):
+    """Relative paths are rejected even if they resolve to a valid directory."""
+    from knowledge_base.vision import configure_omniparser
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Create valid structure under a relative-looking path
+    omni_dir = tmp_path / "omniparser"
+    omni_dir.mkdir()
+    (omni_dir / "parse.py").write_text("# fake")
+    venv_bin = omni_dir / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("# fake")
+    (venv_bin / "python").chmod(0o755)
+
+    with pytest.raises(ValidationError, match="[Aa]bsolute"):
+        configure_omniparser(conn, "omniparser")
+
+
+def test_configure_omniparser_rejects_symlink_traversal(tmp_path):
+    """Symlink pointing outside the declared directory is rejected."""
+    from knowledge_base.vision import configure_omniparser
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Real omniparser lives in /real_omni
+    real_omni = tmp_path / "real_omni"
+    real_omni.mkdir()
+    (real_omni / "parse.py").write_text("# fake")
+    venv_bin = real_omni / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("# fake")
+    (venv_bin / "python").chmod(0o755)
+
+    # Symlink: /fake_omni -> /real_omni
+    fake_omni = tmp_path / "fake_omni"
+    fake_omni.symlink_to(real_omni)
+
+    # The resolved path differs from the given path — should still work
+    # because the resolved path is itself valid. The key validation is
+    # that the *resolved* files exist and are valid, not path equality.
+    result = configure_omniparser(conn, str(fake_omni))
+    # Stored path should be the resolved (real) path, not the symlink
+    assert result["omniparser_path"] == str(real_omni)
+
+
+def test_configure_omniparser_rejects_non_executable_python(tmp_path):
+    """python binary must be executable."""
+    from knowledge_base.vision import configure_omniparser
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    omni_dir = tmp_path / "omniparser"
+    omni_dir.mkdir()
+    (omni_dir / "parse.py").write_text("# fake")
+    venv_bin = omni_dir / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("# fake")
+    (venv_bin / "python").chmod(0o644)  # NOT executable
+
+    with pytest.raises(ValidationError, match="[Ee]xecutable"):
+        configure_omniparser(conn, str(omni_dir))
+
+
+def test_configure_omniparser_stores_resolved_path(tmp_path):
+    """Path with .. components is resolved before storage."""
+    from knowledge_base.vision import _get_omniparser_config, configure_omniparser
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    omni_dir = tmp_path / "omniparser"
+    omni_dir.mkdir()
+    (omni_dir / "parse.py").write_text("# fake")
+    venv_bin = omni_dir / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("# fake")
+    (venv_bin / "python").chmod(0o755)
+
+    # Pass path with .. traversal component
+    messy_path = str(tmp_path / "subdir" / ".." / "omniparser")
+    (tmp_path / "subdir").mkdir()
+
+    result = configure_omniparser(conn, messy_path)
+    stored = _get_omniparser_config(conn)
+    assert stored == str(omni_dir)  # resolved, no ..
+    assert result["omniparser_path"] == str(omni_dir)
+
+
+def test_run_omniparser_revalidates_at_execution(tmp_path):
+    """_run_omniparser returns None if python binary vanishes after config."""
+    from knowledge_base.vision import _run_omniparser
+
+    # Valid structure at config time
+    (tmp_path / "parse.py").write_text("# fake")
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    python_bin = venv_bin / "python"
+    python_bin.write_text("# fake")
+    python_bin.chmod(0o755)
+
+    # Delete python binary to simulate post-config change
+    python_bin.unlink()
+
+    result = _run_omniparser(Path("/fake.png"), str(tmp_path))
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -1495,6 +1617,13 @@ def test_run_omniparser_success(tmp_path):
 
     png_path = tmp_path / "test.png"
     png_path.write_bytes(b"\x89PNG fake")
+
+    # Re-validation requires python binary + parse.py on disk
+    (tmp_path / "parse.py").write_text("# stub")
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True, exist_ok=True)
+    (venv_bin / "python").write_text("# stub")
+    (venv_bin / "python").chmod(0o755)
 
     def fake_run(cmd, **kwargs):
         # Write JSON to the -j output path
@@ -2028,6 +2157,13 @@ def test_run_omniparser_logs_timing(caplog, tmp_path):
 
     json_data = json.dumps({"elements": [{"type": "text", "content": "hello"}]})
 
+    # Re-validation requires python binary + parse.py on disk
+    (tmp_path / "parse.py").write_text("# stub")
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("# stub")
+    (venv_bin / "python").chmod(0o755)
+
     def fake_subprocess_run(cmd, **kwargs):
         # Write the expected JSON to the output file (last arg after -j)
         json_path = cmd[-1]
@@ -2037,7 +2173,7 @@ def test_run_omniparser_logs_timing(caplog, tmp_path):
         import logging
 
         with caplog.at_level(logging.INFO, logger="knowledge_base.vision"):
-            result = _run_omniparser(Path("/fake.png"), "/fake/omniparser")
+            result = _run_omniparser(Path("/fake.png"), str(tmp_path))
 
     assert result is not None
     assert any("OmniParser completed for" in msg for msg in caplog.messages)

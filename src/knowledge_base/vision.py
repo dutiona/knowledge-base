@@ -145,6 +145,39 @@ def _get_omniparser_config(conn: sqlite3.Connection) -> str | None:
     return row["value"] if row else None
 
 
+def _validate_omniparser_path(path: str) -> Path:
+    """Validate and resolve an OmniParser directory path.
+
+    Returns the resolved absolute path.  Raises ``ValidationError`` on any
+    policy violation.
+
+    Security policy (trust model):
+      The caller is the local MCP user — the same principal whose files are
+      executed.  Validation prevents accidental mis-configuration (relative
+      paths, stale symlinks, non-executable interpreters) rather than
+      defending against a hostile local user.
+    """
+    omni_dir = Path(path)
+
+    if not omni_dir.is_absolute():
+        raise ValidationError(f"omniparser_path must be an absolute path, got: {path}")
+
+    # Resolve symlinks and .. components so the stored path is canonical.
+    omni_dir = omni_dir.resolve()
+
+    parse_script = omni_dir / "parse.py"
+    venv_python = omni_dir / ".venv" / "bin" / "python"
+
+    if not parse_script.is_file():
+        raise ValidationError(f"parse.py not found at {parse_script}")
+    if not venv_python.is_file():
+        raise ValidationError(f"venv python not found at {venv_python}")
+    if not os.access(venv_python, os.X_OK):
+        raise ValidationError(f"python binary is not executable at {venv_python}")
+
+    return omni_dir
+
+
 def configure_omniparser(
     conn: sqlite3.Connection,
     path: str | None = None,
@@ -153,6 +186,10 @@ def configure_omniparser(
 
     Args:
         path: None to query, "" to disable, otherwise absolute path to set.
+
+    The path is resolved (symlinks and ``..`` flattened) and validated before
+    storage.  At execution time, ``_run_omniparser`` re-validates that the
+    resolved files still exist on disk.
     """
     if path is None:
         return {"omniparser_path": _get_omniparser_config(conn)}
@@ -162,21 +199,15 @@ def configure_omniparser(
         conn.commit()
         return {"omniparser_path": None}
 
-    omni_dir = Path(path)
-    parse_script = omni_dir / "parse.py"
-    venv_python = omni_dir / ".venv" / "bin" / "python"
-
-    if not parse_script.exists():
-        raise ValidationError(f"parse.py not found at {parse_script}")
-    if not venv_python.exists():
-        raise ValidationError(f"venv python not found at {venv_python}")
+    omni_dir = _validate_omniparser_path(path)
+    resolved = str(omni_dir)
 
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_path', ?)",
-        (path,),
+        (resolved,),
     )
     conn.commit()
-    return {"omniparser_path": path}
+    return {"omniparser_path": resolved}
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +224,25 @@ _TIMING_DRIFT_FACTOR = 2.0
 def _run_omniparser(
     png_path: Path, omniparser_path: str, timeout: int = _OMNIPARSER_SUBPROCESS_TIMEOUT
 ) -> dict | None:
-    """Invoke OmniParser as a subprocess. Returns parsed JSON or None on failure."""
-    venv_python = str(Path(omniparser_path) / ".venv" / "bin" / "python")
-    parse_script = str(Path(omniparser_path) / "parse.py")
+    """Invoke OmniParser as a subprocess. Returns parsed JSON or None on failure.
+
+    Re-validates that the configured python binary and parse script still exist
+    and are accessible before spawning the subprocess.  This guards against
+    paths that were valid at configuration time but have since been moved or
+    deleted.
+    """
+    omni = Path(omniparser_path)
+    venv_python = omni / ".venv" / "bin" / "python"
+    parse_script = omni / "parse.py"
+
+    if not venv_python.is_file() or not os.access(venv_python, os.X_OK):
+        logger.warning(
+            "OmniParser python binary missing or not executable: %s", venv_python
+        )
+        return None
+    if not parse_script.is_file():
+        logger.warning("OmniParser parse.py missing: %s", parse_script)
+        return None
 
     json_fd, json_out = tempfile.mkstemp(suffix=".json")
     t0 = time.monotonic()
