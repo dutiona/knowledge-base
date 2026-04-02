@@ -91,6 +91,22 @@ def test_ingest_markdown_file(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_file_result_uses_forward_slashes(tmp_path):
+    """ingest_file return dict 'file' key must use forward slashes (#158)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md_file = tmp_path / "test.md"
+    md_file.write_text("Content.\n")
+    result = ingest_file(conn, md_file)
+
+    assert "\\" not in result["file"], f"Backslash in result: {result['file']}"
+    assert result["file"] == md_file.as_posix()
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_ingest_dedup(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)

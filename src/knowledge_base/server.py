@@ -193,7 +193,7 @@ def reingest(
         return json.dumps(err)
 
     # Invalidate stale "similar" relationships for all papers linked to this file
-    source_uri = str(p)
+    source_uri = p.as_posix()
     affected = conn.execute(
         "SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)
     ).fetchall()
