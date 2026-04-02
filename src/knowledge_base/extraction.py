@@ -735,11 +735,19 @@ def _extract_map_reduce(
         effective_workers,
     )
     with (
-        httpx.Client() as client,
+        httpx.Client(
+            limits=httpx.Limits(
+                max_connections=effective_workers,
+                max_keepalive_connections=effective_workers,
+            ),
+        ) as client,
         ThreadPoolExecutor(max_workers=effective_workers) as executor,
     ):
-        futures = {
-            executor.submit(
+        submit_times: dict[int, float] = {}
+        futures = {}
+        for i, chunk in enumerate(chunks):
+            submit_times[i] = time.monotonic()
+            fut = executor.submit(
                 _map_extract,
                 chunk["id"],
                 chunk["content"],
@@ -747,12 +755,13 @@ def _extract_map_reduce(
                 len(chunks),
                 cfg,
                 client=client,
-            ): (i, chunk)
-            for i, chunk in enumerate(chunks)
-        }
+            )
+            futures[fut] = (i, chunk)
+
         for future in as_completed(futures):
             i, chunk = futures[future]
-            elapsed = time.monotonic() - phase_start
+            chunk_elapsed = time.monotonic() - submit_times[i]
+            wall_elapsed = time.monotonic() - phase_start
             completed_count += 1
             try:
                 result = future.result()
@@ -761,10 +770,11 @@ def _extract_map_reduce(
                 d = len(result.get("datasets", []))
                 mt = len(result.get("metrics", []))
                 logger.info(
-                    "Chunk %3d/%d (%.1f%%) - methods=%d, datasets=%d, metrics=%d",
+                    "Chunk %3d/%d (%.1f%%) - %.1fs - methods=%d, datasets=%d, metrics=%d",
                     i + 1,
                     len(chunks),
                     completed_count / len(chunks) * 100,
+                    chunk_elapsed,
                     m,
                     d,
                     mt,
@@ -774,10 +784,11 @@ def _extract_map_reduce(
                     {"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)}
                 )
                 logger.info(
-                    "Chunk %3d/%d (%.1f%%) - FAILED: %s",
+                    "Chunk %3d/%d (%.1f%%) - %.1fs - FAILED: %s",
                     i + 1,
                     len(chunks),
                     completed_count / len(chunks) * 100,
+                    chunk_elapsed,
                     e,
                 )
 
@@ -785,7 +796,7 @@ def _extract_map_reduce(
                 on_progress(f"chunk {completed_count}/{len(chunks)}")
 
             if completed_count % 5 == 0 or completed_count == len(chunks):
-                avg = elapsed / completed_count
+                avg = wall_elapsed / completed_count
                 remaining = avg * (len(chunks) - completed_count)
                 logger.info(
                     "  avg %.1fs/chunk (wall) - revised ETA: %.0fmin remaining",
