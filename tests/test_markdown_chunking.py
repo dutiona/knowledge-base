@@ -140,3 +140,61 @@ def test_chunk_markdown_preamble_before_headings():
     assert len(result) >= 2
     assert "preamble" in result[0][0]
     assert result[1][0].startswith("## First Section")
+
+
+def test_chunk_markdown_offset_accuracy_across_pages():
+    """Char offsets must be exact so page_map lookups land on the right page.
+
+    Regression test for #202: offset drift in _chunk_markdown.
+    """
+    # Build a document where each section is on a distinct "page".
+    # Page boundaries are placed exactly at the start of each heading.
+    sec_a = "## Alpha\nAlpha body text.\n"
+    sec_b = "### Beta\nBeta body text.\n"
+    sec_c = "## Gamma\nGamma body text.\n"
+    text = sec_a + sec_b + sec_c
+
+    # page 0 covers sec_a, page 1 covers sec_b, page 2 covers sec_c
+    page_map = {
+        0: 0,
+        len(sec_a): 1,
+        len(sec_a) + len(sec_b): 2,
+    }
+
+    result = _chunk_markdown(text, max_chunk_size=1000, page_map=page_map)
+
+    # Alpha + Beta merge (Beta is deeper) → pages should span [0, 1]
+    merged = next((c, p) for c, p in result if "Alpha" in c)
+    assert 0 in merged[1], f"Merged chunk missing page 0: {merged[1]}"
+    assert 1 in merged[1], f"Merged chunk missing page 1: {merged[1]}"
+
+    # Gamma is same level as Alpha → separate chunk, page 2 only
+    gamma = next((c, p) for c, p in result if "Gamma" in c)
+    assert 2 in gamma[1], f"Gamma chunk missing page 2: {gamma[1]}"
+    assert 0 not in gamma[1], f"Gamma chunk should not include page 0: {gamma[1]}"
+
+
+def test_chunk_markdown_offset_exact_with_preamble():
+    """Offsets stay exact when a non-empty preamble precedes headings."""
+    preamble = "Preamble paragraph.\n"
+    sec_a = "## Section A\nA content.\n"
+    sec_b = "## Section B\nB content.\n"
+    text = preamble + sec_a + sec_b
+
+    # Page 0 = preamble, page 1 = sec_a, page 2 = sec_b
+    page_map = {
+        0: 0,
+        len(preamble): 1,
+        len(preamble) + len(sec_a): 2,
+    }
+
+    result = _chunk_markdown(text, max_chunk_size=1000, page_map=page_map)
+
+    preamble_chunk = next((c, p) for c, p in result if "Preamble" in c)
+    assert 0 in preamble_chunk[1]
+
+    a_chunk = next((c, p) for c, p in result if "Section A" in c)
+    assert 1 in a_chunk[1], f"Section A should be on page 1: {a_chunk[1]}"
+
+    b_chunk = next((c, p) for c, p in result if "Section B" in c)
+    assert 2 in b_chunk[1], f"Section B should be on page 2: {b_chunk[1]}"
