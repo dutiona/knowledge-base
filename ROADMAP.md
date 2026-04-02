@@ -86,7 +86,7 @@ dependency chains, and parallelism opportunities.
 | 188 | no input validation on search params                     | Search      | 2.5c  |                                                   |
 | 189 | subprocess with user-configurable omniparser_path        | Vision      | 2.5c  |                                                   |
 | 190 | LLM base_url SSRF — only scheme validated                | Extraction  | 2.5c  |                                                   |
-| 191 | LLM JSON without structural validation                   | Extraction  | 2.5c  |                                                   |
+| 191 | LLM JSON without structural validation                   | Extraction  | 2.5c  | ✔ PR #314                                         |
 | 192 | indirect prompt injection in LLM extraction              | Extraction  | 2.5c  |                                                   |
 | 193 | FTS5 operator sanitization incomplete                    | Search      | 2.5c  |                                                   |
 | 194 | f-string SQL assembly fragile pattern                    | Foundation  | 2.5c  |                                                   |
@@ -347,7 +347,7 @@ compounding tech debt.
 #188 (no input validation on search)   ─── independent
 #189 (subprocess omniparser_path)      ─── independent
 #190 (LLM base_url SSRF)              ─── independent
-#191 (LLM JSON no structural valid.)   ─── independent
+✔ #191 (LLM JSON no structural valid.)   ─── independent (PR #314)
 #192 (indirect prompt injection)       ─── independent
 #193 (FTS5 sanitization incomplete)    ─── independent
 ```
