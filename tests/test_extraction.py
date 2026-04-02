@@ -183,7 +183,7 @@ def test_extract_structure_basic(tmp_path):
 
     p = register_paper(conn, "BERT Paper", source_uri=str(md.resolve()))["paper_id"]
 
-    def _mock_llm_call(prompt, *, conn=None, cfg=None):
+    def _mock_llm_call(prompt, *, conn=None, cfg=None, client=None):
         return FAKE_LLM_RESPONSE
 
     with patch("knowledge_base.extraction._llm_call", _mock_llm_call):
@@ -241,7 +241,7 @@ def test_entity_tables_exist(tmp_path):
 
 
 def test_map_extract_single_chunk(tmp_path):
-    conn = _setup(tmp_path)
+    _setup(tmp_path)
 
     fake_response = json.dumps(
         {
@@ -271,13 +271,14 @@ def test_map_extract_single_chunk(tmp_path):
         }
     )
 
+    cfg = {"provider": "ollama", "model": "test", "base_url": "http://localhost:11434"}
     with patch("knowledge_base.extraction._llm_call", return_value=fake_response):
         result = _map_extract(
             chunk_id=1,
             chunk_text="BERT achieves 88.5% on GLUE.",
             chunk_index=0,
             total_chunks=1,
-            conn_or_cfg=conn,
+            cfg=cfg,
         )
 
     assert len(result["methods"]) == 1
@@ -288,7 +289,7 @@ def test_map_extract_single_chunk(tmp_path):
 
 
 def test_resolve_entities_merges_aliases(tmp_path):
-    conn = _setup(tmp_path)
+    _setup(tmp_path)
 
     map_results = [
         {
@@ -329,8 +330,9 @@ def test_resolve_entities_merges_aliases(tmp_path):
         }
     )
 
+    cfg = {"provider": "ollama", "model": "test", "base_url": "http://localhost:11434"}
     with patch("knowledge_base.extraction._llm_call", return_value=resolve_response):
-        resolution = _resolve_entities(map_results, conn)
+        resolution = _resolve_entities(map_results, cfg)
 
     assert len(resolution["groups"]) == 1
     assert resolution["groups"][0]["canonical"] == "CNN-LSTM"
@@ -430,7 +432,7 @@ def test_extract_structure_fast_path_short_doc(tmp_path):
     ingest_file(conn, md)
     p = register_paper(conn, "BERT Paper", source_uri=str(md.resolve()))["paper_id"]
 
-    def _mock_llm_call(prompt, *, conn=None, cfg=None):
+    def _mock_llm_call(prompt, *, conn=None, cfg=None, client=None):
         return FAKE_LLM_RESPONSE
 
     with patch("knowledge_base.extraction._llm_call", _mock_llm_call):
@@ -495,7 +497,7 @@ def test_extract_structure_map_reduce_confirmed(tmp_path):
     )
     call_count = {"n": 0}
 
-    def _mock_llm(prompt, *, conn=None, cfg=None):
+    def _mock_llm(prompt, *, conn=None, cfg=None, client=None):
         call_count["n"] += 1
         if "Group mentions" in prompt or "canonical" in prompt.lower():
             return resolve_response
@@ -553,7 +555,7 @@ def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
     ingest_file(conn, md)
     p = register_paper(conn, "Fail Paper", source_uri=str(md.resolve()))["paper_id"]
 
-    def _mock_llm_empty(prompt, *, conn=None, cfg=None):
+    def _mock_llm_empty(prompt, *, conn=None, cfg=None, client=None):
         raise ValueError("LLM returned empty response (possible thinking-mode issue)")
 
     with patch("knowledge_base.extraction._llm_call", _mock_llm_empty):
@@ -629,7 +631,7 @@ def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
 
     first_chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
 
-    def _mock_llm_call(prompt, *, conn=None, cfg=None):
+    def _mock_llm_call(prompt, *, conn=None, cfg=None, client=None):
         return FAKE_LLM_RESPONSE
 
     with patch("knowledge_base.extraction._llm_call", _mock_llm_call):
@@ -771,7 +773,7 @@ def test_single_pass_passes_first_chunk_id_to_methods_and_datasets(tmp_path, tab
 
     first_chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
 
-    def _mock_llm_call(prompt, *, conn=None, cfg=None):
+    def _mock_llm_call(prompt, *, conn=None, cfg=None, client=None):
         return FAKE_LLM_RESPONSE
 
     with patch("knowledge_base.extraction._llm_call", _mock_llm_call):
@@ -1206,7 +1208,7 @@ _RESOLVE_RESPONSE = json.dumps(
 )
 
 
-def _mock_llm_for_progress(prompt, *, conn=None, cfg=None):
+def _mock_llm_for_progress(prompt, *, conn=None, cfg=None, client=None):
     if "Group mentions" in prompt or "canonical" in prompt.lower():
         return _RESOLVE_RESPONSE
     return _MAP_RESPONSE
@@ -1293,11 +1295,11 @@ def test_map_reduce_logs_failed_chunk(tmp_path, caplog):
 
     call_count = {"n": 0}
 
-    def _mock_llm_fail_first(prompt, *, conn=None, cfg=None):
+    def _mock_llm_fail_first(prompt, *, conn=None, cfg=None, client=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise ValueError("simulated LLM failure")
-        return _mock_llm_for_progress(prompt, conn=conn)
+        return _mock_llm_for_progress(prompt, conn=conn, cfg=cfg, client=client)
 
     with caplog.at_level(logging.INFO, logger="knowledge_base.extraction"):
         with patch("knowledge_base.extraction._llm_call", _mock_llm_fail_first):
@@ -1398,7 +1400,7 @@ def test_parallel_map_phase_produces_same_results(tmp_path):
         }
     )
 
-    def _mock_llm(prompt, *, conn=None, cfg=None):
+    def _mock_llm(prompt, *, conn=None, cfg=None, client=None):
         if "Group mentions" in prompt or "canonical" in prompt.lower():
             return resolve_response
         return map_response
@@ -1428,7 +1430,7 @@ def test_parallel_map_handles_partial_failures(tmp_path):
 
     call_count = {"n": 0}
 
-    def _mock_llm(prompt, *, conn=None, cfg=None):
+    def _mock_llm(prompt, *, conn=None, cfg=None, client=None):
         if "Group mentions" in prompt or "canonical" in prompt.lower():
             return json.dumps({"groups": []})
         call_count["n"] += 1
@@ -1456,14 +1458,17 @@ def test_parallel_map_calls_with_cfg_not_conn(tmp_path):
 
     received_args = []
 
-    def _spy_map_extract(chunk_id, chunk_text, chunk_index, total_chunks, conn_or_cfg):
-        received_args.append(type(conn_or_cfg).__name__)
-        # Delegate to a mock that returns empty results
+    def _spy_map_extract(
+        chunk_id, chunk_text, chunk_index, total_chunks, cfg, *, client=None
+    ):
+        received_args.append(
+            ("cfg", type(cfg).__name__, "client", type(client).__name__)
+        )
         return {"methods": [], "datasets": [], "metrics": []}
 
     resolve_response = json.dumps({"groups": []})
 
-    def _mock_llm(prompt, *, conn=None, cfg=None):
+    def _mock_llm(prompt, *, conn=None, cfg=None, client=None):
         return resolve_response
 
     with (
@@ -1472,9 +1477,12 @@ def test_parallel_map_calls_with_cfg_not_conn(tmp_path):
     ):
         extract_structure(conn, p, confirmed=True, max_workers=2)
 
-    # All calls in parallel path should receive a dict (cfg), not a Connection
-    assert all(t == "dict" for t in received_args), (
+    # All calls should receive a cfg dict and a shared httpx.Client
+    assert all(t[1] == "dict" for t in received_args), (
         f"Expected all cfg dicts, got: {received_args}"
+    )
+    assert all(t[3] == "Client" for t in received_args), (
+        f"Expected shared httpx.Client, got: {received_args}"
     )
 
 
@@ -1490,7 +1498,7 @@ def test_parallel_map_progress_callback(tmp_path):
 
     progress_calls = []
 
-    def _mock_llm(prompt, *, conn=None, cfg=None):
+    def _mock_llm(prompt, *, conn=None, cfg=None, client=None):
         if "Group mentions" in prompt or "canonical" in prompt.lower():
             return json.dumps({"groups": []})
         return json.dumps({"methods": [], "datasets": [], "metrics": []})
@@ -1515,7 +1523,7 @@ def test_max_workers_clamped_to_chunk_count(tmp_path):
     ingest_file(conn, md)
     p = register_paper(conn, "Clamp Paper", source_uri=str(md.resolve()))["paper_id"]
 
-    def _mock_llm(prompt, *, conn=None, cfg=None):
+    def _mock_llm(prompt, *, conn=None, cfg=None, client=None):
         if "Group mentions" in prompt or "canonical" in prompt.lower():
             return json.dumps({"groups": []})
         return json.dumps({"methods": [], "datasets": [], "metrics": []})
@@ -1539,7 +1547,7 @@ def test_max_workers_defaults_to_sequential(tmp_path):
 
     call_order = []
 
-    def _mock_llm(prompt, *, conn=None, cfg=None):
+    def _mock_llm(prompt, *, conn=None, cfg=None, client=None):
         if "Group mentions" in prompt or "canonical" in prompt.lower():
             return json.dumps({"groups": []})
         # Extract chunk index from prompt to verify ordering
