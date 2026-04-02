@@ -62,7 +62,7 @@ dependency chains, and parallelism opportunities.
 | 239 | extract auto_relate module (papers.py → auto_relate.py)  | Papers      | 2.5b  | ✔ PR #292                                         |
 | 240 | extract LLM module (extraction.py → llm.py)              | Extraction  | 2.5b  | ✔ PR #294                                         |
 | 243 | light improvements (7 items)                             | Foundation  | 2.5b  | ✔ PR #296                                         |
-| 234 | extract chunking module (ingest.py → chunking.py)        | Ingest      | 2.5b  |                                                   |
+| 234 | extract chunking module (ingest.py → chunking.py)        | Ingest      | 2.5b  | ✔ PR #303                                         |
 | 235 | extract web ingestion module (ingest.py → web.py)        | Ingest      | 2.5b  |                                                   |
 | 237 | shared reingest/ingest logic                             | Ingest      | 2.5b  |                                                   |
 | 241 | decompose extract_figures into pipeline stages           | Vision      | 2.5b  |                                                   |
@@ -285,9 +285,9 @@ review.
 **Step 2 — Ingest decomposition (depends on Step 1, specifically #236):**
 
 ```
-#234 (chunking.py from ingest.py)     ─── needs #236 (shared helper) first
+✔ #234 (chunking.py from ingest.py)     ─── ✔ PR #303
 #235 (web.py from ingest.py)          ─── needs #236 first
-#237 (shared reingest/ingest logic)   ─── needs #234, #235
+#237 (shared reingest/ingest logic)   ─── needs ✔ #234, #235
 ```
 
 **Step 3 — Final decompositions (depends on Step 2):**
@@ -356,7 +356,7 @@ compounding tech debt.
 #196 (add_relationship error ignored)  ─── independent
 #214 (vision ↔ ingest coupling)        ─── easier after #241 (Phase 2.5b)
 #218 (reingest owns relationship inv.) ─── independent
-#219 (primitive obsession — dicts)     ─── easier after #234/#235 (Phase 2.5b)
+#219 (primitive obsession — dicts)     ─── easier after ✔ #234/#235 (Phase 2.5b)
 #220 (duplicated FK cleanup)           ─── independent
 #221 (record_method/dataset WET)       ─── independent
 ```
@@ -581,7 +581,7 @@ Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a ✔        Ph
 PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151       ✔ #236, ✔ #238, ✔ #239       #181, #199, #200
 #85 ─────┤                      ✔ #100               ✔ #150, ✔ #165         ✔ #240, ✔ #243             #205–#211, #213
 #78 ─────┼──▶ ✔ #71            ✔ #15                ✔ #166, ✔ #180      Step 2 (needs ✔ #236):    Security:
-#46 ─────┤                      ✔ #110               ✔ #182, ✔ #195         #234, #235, #237         #187–#193
+#46 ─────┤                      ✔ #110               ✔ #182, ✔ #195         ✔ #234, #235, #237       #187–#193
 #45 ─────┤    ✔ #101           ✔ #82                ✔ #197, ✔ #198      Step 3 (needs Step 2):  Quality:
 #16 ─────┘                      ✔ #126               ✔ #201, ✔ #202         #241, #242               #194, #196, #214
                                 ✔ #127               ✔ #203, ✔ #204      Parallel:                #218–#221

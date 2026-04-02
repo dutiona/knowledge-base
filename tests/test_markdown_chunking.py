@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from knowledge_base.ingest import _chunk_markdown, _chunk_text
+from knowledge_base.chunking import chunk_markdown as _chunk_markdown
+from knowledge_base.chunking import chunk_text as _chunk_text
 
 
 def test_chunk_markdown_no_headings():

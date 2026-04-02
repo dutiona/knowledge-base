@@ -24,12 +24,13 @@ ruff format src/ tests/          # format
 
 ## Architecture
 
-Sixteen modules behind `server.py`, each owning its domain. All share a single SQLite file via thread-local connections with double-checked locking for schema init.
+Seventeen modules behind `server.py`, each owning its domain. All share a single SQLite file via thread-local connections with double-checked locking for schema init.
 
 Read these when the task touches the corresponding area:
 
 | Area                                     | Module                                    | Deep-dive doc                             |
 | ---------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| Chunking (text, markdown, Python AST)    | `src/knowledge_base/chunking.py`          | `docs/usage/ingesting-documents.md`       |
 | Ingestion (PDF, code, web, markdown)     | `src/knowledge_base/ingest.py`            | `docs/usage/ingesting-documents.md`       |
 | Hybrid search (FTS5 + vec + RRF)         | `src/knowledge_base/search.py`            | `docs/usage/searching.md`                 |
 | Keyword intent extraction                | `src/knowledge_base/keywords.py`          | `docs/usage/searching.md`                 |

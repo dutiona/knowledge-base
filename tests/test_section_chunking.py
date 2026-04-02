@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from knowledge_base.ingest import _chunk_by_section
+from knowledge_base.chunking import chunk_by_section as _chunk_by_section
 
 
 def test_basic_heading_split():
