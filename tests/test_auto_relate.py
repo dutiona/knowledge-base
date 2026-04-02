@@ -510,11 +510,11 @@ class TestOnlyCompareHigher:
             calls.append(params)
             return original_submit(c, paper_id, job_type, params)
 
-        from knowledge_base.server import scan_relationships
+        from knowledge_base.routes.papers import scan_relationships
 
         with (
             patch("knowledge_base.jobs.submit_job", side_effect=spy_submit),
-            patch("knowledge_base.server._get_conn", return_value=conn),
+            patch("knowledge_base.routes.papers._get_conn", return_value=conn),
         ):
             scan_relationships()
 

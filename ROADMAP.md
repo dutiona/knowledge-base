@@ -66,7 +66,7 @@ dependency chains, and parallelism opportunities.
 | 235 | extract web ingestion module (ingest.py → web.py)        | Ingest      | 2.5b  | ✔ PR #306                                         |
 | 237 | shared reingest/ingest logic                             | Ingest      | 2.5b  | ✔ PR #307                                         |
 | 241 | decompose extract_figures into pipeline stages           | Vision      | 2.5b  | ✔ PR #308                                         |
-| 242 | decompose server.py into router sub-modules              | Foundation  | 2.5b  |                                                   |
+| 242 | decompose server.py into router sub-modules              | Foundation  | 2.5b  | ✔ PR #310                                         |
 | 141 | refactor: unify multi-line SQL INSERT strings            | Foundation  | 2.5b  | ✔ PR #302                                         |
 | 140 | refactor: extraction module cleanup from #15             | Extraction  | 2.5b  | ✔ PR #300                                         |
 | 154 | refactor: consolidate transaction management             | Ingest      | 2.5b  | ✔ PR #299                                         |
@@ -93,7 +93,7 @@ dependency chains, and parallelism opportunities.
 | 196 | add_relationship error ignored by auto_relate            | Papers      | 2.5c  |                                                   |
 | 214 | bidirectional coupling vision.py ↔ ingest.py             | Vision      | 2.5c  |                                                   |
 | 215 | papers.py god module — 5 responsibilities                | Papers      | 2.5c  |                                                   |
-| 216 | server.py god module — 38 tools in 1083 LOC              | Foundation  | 2.5c  |                                                   |
+| 216 | server.py god module — 38 tools in 1083 LOC              | Foundation  | 2.5c  | ✔ resolved by #242 (PR #310)                      |
 | 217 | status() has 9 inline SQL queries                        | Foundation  | 2.5c  |                                                   |
 | 218 | reingest owns relationship invalidation                  | Ingest      | 2.5c  |                                                   |
 | 219 | primitive obsession — dicts in ingest.py                 | Ingest      | 2.5c  |                                                   |
@@ -105,7 +105,7 @@ dependency chains, and parallelism opportunities.
 | 225 | max_workers missing from mcp-tools.md                    | Extraction  | 2.5c  |                                                   |
 | 226 | phantom auto_relate_accept_threshold in docs             | Search      | 2.5c  |                                                   |
 | 227 | get_methods/datasets/metrics — no docstrings             | Papers      | 2.5c  |                                                   |
-| 228 | server.py 38/41 functions untested                       | Foundation  | 2.5c  |                                                   |
+| 228 | routes/ 46 tool functions untested                       | Foundation  | 2.5c  |                                                   |
 | 229 | \_validate_bib_path — zero tests (security)              | Papers      | 2.5c  |                                                   |
 | 230 | \_cluster_bboxes — zero tests                            | Vision      | 2.5c  |                                                   |
 | 231 | \_folder_boost — zero tests                              | Search      | 2.5c  |                                                   |
@@ -172,7 +172,7 @@ dependency chains, and parallelism opportunities.
 | 185 | chunk insert+dedup boilerplate repeated 5 times | ✔ #236                 |
 | 186 | extract_figures() 500-LOC god function          | ✔ #241                 |
 | 215 | papers.py god module — 5 responsibilities       | #238, #239             |
-| 216 | server.py god module — 38 tools in 1083 LOC     | #242                   |
+| 216 | server.py god module — 38 tools in 1083 LOC     | ✔ #242 (PR #310)       |
 
 **Plan issues** (reference-only, not actionable work items):
 
@@ -294,7 +294,7 @@ review.
 
 ```
 ✔ #241 (decompose extract_figures)    ─── ✔ PR #308
-#242 (decompose server.py)            ─── independent, can go at any step
+✔ #242 (decompose server.py)            ─── ✔ PR #310
 ```
 
 **Parallel with any step:**
@@ -371,7 +371,7 @@ compounding tech debt.
 #225 (max_workers docs gap)            ─── independent
 #226 (phantom threshold in docs)       ─── independent
 #227 (no docstrings on get_methods)    ─── independent
-#228 (server.py 38/41 untested)        ─── large, consider after #242
+#228 (routes/ 46 tool funcs untested)  ─── large, #242 done (PR #310)
 #229 (_validate_bib_path zero tests)   ─── independent
 #230 (_cluster_bboxes zero tests)      ─── independent
 #231 (_folder_boost zero tests)        ─── independent
@@ -387,7 +387,7 @@ compounding tech debt.
 **Parallelism:** All items within each sub-category are independent. Items in
 different sub-categories are also independent. The only soft dependency is that
 #214 and #219 are easier after Phase 2.5b decompositions land, and #228 is easier
-after #242 (server.py decomposition).
+now that #242 (server.py decomposition) has landed.
 
 **Exit criteria:** All medium super-qa findings addressed or explicitly deferred
 with rationale.
