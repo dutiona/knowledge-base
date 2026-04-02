@@ -237,36 +237,32 @@ works, search quality improves via opt-in cross-encoder reranking.
 
 ---
 
-## Phase 2.5a — Bugs & Safety Fixes
+## Phase 2.5a — Bugs & Safety Fixes ✔
 
 **Goal:** Fix all known bugs and safety issues from Phase 2 and super-qa audit
 before adding features or refactoring.
 
 ```
-✔ #163 (qwen3.5 thinking-mode)      ─── bug, independent (done)
-#160 (zombie conclusions)            ─── bug, independent
-✔ #152 (stale inline image chunks)   ─── bug, depends on #82 (done) ✔ PR #271
-#151 (getaddrinfo SSRF)              ─── bug, depends on #82 (done) ✔ PR #270
+✔ #163 (qwen3.5 thinking-mode)        ─── bug, independent (done)
+✔ #160 (zombie conclusions)            ─── bug, independent ✔ PR #272
+✔ #152 (stale inline image chunks)     ─── bug, depends on #82 (done) ✔ PR #271
+✔ #151 (getaddrinfo SSRF)              ─── bug, depends on #82 (done) ✔ PR #270
 ✔ #150 (zero-norm embeddings)          ─── fix, independent ✔ PR #274
 ✔ #165 (auto_relate fallback)          ─── fix, depends on #105 (done) ✔ PR #280
 ✔ #166 (scan_relationships 2x)         ─── perf, depends on #105 (done) ✔ PR #283
-✔ #180 (no rollback on embed failure) ─── bug, independent ✔ PR #282
+✔ #180 (no rollback on embed failure)  ─── bug, independent ✔ PR #282
 ✔ #182 (relocate_paper no transaction) ─── bug, independent ✔ PR #281
-✔ #195 (path_conflict unbound)       ─── bug, independent ✔ PR #286
-#197 (LIKE wildcard injection)       ─── bug, independent
-✔ #198 (lastrowid falsy check)       ─── bug, independent
-✔ #201 (folder boost div-by-zero)    ─── bug, depends on #126 (done) ✔ PR #287
-#202 (offset drift in chunking)      ─── bug, independent
+✔ #195 (path_conflict unbound)         ─── bug, independent ✔ PR #286
+✔ #197 (LIKE wildcard injection)       ─── bug, independent ✔ PR #285
+✔ #198 (lastrowid falsy check)         ─── bug, independent
+✔ #201 (folder boost div-by-zero)      ─── bug, depends on #126 (done) ✔ PR #287
+✔ #202 (offset drift in chunking)      ─── bug, independent ✔ PR #290
 ✔ #203 (_validate_bib_path discarded)  ─── bug, independent ✔ PR #291
-#204 (supersede_conclusion rollback) ─── bug, independent
+✔ #204 (supersede_conclusion rollback) ─── bug, independent ✔ PR #289
 ✔ #212 (PIL Image not closed)          ─── bug, independent ✔ PR #288
 ```
 
-**Parallelism:** All 17 items are independent of each other. Any can be picked up
-in any order. All are small scope (< 1 session each).
-
-**Exit criteria:** No known bugs from Phase 2 work or super-qa audit. Clean
-ruff/pyright. Test suite green without workarounds.
+**All 17 items completed.** Phase 2.5a is done.
 
 ---
 
@@ -577,16 +573,16 @@ has enough content to warrant visual exploration.
 ## Dependency Graph
 
 ```
-Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a          Phase 2.5b              Phase 2.5c
+Phase 0 ✔       Phase 1 ✔       Phase 2 (12/13)     Phase 2.5a ✔        Phase 2.5b              Phase 2.5c
 ────────        ────────        ────────             ────────            ────────                ────────
-                                ✔ #95                ✔ #163, #160        Step 1:                 Perf:
+                                ✔ #95                ✔ #163, ✔ #160      Step 1:                 Perf:
 PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151       ✔ #236, ✔ #238, ✔ #239       #181, #199, #200
 #85 ─────┤                      ✔ #100               ✔ #150, ✔ #165         ✔ #240, ✔ #243             #205–#211, #213
 #78 ─────┼──▶ ✔ #71            ✔ #15                ✔ #166, ✔ #180      Step 2 (needs ✔ #236):    Security:
-#46 ─────┤                      ✔ #110               ✔ #182, #195           #234, #235, #237         #187–#193
-#45 ─────┤    ✔ #101           ✔ #82                #197, ✔ #198        Step 3 (needs Step 2):  Quality:
-#16 ─────┘                      ✔ #126               ✔ #201, ✔ #202           #241, #242               #194, #196, #214
-                                ✔ #127               ✔ #203, #204        Parallel:                #218–#221
+#46 ─────┤                      ✔ #110               ✔ #182, ✔ #195         #234, #235, #237         #187–#193
+#45 ─────┤    ✔ #101           ✔ #82                ✔ #197, ✔ #198      Step 3 (needs Step 2):  Quality:
+#16 ─────┘                      ✔ #126               ✔ #201, ✔ #202         #241, #242               #194, #196, #214
+                                ✔ #127               ✔ #203, ✔ #204      Parallel:                #218–#221
                                 ✔ #128               ✔ #212               #141, #140, #154, #158  Docs/Tests:
                                 ✔ #130                                                            #217, #222–#231
                                 ✔ #105
@@ -636,9 +632,9 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 
 ## Quick Wins (< 1 session each)
 
-**Phase 2.5a items** (all independent, all small scope):
-✔ #163, ✔ #160, ✔ #152, ✔ #151, ✔ #150, ✔ #165, ✔ #166, ✔ #180, ✔ #182, ✔ #195, #197, ✔ #198, ✔ #201,
-✔ #202, ✔ #203, ✔ #204, ✔ #212, #276
+**Phase 2.5a items** ✔ (all 18 complete):
+✔ #163, ✔ #160, ✔ #152, ✔ #151, ✔ #150, ✔ #165, ✔ #166, ✔ #180, ✔ #182, ✔ #195, ✔ #197, ✔ #198, ✔ #201,
+✔ #202, ✔ #203, ✔ #204, ✔ #212, ✔ #276
 
 **Phase 2.5b parallel items** (independent of decomposition ordering):
 #141, #140, #154, #158, ✔ #243, #277, #278
