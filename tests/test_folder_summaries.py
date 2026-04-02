@@ -425,3 +425,71 @@ def test_ingest_directory_batches_folder_summaries(tmp_path):
 
     # Should be called exactly once for the folder (batch), not 3 times (per-file)
     assert mock_update.call_count == 1
+
+
+# ---------- Windows path normalization (#158) ----------
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_source_uri_uses_forward_slashes(tmp_path):
+    """source_uri stored in the DB must always use forward slashes."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    folder = tmp_path / "papers"
+    folder.mkdir()
+    (folder / "a.md").write_text("Paper about attention.\n")
+    ingest_file(conn, folder / "a.md")
+
+    row = conn.execute("SELECT source_uri FROM chunks LIMIT 1").fetchone()
+    assert "\\" not in row["source_uri"], (
+        f"source_uri contains backslashes: {row['source_uri']}"
+    )
+    assert row["source_uri"] == (folder / "a.md").as_posix()
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+def test_folder_summary_path_uses_forward_slashes(tmp_path):
+    """Folder summary folder_path must use forward slashes to match source_uris."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    folder = tmp_path / "papers"
+    folder.mkdir()
+    (folder / "a.md").write_text("Paper about attention.\n")
+    ingest_file(conn, folder / "a.md")
+
+    row = conn.execute("SELECT folder_path FROM folder_summaries LIMIT 1").fetchone()
+    assert row is not None
+    assert "\\" not in row["folder_path"], (
+        f"folder_path contains backslashes: {row['folder_path']}"
+    )
+    assert row["folder_path"] == folder.as_posix()
+
+
+def test_backslash_uris_break_folder_summary_matching(tmp_path):
+    """Backslash source_uris would not be matched by LIKE queries (regression guard)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Simulate a Windows-style backslash source_uri in the DB
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
+        " VALUES (?, ?, ?, ?, ?)",
+        ("h1", "some content", "markdown", "C:\\Users\\foo\\papers\\a.md", 0),
+    )
+    conn.commit()
+
+    # Forward-slash LIKE query (what folder_summaries uses) should NOT match
+    fwd_hash = compute_folder_hash(conn, "C:/Users/foo/papers")
+    assert fwd_hash == "", (
+        "Forward-slash folder query should not match backslash source_uri"
+    )
+
+    # Backslash LIKE query would match, but we never generate one —
+    # the point is normalization at ingestion time prevents the mismatch

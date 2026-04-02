@@ -478,6 +478,24 @@ def _migrate_embed_spaces_matryoshka(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_normalize_source_uri(conn: sqlite3.Connection) -> None:
+    """One-time migration: replace backslashes in source_uri and paper_paths.path.
+
+    Prior to this fix, ``str(Path(...))`` on Windows produced backslash
+    separators that broke ``posixpath``-based folder-summary LIKE queries.
+    This migration normalises any legacy rows so lookups remain consistent.
+    Idempotent — runs a no-op UPDATE when no backslashes are present.
+    """
+    conn.execute(
+        "UPDATE chunks SET source_uri = REPLACE(source_uri, '\\', '/')"
+        " WHERE source_uri LIKE '%\\%'"
+    )
+    conn.execute(
+        "UPDATE paper_paths SET path = REPLACE(path, '\\', '/') WHERE path LIKE '%\\%'"
+    )
+    conn.commit()
+
+
 def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     """Register the default embedding space if embed_spaces is empty.
 
@@ -814,3 +832,4 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_chunk_sessions(conn)
     _bootstrap_embed_spaces(conn, embed_dim)
     _migrate_embed_spaces_matryoshka(conn)
+    _migrate_normalize_source_uri(conn)
