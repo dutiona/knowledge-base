@@ -285,14 +285,14 @@ def _migrate_paper_paths(conn: sqlite3.Connection) -> None:
 
     Idempotent: backfills missing entries per-paper (not all-or-nothing).
     """
-    conn.execute("""
-        INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary)
-        SELECT p.id, c.source_uri, TRUE
-        FROM papers p
-        JOIN chunks c ON c.id = p.abstract_chunk_id
-        WHERE p.abstract_chunk_id IS NOT NULL
-          AND p.id NOT IN (SELECT paper_id FROM paper_paths)
-    """)
+    conn.execute(
+        "INSERT OR IGNORE INTO paper_paths (paper_id, path, is_primary)"
+        " SELECT p.id, c.source_uri, TRUE"
+        " FROM papers p"
+        " JOIN chunks c ON c.id = p.abstract_chunk_id"
+        " WHERE p.abstract_chunk_id IS NOT NULL"
+        " AND p.id NOT IN (SELECT paper_id FROM paper_paths)"
+    )
     conn.commit()
 
 
@@ -352,10 +352,10 @@ def _migrate_chunk_sessions(conn: sqlite3.Connection) -> None:
         "ON chunk_sessions(session_id)"
     )
     # Backfill from existing chunks.session_id
-    conn.execute("""
-        INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id)
-        SELECT id, session_id FROM chunks WHERE session_id IS NOT NULL
-    """)
+    conn.execute(
+        "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id)"
+        " SELECT id, session_id FROM chunks WHERE session_id IS NOT NULL"
+    )
     conn.commit()
 
 
@@ -513,9 +513,9 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     strategy = "mechanical"
 
     conn.execute(
-        """INSERT INTO embed_spaces
-           (name, model, provider, dim, chunk_strategy, status, table_name, chunk_count)
-           VALUES (?, ?, ?, ?, ?, 'active', 'chunks_vec', ?)""",
+        "INSERT INTO embed_spaces"
+        " (name, model, provider, dim, chunk_strategy, status, table_name, chunk_count)"
+        " VALUES (?, ?, ?, ?, ?, 'active', 'chunks_vec', ?)",
         ("default", model, provider, embed_dim, strategy, count),
     )
     conn.commit()

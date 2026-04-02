@@ -42,8 +42,8 @@ def record_conclusion(
             raise NotFoundError(f"Chunk IDs not found: {missing}")
 
     cursor = conn.execute(
-        """INSERT INTO conclusions (claim, confidence, source_chunk_ids, session_context)
-           VALUES (?, ?, ?, ?)""",
+        "INSERT INTO conclusions (claim, confidence, source_chunk_ids, session_context)"
+        " VALUES (?, ?, ?, ?)",
         (claim, confidence, json.dumps(chunk_ids), session_context),
     )
     if _commit:

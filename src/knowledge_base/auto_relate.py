@@ -22,12 +22,10 @@ def _get_paper_embeddings(
     """
     vec_table = get_vec_table_name(conn)
     rows = conn.execute(
-        f"""SELECT cv.chunk_id, cv.embedding
-           FROM [{vec_table}] cv
-           JOIN chunks c ON c.id = cv.chunk_id
-           JOIN paper_paths pp ON pp.path = c.source_uri
-           WHERE pp.paper_id = ?
-             AND c.source_type != 'figure'""",
+        f"SELECT cv.chunk_id, cv.embedding FROM [{vec_table}] cv"
+        " JOIN chunks c ON c.id = cv.chunk_id"
+        " JOIN paper_paths pp ON pp.path = c.source_uri"
+        " WHERE pp.paper_id = ? AND c.source_type != 'figure'",
         (paper_id,),
     ).fetchall()
     if rows:
@@ -42,11 +40,9 @@ def _get_paper_embeddings(
     if not uri_row:
         return []
     return conn.execute(
-        f"""SELECT cv.chunk_id, cv.embedding
-           FROM [{vec_table}] cv
-           JOIN chunks c ON c.id = cv.chunk_id
-           WHERE c.source_uri = ?
-             AND c.source_type != 'figure'""",
+        f"SELECT cv.chunk_id, cv.embedding FROM [{vec_table}] cv"
+        " JOIN chunks c ON c.id = cv.chunk_id"
+        " WHERE c.source_uri = ? AND c.source_type != 'figure'",
         (uri_row["source_uri"],),
     ).fetchall()
 
