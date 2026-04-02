@@ -15,7 +15,7 @@ import fitz
 import pymupdf4llm
 import pytest
 
-from knowledge_base.ingest import _chunk_text
+from knowledge_base.chunking import chunk_text as _chunk_text
 
 _has_tessdata = shutil.which("tesseract") is not None
 

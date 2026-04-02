@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+from knowledge_base.chunking import chunk_python_ast as _chunk_python_ast
+from knowledge_base.chunking import chunk_text as _chunk_text
 from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from knowledge_base.ingest import (
     _cleanup_stale_inline_images,
@@ -22,8 +24,6 @@ from knowledge_base.ingest import (
     ingest_file,
     reingest_file,
     ingest_url,
-    _chunk_text,
-    _chunk_python_ast,
 )
 from knowledge_base.papers import (
     register_paper,
