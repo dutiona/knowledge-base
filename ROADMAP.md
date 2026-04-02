@@ -68,7 +68,7 @@ dependency chains, and parallelism opportunities.
 | 241 | decompose extract_figures into pipeline stages           | Vision      | 2.5b  |                                                   |
 | 242 | decompose server.py into router sub-modules              | Foundation  | 2.5b  |                                                   |
 | 141 | refactor: unify multi-line SQL INSERT strings            | Foundation  | 2.5b  | ✔ PR #302                                         |
-| 140 | refactor: extraction module cleanup from #15             | Extraction  | 2.5b  |                                                   |
+| 140 | refactor: extraction module cleanup from #15             | Extraction  | 2.5b  | ✔ PR #300                                         |
 | 154 | refactor: consolidate transaction management             | Ingest      | 2.5b  | ✔ PR #299                                         |
 | 158 | chore: full Windows path support in folder summaries     | Search      | 2.5b  | ✔ PR #301                                         |
 | 181 | auto_relate O(P\*C²) with per-paper DB round-trips       | Search      | 2.5c  |                                                   |
@@ -303,7 +303,7 @@ review.
 ✔ #277 (conclusion FK full table scan)  ─── perf, ✔ PR #304
 ✔ #278 (conclusion FK cleanup utility)  ─── refactor, ✔ PR #304
 ✔ #141 (unify SQL INSERTs)              ─── refactor, ✔ PR #302
-#140 (extraction cleanup from #15)    ─── refactor, depends on #15 (done)
+✔ #140 (extraction cleanup from #15)    ─── refactor, ✔ PR #300
 ✔ #154 (transaction consolidation)    ─── refactor, independent
 ✔ #158 (Windows path support)           ─── chore, ✔ PR #301
 ```
@@ -585,7 +585,7 @@ PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151  
 #45 ─────┤    ✔ #101           ✔ #82                ✔ #197, ✔ #198      Step 3 (needs Step 2):  Quality:
 #16 ─────┘                      ✔ #126               ✔ #201, ✔ #202         #241, #242               #194, #196, #214
                                 ✔ #127               ✔ #203, ✔ #204      Parallel:                #218–#221
-                                ✔ #128               ✔ #212               ✔ #141, #140, ✔ #154, ✔ #158  Docs/Tests:
+                                ✔ #128               ✔ #212               ✔ #141, ✔ #140, ✔ #154, ✔ #158  Docs/Tests:
                                 ✔ #130                                                            #217, #222–#231
                                 ✔ #105
                                 ✔ #99
@@ -639,7 +639,7 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
 ✔ #202, ✔ #203, ✔ #204, ✔ #212, ✔ #276
 
 **Phase 2.5b parallel items** (independent of decomposition ordering):
-✔ #141, #140, ✔ #154, ✔ #158, ✔ #243, ✔ #277, ✔ #278
+✔ #141, ✔ #140, ✔ #154, ✔ #158, ✔ #243, ✔ #277, ✔ #278
 
 **Dependency:** #278 (consolidate cleanup) subsumes #276 (vision.py fix) and #277 (perf optimization).
 Do #276 first (quick fix), then #278 absorbs the shared utility + perf work.
