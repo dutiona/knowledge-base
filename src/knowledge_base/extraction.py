@@ -48,10 +48,10 @@ def _record_entity(
     if table not in _ENTITY_TABLES:
         raise ValueError(f"Invalid entity table: {table!r}")
     conn.execute(
-        f"""INSERT INTO {table} (name, paper_id, description, chunk_id)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(name, paper_id)
-           DO UPDATE SET description = excluded.description, chunk_id = excluded.chunk_id""",
+        f"INSERT INTO {table} (name, paper_id, description, chunk_id)"
+        " VALUES (?, ?, ?, ?)"
+        " ON CONFLICT(name, paper_id)"
+        " DO UPDATE SET description = excluded.description, chunk_id = excluded.chunk_id",
         (name, paper_id, description, chunk_id),
     )
     if commit:
@@ -110,8 +110,8 @@ def record_metric(
 ) -> dict:
     """Record a metric value."""
     cursor = conn.execute(
-        """INSERT INTO metrics (name, value, unit, dataset_id, method_id, paper_id, chunk_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        "INSERT INTO metrics (name, value, unit, dataset_id, method_id, paper_id, chunk_id)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
         (name, value, unit, dataset_id, method_id, paper_id, chunk_id),
     )
     if commit:
@@ -153,12 +153,12 @@ def get_datasets(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
 
 def get_metrics(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
     rows = conn.execute(
-        """SELECT m.id, m.name, m.value, m.unit, m.chunk_id,
-                  mt.name as method_name, d.name as dataset_name
-           FROM metrics m
-           LEFT JOIN methods mt ON m.method_id = mt.id
-           LEFT JOIN datasets d ON m.dataset_id = d.id
-           WHERE m.paper_id = ?""",
+        "SELECT m.id, m.name, m.value, m.unit, m.chunk_id,"
+        " mt.name as method_name, d.name as dataset_name"
+        " FROM metrics m"
+        " LEFT JOIN methods mt ON m.method_id = mt.id"
+        " LEFT JOIN datasets d ON m.dataset_id = d.id"
+        " WHERE m.paper_id = ?",
         (paper_id,),
     ).fetchall()
     return [
@@ -191,9 +191,9 @@ def compare_papers(
 
     # Find shared dataset names
     rows = conn.execute(
-        f"""SELECT name, COUNT(DISTINCT paper_id) as paper_count
-            FROM datasets WHERE paper_id IN ({placeholders})
-            GROUP BY name HAVING paper_count >= 2""",
+        f"SELECT name, COUNT(DISTINCT paper_id) as paper_count"
+        f" FROM datasets WHERE paper_id IN ({placeholders})"
+        " GROUP BY name HAVING paper_count >= 2",
         paper_ids,
     ).fetchall()
 
@@ -206,14 +206,14 @@ def compare_papers(
         # Get all metrics for this dataset across the given papers
         ds_placeholders = ",".join("?" * len(paper_ids))
         metrics = conn.execute(
-            f"""SELECT m.name as metric_name, m.value, m.unit,
-                       mt.name as method_name, p.title as paper_title, m.paper_id
-                FROM metrics m
-                JOIN datasets d ON m.dataset_id = d.id
-                LEFT JOIN methods mt ON m.method_id = mt.id
-                JOIN papers p ON m.paper_id = p.id
-                WHERE d.name = ? AND m.paper_id IN ({ds_placeholders})
-                ORDER BY m.name, m.value DESC""",
+            f"SELECT m.name as metric_name, m.value, m.unit,"
+            " mt.name as method_name, p.title as paper_title, m.paper_id"
+            " FROM metrics m"
+            " JOIN datasets d ON m.dataset_id = d.id"
+            " LEFT JOIN methods mt ON m.method_id = mt.id"
+            " JOIN papers p ON m.paper_id = p.id"
+            f" WHERE d.name = ? AND m.paper_id IN ({ds_placeholders})"
+            " ORDER BY m.name, m.value DESC",
             [ds_name] + paper_ids,
         ).fetchall()
 

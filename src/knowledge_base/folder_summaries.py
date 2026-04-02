@@ -38,10 +38,10 @@ def compute_folder_hash(conn: sqlite3.Connection, folder_path: str) -> str:
     """
     like, not_like = _folder_like_params(folder_path)
     rows = conn.execute(
-        r"""SELECT DISTINCT content_hash FROM chunks
-           WHERE source_uri LIKE ? ESCAPE '\'
-             AND source_uri NOT LIKE ? ESCAPE '\'
-           ORDER BY content_hash""",
+        r"SELECT DISTINCT content_hash FROM chunks"
+        r" WHERE source_uri LIKE ? ESCAPE '\'"
+        r" AND source_uri NOT LIKE ? ESCAPE '\'"
+        " ORDER BY content_hash",
         (like, not_like),
     ).fetchall()
     if not rows:
@@ -58,11 +58,11 @@ def _build_folder_summary(conn: sqlite3.Connection, folder_path: str) -> str:
     """
     like, not_like = _folder_like_params(folder_path)
     rows = conn.execute(
-        r"""SELECT source_uri, content FROM chunks
-           WHERE source_uri LIKE ? ESCAPE '\'
-             AND source_uri NOT LIKE ? ESCAPE '\'
-             AND chunk_index = 0
-           ORDER BY source_uri""",
+        r"SELECT source_uri, content FROM chunks"
+        r" WHERE source_uri LIKE ? ESCAPE '\'"
+        r" AND source_uri NOT LIKE ? ESCAPE '\'"
+        " AND chunk_index = 0"
+        " ORDER BY source_uri",
         (like, not_like),
     ).fetchall()
     parts = []
@@ -133,12 +133,12 @@ def update_folder_summary(
 
     # Upsert folder_summaries
     conn.execute(
-        """INSERT INTO folder_summaries (folder_path, summary, content_hash, updated_at)
-           VALUES (?, ?, ?, datetime('now'))
-           ON CONFLICT(folder_path) DO UPDATE SET
-               summary = excluded.summary,
-               content_hash = excluded.content_hash,
-               updated_at = excluded.updated_at""",
+        "INSERT INTO folder_summaries (folder_path, summary, content_hash, updated_at)"
+        " VALUES (?, ?, ?, datetime('now'))"
+        " ON CONFLICT(folder_path) DO UPDATE SET"
+        " summary = excluded.summary,"
+        " content_hash = excluded.content_hash,"
+        " updated_at = excluded.updated_at",
         (folder_path, summary, current_hash),
     )
 

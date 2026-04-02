@@ -338,9 +338,8 @@ def status() -> str:
     ]
 
     recent = conn.execute(
-        """SELECT source_uri, source_type, COUNT(*) as chunks, created_at
-           FROM chunks GROUP BY source_uri
-           ORDER BY created_at DESC LIMIT 5"""
+        "SELECT source_uri, source_type, COUNT(*) as chunks, created_at"
+        " FROM chunks GROUP BY source_uri ORDER BY created_at DESC LIMIT 5"
     ).fetchall()
 
     db_size_bytes = DEFAULT_DB_PATH.stat().st_size if DEFAULT_DB_PATH.exists() else 0

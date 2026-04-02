@@ -181,8 +181,8 @@ def register_paper(
             abstract_chunk_id = row["id"]
 
     cursor = conn.execute(
-        """INSERT INTO papers (title, authors, year, venue, doi, bibtex, abstract_chunk_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        "INSERT INTO papers (title, authors, year, venue, doi, bibtex, abstract_chunk_id)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
         (title, authors_json, year, venue, doi, bibtex, abstract_chunk_id),
     )
 
@@ -255,13 +255,13 @@ def get_paper(
 
         # Fetch relationships
         rels = conn.execute(
-            """SELECT r.*, p.title as related_title
-               FROM relationships r
-               JOIN papers p ON (
-                   CASE WHEN r.source_paper_id = ? THEN r.target_paper_id
-                        ELSE r.source_paper_id END
-               ) = p.id
-               WHERE r.source_paper_id = ? OR r.target_paper_id = ?""",
+            "SELECT r.*, p.title as related_title"
+            " FROM relationships r"
+            " JOIN papers p ON ("
+            "   CASE WHEN r.source_paper_id = ? THEN r.target_paper_id"
+            "        ELSE r.source_paper_id END"
+            " ) = p.id"
+            " WHERE r.source_paper_id = ? OR r.target_paper_id = ?",
             (row["id"], row["id"], row["id"]),
         ).fetchall()
         paper["relationships"] = [
@@ -300,10 +300,12 @@ def add_relationship(
         raise ValidationError("confidence must be between 0.0 and 1.0")
 
     conn.execute(
-        """INSERT INTO relationships (source_paper_id, target_paper_id, relation_type, confidence, evidence_chunk_id)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(source_paper_id, target_paper_id, relation_type)
-           DO UPDATE SET confidence = excluded.confidence, evidence_chunk_id = excluded.evidence_chunk_id""",
+        "INSERT INTO relationships"
+        " (source_paper_id, target_paper_id, relation_type, confidence, evidence_chunk_id)"
+        " VALUES (?, ?, ?, ?, ?)"
+        " ON CONFLICT(source_paper_id, target_paper_id, relation_type)"
+        " DO UPDATE SET confidence = excluded.confidence,"
+        " evidence_chunk_id = excluded.evidence_chunk_id",
         (
             source_paper_id,
             target_paper_id,
@@ -347,11 +349,11 @@ def get_relationships(
         params.append(relation_type)
 
     rows = conn.execute(
-        f"""SELECT r.*, sp.title as source_title, tp.title as target_title
-            FROM relationships r
-            JOIN papers sp ON r.source_paper_id = sp.id
-            JOIN papers tp ON r.target_paper_id = tp.id
-            WHERE {where}""",
+        f"SELECT r.*, sp.title as source_title, tp.title as target_title"
+        " FROM relationships r"
+        " JOIN papers sp ON r.source_paper_id = sp.id"
+        " JOIN papers tp ON r.target_paper_id = tp.id"
+        f" WHERE {where}",
         params,
     ).fetchall()
 

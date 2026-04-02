@@ -96,10 +96,10 @@ def create_space(
         total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
     conn.execute(
-        """INSERT INTO embed_spaces
-           (name, model, provider, dim, chunk_strategy, status, table_name,
-            total_chunks, matryoshka_base_dim)
-           VALUES (?, ?, ?, ?, ?, 'populating', ?, ?, ?)""",
+        "INSERT INTO embed_spaces"
+        " (name, model, provider, dim, chunk_strategy, status, table_name,"
+        " total_chunks, matryoshka_base_dim)"
+        " VALUES (?, ?, ?, ?, ?, 'populating', ?, ?, ?)",
         (name, model, provider, dim, chunk_strategy, tbl, total, matryoshka_base_dim),
     )
     conn.execute(f"""
