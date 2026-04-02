@@ -496,6 +496,19 @@ def _migrate_normalize_source_uri(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_extraction_source(conn: sqlite3.Connection) -> None:
+    """Add source column to methods, datasets, metrics, entities tables."""
+    for table in ("methods", "datasets", "metrics", "entities"):
+        columns = {
+            row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if "source" not in columns:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN source TEXT NOT NULL DEFAULT 'user'"
+            )
+    conn.commit()
+
+
 def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     """Register the default embedding space if embed_spaces is empty.
 
@@ -669,6 +682,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         paper_id INTEGER NOT NULL REFERENCES papers(id),
         description TEXT,
         chunk_id INTEGER REFERENCES chunks(id),
+        source TEXT NOT NULL DEFAULT 'user',
         UNIQUE(name, paper_id)
     );
 
@@ -678,6 +692,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         paper_id INTEGER NOT NULL REFERENCES papers(id),
         description TEXT,
         chunk_id INTEGER REFERENCES chunks(id),
+        source TEXT NOT NULL DEFAULT 'user',
         UNIQUE(name, paper_id)
     );
 
@@ -689,7 +704,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
         dataset_id INTEGER REFERENCES datasets(id),
         method_id INTEGER REFERENCES methods(id),
         paper_id INTEGER NOT NULL REFERENCES papers(id),
-        chunk_id INTEGER REFERENCES chunks(id)
+        chunk_id INTEGER REFERENCES chunks(id),
+        source TEXT NOT NULL DEFAULT 'user'
     );
 
     CREATE TABLE IF NOT EXISTS entities (
@@ -698,6 +714,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         entity_type TEXT NOT NULL CHECK(entity_type IN ('method', 'dataset', 'metric')),
         paper_id INTEGER NOT NULL REFERENCES papers(id),
         description TEXT,
+        source TEXT NOT NULL DEFAULT 'user',
         UNIQUE(canonical_name, entity_type, paper_id)
     );
 
@@ -833,3 +850,4 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _bootstrap_embed_spaces(conn, embed_dim)
     _migrate_embed_spaces_matryoshka(conn)
     _migrate_normalize_source_uri(conn)
+    _migrate_extraction_source(conn)
