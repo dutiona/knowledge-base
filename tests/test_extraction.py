@@ -1563,72 +1563,47 @@ def test_max_workers_defaults_to_sequential(tmp_path):
     assert call_order == sorted(call_order)
 
 
-# --- Schema validation (#191) ---
+# --- Schema validation (integration) + Output validation & sanitization ---
 
 
-class TestValidateExtractionSchema:
-    """LLM JSON responses must conform to expected structure."""
+class TestValidateExtractionSchemaIntegration:
+    """Integration tests: validation via _map_extract / _extract_single_pass."""
 
     def test_map_extract_rejects_non_dict(self, tmp_path):
-        """Top-level response must be a dict, not a list or string."""
         _setup(tmp_path)
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
         with patch(
             "knowledge_base.extraction._llm_call",
             return_value=json.dumps([{"name": "X"}]),
         ):
-            with pytest.raises(ValueError, match="expected a JSON object"):
+            with pytest.raises(ValueError, match="expected dict"):
                 _map_extract(1, "text", 0, 1, cfg)
 
     def test_map_extract_rejects_methods_not_list(self, tmp_path):
-        """'methods' must be a list, not a string or dict."""
         _setup(tmp_path)
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
         with patch(
             "knowledge_base.extraction._llm_call",
             return_value=json.dumps({"methods": "BERT", "datasets": [], "metrics": []}),
         ):
-            with pytest.raises(ValueError, match="'methods'.*must be a list"):
+            with pytest.raises(ValueError, match="expected list"):
                 _map_extract(1, "text", 0, 1, cfg)
 
-    def test_map_extract_rejects_datasets_not_list(self, tmp_path):
+    def test_map_extract_drops_non_dict_item(self, tmp_path):
+        """Non-dict items in methods are silently dropped (permissive validation)."""
         _setup(tmp_path)
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
         with patch(
             "knowledge_base.extraction._llm_call",
             return_value=json.dumps(
-                {"methods": [], "datasets": {"name": "X"}, "metrics": []}
+                {"methods": ["BERT", {"name": "ok"}], "datasets": [], "metrics": []}
             ),
         ):
-            with pytest.raises(ValueError, match="'datasets'.*must be a list"):
-                _map_extract(1, "text", 0, 1, cfg)
-
-    def test_map_extract_rejects_metrics_not_list(self, tmp_path):
-        _setup(tmp_path)
-        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps(
-                {"methods": [], "datasets": [], "metrics": "95% accuracy"}
-            ),
-        ):
-            with pytest.raises(ValueError, match="'metrics'.*must be a list"):
-                _map_extract(1, "text", 0, 1, cfg)
-
-    def test_map_extract_rejects_method_item_not_dict(self, tmp_path):
-        _setup(tmp_path)
-        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps(
-                {"methods": ["BERT"], "datasets": [], "metrics": []}
-            ),
-        ):
-            with pytest.raises(ValueError, match="'methods\\[0\\]'.*must be a dict"):
-                _map_extract(1, "text", 0, 1, cfg)
+            result = _map_extract(1, "text", 0, 1, cfg)
+        assert len(result["methods"]) == 1
+        assert result["methods"][0]["name"] == "ok"
 
     def test_map_extract_accepts_valid_response(self, tmp_path):
-        """Valid schema passes without error."""
         _setup(tmp_path)
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
         valid = {
@@ -1645,56 +1620,23 @@ class TestValidateExtractionSchema:
             ],
         }
         with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps(valid),
+            "knowledge_base.extraction._llm_call", return_value=json.dumps(valid)
         ):
             result = _map_extract(1, "text", 0, 1, cfg)
         assert len(result["methods"]) == 1
 
-    def test_map_extract_accepts_missing_optional_keys(self, tmp_path):
-        """Missing top-level keys are OK (treated as empty)."""
+    def test_map_extract_drops_non_string_name(self, tmp_path):
+        """Items with non-string names are silently dropped."""
         _setup(tmp_path)
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
         with patch(
             "knowledge_base.extraction._llm_call",
-            return_value=json.dumps({"methods": []}),
+            return_value=json.dumps(
+                {"methods": [{"name": 42}], "datasets": [], "metrics": []}
+            ),
         ):
             result = _map_extract(1, "text", 0, 1, cfg)
-        assert result.get("datasets") is None or result.get("datasets") == []
-
-    def test_map_extract_rejects_non_string_name(self, tmp_path):
-        """'name' field in method/dataset items must be a string."""
-        _setup(tmp_path)
-        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps(
-                {
-                    "methods": [{"name": 42, "description": "x"}],
-                    "datasets": [],
-                    "metrics": [],
-                }
-            ),
-        ):
-            with pytest.raises(
-                ValueError, match="'methods\\[0\\]\\.name'.*must be a string"
-            ):
-                _map_extract(1, "text", 0, 1, cfg)
-
-    def test_map_extract_rejects_non_string_metric(self, tmp_path):
-        """'metric' field in metric items must be a string."""
-        _setup(tmp_path)
-        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps(
-                {"methods": [], "datasets": [], "metrics": [{"metric": 99, "value": 1}]}
-            ),
-        ):
-            with pytest.raises(
-                ValueError, match="'metrics\\[0\\]\\.metric'.*must be a string"
-            ):
-                _map_extract(1, "text", 0, 1, cfg)
+        assert len(result["methods"]) == 0
 
     def test_single_pass_rejects_non_dict(self, tmp_path):
         conn = _setup(tmp_path)
@@ -1704,23 +1646,12 @@ class TestValidateExtractionSchema:
             "knowledge_base.extraction._llm_call",
             return_value=json.dumps("just a string"),
         ):
-            with pytest.raises(ExtractionError, match="expected a JSON object"):
-                _extract_single_pass(conn, p, chunks)
-
-    def test_single_pass_rejects_methods_not_list(self, tmp_path):
-        conn = _setup(tmp_path)
-        p = register_paper(conn, "P")["paper_id"]
-        chunks = [{"id": 1, "content": "short text"}]
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps({"methods": 42, "datasets": [], "metrics": []}),
-        ):
-            with pytest.raises(ExtractionError, match="'methods'.*must be a list"):
+            with pytest.raises(ExtractionError):
                 _extract_single_pass(conn, p, chunks)
 
 
-class TestValidateResolutionSchema:
-    """Entity resolution JSON must conform to expected structure."""
+class TestValidateResolutionSchemaIntegration:
+    """Integration tests: resolution validation via _resolve_entities."""
 
     def test_resolve_rejects_non_dict(self, tmp_path):
         _setup(tmp_path)
@@ -1732,36 +1663,11 @@ class TestValidateResolutionSchema:
             "knowledge_base.extraction._llm_call",
             return_value=json.dumps([{"canonical": "X"}]),
         ):
-            with pytest.raises(ValueError, match="expected a JSON object"):
+            with pytest.raises(ValueError, match="expected dict"):
                 _resolve_entities(map_results, cfg)
 
-    def test_resolve_rejects_groups_not_list(self, tmp_path):
-        _setup(tmp_path)
-        map_results = [
-            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
-        ]
-        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps({"groups": "not a list"}),
-        ):
-            with pytest.raises(ValueError, match="'groups'.*must be a list"):
-                _resolve_entities(map_results, cfg)
-
-    def test_resolve_rejects_group_item_not_dict(self, tmp_path):
-        _setup(tmp_path)
-        map_results = [
-            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
-        ]
-        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps({"groups": ["not a dict"]}),
-        ):
-            with pytest.raises(ValueError, match="'groups\\[0\\]'.*must be a dict"):
-                _resolve_entities(map_results, cfg)
-
-    def test_resolve_rejects_members_not_list(self, tmp_path):
+    def test_resolve_drops_non_dict_group(self, tmp_path):
+        """Non-dict groups are silently dropped."""
         _setup(tmp_path)
         map_results = [
             {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
@@ -1770,30 +1676,16 @@ class TestValidateResolutionSchema:
         with patch(
             "knowledge_base.extraction._llm_call",
             return_value=json.dumps(
-                {"groups": [{"canonical": "X", "type": "method", "members": "X"}]}
+                {
+                    "groups": [
+                        "not a dict",
+                        {"canonical": "X", "type": "method", "members": ["X"]},
+                    ]
+                }
             ),
         ):
-            with pytest.raises(
-                ValueError, match="'groups\\[0\\]\\.members'.*must be a list"
-            ):
-                _resolve_entities(map_results, cfg)
-
-    def test_resolve_rejects_non_string_member(self, tmp_path):
-        _setup(tmp_path)
-        map_results = [
-            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
-        ]
-        cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps(
-                {"groups": [{"canonical": "X", "type": "method", "members": [123]}]}
-            ),
-        ):
-            with pytest.raises(
-                ValueError, match="'groups\\[0\\]\\.members\\[0\\]'.*must be a string"
-            ):
-                _resolve_entities(map_results, cfg)
+            result = _resolve_entities(map_results, cfg)
+        assert len(result["groups"]) == 1
 
     def test_resolve_accepts_valid(self, tmp_path):
         _setup(tmp_path)
@@ -1809,3 +1701,288 @@ class TestValidateResolutionSchema:
         ):
             result = _resolve_entities(map_results, cfg)
         assert len(result["groups"]) == 1
+
+
+# --- Output validation & sanitization (unit tests) ---
+
+
+class TestValidateExtraction:
+    """Tests for _validate_extraction — LLM output schema guard."""
+
+    def test_valid_extraction_passes(self):
+        from knowledge_base.extraction import _validate_extraction
+
+        data = {
+            "methods": [{"name": "CNN", "description": "A model"}],
+            "datasets": [{"name": "MNIST", "description": "Digits"}],
+            "metrics": [
+                {
+                    "metric": "accuracy",
+                    "value": 0.99,
+                    "unit": "%",
+                    "method": "CNN",
+                    "dataset": "MNIST",
+                }
+            ],
+        }
+        result = _validate_extraction(data)
+        assert result["methods"][0]["name"] == "CNN"
+
+    def test_rejects_non_dict(self):
+        from knowledge_base.extraction import _validate_extraction
+
+        with pytest.raises(ValueError, match="expected dict"):
+            _validate_extraction([1, 2, 3])
+
+    def test_rejects_non_list_methods(self):
+        from knowledge_base.extraction import _validate_extraction
+
+        with pytest.raises(ValueError, match="expected list"):
+            _validate_extraction(
+                {"methods": "not a list", "datasets": [], "metrics": []}
+            )
+
+    def test_truncates_long_entity_name(self):
+        from knowledge_base.extraction import _validate_extraction
+
+        data = {
+            "methods": [{"name": "x" * 500, "description": "ok"}],
+            "datasets": [],
+            "metrics": [],
+        }
+        result = _validate_extraction(data)
+        assert len(result["methods"][0]["name"]) <= 200
+
+    def test_truncates_long_description(self):
+        from knowledge_base.extraction import _validate_extraction
+
+        data = {
+            "methods": [{"name": "ok", "description": "d" * 5000}],
+            "datasets": [],
+            "metrics": [],
+        }
+        result = _validate_extraction(data)
+        assert len(result["methods"][0]["description"]) <= 2000
+
+    def test_strips_control_characters(self):
+        from knowledge_base.extraction import _validate_extraction
+
+        data = {
+            "methods": [{"name": "CN\x00N\x01", "description": "ok"}],
+            "datasets": [],
+            "metrics": [],
+        }
+        result = _validate_extraction(data)
+        assert "\x00" not in result["methods"][0]["name"]
+        assert result["methods"][0]["name"] == "CNN"
+
+    def test_caps_entity_count(self):
+        from knowledge_base.extraction import (
+            _validate_extraction,
+            MAX_ENTITIES_PER_EXTRACTION,
+        )
+
+        data = {
+            "methods": [{"name": f"m{i}"} for i in range(200)],
+            "datasets": [],
+            "metrics": [],
+        }
+        result = _validate_extraction(data)
+        assert len(result["methods"]) <= MAX_ENTITIES_PER_EXTRACTION
+
+    def test_caps_metric_count(self):
+        from knowledge_base.extraction import (
+            _validate_extraction,
+            MAX_METRICS_PER_EXTRACTION,
+        )
+
+        data = {
+            "methods": [],
+            "datasets": [],
+            "metrics": [{"metric": f"m{i}", "value": i} for i in range(500)],
+        }
+        result = _validate_extraction(data)
+        assert len(result["metrics"]) <= MAX_METRICS_PER_EXTRACTION
+
+    def test_drops_entity_with_non_string_name(self):
+        from knowledge_base.extraction import _validate_extraction
+
+        data = {
+            "methods": [{"name": 123}, {"name": "ok"}],
+            "datasets": [],
+            "metrics": [],
+        }
+        result = _validate_extraction(data)
+        assert len(result["methods"]) == 1
+        assert result["methods"][0]["name"] == "ok"
+
+    def test_drops_metric_with_non_numeric_value(self):
+        from knowledge_base.extraction import _validate_extraction
+
+        data = {
+            "methods": [],
+            "datasets": [],
+            "metrics": [
+                {"metric": "acc", "value": "high"},
+                {"metric": "f1", "value": 0.9},
+            ],
+        }
+        result = _validate_extraction(data)
+        assert len(result["metrics"]) == 1
+        assert result["metrics"][0]["metric"] == "f1"
+
+    def test_missing_keys_default_to_empty(self):
+        from knowledge_base.extraction import _validate_extraction
+
+        result = _validate_extraction({})
+        assert result["methods"] == []
+        assert result["datasets"] == []
+        assert result["metrics"] == []
+
+
+class TestValidateResolution:
+    """Tests for _validate_resolution — entity resolution output guard."""
+
+    def test_valid_resolution_passes(self):
+        from knowledge_base.extraction import _validate_resolution
+
+        data = {
+            "groups": [
+                {"canonical": "CNN", "type": "method", "members": ["CNN", "ConvNet"]}
+            ]
+        }
+        result = _validate_resolution(data)
+        assert len(result["groups"]) == 1
+
+    def test_rejects_non_dict(self):
+        from knowledge_base.extraction import _validate_resolution
+
+        with pytest.raises(ValueError, match="expected dict"):
+            _validate_resolution("not a dict")
+
+    def test_drops_group_without_canonical(self):
+        from knowledge_base.extraction import _validate_resolution
+
+        data = {
+            "groups": [{"members": ["a", "b"]}, {"canonical": "ok", "members": ["ok"]}]
+        }
+        result = _validate_resolution(data)
+        assert len(result["groups"]) == 1
+        assert result["groups"][0]["canonical"] == "ok"
+
+    def test_missing_groups_defaults_empty(self):
+        from knowledge_base.extraction import _validate_resolution
+
+        result = _validate_resolution({})
+        assert result["groups"] == []
+
+
+class TestProvenanceColumn:
+    """Tests for source provenance tracking on extraction tables."""
+
+    def test_record_method_default_source_is_user(self, tmp_path):
+        conn = _setup(tmp_path)
+        p = register_paper(conn, "Test")["paper_id"]
+        record_method(conn, "Transformer", p)
+        row = conn.execute(
+            "SELECT source FROM methods WHERE paper_id = ?", (p,)
+        ).fetchone()
+        assert row["source"] == "user"
+
+    def test_record_method_explicit_source(self, tmp_path):
+        conn = _setup(tmp_path)
+        p = register_paper(conn, "Test")["paper_id"]
+        record_method(conn, "Transformer", p, source="llm_extraction")
+        row = conn.execute(
+            "SELECT source FROM methods WHERE paper_id = ?", (p,)
+        ).fetchone()
+        assert row["source"] == "llm_extraction"
+
+    def test_record_dataset_default_source_is_user(self, tmp_path):
+        conn = _setup(tmp_path)
+        p = register_paper(conn, "Test")["paper_id"]
+        record_dataset(conn, "MNIST", p)
+        row = conn.execute(
+            "SELECT source FROM datasets WHERE paper_id = ?", (p,)
+        ).fetchone()
+        assert row["source"] == "user"
+
+    def test_record_metric_default_source_is_user(self, tmp_path):
+        conn = _setup(tmp_path)
+        p = register_paper(conn, "Test")["paper_id"]
+        record_metric(conn, "accuracy", 0.95, p)
+        row = conn.execute(
+            "SELECT source FROM metrics WHERE paper_id = ?", (p,)
+        ).fetchone()
+        assert row["source"] == "user"
+
+    def test_entities_table_has_source(self, tmp_path):
+        conn = _setup(tmp_path)
+        p = register_paper(conn, "Test")["paper_id"]
+        conn.execute(
+            "INSERT INTO entities (canonical_name, entity_type, paper_id, source) VALUES (?, ?, ?, ?)",
+            ("CNN", "method", p, "llm_extraction"),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT source FROM entities WHERE paper_id = ?", (p,)
+        ).fetchone()
+        assert row["source"] == "llm_extraction"
+
+    def test_extract_single_pass_sets_llm_source(self, tmp_path):
+        """Single-pass extraction should mark all stored entities with source='llm_extraction'."""
+        conn = _setup(tmp_path)
+        p = register_paper(conn, "Test Paper")["paper_id"]
+        # Create a chunk linked to the paper
+        conn.execute(
+            "INSERT INTO chunks (content, source_uri, content_hash, source_type, chunk_index) VALUES (?, ?, ?, ?, ?)",
+            ("Some research text about Transformers.", "test.pdf", "abc123", "pdf", 0),
+        )
+        chunk_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO paper_paths (paper_id, path) VALUES (?, ?)", (p, "test.pdf")
+        )
+        conn.commit()
+
+        llm_response = json.dumps(
+            {
+                "methods": [{"name": "Transformer", "description": "Attention model"}],
+                "datasets": [{"name": "WMT14", "description": "Translation"}],
+                "metrics": [
+                    {
+                        "metric": "BLEU",
+                        "value": 28.4,
+                        "unit": "points",
+                        "method": "Transformer",
+                        "dataset": "WMT14",
+                    }
+                ],
+            }
+        )
+
+        def _mock_llm(prompt, *, conn=None, cfg=None, client=None):
+            return llm_response
+
+        with (
+            patch("knowledge_base.extraction._llm_call", _mock_llm),
+            patch(
+                "knowledge_base.extraction._get_paper_chunks",
+                return_value=[{"id": chunk_id, "content": "text"}],
+            ),
+        ):
+            _extract_single_pass(conn, p, [{"id": chunk_id, "content": "text"}])
+
+        # All stored entities should have source='llm_extraction'
+        for table in ("methods", "datasets", "metrics"):
+            row = conn.execute(
+                f"SELECT source FROM {table} WHERE paper_id = ?", (p,)
+            ).fetchone()
+            assert row is not None, f"No {table} row found"
+            assert row["source"] == "llm_extraction", (
+                f"{table} source should be llm_extraction"
+            )
+
+        entity_row = conn.execute(
+            "SELECT source FROM entities WHERE paper_id = ?", (p,)
+        ).fetchone()
+        assert entity_row["source"] == "llm_extraction"

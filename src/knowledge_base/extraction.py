@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import time
 from collections import defaultdict
@@ -19,96 +20,15 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Schema validation for LLM JSON responses (#191)
-# ---------------------------------------------------------------------------
-
-_EXTRACTION_LIST_KEYS = ("methods", "datasets", "metrics")
-
-
-def _validate_extraction_schema(data: object, *, context: str = "") -> dict:
-    """Validate that *data* matches the extraction response schema.
-
-    Expected shape::
-
-        {"methods": [dict, ...], "datasets": [dict, ...], "metrics": [dict, ...]}
-
-    Each top-level key is optional (missing → treated as empty list downstream),
-    but if present it must be a list of dicts.
-
-    Raises ``ValueError`` with a human-readable message on mismatch.
-    """
-    if not isinstance(data, dict):
-        raise ValueError(
-            f"{context}expected a JSON object (dict), got {type(data).__name__}"
-        )
-    for key in _EXTRACTION_LIST_KEYS:
-        value = data.get(key)
-        if value is None:
-            continue
-        if not isinstance(value, list):
-            raise ValueError(
-                f"{context}'{key}' must be a list, got {type(value).__name__}"
-            )
-        for i, item in enumerate(value):
-            if not isinstance(item, dict):
-                raise ValueError(
-                    f"{context}'{key}[{i}]' must be a dict, got {type(item).__name__}"
-                )
-            # Validate fields used with .strip()/.lower() downstream
-            str_field = "metric" if key == "metrics" else "name"
-            val = item.get(str_field)
-            if val is not None and not isinstance(val, str):
-                raise ValueError(
-                    f"{context}'{key}[{i}].{str_field}' must be a string, "
-                    f"got {type(val).__name__}"
-                )
-    return data
-
-
-def _validate_resolution_schema(data: object, *, context: str = "") -> dict:
-    """Validate that *data* matches the entity-resolution response schema.
-
-    Expected shape::
-
-        {"groups": [{"canonical": str, "type": str, "members": [str, ...]}, ...]}
-
-    Raises ``ValueError`` with a human-readable message on mismatch.
-    """
-    if not isinstance(data, dict):
-        raise ValueError(
-            f"{context}expected a JSON object (dict), got {type(data).__name__}"
-        )
-    groups = data.get("groups")
-    if groups is None:
-        return data
-    if not isinstance(groups, list):
-        raise ValueError(
-            f"{context}'groups' must be a list, got {type(groups).__name__}"
-        )
-    for i, group in enumerate(groups):
-        if not isinstance(group, dict):
-            raise ValueError(
-                f"{context}'groups[{i}]' must be a dict, got {type(group).__name__}"
-            )
-        members = group.get("members")
-        if members is not None and not isinstance(members, list):
-            raise ValueError(
-                f"{context}'groups[{i}].members' must be a list, "
-                f"got {type(members).__name__}"
-            )
-        if isinstance(members, list):
-            for j, member in enumerate(members):
-                if not isinstance(member, str):
-                    raise ValueError(
-                        f"{context}'groups[{i}].members[{j}]' must be a string, "
-                        f"got {type(member).__name__}"
-                    )
-    return data
 
 
 __all__ = [
     "AVG_SECONDS_PER_CHUNK",
+    "MAX_ENTITIES_PER_EXTRACTION",
+    "MAX_METRICS_PER_EXTRACTION",
     "SINGLE_PASS_CHAR_LIMIT",
+    "_validate_extraction",
+    "_validate_resolution",
     "compare_papers",
     "estimate_extraction_time",
     "extract_structure",
@@ -120,6 +40,130 @@ __all__ = [
     "record_method",
     "record_metric",
 ]
+
+# --- Validation constants ---------------------------------------------------
+
+MAX_ENTITY_NAME_LEN = 200
+MAX_DESCRIPTION_LEN = 2000
+MAX_ENTITIES_PER_EXTRACTION = 50
+MAX_METRICS_PER_EXTRACTION = 200
+
+# Control-character pattern (keep tabs, newlines, carriage returns)
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _sanitize_str(s: str, max_len: int) -> str:
+    """Strip control characters and truncate."""
+    return _CONTROL_CHAR_RE.sub("", s)[:max_len]
+
+
+def _validate_extraction(data: object) -> dict:
+    """Validate and sanitize LLM extraction output.
+
+    Raises ``ValueError`` for structurally invalid output (non-dict or
+    non-list arrays).  Silently drops items with wrong field types and
+    truncates overlong strings.
+    """
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"LLM extraction output: expected dict, got {type(data).__name__}"
+        )
+
+    cleaned: dict[str, list] = {"methods": [], "datasets": [], "metrics": []}
+
+    for key in ("methods", "datasets"):
+        items = data.get(key) or []
+        if not isinstance(items, list):
+            raise ValueError(
+                f"LLM extraction output['{key}']: expected list, got {type(items).__name__}"
+            )
+        for item in items[:MAX_ENTITIES_PER_EXTRACTION]:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            clean_item = {"name": _sanitize_str(name.strip(), MAX_ENTITY_NAME_LEN)}
+            desc = item.get("description")
+            if isinstance(desc, str):
+                clean_item["description"] = _sanitize_str(desc, MAX_DESCRIPTION_LEN)
+            # Preserve surface_forms / chunk_id if present
+            if "surface_forms" in item and isinstance(item["surface_forms"], list):
+                clean_item["surface_forms"] = [
+                    _sanitize_str(sf, MAX_ENTITY_NAME_LEN)
+                    for sf in item["surface_forms"]
+                    if isinstance(sf, str)
+                ]
+            if "chunk_id" in item:
+                clean_item["chunk_id"] = item["chunk_id"]
+            cleaned[key].append(clean_item)
+
+    metrics = data.get("metrics") or []
+    if not isinstance(metrics, list):
+        raise ValueError(
+            f"LLM extraction output['metrics']: expected list, got {type(metrics).__name__}"
+        )
+    for met in metrics[:MAX_METRICS_PER_EXTRACTION]:
+        if not isinstance(met, dict):
+            continue
+        metric_name = met.get("metric")
+        value = met.get("value")
+        if not isinstance(metric_name, str) or not metric_name.strip():
+            continue
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            continue
+        clean_met: dict = {
+            "metric": _sanitize_str(metric_name.strip(), MAX_ENTITY_NAME_LEN),
+            "value": value,
+        }
+        if isinstance(met.get("unit"), str):
+            clean_met["unit"] = _sanitize_str(met["unit"], MAX_ENTITY_NAME_LEN)
+        if isinstance(met.get("method"), str):
+            clean_met["method"] = _sanitize_str(met["method"], MAX_ENTITY_NAME_LEN)
+        if isinstance(met.get("dataset"), str):
+            clean_met["dataset"] = _sanitize_str(met["dataset"], MAX_ENTITY_NAME_LEN)
+        if "chunk_id" in met:
+            clean_met["chunk_id"] = met["chunk_id"]
+        cleaned["metrics"].append(clean_met)
+
+    return cleaned
+
+
+def _validate_resolution(data: object) -> dict:
+    """Validate and sanitize LLM entity resolution output."""
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"LLM resolution output: expected dict, got {type(data).__name__}"
+        )
+
+    groups_raw = data.get("groups") or []
+    if not isinstance(groups_raw, list):
+        return {"groups": []}
+
+    clean_groups = []
+    for group in groups_raw:
+        if not isinstance(group, dict):
+            continue
+        canonical = group.get("canonical")
+        if not isinstance(canonical, str) or not canonical.strip():
+            continue
+        clean_group: dict = {
+            "canonical": _sanitize_str(canonical.strip(), MAX_ENTITY_NAME_LEN),
+        }
+        if isinstance(group.get("type"), str):
+            clean_group["type"] = group["type"]
+        members = group.get("members") or []
+        if isinstance(members, list):
+            clean_group["members"] = [
+                _sanitize_str(m, MAX_ENTITY_NAME_LEN)
+                for m in members
+                if isinstance(m, str)
+            ]
+        clean_groups.append(clean_group)
+
+    return {"groups": clean_groups}
 
 
 _ENTITY_TABLES = frozenset({"methods", "datasets"})
@@ -134,16 +178,17 @@ def _record_entity(
     chunk_id: int | None = None,
     *,
     commit: bool = True,
+    source: str = "user",
 ) -> int:
     """Insert-or-update a named entity (method/dataset) and return its ID."""
     if table not in _ENTITY_TABLES:
         raise ValueError(f"Invalid entity table: {table!r}")
     conn.execute(
-        f"INSERT INTO {table} (name, paper_id, description, chunk_id)"
-        " VALUES (?, ?, ?, ?)"
+        f"INSERT INTO {table} (name, paper_id, description, chunk_id, source)"
+        " VALUES (?, ?, ?, ?, ?)"
         " ON CONFLICT(name, paper_id)"
-        " DO UPDATE SET description = excluded.description, chunk_id = excluded.chunk_id",
-        (name, paper_id, description, chunk_id),
+        " DO UPDATE SET description = excluded.description, chunk_id = excluded.chunk_id, source = excluded.source",
+        (name, paper_id, description, chunk_id, source),
     )
     if commit:
         conn.commit()
@@ -163,10 +208,18 @@ def record_method(
     chunk_id: int | None = None,
     *,
     commit: bool = True,
+    source: str = "user",
 ) -> dict:
     """Record or update a method for a paper."""
     eid = _record_entity(
-        conn, "methods", name, paper_id, description, chunk_id, commit=commit
+        conn,
+        "methods",
+        name,
+        paper_id,
+        description,
+        chunk_id,
+        commit=commit,
+        source=source,
     )
     return {"method_id": eid}
 
@@ -179,10 +232,18 @@ def record_dataset(
     chunk_id: int | None = None,
     *,
     commit: bool = True,
+    source: str = "user",
 ) -> dict:
     """Record or update a dataset for a paper."""
     eid = _record_entity(
-        conn, "datasets", name, paper_id, description, chunk_id, commit=commit
+        conn,
+        "datasets",
+        name,
+        paper_id,
+        description,
+        chunk_id,
+        commit=commit,
+        source=source,
     )
     return {"dataset_id": eid}
 
@@ -198,12 +259,13 @@ def record_metric(
     chunk_id: int | None = None,
     *,
     commit: bool = True,
+    source: str = "user",
 ) -> dict:
     """Record a metric value."""
     cursor = conn.execute(
-        "INSERT INTO metrics (name, value, unit, dataset_id, method_id, paper_id, chunk_id)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (name, value, unit, dataset_id, method_id, paper_id, chunk_id),
+        "INSERT INTO metrics (name, value, unit, dataset_id, method_id, paper_id, chunk_id, source)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, value, unit, dataset_id, method_id, paper_id, chunk_id, source),
     )
     if commit:
         conn.commit()
@@ -384,10 +446,9 @@ def _map_extract(
     )
     raw = _llm_call(prompt, cfg=cfg, client=client)
     try:
-        result = json.loads(raw)
+        result = _validate_extraction(json.loads(raw))
     except json.JSONDecodeError as e:
         raise ValueError(f"LLM returned invalid JSON for chunk {chunk_id}: {e}") from e
-    _validate_extraction_schema(result, context=f"chunk {chunk_id}: ")
     for item in result.get("methods") or []:
         item["chunk_id"] = chunk_id
     for item in result.get("datasets") or []:
@@ -465,11 +526,9 @@ def _resolve_entities(
     prompt = _RESOLVE_PROMPT.format(entities=json.dumps(entity_list, indent=2))
     raw = _llm_call(prompt, cfg=cfg, client=client)
     try:
-        result = json.loads(raw)
+        return _validate_resolution(json.loads(raw))
     except json.JSONDecodeError as e:
         raise ValueError(f"Entity resolution returned invalid JSON: {e}") from e
-    _validate_resolution_schema(result)
-    return result
 
 
 def _clear_previous_extraction(conn: sqlite3.Connection, paper_id: int) -> None:
@@ -544,8 +603,8 @@ def _store_resolved(
         entity_id_map = {}
         for (canonical, etype), data in entity_data.items():
             cursor = conn.execute(
-                "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
-                (canonical, etype, paper_id, data["description"]),
+                "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description, source) VALUES (?, ?, ?, ?, ?)",
+                (canonical, etype, paper_id, data["description"], "llm_extraction"),
             )
             eid = cursor.lastrowid
             if cursor.rowcount == 0:
@@ -587,6 +646,7 @@ def _store_resolved(
                     data["description"],
                     chunk_id,
                     commit=False,
+                    source="llm_extraction",
                 )
                 method_map[canonical] = result["method_id"]
                 methods_added += 1
@@ -598,6 +658,7 @@ def _store_resolved(
                     data["description"],
                     chunk_id,
                     commit=False,
+                    source="llm_extraction",
                 )
                 dataset_map[canonical] = result["dataset_id"]
                 datasets_added += 1
@@ -649,6 +710,7 @@ def _store_resolved(
                     unit=met.get("unit"),
                     chunk_id=met.get("chunk_id"),
                     commit=False,
+                    source="llm_extraction",
                 )
                 metrics_added += 1
 
@@ -689,12 +751,8 @@ def _extract_single_pass(
     except Exception as e:
         raise ExtractionError(f"LLM extraction failed: {e}") from e
     try:
-        extracted = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ExtractionError("LLM returned invalid JSON", raw=raw) from e
-    try:
-        _validate_extraction_schema(extracted)
-    except ValueError as e:
+        extracted = _validate_extraction(json.loads(raw))
+    except (json.JSONDecodeError, ValueError) as e:
         raise ExtractionError(str(e), raw=raw) from e
 
     try:
@@ -715,13 +773,14 @@ def _extract_single_pass(
                     m.get("description"),
                     first_chunk_id,
                     commit=False,
+                    source="llm_extraction",
                 )
                 method_map[name] = result["method_id"]
                 methods_added += 1
                 # Populate entities table for get_entities_tool consistency
                 conn.execute(
-                    "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
-                    (name, "method", paper_id, m.get("description")),
+                    "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description, source) VALUES (?, ?, ?, ?, ?)",
+                    (name, "method", paper_id, m.get("description"), "llm_extraction"),
                 )
                 if first_chunk_id:
                     eid = conn.execute(
@@ -745,12 +804,13 @@ def _extract_single_pass(
                     d.get("description"),
                     first_chunk_id,
                     commit=False,
+                    source="llm_extraction",
                 )
                 dataset_map[name] = result["dataset_id"]
                 datasets_added += 1
                 conn.execute(
-                    "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description) VALUES (?, ?, ?, ?)",
-                    (name, "dataset", paper_id, d.get("description")),
+                    "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description, source) VALUES (?, ?, ?, ?, ?)",
+                    (name, "dataset", paper_id, d.get("description"), "llm_extraction"),
                 )
                 if first_chunk_id:
                     eid = conn.execute(
@@ -783,6 +843,7 @@ def _extract_single_pass(
                     unit=met.get("unit"),
                     chunk_id=first_chunk_id,
                     commit=False,
+                    source="llm_extraction",
                 )
                 metrics_added += 1
 
