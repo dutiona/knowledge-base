@@ -266,19 +266,32 @@ def _extract_markdown_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def ingest_file(
+def _produce_and_insert_chunks(
     conn: sqlite3.Connection,
+    *,
     path: Path,
-    source_type: str | None = None,
+    source_type: str,
+    source_uri: str,
     session_id: str | None = None,
-    _skip_folder_summary: bool = False,
-) -> dict:
-    path = path.resolve()
-    if source_type is None:
-        source_type = _detect_source_type(path)
+    session_ids: set[str] | None = None,
+    deduplicate: bool = True,
+) -> tuple[int, int, list[int]]:
+    """Extract text, produce chunks, embed, and insert into the database.
 
+    Does NOT commit the transaction — callers handle commit timing.
+
+    When *deduplicate* is True, existing chunks (by content hash) are
+    skipped and their IDs collected in the returned deferred-links list
+    so the caller can flush session associations.
+
+    Returns ``(chunks_added, chunks_skipped, deferred_session_links)``.
+    """
     strategy = _get_chunk_strategy(conn)
+    effective_strategy = (
+        "semantic" if source_type == "pdf" and strategy == "semantic" else "mechanical"
+    )
 
+    # --- Text extraction ---
     if source_type == "pdf":
         image_dir = pdf_image_dir(path)
         if image_dir.exists():
@@ -286,46 +299,27 @@ def ingest_file(
         text, page_map = _extract_pdf_markdown(path, image_dir=image_dir)
     else:
         text = _extract_markdown_text(path)
-        page_map = {}
+        page_map: dict[int, int] = {}
+        image_dir = None
 
-    # Try AST-aware chunking for Python files
+    # --- Chunk production ---
     ast_chunks = None
     if source_type == "code" and path.suffix.lower() == ".py":
         ast_chunks = _chunk_python_ast(text)
 
-    # Determine the effective chunk_strategy for this file
-    # Only PDFs get 'semantic' when configured; all others stay 'mechanical'
-    effective_strategy = (
-        "semantic" if source_type == "pdf" and strategy == "semantic" else "mechanical"
-    )
-
-    # Defer chunk_sessions writes until after embeddings succeed (#180).
-    # If _embed_with_config raises, no orphan session rows are left behind.
-    deferred_session_links: list[int] = []
-
     if ast_chunks:
-        # AST-aware path: each chunk has metadata
-        new_chunks = []
-        skipped = 0
+        items: list[tuple[int, str, str, str]] = []
         for i, ac in enumerate(ast_chunks):
-            h = _content_hash(ac["text"])
-            existing = conn.execute(
-                "SELECT id FROM chunks WHERE content_hash = ?", (h,)
-            ).fetchone()
-            if existing:
-                if session_id is not None:
-                    deferred_session_links.append(existing["id"])
-                skipped += 1
-                continue
-            meta = {
-                "name": ac["name"],
-                "type": ac["type"],
-                "start_line": ac["start_line"],
-                "end_line": ac["end_line"],
-            }
-            new_chunks.append((i, ac["text"], h, json.dumps(meta)))
+            meta = json.dumps(
+                {
+                    "name": ac["name"],
+                    "type": ac["type"],
+                    "start_line": ac["start_line"],
+                    "end_line": ac["end_line"],
+                }
+            )
+            items.append((i, ac["text"], _content_hash(ac["text"]), meta))
     elif source_type == "pdf":
-        # Dispatch based on chunk strategy
         if effective_strategy == "semantic":
             md_chunks = _chunk_by_section(
                 text,
@@ -339,81 +333,55 @@ def ingest_file(
                 image_dir=image_dir if page_map else None,
             )
         if not md_chunks:
-            return {"file": path.as_posix(), "chunks_added": 0, "chunks_skipped": 0}
-        new_chunks = []
-        skipped = 0
-        # Build extractor version string
+            return (0, 0, [])
         try:
             import pymupdf4llm
 
             extractor_tag = f"pymupdf4llm@{pymupdf4llm.__version__}"
         except (ImportError, AttributeError):
             extractor_tag = "pymupdf4llm"
+        items = []
         for i, (chunk_text, chunk_pages) in enumerate(md_chunks):
-            h = _content_hash(chunk_text)
-            existing = conn.execute(
-                "SELECT id FROM chunks WHERE content_hash = ?", (h,)
-            ).fetchone()
-            if existing:
-                if session_id is not None:
-                    deferred_session_links.append(existing["id"])
-                skipped += 1
-                continue
-            # Collect verified image basenames from chunk text
             images = [Path(m.group(2)).name for m in _IMAGE_REF_RE.finditer(chunk_text)]
-            meta = {"extractor": extractor_tag, "pages": chunk_pages}
+            chunk_meta: dict = {"extractor": extractor_tag, "pages": chunk_pages}
             if images:
-                meta["images"] = images
-            new_chunks.append((i, chunk_text, h, json.dumps(meta)))
+                chunk_meta["images"] = images
+            items.append(
+                (i, chunk_text, _content_hash(chunk_text), json.dumps(chunk_meta))
+            )
     else:
-        # Fixed-size chunking path
         fixed_chunks = _chunk_text(text)
         if not fixed_chunks:
-            return {"file": path.as_posix(), "chunks_added": 0, "chunks_skipped": 0}
-        new_chunks = []
+            return (0, 0, [])
+        items = [(i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)]
+
+    # --- Deduplication (optional) ---
+    deferred_session_links: list[int] = []
+    if deduplicate:
+        new_items: list[tuple[int, str, str, str]] = []
         skipped = 0
-        for i, chunk in enumerate(fixed_chunks):
-            h = _content_hash(chunk)
+        for item in items:
             existing = conn.execute(
-                "SELECT id FROM chunks WHERE content_hash = ?", (h,)
+                "SELECT id FROM chunks WHERE content_hash = ?", (item[2],)
             ).fetchone()
             if existing:
                 if session_id is not None:
                     deferred_session_links.append(existing["id"])
                 skipped += 1
                 continue
-            new_chunks.append((i, chunk, h, "{}"))
+            new_items.append(item)
+        items = new_items
+    else:
+        skipped = 0
 
-    if not new_chunks:
-        # All chunks deduped — safe to flush session links (no embedding needed)
-        _flush_deferred_session_links(conn, deferred_session_links, session_id)
-        conn.commit()
-        result = {"file": path.as_posix(), "chunks_added": 0, "chunks_skipped": skipped}
-        if skipped > 0:
-            from .papers import compute_file_hash
+    if not items:
+        return (0, skipped, deferred_session_links)
 
-            try:
-                file_hash = compute_file_hash(path)
-            except OSError:
-                file_hash = None
-            if file_hash:
-                existing_paper = conn.execute(
-                    "SELECT paper_id FROM paper_paths WHERE content_hash = ?",
-                    (file_hash,),
-                ).fetchone()
-                if existing_paper:
-                    result["duplicate_of_paper_id"] = existing_paper["paper_id"]
-        return result
-
-    # Embed all new chunks using configured model
-    texts_to_embed = [c[1] for c in new_chunks]
+    # --- Embed + insert ---
+    texts_to_embed = [item[1] for item in items]
     embeddings = _embed_with_config(conn, texts_to_embed)
 
-    # Insert
-    source_uri = path.as_posix()
-    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(
-        new_chunks, embeddings
-    ):
+    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(items, embeddings):
         _insert_chunk(
             conn,
             content_hash=chunk_hash,
@@ -423,22 +391,63 @@ def ingest_file(
             chunk_index=idx,
             embedding=emb_vec,
             session_id=session_id,
+            session_ids=session_ids,
             chunk_strategy=effective_strategy,
             metadata=meta_json,
         )
 
-    # Embeddings succeeded — now flush deferred session links for deduped chunks
-    _flush_deferred_session_links(conn, deferred_session_links, session_id)
+    return (len(items), skipped, deferred_session_links)
 
+
+def ingest_file(
+    conn: sqlite3.Connection,
+    path: Path,
+    source_type: str | None = None,
+    session_id: str | None = None,
+    _skip_folder_summary: bool = False,
+) -> dict:
+    path = path.resolve()
+    if source_type is None:
+        source_type = _detect_source_type(path)
+
+    added, skipped, deferred = _produce_and_insert_chunks(
+        conn,
+        path=path,
+        source_type=source_type,
+        source_uri=path.as_posix(),
+        session_id=session_id,
+        deduplicate=True,
+    )
+
+    # Flush deferred session links for deduped chunks (#180).
+    _flush_deferred_session_links(conn, deferred, session_id)
     conn.commit()
-    if not _skip_folder_summary:
-        _update_folder_summary_safe(conn, path)
 
-    return {
+    result: dict = {
         "file": path.as_posix(),
-        "chunks_added": len(new_chunks),
+        "chunks_added": added,
         "chunks_skipped": skipped,
     }
+
+    if added == 0 and skipped > 0:
+        from .papers import compute_file_hash
+
+        try:
+            file_hash = compute_file_hash(path)
+        except OSError:
+            file_hash = None
+        if file_hash:
+            existing_paper = conn.execute(
+                "SELECT paper_id FROM paper_paths WHERE content_hash = ?",
+                (file_hash,),
+            ).fetchone()
+            if existing_paper:
+                result["duplicate_of_paper_id"] = existing_paper["paper_id"]
+
+    if added > 0 and not _skip_folder_summary:
+        _update_folder_summary_safe(conn, path)
+
+    return result
 
 
 def _cleanup_conclusion_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> None:
@@ -570,116 +579,19 @@ def reingest_file(
     if source_type is None:
         source_type = _detect_source_type(path)
 
-    strategy = _get_chunk_strategy(conn)
-    effective_strategy = (
-        "semantic" if source_type == "pdf" and strategy == "semantic" else "mechanical"
-    )
-
-    if source_type == "pdf":
-        image_dir = pdf_image_dir(path)
-        if image_dir.exists():
-            shutil.rmtree(image_dir)
-        text, page_map = _extract_pdf_markdown(path, image_dir=image_dir)
-    else:
-        text = _extract_markdown_text(path)
-        page_map = {}
-
-    # Try AST-aware chunking for Python files
-    ast_chunks = None
-    if source_type == "code" and path.suffix.lower() == ".py":
-        ast_chunks = _chunk_python_ast(text)
-
-    if ast_chunks:
-        insert_items = []
-        for i, ac in enumerate(ast_chunks):
-            meta = json.dumps(
-                {
-                    "name": ac["name"],
-                    "type": ac["type"],
-                    "start_line": ac["start_line"],
-                    "end_line": ac["end_line"],
-                }
-            )
-            insert_items.append((i, ac["text"], _content_hash(ac["text"]), meta))
-    elif source_type == "pdf":
-        if effective_strategy == "semantic":
-            md_chunks = _chunk_by_section(
-                text,
-                page_map=page_map,
-                image_dir=image_dir if page_map else None,
-            )
-        else:
-            md_chunks = _chunk_markdown(
-                text,
-                page_map=page_map,
-                image_dir=image_dir if page_map else None,
-            )
-        if not md_chunks:
-            conn.commit()
-            _update_folder_summary_safe(conn, path)
-            return {
-                "file": source_uri,
-                "chunks_deleted": len(old_ids),
-                "chunks_added": 0,
-            }
-        try:
-            import pymupdf4llm
-
-            extractor_tag = f"pymupdf4llm@{pymupdf4llm.__version__}"
-        except (ImportError, AttributeError):
-            extractor_tag = "pymupdf4llm"
-        insert_items = []
-        for i, (chunk_text, chunk_pages) in enumerate(md_chunks):
-            images = [Path(m.group(2)).name for m in _IMAGE_REF_RE.finditer(chunk_text)]
-            meta: dict = {"extractor": extractor_tag, "pages": chunk_pages}
-            if images:
-                meta["images"] = images
-            insert_items.append(
-                (i, chunk_text, _content_hash(chunk_text), json.dumps(meta))
-            )
-    else:
-        fixed_chunks = _chunk_text(text)
-        if not fixed_chunks:
-            conn.commit()
-            _update_folder_summary_safe(conn, path)
-            return {
-                "file": source_uri,
-                "chunks_deleted": len(old_ids),
-                "chunks_added": 0,
-            }
-        insert_items = [
-            (i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)
-        ]
-
-    if not insert_items:
-        conn.commit()
-        _update_folder_summary_safe(conn, path)
-        return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": 0}
-
-    texts_to_embed = [item[1] for item in insert_items]
-    embeddings = _embed_with_config(conn, texts_to_embed)
-
-    # --- Restore historical + current session associations on new chunks ---
     all_sessions = historical_sessions
     if session_id is not None:
         all_sessions = historical_sessions | {session_id}
 
-    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(
-        insert_items, embeddings
-    ):
-        _insert_chunk(
-            conn,
-            content_hash=chunk_hash,
-            content=chunk_text,
-            source_type=source_type,
-            source_uri=source_uri,
-            chunk_index=idx,
-            embedding=emb_vec,
-            session_id=session_id,
-            session_ids=all_sessions,
-            chunk_strategy=effective_strategy,
-            metadata=meta_json,
-        )
+    added, _, _ = _produce_and_insert_chunks(
+        conn,
+        path=path,
+        source_type=source_type,
+        source_uri=source_uri,
+        session_id=session_id,
+        session_ids=all_sessions,
+        deduplicate=False,
+    )
 
     # --- Re-link papers whose abstract_chunk_id was nullified ---
     if affected_paper_ids:
@@ -730,7 +642,7 @@ def reingest_file(
     return {
         "file": source_uri,
         "chunks_deleted": len(old_ids),
-        "chunks_added": len(insert_items),
+        "chunks_added": added,
     }
 
 
