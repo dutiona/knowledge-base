@@ -944,7 +944,6 @@ def reingest_file(
         raise NotFoundError(f"No chunks found for source_uri: {source_uri}")
 
     old_ids = [r["id"] for r in existing]
-    old_id_set = set(old_ids)
 
     # --- FK cleanup (batched to stay under SQLITE_MAX_VARIABLE_NUMBER) ---
     # 1. papers.abstract_chunk_id → SET NULL (track affected papers for re-linking)
@@ -967,25 +966,8 @@ def reingest_file(
         old_ids,
     )
 
-    # 3. conclusions.source_chunk_ids — JSON array, remove deleted IDs;
-    #    delete conclusion entirely if no evidence remains (#160)
-    rows = conn.execute("SELECT id, source_chunk_ids FROM conclusions").fetchall()
-    for row in rows:
-        chunk_ids = json.loads(row["source_chunk_ids"])
-        filtered = [cid for cid in chunk_ids if cid not in old_id_set]
-        if len(filtered) != len(chunk_ids):
-            if filtered:
-                conn.execute(
-                    "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
-                    (json.dumps(filtered), row["id"]),
-                )
-            else:
-                conn.execute(
-                    "UPDATE conclusions SET superseded_by = NULL "
-                    "WHERE superseded_by = ?",
-                    (row["id"],),
-                )
-                conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
+    # 3. conclusions.source_chunk_ids — targeted json_each() cleanup (#277)
+    _cleanup_conclusion_refs(conn, old_ids)
 
     # 4. methods/datasets/metrics.chunk_id → SET NULL (track for re-linking)
     affected_entities: dict[str, list[dict]] = {}
@@ -1277,6 +1259,47 @@ def _validate_image_url(url: str) -> bool:
     return not _is_private_ip(parsed.hostname)
 
 
+def _cleanup_conclusion_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> None:
+    """Remove *chunk_ids* from ``conclusions.source_chunk_ids`` JSON arrays.
+
+    Uses ``json_each()`` to target only conclusions that reference any of the
+    given IDs instead of scanning the full table (#277).  Conclusions left
+    with an empty array are deleted (zombie cleanup, #160); their
+    ``superseded_by`` back-references are cleared first.
+    """
+    if not chunk_ids:
+        return
+    id_set = set(chunk_ids)
+    rows = _batched_select(
+        conn,
+        "SELECT DISTINCT c.id, c.source_chunk_ids "
+        "FROM conclusions c, json_each(c.source_chunk_ids) j "
+        "WHERE j.value IN ({ph})",
+        chunk_ids,
+    )
+    # Deduplicate across batches: a conclusion referencing chunks in
+    # different batches would otherwise appear once per batch.
+    seen: set[int] = set()
+    for row in rows:
+        if row["id"] in seen:
+            continue
+        seen.add(row["id"])
+        filtered = [
+            cid for cid in json.loads(row["source_chunk_ids"]) if cid not in id_set
+        ]
+        if filtered:
+            conn.execute(
+                "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
+                (json.dumps(filtered), row["id"]),
+            )
+        else:
+            conn.execute(
+                "UPDATE conclusions SET superseded_by = NULL WHERE superseded_by = ?",
+                (row["id"],),
+            )
+            conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
+
+
 def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> None:
     """Clean FK references to figure chunks before deletion.
 
@@ -1285,7 +1308,6 @@ def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> N
     """
     if not chunk_ids:
         return
-    id_set = set(chunk_ids)
 
     _batched_execute(
         conn,
@@ -1299,23 +1321,7 @@ def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> N
         chunk_ids,
     )
 
-    rows = conn.execute("SELECT id, source_chunk_ids FROM conclusions").fetchall()
-    for row in rows:
-        cids = json.loads(row["source_chunk_ids"])
-        filtered = [cid for cid in cids if cid not in id_set]
-        if len(filtered) != len(cids):
-            if filtered:
-                conn.execute(
-                    "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
-                    (json.dumps(filtered), row["id"]),
-                )
-            else:
-                conn.execute(
-                    "UPDATE conclusions SET superseded_by = NULL "
-                    "WHERE superseded_by = ?",
-                    (row["id"],),
-                )
-                conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
+    _cleanup_conclusion_refs(conn, chunk_ids)
 
     for table in ("methods", "datasets", "metrics"):
         _batched_execute(
