@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 from .._conn import _get_conn
 from ..db import DEFAULT_DB_PATH, co_occurrence_pairs
 from ..embed_swap import get_embed_config
+from ..exceptions import KnowledgeBaseError
 from ..prediction_errors import detect_and_log, get_prediction_error_count
 from ..search import search
 
@@ -44,17 +45,21 @@ def search_index(
             onnxruntime (install with: uv sync --group reranker). Default false.
     """
     conn = _get_conn()
-    results = search(
-        conn,
-        query,
-        top_k=top_k,
-        source_type=source_type,
-        mode=mode,
-        keyword_prefilter=keyword_prefilter,
-        chunk_strategy=chunk_strategy,
-        space_name=space_name,
-        rerank=rerank,
-    )
+    try:
+        results = search(
+            conn,
+            query,
+            top_k=top_k,
+            source_type=source_type,
+            mode=mode,
+            keyword_prefilter=keyword_prefilter,
+            chunk_strategy=chunk_strategy,
+            space_name=space_name,
+            rerank=rerank,
+        )
+    except KnowledgeBaseError as e:
+        return json.dumps({"error": str(e), **e.details})
+
     detect_and_log(conn, query, results, source_type_filter=source_type, mode=mode)
 
     return json.dumps(
