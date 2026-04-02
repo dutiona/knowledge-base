@@ -65,7 +65,7 @@ dependency chains, and parallelism opportunities.
 | 234 | extract chunking module (ingest.py → chunking.py)        | Ingest      | 2.5b  | ✔ PR #303                                         |
 | 235 | extract web ingestion module (ingest.py → web.py)        | Ingest      | 2.5b  | ✔ PR #306                                         |
 | 237 | shared reingest/ingest logic                             | Ingest      | 2.5b  | ✔ PR #307                                         |
-| 241 | decompose extract_figures into pipeline stages           | Vision      | 2.5b  |                                                   |
+| 241 | decompose extract_figures into pipeline stages           | Vision      | 2.5b  | ✔ PR #308                                         |
 | 242 | decompose server.py into router sub-modules              | Foundation  | 2.5b  |                                                   |
 | 141 | refactor: unify multi-line SQL INSERT strings            | Foundation  | 2.5b  | ✔ PR #302                                         |
 | 140 | refactor: extraction module cleanup from #15             | Extraction  | 2.5b  | ✔ PR #300                                         |
@@ -170,7 +170,7 @@ dependency chains, and parallelism opportunities.
 | 183 | god module — ingest.py 1950 LOC, 5 concerns     | ✔ #234, ✔ #235, ✔ #236, ✔ #237 |
 | 184 | 250-line duplication ingest_file/reingest_file  | ✔ #237                 |
 | 185 | chunk insert+dedup boilerplate repeated 5 times | ✔ #236                 |
-| 186 | extract_figures() 500-LOC god function          | #241                   |
+| 186 | extract_figures() 500-LOC god function          | ✔ #241                 |
 | 215 | papers.py god module — 5 responsibilities       | #238, #239             |
 | 216 | server.py god module — 38 tools in 1083 LOC     | #242                   |
 
@@ -293,7 +293,7 @@ review.
 **Step 3 — Final decompositions (depends on Step 2):**
 
 ```
-#241 (decompose extract_figures)      ─── after ingest.py is smaller
+✔ #241 (decompose extract_figures)    ─── ✔ PR #308
 #242 (decompose server.py)            ─── independent, can go at any step
 ```
 
