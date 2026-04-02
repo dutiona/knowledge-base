@@ -1346,12 +1346,12 @@ def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path)
 # ---------------------------------------------------------------------------
 
 
-@patch("knowledge_base.server.submit_job")
-@patch("knowledge_base.server.estimate_figures_time")
-@patch("knowledge_base.server._get_conn")
+@patch("knowledge_base.routes.extraction.submit_job")
+@patch("knowledge_base.routes.extraction.estimate_figures_time")
+@patch("knowledge_base.routes.extraction._get_conn")
 def test_mcp_tool_page_conversion(mock_get_conn, mock_eft, mock_submit):
     """extract_figures_tool converts 1-based pages to 0-based and submits a job."""
-    from knowledge_base.server import extract_figures_tool
+    from knowledge_base.routes.extraction import extract_figures_tool
 
     mock_get_conn.return_value = MagicMock()
     mock_eft.return_value = {
@@ -1377,10 +1377,10 @@ def test_mcp_tool_page_conversion(mock_get_conn, mock_eft, mock_submit):
     assert submit_args[0][3] == {"pages": [0, 4, 9]}
 
 
-@patch("knowledge_base.server._get_conn")
+@patch("knowledge_base.routes.extraction._get_conn")
 def test_mcp_tool_rejects_zero_and_negative_pages(mock_get_conn):
     """extract_figures_tool rejects pages <= 0."""
-    from knowledge_base.server import extract_figures_tool
+    from knowledge_base.routes.extraction import extract_figures_tool
 
     mock_get_conn.return_value = MagicMock()
 

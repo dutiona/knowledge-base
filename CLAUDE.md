@@ -24,32 +24,44 @@ ruff format src/ tests/          # format
 
 ## Architecture
 
-Eighteen modules behind `server.py`, each owning its domain. All share a single SQLite file via thread-local connections with double-checked locking for schema init.
+`server.py` is a thin hub (~40 LOC) that mounts 6 route sub-modules via `FastMCP.mount()`. Each route registers its own tools; domain logic lives in dedicated modules. All share a single SQLite file via thread-local connections (`_conn.py`) with double-checked locking for schema init.
 
 Read these when the task touches the corresponding area:
 
-| Area | Module | Deep-dive doc |
-| ---- | ------ | ------------- |
+**Route modules** (MCP tool definitions):
 
-| Chunking (text, markdown, Python AST) | `src/knowledge_base/chunking.py` | `docs/usage/ingesting-documents.md` |
-| Ingestion (PDF, code, markdown) | `src/knowledge_base/ingest.py` | `docs/usage/ingesting-documents.md` |
-| Web ingestion (URL, SSRF, browser) | `src/knowledge_base/web.py` | `docs/usage/ingesting-documents.md` |
+| Route      | Tools                                                                    | Module                                    |
+| ---------- | ------------------------------------------------------------------------ | ----------------------------------------- |
+| Ingestion  | ingest, reingest, ingest_url, configure_chunking, configure_browser_tool | `src/knowledge_base/routes/ingestion.py`  |
+| Search     | search_index, co_occurrence, status                                      | `src/knowledge_base/routes/search.py`     |
+| Embeddings | embed_config, re_embed_tool, space lifecycle, compare                    | `src/knowledge_base/routes/embeddings.py` |
+| Papers     | paper CRUD, relationships, conclusions, bibtex                           | `src/knowledge_base/routes/papers.py`     |
+| Extraction | LLM extraction, vision, entity recording                                 | `src/knowledge_base/routes/extraction.py` |
+| Operations | jobs, prediction errors                                                  | `src/knowledge_base/routes/operations.py` |
 
-> > > > > > > | Hybrid search (FTS5 + vec + RRF) | `src/knowledge_base/search.py` | `docs/usage/searching.md` |
-> > > > > > > | Keyword intent extraction | `src/knowledge_base/keywords.py` | `docs/usage/searching.md` |
-> > > > > > > | LLM config, calling & connectivity | `src/knowledge_base/llm.py` | `docs/usage/structured-extraction.md` |
-> > > > > > > | LLM extraction (map-reduce) | `src/knowledge_base/extraction.py` | `docs/usage/structured-extraction.md` |
-> > > > > > > | Vision/figure extraction | `src/knowledge_base/vision.py` | `docs/usage/figure-extraction.md` |
-> > > > > > > | Paper metadata & relationships | `src/knowledge_base/papers.py` | `docs/usage/relationships-conclusions.md` |
-> > > > > > > | BibTeX export & sync | `src/knowledge_base/bibtex.py` | `docs/usage/bibtex-export.md` |
-> > > > > > > | Background jobs | `src/knowledge_base/jobs.py` | `docs/design/architecture-overview.md` |
-> > > > > > > | Folder context boosting | `src/knowledge_base/folder_summaries.py` | `docs/usage/searching.md` |
-> > > > > > > | Embedding providers (Ollama/OpenAI/ONNX) | `src/knowledge_base/embeddings.py` | `docs/usage/ingesting-documents.md` |
-> > > > > > > | Embedding model swap | `src/knowledge_base/embed_swap.py` | `docs/design/architecture-overview.md` |
-> > > > > > > | Prediction-error detection | `src/knowledge_base/prediction_errors.py` | `docs/usage/prediction-errors.md` |
-> > > > > > > | Auto-relationship discovery | `src/knowledge_base/auto_relate.py` | `docs/usage/auto-relationships.md` |
-> > > > > > > | Cross-encoder reranking | `src/knowledge_base/reranker.py` | `docs/usage/searching.md` |
-> > > > > > > | DB schema & migrations | `src/knowledge_base/db.py` | `docs/reference/schema.md` |
+**Domain modules** (business logic):
+
+| Area                                     | Module                                    | Deep-dive doc                             |
+| ---------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| Thread-local DB connections              | `src/knowledge_base/_conn.py`             | `docs/design/architecture-overview.md`    |
+| Chunking (text, markdown, Python AST)    | `src/knowledge_base/chunking.py`          | `docs/usage/ingesting-documents.md`       |
+| Ingestion (PDF, code, markdown)          | `src/knowledge_base/ingest.py`            | `docs/usage/ingesting-documents.md`       |
+| Web ingestion (URL, SSRF, browser)       | `src/knowledge_base/web.py`               | `docs/usage/ingesting-documents.md`       |
+| Hybrid search (FTS5 + vec + RRF)         | `src/knowledge_base/search.py`            | `docs/usage/searching.md`                 |
+| Keyword intent extraction                | `src/knowledge_base/keywords.py`          | `docs/usage/searching.md`                 |
+| LLM config, calling & connectivity       | `src/knowledge_base/llm.py`               | `docs/usage/structured-extraction.md`     |
+| LLM extraction (map-reduce)              | `src/knowledge_base/extraction.py`        | `docs/usage/structured-extraction.md`     |
+| Vision/figure extraction                 | `src/knowledge_base/vision.py`            | `docs/usage/figure-extraction.md`         |
+| Paper metadata & relationships           | `src/knowledge_base/papers.py`            | `docs/usage/relationships-conclusions.md` |
+| BibTeX export & sync                     | `src/knowledge_base/bibtex.py`            | `docs/usage/bibtex-export.md`             |
+| Background jobs                          | `src/knowledge_base/jobs.py`              | `docs/design/architecture-overview.md`    |
+| Folder context boosting                  | `src/knowledge_base/folder_summaries.py`  | `docs/usage/searching.md`                 |
+| Embedding providers (Ollama/OpenAI/ONNX) | `src/knowledge_base/embeddings.py`        | `docs/usage/ingesting-documents.md`       |
+| Embedding model swap                     | `src/knowledge_base/embed_swap.py`        | `docs/design/architecture-overview.md`    |
+| Prediction-error detection               | `src/knowledge_base/prediction_errors.py` | `docs/usage/prediction-errors.md`         |
+| Auto-relationship discovery              | `src/knowledge_base/auto_relate.py`       | `docs/usage/auto-relationships.md`        |
+| Cross-encoder reranking                  | `src/knowledge_base/reranker.py`          | `docs/usage/searching.md`                 |
+| DB schema & migrations                   | `src/knowledge_base/db.py`                | `docs/reference/schema.md`                |
 
 ## Testing Conventions
 
