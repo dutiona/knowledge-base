@@ -14,6 +14,7 @@ from .db import (
 )
 from .embed_swap import get_embed_config
 from .embeddings import embed_single, truncate_embedding
+from .exceptions import ValidationError
 from .keywords import build_fts_query, extract_keywords
 from .utils import serialize_f32 as _serialize_f32
 
@@ -55,6 +56,11 @@ BOOST_WINDOW_MULTIPLIER = 2
 # Default search parameters
 DEFAULT_TOP_K = 10
 DEFAULT_RERANK_TOP_N = 20
+MAX_TOP_K = 500
+
+VALID_MODES = frozenset({"hybrid", "fts", "vec"})
+VALID_SOURCE_TYPES = frozenset({"pdf", "markdown", "code", "web", "note", "figure"})
+VALID_CHUNK_STRATEGIES = frozenset({"mechanical", "semantic"})
 
 
 def _fts_search(
@@ -208,7 +214,7 @@ def search(
     Args:
         query: Natural language search query.
         top_k: Number of results to return.
-        source_type: Filter by source type (pdf, markdown, code, web, note).
+        source_type: Filter by source type (pdf, markdown, code, web, note, figure).
         mode: 'hybrid' (default), 'fts' (keyword only), 'vec' (semantic only).
         keyword_prefilter: Extract intent keywords for FTS leg instead of
             using the raw query. Reduces noise from stopwords and context-
@@ -222,7 +228,26 @@ def search(
             candidates before final selection.
         rerank_top_n: Number of candidates to feed into the reranker.
             Larger values improve recall at the cost of latency.
+
+    Raises:
+        ValidationError: If mode, source_type, or chunk_strategy are invalid,
+            or top_k is not in [1, MAX_TOP_K].
     """
+    if mode not in VALID_MODES:
+        raise ValidationError(
+            f"mode must be one of {sorted(VALID_MODES)}, got {mode!r}"
+        )
+    if top_k < 1 or top_k > MAX_TOP_K:
+        raise ValidationError(f"top_k must be between 1 and {MAX_TOP_K}, got {top_k}")
+    if source_type and source_type not in VALID_SOURCE_TYPES:
+        raise ValidationError(
+            f"source_type must be one of {sorted(VALID_SOURCE_TYPES)}, got {source_type!r}"
+        )
+    if chunk_strategy and chunk_strategy not in VALID_CHUNK_STRATEGIES:
+        raise ValidationError(
+            f"chunk_strategy must be one of {sorted(VALID_CHUNK_STRATEGIES)}, got {chunk_strategy!r}"
+        )
+
     fetch_limit = top_k * SEARCH_OVERFETCH_MULTIPLIER
 
     # Resolve space configuration — either specific space or active
