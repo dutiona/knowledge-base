@@ -2,7 +2,7 @@
 
 > Last updated: 2026-04-02
 
-126 open issues (118 actionable + 5 reference/stale) across 8 workstreams. This document establishes priority, ordering,
+118 open issues across 8 workstreams. This document establishes priority, ordering,
 dependency chains, and parallelism opportunities.
 
 > **Gap Analysis Integration (2026-03-31):** Seven new Phase 3 issues and five
@@ -92,7 +92,7 @@ dependency chains, and parallelism opportunities.
 | 194 | f-string SQL assembly fragile pattern                    | Foundation  | 2.5c  |                                                   |
 | 196 | add_relationship error ignored by auto_relate            | Papers      | 2.5c  |                                                   |
 | 214 | bidirectional coupling vision.py ↔ ingest.py             | Vision      | 2.5c  |                                                   |
-| 215 | papers.py god module — 5 responsibilities                | Papers      | 2.5c  |                                                   |
+| 215 | papers.py god module — 5 responsibilities                | Papers      | 2.5c  | ✔ resolved by #238, #239                          |
 | 216 | server.py god module — 38 tools in 1083 LOC              | Foundation  | 2.5c  | ✔ resolved by #242 (PR #310)                      |
 | 217 | status() has 9 inline SQL queries                        | Foundation  | 2.5c  |                                                   |
 | 218 | reingest owns relationship invalidation                  | Ingest      | 2.5c  |                                                   |
@@ -165,24 +165,26 @@ dependency chains, and parallelism opportunities.
 
 **Umbrella issues** (closed when child decomposition issues land):
 
-| #   | Title                                           | Children               |
-| --- | ----------------------------------------------- | ---------------------- |
-| 183 | god module — ingest.py 1950 LOC, 5 concerns     | ✔ #234, ✔ #235, ✔ #236, ✔ #237 |
-| 184 | 250-line duplication ingest_file/reingest_file  | ✔ #237                 |
-| 185 | chunk insert+dedup boilerplate repeated 5 times | ✔ #236                 |
-| 186 | extract_figures() 500-LOC god function          | ✔ #241                 |
-| 215 | papers.py god module — 5 responsibilities       | #238, #239             |
-| 216 | server.py god module — 38 tools in 1083 LOC     | ✔ #242 (PR #310)       |
+| #   | Title                                             | Children                       |
+| --- | ------------------------------------------------- | ------------------------------ |
+| 183 | god module — ingest.py 1950 LOC, 5 concerns       | ✔ #234, ✔ #235, ✔ #236, ✔ #237 |
+| 184 | 250-line duplication ingest_file/reingest_file    | ✔ #237                         |
+| 185 | ✔ chunk insert+dedup boilerplate repeated 5 times | ✔ #236                         |
+| 186 | ✔ extract_figures() 500-LOC god function          | ✔ #241                         |
+| 215 | papers.py god module — 5 responsibilities         | ✔ #238, ✔ #239                 |
+| 216 | server.py god module — 38 tools in 1083 LOC       | ✔ #242 (PR #310)               |
 
-**Plan issues** (reference-only, not actionable work items):
+All 6 umbrella issues are now closed.
 
-| #   | Title                                                  |
-| --- | ------------------------------------------------------ |
-| 171 | plan: Phase 1 — Multi-space embedding registry         |
-| 174 | plan: Phase 2 — Matryoshka truncation support          |
-| 177 | plan: Phase 3 — A/B embedding space comparison tooling |
-| 178 | perf: search query optimization opportunities (#172)   |
-| 248 | plan: stage-2 cross-encoder reranking (#106)           |
+**Plan issues** (reference-only, all closed):
+
+| #   | Title                                                  | Status |
+| --- | ------------------------------------------------------ | ------ |
+| 171 | plan: Phase 1 — Multi-space embedding registry         | ✔      |
+| 174 | plan: Phase 2 — Matryoshka truncation support          | ✔      |
+| 177 | plan: Phase 3 — A/B embedding space comparison tooling | ✔      |
+| 178 | perf: search query optimization opportunities (#172)   | ✔      |
+| 248 | plan: stage-2 cross-encoder reranking (#106)           | ✔      |
 
 ---
 
@@ -266,7 +268,7 @@ before adding features or refactoring.
 
 ---
 
-## Phase 2.5b — Module Decomposition & Refactoring
+## Phase 2.5b — Module Decomposition & Refactoring ✔
 
 **Goal:** Break god modules into focused, single-responsibility modules. This is
 the structural prerequisite that makes Phase 3 features easier to implement and
@@ -308,9 +310,10 @@ review.
 ✔ #158 (Windows path support)           ─── chore, ✔ PR #301
 ```
 
-**Umbrella closure:** When children land, close #183, #184, #185, #186, #215, #216.
+**All 16 items completed.** Phase 2.5b is done. All 6 umbrella issues (#183–#186,
+#215, #216) closed.
 
-**Exit criteria:** No module exceeds ~500 LOC. Each module has a single
+**Exit criteria:** ✔ No module exceeds ~500 LOC. Each module has a single
 responsibility. God module warnings resolved.
 
 ---
@@ -583,7 +586,7 @@ PR #89 ──┐                      ✔ #99               ✔ #152, ✔ #151  
 #78 ─────┼──▶ ✔ #71            ✔ #15                ✔ #166, ✔ #180      Step 2 (needs ✔ #236):    Security:
 #46 ─────┤                      ✔ #110               ✔ #182, ✔ #195         ✔ #234, ✔ #235, ✔ #237     #187–#193
 #45 ─────┤    ✔ #101           ✔ #82                ✔ #197, ✔ #198      Step 3 (needs Step 2):  Quality:
-#16 ─────┘                      ✔ #126               ✔ #201, ✔ #202         #241, #242               #194, #196, #214
+#16 ─────┘                      ✔ #126               ✔ #201, ✔ #202         ✔ #241, ✔ #242           #194, #196, #214
                                 ✔ #127               ✔ #203, ✔ #204      Parallel:                #218–#221
                                 ✔ #128               ✔ #212               ✔ #141, ✔ #140, ✔ #154, ✔ #158  Docs/Tests:
                                 ✔ #130                                                            #217, #222–#231
