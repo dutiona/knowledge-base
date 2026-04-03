@@ -20,6 +20,7 @@ import httpx
 
 from .embeddings import _get_ollama_url
 from .exceptions import ValidationError
+from .utils import is_private_ip
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,29 @@ def _strip_think_tags(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# SSRF guard for openai_compat
+# ---------------------------------------------------------------------------
+
+
+def _ssrf_check_openai_compat(base_url: str) -> None:
+    """Block openai_compat requests to private/reserved IPs.
+
+    Ollama (localhost) is trusted by definition; this check only runs for the
+    openai_compat code path where user-supplied URLs could target internal
+    infrastructure (cloud metadata, local services, etc.).
+    """
+    from urllib.parse import urlparse
+
+    hostname = urlparse(base_url).hostname
+    if hostname and is_private_ip(hostname):
+        raise ValidationError(
+            f"openai_compat base_url resolves to a private address ({hostname}). "
+            "This is blocked to prevent SSRF. Use the 'ollama' provider for "
+            "local endpoints, or provide a public URL."
+        )
+
+
+# ---------------------------------------------------------------------------
 # LLM calling
 # ---------------------------------------------------------------------------
 
@@ -177,6 +201,7 @@ def _llm_call(
         resp.raise_for_status()
         raw = resp.json()["response"]
     else:  # openai_compat
+        _ssrf_check_openai_compat(cfg["base_url"])
         headers = {}
         if cfg.get("api_key"):
             headers["Authorization"] = f"Bearer {cfg['api_key']}"
@@ -245,6 +270,7 @@ def _test_llm_connectivity(
             resp = httpx.get(f"{base_url}/api/tags", timeout=_CONNECTIVITY_TIMEOUT)
             resp.raise_for_status()
         else:
+            _ssrf_check_openai_compat(base_url)
             headers: dict[str, str] = {}
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
@@ -315,7 +341,7 @@ def configure_llm(
         parsed = urlparse(base_url)
         if parsed.scheme not in ("http", "https"):
             raise ValidationError(
-                f"Invalid URL scheme: {parsed.scheme}. Use http or https."
+                f"Invalid URL scheme: {parsed.scheme!r}. Use http or https."
             )
 
     conn.execute(
