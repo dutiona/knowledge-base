@@ -1,8 +1,8 @@
 # Roadmap
 
-> Last updated: 2026-04-02
+> Last updated: 2026-04-04
 
-118 open issues across 8 workstreams. This document establishes priority, ordering,
+129 open issues across 8 workstreams. This document establishes priority, ordering,
 dependency chains, and parallelism opportunities.
 
 > **Gap Analysis Integration (2026-03-31):** Seven new Phase 3 issues and five
@@ -10,6 +10,14 @@ dependency chains, and parallelism opportunities.
 > `autonomous-agent-project` (`docs/summaries/gap-analysis-notes-23-25.md`).
 > These cover multi-agent write-gating, provenance tracking, decontamination,
 > staleness detection, and Level 2 injection research.
+>
+> **Notes 29-30 Integration (2026-04-04):** 11 new issues (#322-#332) and 3
+> existing-issue updates (#94, #108, #109) from notes 29 (Claude Code
+> reverse-engineering) and 30 (RAG/memory landscape scan). New items cover
+> secret scanning, contextual retrieval (-67% failure rate), chunk enrichment,
+> query expansion, embedding versioning, table-aware chunking, late chunking,
+> Gemma 4 and EmbeddingGemma evaluation, Docling/Marker extraction, and
+> Chandra v2 OCR. See `docs/summaries/steal-list-notes-29-30.md`.
 
 ## Issue Index
 
@@ -154,9 +162,20 @@ dependency chains, and parallelism opportunities.
 | 267 | contrastive decontamination for multi-agent ingestion    | Integration | 3     |                                                   |
 | 268 | Level 2 context-triggered injection interface (research) | Search      | 3     |                                                   |
 | 269 | injection dosing framework for KB retrieval (research)   | Search      | 3     |                                                   |
+| 322 | content provenance gate (secret/PII scanning)            | Ingest      | 3     | note 29 K1                                        |
+| 323 | user-facing memory taxonomy overlay for MCP tools        | Integration | 3     | note 29 K3                                        |
+| 324 | pre-inject existing facts for dedup context              | Extraction  | 3     | note 29 K4                                        |
+| 325 | contextual retrieval — LLM context prepend before embed  | Search      | 3     | note 30 K5. **Highest-ROI**: Anthropic -67% fail  |
+| 326 | chunk enrichment (keywords, questions, context, summary) | Ingest      | 3     | note 30 K6                                        |
+| 327 | query expansion — rephrase 2-3× before search            | Search      | 3     | note 30 K7                                        |
+| 328 | embedding versioning — track model version per vector    | Embedding   | 3     | note 30 K8. #1 production pain point              |
+| 329 | late chunking evaluation (8K+ embedding model)           | Search      | 3+    | note 30 K12. Research                             |
+| 330 | table-aware chunking — preserve headers across splits    | Ingest      | 3     | note 30 K13                                       |
+| 331 | benchmark Gemma 4 26B-A4B as generative model            | Extraction  | 3     | note 30 K14. Operational eval                     |
+| 332 | benchmark EmbeddingGemma as embedding model              | Embedding   | 3     | note 30 K15. Operational eval                     |
 | 262 | multimodal embedding as secondary retrieval signal       | Embedding   | 4+    |                                                   |
-| 108 | OCR preprocessing for scanned documents                  | Ingest      | 4     |                                                   |
-| 109 | evaluate IBM docling Tableformer for tables              | Ingest      | 4     |                                                   |
+| 108 | OCR preprocessing for scanned documents (+Chandra v2)    | Ingest      | 4     | note 30 K11 update                                |
+| 109 | evaluate Docling + Marker for layout-aware extraction    | Ingest      | 4     | note 30 K10 update (was: Tableformer only)        |
 | 247 | research: evaluate Kreuzberg v4.50                       | Ingest      | 4     |                                                   |
 | 107 | epic: semantic code indexing                             | Ingest      | 4+    |                                                   |
 | 12  | migrate entity graph to neo4j                            | Scale       | 4     |                                                   |
