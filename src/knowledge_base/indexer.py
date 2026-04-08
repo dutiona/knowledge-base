@@ -32,12 +32,21 @@ def _get_conn(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _drain_jobs(conn: sqlite3.Connection, timeout: float = 300.0) -> None:
-    """Block until no pending/running jobs remain, or *timeout* seconds."""
+def _drain_jobs(
+    conn: sqlite3.Connection,
+    job_ids: list[int],
+    timeout: float = 300.0,
+) -> None:
+    """Block until the specified *job_ids* are no longer pending/running."""
+    if not job_ids:
+        return
+    placeholders = ",".join("?" for _ in job_ids)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('pending', 'running')"
+            f"SELECT COUNT(*) AS n FROM jobs "
+            f"WHERE id IN ({placeholders}) AND status IN ('pending', 'running')",
+            job_ids,
         ).fetchone()
         if row["n"] == 0:
             return
@@ -48,6 +57,11 @@ def _drain_jobs(conn: sqlite3.Connection, timeout: float = 300.0) -> None:
 def _print(data: object, *, quiet: bool = False) -> None:
     if not quiet:
         print(json.dumps(data, indent=2))
+
+
+def _print_error(data: object) -> None:
+    """Always print errors, even in quiet mode."""
+    print(json.dumps(data, indent=2), file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -62,17 +76,14 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     p = Path(args.path).expanduser().resolve()
 
     if not p.exists():
-        _print({"error": f"Path does not exist: {p}"}, quiet=args.quiet)
+        _print_error({"error": f"Path does not exist: {p}"})
         sys.exit(1)
 
     if p.is_dir():
         if args.source_type is not None:
-            _print(
-                {"error": "--source-type is not supported for directories"},
-                quiet=args.quiet,
-            )
+            _print_error({"error": "--source-type is not supported for directories"})
             sys.exit(1)
-        results = ingest_directory(conn, p)
+        results = ingest_directory(conn, p, session_id=args.session_id)
         total_added = sum(r["chunks_added"] for r in results)
         total_skipped = sum(r["chunks_skipped"] for r in results)
         _print(
@@ -97,7 +108,7 @@ def cmd_reingest(args: argparse.Namespace) -> None:
     p = Path(args.path).expanduser().resolve()
 
     if not p.exists():
-        _print({"error": f"Path does not exist: {p}"}, quiet=args.quiet)
+        _print_error({"error": f"Path does not exist: {p}"})
         sys.exit(1)
 
     result = reingest_file(conn, p, args.source_type, session_id=args.session_id)
@@ -108,6 +119,7 @@ def cmd_reingest(args: argparse.Namespace) -> None:
     affected = conn.execute(
         "SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)
     ).fetchall()
+    submitted_job_ids: list[int] = []
     if affected:
         for row in affected:
             pid = row["paper_id"]
@@ -116,9 +128,10 @@ def cmd_reingest(args: argparse.Namespace) -> None:
                 "AND (source_paper_id = ? OR target_paper_id = ?)",
                 (pid, pid),
             )
-            submit_job(conn, pid, "auto_relate", {"paper_id": pid})
+            jid = submit_job(conn, pid, "auto_relate", {"paper_id": pid})
+            submitted_job_ids.append(jid)
         conn.commit()
-        _drain_jobs(conn)
+        _drain_jobs(conn, submitted_job_ids)
 
     _print(result, quiet=args.quiet)
 
@@ -272,7 +285,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         dispatch[args.command](args)
     except (KnowledgeBaseError, ValueError) as exc:
-        _print({"error": str(exc)}, quiet=args.quiet)
+        _print_error({"error": str(exc)})
         sys.exit(1)
 
 

@@ -340,7 +340,7 @@ def test_cmd_status(tmp_path, capsys):
 def test_drain_jobs_returns_immediately_when_empty(tmp_path):
     conn, _ = _setup(tmp_path)
     # No jobs — should return instantly
-    _drain_jobs(conn, timeout=2.0)
+    _drain_jobs(conn, job_ids=[], timeout=2.0)
 
 
 def test_drain_jobs_times_out(tmp_path):
@@ -348,10 +348,11 @@ def test_drain_jobs_times_out(tmp_path):
     # Need a paper for FK constraint
     conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Test')")
     conn.execute(
-        "INSERT INTO jobs (paper_id, job_type, params) VALUES (1, 'extract_structure', '{}')"
+        "INSERT INTO jobs (id, paper_id, job_type, params) "
+        "VALUES (42, 1, 'extract_structure', '{}')"
     )
     conn.commit()
-    _drain_jobs(conn, timeout=1.0)  # should not hang
+    _drain_jobs(conn, job_ids=[42], timeout=1.0)  # should not hang
 
 
 # ---------------------------------------------------------------------------
