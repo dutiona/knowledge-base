@@ -598,10 +598,31 @@ def _render_with_browser(
         if final_url_path.exists()
         else None
     )
+    # Per-element captures (Phase 3, #132)
+    element_captures: list[dict] = []
+    elements_json_path = tmpdir / "elements.json"
+    if elements_json_path.exists():
+        try:
+            raw = json.loads(elements_json_path.read_text(encoding="utf-8"))
+            for entry in raw:
+                png_path = tmpdir / entry["file"]
+                if png_path.exists():
+                    element_captures.append(
+                        {
+                            "path": png_path,
+                            "tag": entry["tag"],
+                            "width": entry.get("width", 0),
+                            "height": entry.get("height", 0),
+                        }
+                    )
+        except (json.JSONDecodeError, KeyError, TypeError):
+            logger.warning("Failed to parse elements.json for %s", url)
+
     return {
         "html": html,
         "screenshot_path": screenshot_path if screenshot_path.exists() else None,
         "final_url": final_url,
+        "element_captures": element_captures,
         "tmpdir": tmpdir,
     }
 

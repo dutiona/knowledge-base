@@ -3532,3 +3532,52 @@ def test_ingest_skips_vec_for_none_embedding(tmp_path):
     # But vec table should have one fewer entry than chunks
     vec_count = conn.execute("SELECT COUNT(*) as c FROM chunks_vec").fetchone()["c"]
     assert vec_count == chunk_count - 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: per-element canvas/SVG screenshot capture (#132)
+# ---------------------------------------------------------------------------
+
+
+class TestElementCapture:
+    """Phase 3: per-element canvas/SVG screenshot capture."""
+
+    def test_render_with_browser_produces_element_captures(self, tmp_path):
+        """_render_with_browser returns element captures when present."""
+        import json as _json
+
+        elements_manifest = [
+            {"file": "element_0.png", "tag": "canvas", "width": 400, "height": 300},
+        ]
+
+        def _fake_subprocess_run(cmd, **kwargs):
+            out_dir = Path(cmd[3])  # 4th arg is output_dir
+            (out_dir / "page.html").write_text("<html></html>")
+            (out_dir / "screenshot.png").write_bytes(b"\x89PNG fake")
+            (out_dir / "elements.json").write_text(_json.dumps(elements_manifest))
+            (out_dir / "element_0.png").write_bytes(_make_test_png(400, 300))
+            return MagicMock(returncode=0)
+
+        with (
+            patch(
+                "knowledge_base.web._find_venv_python",
+                return_value=Path("/usr/bin/python3"),
+            ),
+            patch(
+                "knowledge_base.web.subprocess.run",
+                side_effect=_fake_subprocess_run,
+            ),
+        ):
+            result = _render_with_browser(
+                "https://example.com", {"venv": "/fake", "mode": "local"}
+            )
+
+        assert result is not None
+        assert result["element_captures"] == [
+            {
+                "path": result["tmpdir"] / "element_0.png",
+                "tag": "canvas",
+                "width": 400,
+                "height": 300,
+            },
+        ]
