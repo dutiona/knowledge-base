@@ -18,6 +18,7 @@ Refs: #343, #111, #340, #335
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -32,7 +33,11 @@ from knowledge_base.vision import configure_omniparser, extract_figures
 # Constants
 # ---------------------------------------------------------------------------
 
-_OMNIPARSER_PATH = Path.home() / ".local" / "opt" / "omniparser"
+_OMNIPARSER_PATH = Path(
+    os.environ.get(
+        "OMNIPARSER_PATH", str(Path.home() / ".local" / "opt" / "omniparser")
+    )
+)
 
 
 def _omniparser_available() -> bool:
@@ -44,7 +49,7 @@ def _omniparser_available() -> bool:
 
 skip_no_omniparser = pytest.mark.skipif(
     not _omniparser_available(),
-    reason="OmniParser not installed at ~/.local/opt/omniparser/",
+    reason=f"OmniParser not installed at {_OMNIPARSER_PATH}",
 )
 
 # All tests in this module are slow (real subprocess calls).
@@ -360,7 +365,7 @@ def test_ocr_text_not_in_description_section(
     mock_img_dir.return_value = image_dir
     _setup_extracted_image(conn, pdf_path, image_dir, "img-0001.png", chart_png)
 
-    vision_description = "A bar chart showing model accuracy improving over epochs"
+    vision_description = "A bar chart comparing neural network performance metrics"
     mock_vision.return_value = [
         {
             "figure_type": "chart",
@@ -406,15 +411,24 @@ def test_ocr_text_not_in_description_section(
     desc_text = sections["[Description]"]
     assert vision_description in desc_text
 
-    # If [OCR] is present, its text must NOT appear in [Description]
+    # If [OCR] is present, its text must NOT appear in [Description].
+    # We check both the formatter prefixes AND actual OCR tokens to guard
+    # against leaks regardless of formatter wording changes.
     if "[OCR]" in sections:
-        # OCR text contains "Detected text:" prefix from _format_omniparser_ocr
-        # The raw OCR words should not leak into [Description]
+        ocr_text = sections["[OCR]"]
         assert "Detected text:" not in desc_text, (
-            f"OCR text leaked into [Description]: {desc_text!r}"
+            f"OCR formatter prefix leaked into [Description]: {desc_text!r}"
         )
         assert "Detected elements:" not in desc_text, (
-            f"OCR elements leaked into [Description]: {desc_text!r}"
+            f"OCR formatter prefix leaked into [Description]: {desc_text!r}"
+        )
+        # Also check that recognizable OCR tokens from the chart don't
+        # appear in the description section (tests the actual invariant,
+        # not just the formatter's prefix).
+        ocr_tokens = {"Accuracy", "Epochs", "ResNet"}
+        leaked = {t for t in ocr_tokens if t in desc_text and t in ocr_text}
+        assert not leaked, (
+            f"OCR tokens {leaked} leaked into [Description]: {desc_text!r}"
         )
 
 
