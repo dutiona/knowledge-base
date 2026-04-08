@@ -10,6 +10,7 @@ from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from knowledge_base.ingest import (
     _cleanup_stale_inline_images,
     _extract_html_images,
+    _parse_image_candidates,
     _extract_pdf_markdown,
     _extract_web_figures,
     _get_browser_config,
@@ -1659,6 +1660,39 @@ def _mock_image_stream(image_bytes, url="https://example.com/img.png"):
     mock_response.__enter__ = MagicMock(return_value=mock_response)
     mock_response.__exit__ = MagicMock(return_value=False)
     return mock_response
+
+
+# --- Candidate parsing ---
+
+
+def test_parse_image_candidates_basic():
+    """Parses qualifying <img> tags and returns (url, alt) tuples."""
+    html = (
+        "<html><body>"
+        '<img src="https://example.com/fig.png" alt="A figure">'
+        '<img src="data:image/png;base64,abc" alt="inline">'
+        '<img src="https://example.com/icon.svg">'
+        "</body></html>"
+    )
+    result = _parse_image_candidates(html, "https://example.com/page")
+    assert result == [("https://example.com/fig.png", "A figure")]
+
+
+def test_parse_image_candidates_exclude_urls():
+    """Images in exclude_urls are skipped (cross-source dedup)."""
+    html = (
+        "<html><body>"
+        '<img src="https://example.com/already-seen.png">'
+        '<img src="https://example.com/new-image.png">'
+        "</body></html>"
+    )
+    result = _parse_image_candidates(
+        html,
+        "https://example.com/page",
+        exclude_urls=frozenset({"https://example.com/already-seen.png"}),
+    )
+    assert len(result) == 1
+    assert result[0][0] == "https://example.com/new-image.png"
 
 
 # --- Core extraction ---

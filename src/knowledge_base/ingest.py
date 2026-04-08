@@ -1280,6 +1280,71 @@ def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> N
     )
 
 
+def _parse_image_candidates(
+    html_content: str,
+    base_url: str,
+    *,
+    exclude_urls: frozenset[str] = frozenset(),
+) -> list[tuple[str, str]]:
+    """Parse ``<img>`` tags from *html_content* and return qualifying ``(url, alt)`` pairs.
+
+    Applies all Phase 1 filtering: data URIs, SVGs, decorative patterns,
+    HTML dimension pre-filter, and URL dedup.  *exclude_urls* skips images
+    already collected from another HTML source (Phase 2 cross-source dedup).
+    """
+    parser = _ImgTagParser()
+    try:
+        parser.feed(html_content)
+    except Exception:
+        logger.warning("HTML parsing failed for %s", base_url, exc_info=True)
+        return []
+
+    if not parser.images:
+        return []
+
+    seen_urls: set[str] = set(exclude_urls)
+    candidates: list[tuple[str, str]] = []
+
+    for img in parser.images:
+        src = img["src"]
+
+        if src.startswith("data:"):
+            continue
+        if src.lower().endswith((".svg", ".svgz")):
+            continue
+
+        resolved = urljoin(base_url, src)
+
+        if not _validate_image_url(resolved):
+            continue
+
+        if _DECORATIVE_URL_PATTERNS.search(resolved):
+            continue
+
+        alt = img.get("alt", "")
+        if alt and _DECORATIVE_ALT_PATTERNS.search(alt):
+            continue
+
+        w_str = img.get("width", "")
+        h_str = img.get("height", "")
+        try:
+            w = int(w_str) if w_str else None
+            h = int(h_str) if h_str else None
+        except ValueError:
+            w, h = None, None
+        if w is not None and h is not None:
+            if w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION:
+                continue
+
+        if resolved in seen_urls:
+            continue
+        seen_urls.add(resolved)
+
+        candidates.append((resolved, alt))
+
+    return candidates
+
+
 def _extract_html_images(
     conn: sqlite3.Connection,
     html_content: str,
@@ -1317,65 +1382,9 @@ def _extract_html_images(
     vis_model = vision_config["model"]
 
     # --- Parse <img> tags ---
-    parser = _ImgTagParser()
-    try:
-        parser.feed(html_content)
-    except Exception:
-        logger.warning("HTML parsing failed for %s", base_url, exc_info=True)
-        return 0
-
-    if not parser.images:
-        # Page has no <img> tags — clean up any stale inline image chunks (#152)
-        _cleanup_stale_inline_images(conn, source_url)
-        return 0
-
-    # --- Pre-filter ---
-    seen_urls: set[str] = set()
-    candidates: list[tuple[str, str]] = []  # (resolved_url, alt_text)
-
-    for img in parser.images:
-        src = img["src"]
-
-        # Skip data URIs and SVGs
-        if src.startswith("data:"):
-            continue
-        if src.lower().endswith((".svg", ".svgz")):
-            continue
-
-        resolved = urljoin(base_url, src)
-
-        if not _validate_image_url(resolved):
-            continue
-
-        # Decorative URL patterns
-        if _DECORATIVE_URL_PATTERNS.search(resolved):
-            continue
-
-        alt = img.get("alt", "")
-        if alt and _DECORATIVE_ALT_PATTERNS.search(alt):
-            continue
-
-        # HTML dimension pre-filter
-        w_str = img.get("width", "")
-        h_str = img.get("height", "")
-        try:
-            w = int(w_str) if w_str else None
-            h = int(h_str) if h_str else None
-        except ValueError:
-            w, h = None, None
-        if w is not None and h is not None:
-            if w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION:
-                continue
-
-        # URL dedup
-        if resolved in seen_urls:
-            continue
-        seen_urls.add(resolved)
-
-        candidates.append((resolved, alt))
+    candidates = _parse_image_candidates(html_content, base_url)
 
     if not candidates:
-        # Images exist but none qualify — clean up stale chunks (#152)
         _cleanup_stale_inline_images(conn, source_url)
         return 0
 
