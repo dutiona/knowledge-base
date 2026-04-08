@@ -132,7 +132,7 @@ dependency chains, and parallelism opportunities.
 | 124 | decouple index construction from query serving           | Search      | 3     |                                                   |
 | 122 | docs: four-layer cognitive architecture                  | Foundation  | 3     |                                                   |
 | 94  | compressed vector indices (int8/bit)                     | Embedding   | 3     |                                                   |
-| 111 | pymupdf4llm Phase 4: hybrid enrichment                   | Ingest      | 3     |                                                   |
+| 111 | pymupdf4llm Phase 4: hybrid enrichment                   | Ingest      | 3     | ✔ PR #340                                         |
 | 131 | web image extraction Phase 2: rendered DOM images        | Ingest      | 3     | done                                              |
 | 132 | web image extraction Phase 3: canvas/SVG screenshots     | Ingest      | 3     |                                                   |
 | 129 | retrieval plan intermediate representation               | Search      | 3     |                                                   |
@@ -427,7 +427,7 @@ polish ingest pipelines with follow-up enhancements.
   KnowledgeBaseConnector: intent-aware retrieval,
   Knowledge-URI-to-Memory-fact linking.
 
-#111 (vision Phase 4)       ─── depends on #110 (done)
+#111 (vision Phase 4)       ─── depends on #110 (done) ── done (PR #340)
 #155 (mixed raster+vector)  ─── depends on #110 (done)
 #131 (web images, Phase 2)  ─── depends on #82 (done)
 #132 (web images, Phase 3)  ─── depends on #131
@@ -534,7 +534,7 @@ polish ingest pipelines with follow-up enhancements.
   candidates between larger features.
 - **#246** is the lowest-effort item in the entire roadmap — modifying MCP tool
   description strings only. Can be done at any time.
-- #111 and #155 (vision pipeline) are independent of integration work.
+- #111 (done, PR #340) and #155 (vision pipeline) are independent of integration work.
 - #63 (watch/sync) and #64 (workspace tagging) are standalone ingest
   improvements. #64 now also covers agent-identity-scoped isolation (companion
   to #264).
@@ -626,7 +626,7 @@ Phase 3                         Phase 4
 #162, #161, #147+#179
 #146, #145, #149, #164
 #131 ──▶ #132
-#111, #155
+#111 (done), #155
 #63, #64, #122
 #173, #246
 #263, #264 ──▶ #267
