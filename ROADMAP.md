@@ -134,7 +134,7 @@ dependency chains, and parallelism opportunities.
 | 94  | compressed vector indices (int8/bit)                     | Embedding   | 3     |                                                   |
 | 111 | pymupdf4llm Phase 4: hybrid enrichment                   | Ingest      | 3     | ✔ PR #340                                         |
 | 131 | web image extraction Phase 2: rendered DOM images        | Ingest      | 3     | done                                              |
-| 132 | web image extraction Phase 3: canvas/SVG screenshots     | Ingest      | 3     |                                                   |
+| 132 | web image extraction Phase 3: canvas/SVG screenshots     | Ingest      | 3     | ✔ PR #347                                         |
 | 129 | retrieval plan intermediate representation               | Search      | 3     |                                                   |
 | 63  | document watch/sync for auto-re-ingestion                | Ingest      | 3     |                                                   |
 | 64  | workspace/project tagging for chunk isolation            | Ingest      | 3     |                                                   |
@@ -429,8 +429,8 @@ polish ingest pipelines with follow-up enhancements.
 
 #111 (vision Phase 4)       ─── depends on #110 (done) ── done (PR #340)
 #155 (mixed raster+vector)  ─── depends on #110 (done)
-#131 (web images, Phase 2)  ─── depends on #82 (done)
-#132 (web images, Phase 3)  ─── depends on #131
+#131 (web images, Phase 2)  ─── depends on #82 (done) ── done (PR #339)
+#132 (web images, Phase 3)  ─── depends on #131 (done) ── done (PR #347)
 #164 (<picture>/srcset)     ─── depends on #82 (done)
 
 #94 (int8/bit quantization) ─── depends on #99 (done)
@@ -625,7 +625,7 @@ Phase 3                         Phase 4
 #253 ──▶ #268 ──▶ #269
 #162, #161, #147+#179
 #146, #145, #149, #164
-#131 ──▶ #132
+#131 (done) ──▶ #132 (done)
 #111 (done), #155
 #63, #64, #122
 #173, #246

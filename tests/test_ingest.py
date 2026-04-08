@@ -3532,3 +3532,323 @@ def test_ingest_skips_vec_for_none_embedding(tmp_path):
     # But vec table should have one fewer entry than chunks
     vec_count = conn.execute("SELECT COUNT(*) as c FROM chunks_vec").fetchone()["c"]
     assert vec_count == chunk_count - 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: per-element canvas/SVG screenshot capture (#132)
+# ---------------------------------------------------------------------------
+
+
+class TestElementCapture:
+    """Phase 3: per-element canvas/SVG screenshot capture."""
+
+    def test_render_with_browser_produces_element_captures(self, tmp_path):
+        """_render_with_browser returns element captures when present."""
+        import json as _json
+
+        elements_manifest = [
+            {"file": "element_0.png", "tag": "canvas", "width": 400, "height": 300},
+        ]
+
+        def _fake_subprocess_run(cmd, **kwargs):
+            out_dir = Path(cmd[3])  # 4th arg is output_dir
+            (out_dir / "page.html").write_text("<html></html>")
+            (out_dir / "screenshot.png").write_bytes(b"\x89PNG fake")
+            (out_dir / "elements.json").write_text(_json.dumps(elements_manifest))
+            (out_dir / "element_0.png").write_bytes(_make_test_png(400, 300))
+            return MagicMock(returncode=0)
+
+        with (
+            patch(
+                "knowledge_base.web._find_venv_python",
+                return_value=Path("/usr/bin/python3"),
+            ),
+            patch(
+                "knowledge_base.web.subprocess.run",
+                side_effect=_fake_subprocess_run,
+            ),
+        ):
+            result = _render_with_browser(
+                "https://example.com", {"venv": "/fake", "mode": "local"}
+            )
+
+        assert result is not None
+        assert result["element_captures"] == [
+            {
+                "path": result["tmpdir"] / "element_0.png",
+                "tag": "canvas",
+                "width": 400,
+                "height": 300,
+            },
+        ]
+
+    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
+    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @patch("knowledge_base.vision._vision_call")
+    @patch("knowledge_base.vision._get_vision_config")
+    def test_extract_element_captures_basic(
+        self, mock_vision_cfg, mock_vision_call, tmp_path
+    ):
+        """Per-element captures are sent to vision and stored as figure chunks."""
+        mock_vision_cfg.return_value = {
+            "base_url": "http://localhost:11434",
+            "model": "gemma3:27b",
+        }
+        mock_vision_call.return_value = [
+            {
+                "description": "An interactive D3.js bar chart showing quarterly revenue.",
+                "figure_type": "chart",
+                "title": "Quarterly Revenue",
+            }
+        ]
+
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        init_schema(conn)
+        png_bytes = _make_test_png(400, 300)
+        capture_path = tmp_path / "element_0.png"
+        capture_path.write_bytes(png_bytes)
+
+        captures = [
+            {"path": capture_path, "tag": "canvas", "width": 400, "height": 300}
+        ]
+
+        from knowledge_base.web import _extract_element_captures
+
+        count = _extract_element_captures(
+            conn, "https://example.com/dashboard", captures
+        )
+
+        assert count == 1
+        row = conn.execute(
+            "SELECT * FROM chunks WHERE source_type = 'figure' AND chunk_index >= 3000000"
+        ).fetchone()
+        assert row is not None
+        meta = json.loads(row["metadata"])
+        assert meta["figure_type"] == "chart"
+        assert meta["element_tag"] == "canvas"
+        assert "D3.js bar chart" in row["content"]
+
+    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
+    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @patch("knowledge_base.vision._vision_call")
+    @patch("knowledge_base.vision._get_vision_config")
+    @patch("knowledge_base.web.is_private_ip", return_value=False)
+    @patch("knowledge_base.web._render_with_browser")
+    @patch("knowledge_base.web._get_browser_config")
+    @patch("knowledge_base.web.httpx")
+    def test_ingest_url_extracts_element_captures(
+        self,
+        mock_httpx,
+        mock_browser_cfg,
+        mock_render,
+        _mock_ip,
+        mock_vision_cfg,
+        mock_vision_call,
+        tmp_path,
+    ):
+        """ingest_url processes element captures from browser rendering."""
+        mock_vision_cfg.return_value = {
+            "base_url": "http://localhost:11434",
+            "model": "gemma3:27b",
+        }
+        mock_vision_call.return_value = [
+            {
+                "description": "A D3 scatter plot of gene expression levels.",
+                "figure_type": "chart",
+                "title": "Expression Scatter",
+            }
+        ]
+
+        # httpx returns minimal content (triggers browser fallback)
+        mock_resp = MagicMock()
+        mock_resp.text = "<html><body>short</body></html>"
+        mock_resp.url = "https://example.com/viz"
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_httpx.get.return_value = mock_resp
+
+        mock_browser_cfg.return_value = {"venv": "/fake", "mode": "local"}
+
+        # Browser render returns element captures
+        tmpdir = tmp_path / "browser_out"
+        tmpdir.mkdir()
+        capture_png = tmpdir / "element_0.png"
+        capture_png.write_bytes(_make_test_png(500, 400))
+
+        mock_render.return_value = {
+            "html": "<html><canvas width='500' height='400'></canvas></html>",
+            "screenshot_path": None,
+            "final_url": "https://example.com/viz",
+            "tmpdir": tmpdir,
+            "element_captures": [
+                {"path": capture_png, "tag": "canvas", "width": 500, "height": 400},
+            ],
+        }
+
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        init_schema(conn)
+
+        result = ingest_url(conn, "https://example.com/viz")
+
+        assert result["figures_extracted"] >= 1
+        row = conn.execute(
+            "SELECT * FROM chunks WHERE source_type = 'figure'"
+            " AND chunk_index >= 3000000"
+        ).fetchone()
+        assert row is not None
+        assert "scatter plot" in row["content"].lower()
+
+    @patch(
+        "knowledge_base.vision._get_vision_config",
+        side_effect=RuntimeError("no vision"),
+    )
+    def test_extract_element_captures_no_vision(self, _mock_cfg, tmp_path):
+        """Returns 0 when vision is not configured."""
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        init_schema(conn)
+        from knowledge_base.web import _extract_element_captures
+
+        count = _extract_element_captures(
+            conn,
+            "https://x.com",
+            [
+                {
+                    "path": tmp_path / "x.png",
+                    "tag": "canvas",
+                    "width": 100,
+                    "height": 100,
+                }
+            ],
+        )
+        assert count == 0
+
+    def test_extract_element_captures_empty_list(self, tmp_path):
+        """Returns 0 for empty captures list."""
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        init_schema(conn)
+        from knowledge_base.web import _extract_element_captures
+
+        count = _extract_element_captures(conn, "https://x.com", [])
+        assert count == 0
+
+    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
+    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @patch("knowledge_base.vision._vision_call")
+    @patch("knowledge_base.vision._get_vision_config")
+    def test_extract_element_captures_stale_cleanup(
+        self, mock_vision_cfg, mock_vision_call, tmp_path
+    ):
+        """Re-extraction deletes stale element-capture chunks."""
+        mock_vision_cfg.return_value = {
+            "base_url": "http://localhost:11434",
+            "model": "gemma3:27b",
+        }
+        mock_vision_call.return_value = [
+            {"description": "Old chart.", "figure_type": "chart", "title": "Old"}
+        ]
+
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        init_schema(conn)
+        png = tmp_path / "el.png"
+        png.write_bytes(_make_test_png(200, 200))
+
+        from knowledge_base.web import _extract_element_captures
+
+        _extract_element_captures(
+            conn,
+            "https://x.com",
+            [{"path": png, "tag": "canvas", "width": 200, "height": 200}],
+        )
+        old_count = conn.execute(
+            "SELECT COUNT(*) as c FROM chunks WHERE chunk_index >= 3000000"
+        ).fetchone()["c"]
+        assert old_count == 1
+
+        # Re-extract with new description
+        mock_vision_call.return_value = [
+            {
+                "description": "New chart with updated data.",
+                "figure_type": "chart",
+                "title": "New",
+            }
+        ]
+        _extract_element_captures(
+            conn,
+            "https://x.com",
+            [{"path": png, "tag": "canvas", "width": 200, "height": 200}],
+        )
+        rows = conn.execute(
+            "SELECT content FROM chunks WHERE chunk_index >= 3000000"
+        ).fetchall()
+        assert len(rows) == 1
+        assert "New chart" in rows[0]["content"]
+
+    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
+    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @patch("knowledge_base.vision._vision_call")
+    @patch("knowledge_base.vision._get_vision_config")
+    def test_extract_element_captures_svg(
+        self, mock_vision_cfg, mock_vision_call, tmp_path
+    ):
+        """SVG elements use svg_capture figure_type when vision returns empty type."""
+        mock_vision_cfg.return_value = {
+            "base_url": "http://localhost:11434",
+            "model": "gemma3:27b",
+        }
+        mock_vision_call.return_value = [
+            {"description": "An SVG flow diagram.", "figure_type": "", "title": "Flow"}
+        ]
+
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        init_schema(conn)
+        png = tmp_path / "el.png"
+        png.write_bytes(_make_test_png(300, 200))
+
+        from knowledge_base.web import _extract_element_captures
+
+        _extract_element_captures(
+            conn,
+            "https://x.com",
+            [{"path": png, "tag": "svg", "width": 300, "height": 200}],
+        )
+        meta = json.loads(
+            conn.execute(
+                "SELECT metadata FROM chunks WHERE chunk_index >= 3000000"
+            ).fetchone()["metadata"]
+        )
+        assert meta["figure_type"] == "svg_capture"
+        assert meta["element_tag"] == "svg"
+
+    def test_extract_element_captures_missing_png(self, tmp_path):
+        """Skips captures whose PNG file does not exist."""
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        init_schema(conn)
+        from knowledge_base.web import _extract_element_captures
+
+        with patch(
+            "knowledge_base.vision._get_vision_config",
+            return_value={
+                "base_url": "http://localhost:11434",
+                "model": "gemma3:27b",
+            },
+        ):
+            count = _extract_element_captures(
+                conn,
+                "https://x.com",
+                [
+                    {
+                        "path": tmp_path / "nonexistent.png",
+                        "tag": "canvas",
+                        "width": 200,
+                        "height": 200,
+                    }
+                ],
+            )
+        assert count == 0
