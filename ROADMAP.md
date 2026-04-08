@@ -120,7 +120,7 @@ dependency chains, and parallelism opportunities.
 | 232 | low findings (55)                                        | Mixed       | 2.5c  |                                                   |
 | 233 | info findings (30)                                       | Mixed       | 2.5c  |                                                   |
 | 162 | folder summary integration for ingest_url                | Search      | 3     |                                                   |
-| 164 | `<picture>` and srcset in inline image extraction        | Ingest      | 3     |                                                   |
+| 164 | `<picture>` and srcset in inline image extraction        | Ingest      | 3     | done                                              |
 | 161 | keyword stopwords strips compound technical terms        | Search      | 3     |                                                   |
 | 147 | configurable stopword list for keyword extraction        | Search      | 3     |                                                   |
 | 179 | multilingual stopword support (lingua-py)                | Search      | 3     |                                                   |
@@ -435,7 +435,7 @@ polish ingest pipelines with follow-up enhancements.
 #155 (mixed raster+vector)  ─── depends on #110 (done) ── done (PR #338)
 #131 (web images, Phase 2)  ─── depends on #82 (done) ── done (PR #339)
 #132 (web images, Phase 3)  ─── depends on #131 (done) ── done (PR #347)
-#164 (<picture>/srcset)     ─── depends on #82 (done)
+#164 (<picture>/srcset)     ─── depends on #82 (done) ── done (PR #356)
 
 #94 (int8/bit quantization) ─── depends on #99 (done) ── done (PR #355)
 #344 (TurboQuant 4-bit)     ─── depends on #94 (done)
@@ -536,7 +536,7 @@ polish ingest pipelines with follow-up enhancements.
 
 **Parallelism:**
 
-- Follow-up enhancements (#162, #161, #147+#179, #146, #145, #149, #164, #246)
+- Follow-up enhancements (#162, #161, #147+#179, #146, #145, #149, ~~#164~~, #246)
   are all independent of each other and of the integration work. Good quick-win
   candidates between larger features.
 - **#246** is the lowest-effort item in the entire roadmap — modifying MCP tool
@@ -632,7 +632,7 @@ Phase 3                         Phase 4
 #253 ──▶ #254 ──▶ #257
 #253 ──▶ #268 ──▶ #269
 #162, #161, #147+#179
-#146, #145, #149, #164
+#146, #145, #149, #164 (done)
 #131 (done) ──▶ #132 (done)
 #111 (done) ──▶ #334 (done)
 #155 (done)
@@ -680,7 +680,7 @@ Do #276 first (quick fix), then #278 absorbs the shared utility + perf work.
 #222, #223, #224, #225, #226, #227, #229, #230, #231
 
 **Phase 3 follow-up enhancements** (depend on Phase 2 features already done):
-#162, #164, #161, #147, #149, #146, #145, #122, #246, #253
+#162, ~~#164~~, #161, #147, #149, #146, #145, #122, #246, #253
 
 **Phase 3 gap-analysis additions** (independent, can start when Phase 3 begins):
 #263, #264, #265, #266

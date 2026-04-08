@@ -86,18 +86,120 @@ _RENDER_SCRIPT = Path(__file__).parent / "browser" / "render_page.py"
 # ---------------------------------------------------------------------------
 
 
+def _parse_srcset(srcset: str, *, current_src: str = "") -> str | None:
+    """Pick the highest-resolution URL from an ``srcset`` attribute value.
+
+    Applies fail-soft parsing: malformed entries, data-URI entries, and SVG
+    URLs are silently skipped.  *current_src* participates as an implicit
+    ``1x`` candidate when the set uses pixel-density descriptors.
+
+    Returns the best URL, or ``None`` when no valid candidate survives.
+    """
+    candidates: list[tuple[str, float, str]] = []  # (url, value, kind)
+    for raw in srcset.split(","):
+        parts = raw.strip().split()
+        if not parts:
+            continue
+        url = parts[0]
+        if not url or url.startswith("data:"):
+            continue
+        if url.lower().endswith((".svg", ".svgz")):
+            continue
+        if len(parts) >= 2:
+            desc = parts[1]
+            if desc.endswith("w"):
+                try:
+                    candidates.append((url, float(desc[:-1]), "w"))
+                except ValueError:
+                    continue
+            elif desc.endswith("x"):
+                try:
+                    candidates.append((url, float(desc[:-1]), "x"))
+                except ValueError:
+                    continue
+            else:
+                # Unknown descriptor — treat as no-descriptor
+                candidates.append((url, 0.0, "none"))
+        else:
+            candidates.append((url, 0.0, "none"))
+
+    if not candidates:
+        return None
+
+    # Determine dominant descriptor kind
+    kinds = {k for _, _, k in candidates}
+    if "w" in kinds:
+        w_candidates = [(u, v) for u, v, k in candidates if k == "w"]
+        return max(w_candidates, key=lambda t: t[1])[0]
+    if "x" in kinds:
+        x_candidates = [(u, v) for u, v, k in candidates if k == "x"]
+        best_url, best_x = max(x_candidates, key=lambda t: t[1])
+        # src is implicit 1x — keep it if it ties or beats srcset
+        if current_src and best_x <= 1.0:
+            return current_src
+        return best_url
+    # No descriptors — pick last (convention: ascending quality)
+    return candidates[-1][0]
+
+
 class _ImgTagParser(html.parser.HTMLParser):
-    """Extract <img> tag attributes from HTML."""
+    """Extract ``<img>`` (and ``<picture>``) tag attributes from HTML."""
 
     def __init__(self) -> None:
         super().__init__()
         self.images: list[dict[str, str]] = []
+        self._in_picture: bool = False
+        self._picture_best_src: str | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "picture":
+            self._in_picture = True
+            self._picture_best_src = None
+            return
+
+        if tag == "source" and self._in_picture and self._picture_best_src is None:
+            d = {k: v for k, v in attrs if v is not None}
+            # Skip SVG sources entirely
+            if d.get("type", "").lower() == "image/svg+xml":
+                return
+            # Skip sources with media queries — we can't evaluate them
+            # server-side (no viewport context). Only unconditional sources
+            # are reliable for a content indexer.
+            if "media" in d:
+                return
+            srcset = d.get("srcset", "")
+            if srcset:
+                best = _parse_srcset(srcset)
+                if best:
+                    self._picture_best_src = best
+            return
+
         if tag == "img":
             d = {k: v for k, v in attrs if v is not None}
-            if "src" in d:
-                self.images.append(d)
+            src = d.get("src", "")
+            if self._in_picture:
+                # Use picture source if available, else try img srcset, else img src
+                if self._picture_best_src:
+                    d["src"] = self._picture_best_src
+                elif "srcset" in d:
+                    best = _parse_srcset(d["srcset"], current_src=src)
+                    if best:
+                        d["src"] = best
+                if d.get("src"):
+                    self.images.append(d)
+            else:
+                # Standalone <img> — resolve srcset if present
+                if "srcset" in d:
+                    best = _parse_srcset(d["srcset"], current_src=src)
+                    if best:
+                        d["src"] = best
+                if d.get("src"):
+                    self.images.append(d)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "picture":
+            self._in_picture = False
+            self._picture_best_src = None
 
 
 def _validate_image_url(url: str) -> bool:
