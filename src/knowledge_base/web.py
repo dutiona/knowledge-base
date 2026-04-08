@@ -157,7 +157,7 @@ def _parse_image_candidates(
     html_content: str,
     base_url: str,
     *,
-    exclude_urls: frozenset[str] = frozenset(),
+    exclude_urls: set[str] | frozenset[str] = frozenset(),
 ) -> list[tuple[str, str]] | None:
     """Parse ``<img>`` tags from *html_content* and return qualifying ``(url, alt)`` pairs.
 
@@ -277,17 +277,22 @@ def _extract_html_images(
         seen_urls: set[str] = {url for url, _alt in candidates}
         for extra_html, extra_base in extra_html_sources:
             extra = _parse_image_candidates(
-                extra_html, extra_base, exclude_urls=frozenset(seen_urls)
+                extra_html, extra_base, exclude_urls=seen_urls
             )
             if extra is None:
                 any_parse_failed = True
+                break
             elif extra:
                 candidates.extend(extra)
                 seen_urls.update(url for url, _alt in extra)
 
+    if any_parse_failed:
+        # Abort: proceeding with partial candidates would delete-then-reinsert,
+        # losing figures previously extracted from the failed source.
+        return 0
+
     if not candidates:
-        if not any_parse_failed:
-            _cleanup_stale_inline_images(conn, source_url)
+        _cleanup_stale_inline_images(conn, source_url)
         return 0
 
     # Cap
