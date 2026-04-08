@@ -17,6 +17,7 @@ from .db import (
     space_table_name,
 )
 from .embeddings import EmbeddingProvider, get_provider, truncate_embedding
+from .utils import ELEMENT_INSERT_EXPR, VALID_ELEMENT_TYPES
 
 
 def get_embed_config(conn: sqlite3.Connection) -> dict:
@@ -60,6 +61,7 @@ def create_space(
     provider: str,
     chunk_strategy: str = "mechanical",
     matryoshka_base_dim: int | None = None,
+    element_type: str = "float32",
 ) -> dict:
     """Create a new embedding space in 'populating' status.
 
@@ -76,6 +78,10 @@ def create_space(
     if matryoshka_base_dim is not None and matryoshka_base_dim <= dim:
         raise ValueError(
             f"matryoshka_base_dim ({matryoshka_base_dim}) must be greater than dim ({dim})"
+        )
+    if element_type not in VALID_ELEMENT_TYPES:
+        raise ValueError(
+            f"element_type must be one of {sorted(VALID_ELEMENT_TYPES)}, got: {element_type!r}"
         )
 
     existing = conn.execute(
@@ -98,13 +104,23 @@ def create_space(
     conn.execute(
         "INSERT INTO embed_spaces"
         " (name, model, provider, dim, chunk_strategy, status, table_name,"
-        " total_chunks, matryoshka_base_dim)"
-        " VALUES (?, ?, ?, ?, ?, 'populating', ?, ?, ?)",
-        (name, model, provider, dim, chunk_strategy, tbl, total, matryoshka_base_dim),
+        " total_chunks, matryoshka_base_dim, element_type)"
+        " VALUES (?, ?, ?, ?, ?, 'populating', ?, ?, ?, ?)",
+        (
+            name,
+            model,
+            provider,
+            dim,
+            chunk_strategy,
+            tbl,
+            total,
+            matryoshka_base_dim,
+            element_type,
+        ),
     )
     conn.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS [{tbl}] USING vec0(
-            embedding float[{dim}],
+            embedding {element_type}[{dim}],
             +chunk_id INTEGER
         )
     """)
@@ -116,6 +132,7 @@ def create_space(
         "status": "populating",
         "total_chunks": total,
         "matryoshka_base_dim": matryoshka_base_dim,
+        "element_type": element_type,
     }
 
 
@@ -141,6 +158,7 @@ def backfill_space(
     provider_name = space["provider"]
     chunk_strategy = space["chunk_strategy"]
     matryoshka_base_dim = space["matryoshka_base_dim"]
+    element_type = space["element_type"] or "float32"
     embed_dim = matryoshka_base_dim or dim
 
     embed_provider = get_provider(provider_name, allow_env_override=False)
@@ -185,11 +203,12 @@ def backfill_space(
                 for e in embeddings
             ]
 
+        insert_expr = ELEMENT_INSERT_EXPR[element_type]
         for chunk_id, emb_vec in zip(ids, embeddings):
             if emb_vec is None:
                 continue
             conn.execute(
-                f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
+                f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, {insert_expr}, ?)",
                 (chunk_id, _serialize_f32(emb_vec), chunk_id),
             )
         processed += len(batch)
@@ -292,6 +311,10 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_matryoshka_base_dim', ?)",
         (str(space["matryoshka_base_dim"] or ""),),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_element_type', ?)",
+        (space["element_type"] or "float32",),
     )
     # Invalidate similarity relationships (embedding space changed)
     conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")

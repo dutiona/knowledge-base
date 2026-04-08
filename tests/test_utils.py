@@ -53,3 +53,19 @@ def test_validate_base_url_rejects_private_ip():
 def test_validate_base_url_allows_public(_mock):
     validate_base_url("http://api.example.com:1234")  # should not raise
     validate_base_url("https://llm.example.com")  # should not raise
+
+
+# --- element_type constants ---
+
+
+def test_element_type_constants():
+    from knowledge_base.utils import (
+        ELEMENT_INSERT_EXPR,
+        ELEMENT_QUERY_EXPR,
+        VALID_ELEMENT_TYPES,
+    )
+
+    assert VALID_ELEMENT_TYPES == {"float32", "int8"}
+    assert set(ELEMENT_INSERT_EXPR.keys()) == set(ELEMENT_QUERY_EXPR.keys())
+    assert ELEMENT_INSERT_EXPR["float32"] == "?"
+    assert ELEMENT_QUERY_EXPR["float32"] == "?"
