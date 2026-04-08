@@ -3581,3 +3581,50 @@ class TestElementCapture:
                 "height": 300,
             },
         ]
+
+    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
+    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @patch("knowledge_base.vision._vision_call")
+    @patch("knowledge_base.vision._get_vision_config")
+    def test_extract_element_captures_basic(
+        self, mock_vision_cfg, mock_vision_call, tmp_path
+    ):
+        """Per-element captures are sent to vision and stored as figure chunks."""
+        mock_vision_cfg.return_value = {
+            "base_url": "http://localhost:11434",
+            "model": "gemma3:27b",
+        }
+        mock_vision_call.return_value = [
+            {
+                "description": "An interactive D3.js bar chart showing quarterly revenue.",
+                "figure_type": "chart",
+                "title": "Quarterly Revenue",
+            }
+        ]
+
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        init_schema(conn)
+        png_bytes = _make_test_png(400, 300)
+        capture_path = tmp_path / "element_0.png"
+        capture_path.write_bytes(png_bytes)
+
+        captures = [
+            {"path": capture_path, "tag": "canvas", "width": 400, "height": 300}
+        ]
+
+        from knowledge_base.web import _extract_element_captures
+
+        count = _extract_element_captures(
+            conn, "https://example.com/dashboard", captures
+        )
+
+        assert count == 1
+        row = conn.execute(
+            "SELECT * FROM chunks WHERE source_type = 'figure' AND chunk_index >= 3000000"
+        ).fetchone()
+        assert row is not None
+        meta = json.loads(row["metadata"])
+        assert meta["figure_type"] == "chart"
+        assert meta["element_tag"] == "canvas"
+        assert "D3.js bar chart" in row["content"]

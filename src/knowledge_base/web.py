@@ -54,6 +54,9 @@ _WEB_FIGURE_CHUNK_INDEX_START = 1_000_000
 _WEB_IMAGE_CHUNK_INDEX_START = 2_000_000
 """Chunk index offset for inline web image figures (avoids collision with screenshot figures)."""
 
+_WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START = 3_000_000
+"""Chunk index offset for per-element canvas/SVG captures (avoids collision with inline images)."""
+
 _MIN_IMAGE_DIMENSION = 100
 """Minimum width/height in pixels for an image to be considered non-decorative."""
 
@@ -749,6 +752,133 @@ def _extract_web_figures(
         )
 
         chunk_index = _WEB_FIGURE_CHUNK_INDEX_START + idx
+        _insert_chunk(
+            conn,
+            content_hash=chunk_hash,
+            content=desc,
+            source_type="figure",
+            source_uri=source_url,
+            chunk_index=chunk_index,
+            embedding=emb_vec,
+            metadata=meta_json,
+        )
+        figures_added += 1
+
+    if figures_added:
+        conn.commit()
+    return figures_added
+
+
+# ---------------------------------------------------------------------------
+# Per-element canvas/SVG capture extraction (Phase 3, #132)
+# ---------------------------------------------------------------------------
+
+
+def _extract_element_captures(
+    conn: sqlite3.Connection,
+    source_url: str,
+    captures: list[dict],
+) -> int:
+    """Extract figures from per-element browser captures.
+
+    Each capture dict has ``{"path": Path, "tag": str, "width": int, "height": int}``.
+    Sends each PNG to the vision model and stores as a figure chunk with
+    ``chunk_index >= _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START``.
+
+    Returns number of figure chunks added.
+    """
+    import base64
+
+    from .vision import _get_vision_config, _vision_call
+
+    if not captures:
+        return 0
+
+    try:
+        vision_config = _get_vision_config(conn)
+    except Exception:
+        return 0
+
+    base_url = vision_config["base_url"]
+    model = vision_config["model"]
+
+    # Remove stale element-capture figures
+    old_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' "
+            "AND chunk_index >= ?",
+            (source_url, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START),
+        ).fetchall()
+    ]
+    if old_ids:
+        _cleanup_figure_fk_refs(conn, old_ids)
+        delete_chunk_vecs(conn, old_ids)
+        _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
+
+    figures_added = 0
+
+    for idx, capture in enumerate(captures):
+        png_path: Path = capture["path"]
+        tag: str = capture["tag"]
+        if not png_path.exists():
+            continue
+
+        b64 = base64.b64encode(png_path.read_bytes()).decode("ascii")
+        prompt = (
+            f"Describe this {tag} element captured from a web page. "
+            "What does it show? Respond with a JSON list of objects "
+            'with keys: "description", "figure_type", "title".'
+        )
+
+        try:
+            figures = _vision_call(b64, prompt, base_url=base_url, model=model)
+        except Exception:
+            logger.warning(
+                "Vision call failed for element capture %s/%s",
+                source_url,
+                png_path.name,
+                exc_info=True,
+            )
+            continue
+
+        if not figures:
+            continue
+
+        # Use the first (best) figure description
+        fig = figures[0]
+        desc = fig.get("description", "")
+        if not desc:
+            continue
+
+        embeddings = _embed_with_config(conn, [desc])
+        emb_vec = embeddings[0] if embeddings else None
+
+        chunk_hash = _content_hash(desc)
+        existing = conn.execute(
+            "SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)
+        ).fetchone()
+        if existing:
+            continue
+
+        # Map tag → figure_type prefix
+        fig_type_raw = fig.get("figure_type", "unknown")
+        fig_type = f"{tag}_capture" if fig_type_raw in ("unknown", "") else fig_type_raw
+
+        meta_json = json.dumps(
+            {
+                "figure_type": fig_type,
+                "element_tag": tag,
+                "element_width": capture.get("width", 0),
+                "element_height": capture.get("height", 0),
+                "title": fig.get("title", ""),
+                "original_source_type": "web",
+                "source_url": source_url,
+                "vision_model": model,
+            }
+        )
+
+        chunk_index = _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START + idx
         _insert_chunk(
             conn,
             content_hash=chunk_hash,
