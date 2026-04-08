@@ -2649,3 +2649,519 @@ def test_estimate_figures_time_accounts_for_extracted_images(
     # With 5 extracted images and 0 vector pages, should be cheaper than
     # the old heuristic which would have returned all 10 pages
     assert result["estimated_seconds"] < 10 * 4
+
+
+# ---------------------------------------------------------------------------
+# Mixed raster+vector page tests (#155)
+# ---------------------------------------------------------------------------
+
+
+def _make_mixed_page_pdf(
+    tmp_path: Path,
+    *,
+    image_rect: tuple[float, float, float, float] = (50, 50, 250, 250),
+    drawing_y_start: float = 400,
+    n_drawings: int = 15,
+) -> Path:
+    """Create a single-page PDF with a raster image AND vector drawings."""
+    import io
+    from PIL import Image
+
+    doc = _fitz.open()
+    page = doc.new_page(width=612, height=792)
+
+    img = Image.new("RGB", (200, 200), color="red")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    page.insert_image(_fitz.Rect(*image_rect), stream=buf.getvalue())
+
+    for i in range(n_drawings):
+        shape = page.new_shape()
+        y = drawing_y_start + i * 10
+        shape.draw_line(_fitz.Point(50, y), _fitz.Point(300, y))
+        shape.finish()
+        shape.commit()
+
+    pdf_path = tmp_path / "mixed.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+    return pdf_path
+
+
+def test_cluster_drawing_rects_separates_vertical_groups():
+    """Two spatially separated clusters should produce two output rects."""
+    from knowledge_base.vision import _cluster_drawing_rects
+
+    top = [_fitz.Rect(50, 10, 200, 20), _fitz.Rect(50, 30, 200, 60)]
+    bottom = [_fitz.Rect(50, 600, 200, 650), _fitz.Rect(50, 660, 200, 700)]
+
+    result = _cluster_drawing_rects(top + bottom, page_height=792, page_width=612)
+
+    assert len(result) == 2
+    assert result[0].y1 < 300
+    assert result[1].y0 > 300
+
+
+def test_cluster_drawing_rects_single_group():
+    """Tightly packed rects should produce a single bounding rect."""
+    from knowledge_base.vision import _cluster_drawing_rects
+
+    rects = [
+        _fitz.Rect(50, 100, 200, 120),
+        _fitz.Rect(60, 130, 210, 150),
+        _fitz.Rect(55, 160, 205, 180),
+    ]
+
+    result = _cluster_drawing_rects(rects, page_height=792, page_width=612)
+
+    assert len(result) == 1
+    assert result[0].x0 <= 50
+    assert result[0].y0 <= 100
+    assert result[0].x1 >= 210
+    assert result[0].y1 >= 180
+
+
+def test_detect_mixed_page_vector_regions_finds_vectors_outside_images(tmp_path):
+    """Vector drawings outside image bboxes on mixed pages are detected."""
+    from knowledge_base.vision import _detect_mixed_page_vector_regions
+
+    pdf_path = _make_mixed_page_pdf(tmp_path)
+
+    result = _detect_mixed_page_vector_regions(str(pdf_path), {0})
+
+    assert 0 in result
+    regions = result[0]
+    assert len(regions) >= 1
+    assert all(r.y0 > 300 for r in regions)
+
+
+def test_detect_mixed_page_vector_regions_ignores_drawings_inside_image(tmp_path):
+    """Drawings that overlap the image bbox should be excluded."""
+    from knowledge_base.vision import _detect_mixed_page_vector_regions
+
+    import io
+    from PIL import Image
+
+    doc = _fitz.open()
+    page = doc.new_page(width=612, height=792)
+
+    img = Image.new("RGB", (500, 700), color="blue")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    page.insert_image(_fitz.Rect(50, 50, 550, 750), stream=buf.getvalue())
+
+    for i in range(15):
+        shape = page.new_shape()
+        y = 100 + i * 20
+        shape.draw_line(_fitz.Point(100, y), _fitz.Point(400, y))
+        shape.finish()
+        shape.commit()
+
+    pdf_path = tmp_path / "overlap.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    result = _detect_mixed_page_vector_regions(str(pdf_path), {0})
+
+    assert 0 not in result
+
+
+def test_detect_mixed_page_vector_regions_skips_pages_without_images(tmp_path):
+    """Pages not in pages_with_extracted_images are not examined."""
+    from knowledge_base.vision import _detect_mixed_page_vector_regions
+
+    doc = _fitz.open()
+    page = doc.new_page(width=612, height=792)
+    for i in range(15):
+        shape = page.new_shape()
+        shape.draw_line(_fitz.Point(10, 10 + i * 5), _fitz.Point(100, 10 + i * 5))
+        shape.finish()
+        shape.commit()
+    pdf_path = tmp_path / "vectors_only.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    result = _detect_mixed_page_vector_regions(str(pdf_path), set())
+    assert result == {}
+
+
+def test_detect_mixed_page_vector_regions_degenerate_image_bbox(tmp_path):
+    """Page with only degenerate image bboxes is skipped (falls to vector path)."""
+    from knowledge_base.vision import _detect_mixed_page_vector_regions
+
+    import io
+    from PIL import Image
+
+    doc = _fitz.open()
+    page = doc.new_page(width=612, height=792)
+
+    img = Image.new("RGB", (1, 1), color="green")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    page.insert_image(_fitz.Rect(100, 100, 100.5, 100.5), stream=buf.getvalue())
+
+    for i in range(15):
+        shape = page.new_shape()
+        y = 400 + i * 10
+        shape.draw_line(_fitz.Point(50, y), _fitz.Point(300, y))
+        shape.finish()
+        shape.commit()
+
+    pdf_path = tmp_path / "degenerate.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    result = _detect_mixed_page_vector_regions(str(pdf_path), {0})
+
+    assert 0 not in result
+
+
+def _setup_mixed_page_paper(conn, tmp_path, *, n_drawings=15):
+    """Create a paper with a single mixed page (raster image + vector drawings)."""
+    import io
+    from PIL import Image
+
+    doc = _fitz.open()
+    page = doc.new_page(width=612, height=792)
+
+    img = Image.new("RGB", (200, 200), color="red")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+    page.insert_image(_fitz.Rect(50, 50, 250, 250), stream=png_bytes)
+
+    for i in range(n_drawings):
+        shape = page.new_shape()
+        y = 400 + i * 10
+        shape.draw_line(_fitz.Point(50, y), _fitz.Point(300, y))
+        shape.finish()
+        shape.commit()
+
+    pdf_path = tmp_path / "mixed_paper.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    image_dir = tmp_path / "extracted"
+    image_dir.mkdir(parents=True)
+    (image_dir / "image_0.png").write_bytes(png_bytes)
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Mixed Paper')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "ch1",
+            "![fig](image_0.png)",
+            str(pdf_path),
+            json.dumps({"pages": [1], "images": ["image_0.png"]}),
+        ),
+    )
+    conn.commit()
+
+    return pdf_path, image_dir
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_processes_mixed_page_vector_regions(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
+):
+    """Mixed pages produce both raster image figures and vector region figures."""
+    conn = vision_conn
+    pdf_path, image_dir = _setup_mixed_page_paper(conn, tmp_path)
+    mock_image_dir.return_value = image_dir
+
+    call_count = [0]
+
+    def vision_side_effect(*args, **kwargs):
+        call_count[0] += 1
+        return [
+            {
+                "figure_type": "chart" if call_count[0] == 1 else "diagram",
+                "description": f"Figure {call_count[0]}",
+                "title": f"Fig {call_count[0]}",
+                "entities_mentioned": [],
+            }
+        ]
+
+    mock_vision.side_effect = vision_side_effect
+    mock_embed.return_value = [[0.1] * 1024, [0.2] * 1024]
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, confirmed=True)
+
+    assert result["figures_found"] == 2
+    assert result["extracted_images_processed"] == 1
+    assert result.get("mixed_vector_regions_rendered", 0) > 0
+    assert mock_vision.call_count == 2
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_mixed_page_explicit_pages(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
+):
+    """Mixed page handling works with explicit pages=[0]."""
+    conn = vision_conn
+    pdf_path, image_dir = _setup_mixed_page_paper(conn, tmp_path)
+    mock_image_dir.return_value = image_dir
+
+    call_count = [0]
+
+    def vision_side_effect(*args, **kwargs):
+        call_count[0] += 1
+        return [
+            {
+                "figure_type": "chart",
+                "description": f"Explicit figure {call_count[0]}",
+                "title": f"Fig {call_count[0]}",
+                "entities_mentioned": [],
+            }
+        ]
+
+    mock_vision.side_effect = vision_side_effect
+    mock_embed.return_value = [[0.1] * 1024, [0.2] * 1024]
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
+
+    assert result["extracted_images_processed"] == 1
+    assert result.get("mixed_vector_regions_rendered", 0) > 0
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_no_regression_pure_raster(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
+):
+    """Pure-raster page should not trigger mixed rendering."""
+    conn = vision_conn
+
+    doc = _fitz.open()
+    doc.new_page(width=612, height=792)
+    pdf_path = tmp_path / "raster_only.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Raster Paper')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+
+    image_dir = tmp_path / "extracted"
+    image_dir.mkdir(parents=True)
+    mock_image_dir.return_value = image_dir
+
+    from PIL import Image
+    import io
+
+    img = Image.new("RGB", (100, 100), color="blue")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    (image_dir / "img0.png").write_bytes(buf.getvalue())
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "ch1",
+            "![fig](img0.png)",
+            str(pdf_path),
+            json.dumps({"pages": [1], "images": ["img0.png"]}),
+        ),
+    )
+    conn.commit()
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "chart",
+            "description": "A blue chart.",
+            "title": "Fig 1",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.1] * 1024]
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, confirmed=True)
+
+    assert result["figures_found"] == 1
+    assert result.get("mixed_vector_regions_rendered", 0) == 0
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_no_regression_pure_vector(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
+):
+    """Pure-vector page should use existing vector path, not mixed."""
+    conn = vision_conn
+
+    doc = _fitz.open()
+    page = doc.new_page(width=612, height=792)
+    for i in range(15):
+        shape = page.new_shape()
+        shape.draw_line(_fitz.Point(10, 10 + i * 5), _fitz.Point(100, 10 + i * 5))
+        shape.finish()
+        shape.commit()
+    pdf_path = tmp_path / "vector_only.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Vector Paper')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+    image_dir = tmp_path / "extracted"
+    image_dir.mkdir(parents=True)
+    mock_image_dir.return_value = image_dir
+    conn.commit()
+
+    mock_vision.return_value = [
+        {
+            "figure_type": "diagram",
+            "description": "A vector diagram.",
+            "title": None,
+            "entities_mentioned": [],
+        }
+    ]
+    mock_embed.return_value = [[0.1] * 1024]
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, confirmed=True)
+
+    assert result["figures_found"] == 1
+    assert result.get("vector_pages_rendered", 0) > 0
+    assert result.get("mixed_vector_regions_rendered", 0) == 0
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_mixed_page_no_key_collision(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
+):
+    """Multiple extracted images + mixed vector regions don't collide."""
+    conn = vision_conn
+    import io
+    from PIL import Image
+
+    doc = _fitz.open()
+    page = doc.new_page(width=612, height=792)
+
+    for i in range(3):
+        img = Image.new("RGB", (50, 50), color="green")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        x = 50 + i * 80
+        page.insert_image(_fitz.Rect(x, 50, x + 50, 100), stream=buf.getvalue())
+
+    for i in range(15):
+        shape = page.new_shape()
+        y = 500 + i * 10
+        shape.draw_line(_fitz.Point(50, y), _fitz.Point(300, y))
+        shape.finish()
+        shape.commit()
+
+    pdf_path = tmp_path / "collision_test.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Collision Paper')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+
+    image_dir = tmp_path / "extracted"
+    image_dir.mkdir(parents=True)
+    mock_image_dir.return_value = image_dir
+
+    image_names = []
+    for i in range(3):
+        name = f"image_{i}.png"
+        image_names.append(name)
+        img = Image.new("RGB", (50, 50), color="green")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        (image_dir / name).write_bytes(buf.getvalue())
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        (
+            "ch1",
+            "images",
+            str(pdf_path),
+            json.dumps({"pages": [1], "images": image_names}),
+        ),
+    )
+    conn.commit()
+
+    call_count = [0]
+
+    def vision_side_effect(*args, **kwargs):
+        call_count[0] += 1
+        return [
+            {
+                "figure_type": "chart",
+                "description": f"Figure {call_count[0]} - unique content {call_count[0]}",
+                "title": f"Fig {call_count[0]}",
+                "entities_mentioned": [],
+            }
+        ]
+
+    mock_vision.side_effect = vision_side_effect
+    mock_embed.return_value = [[float(i) / 10] * 1024 for i in range(4)]
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, confirmed=True)
+
+    assert result["figures_found"] == 4
+    assert result["extracted_images_processed"] == 3
+    assert result.get("mixed_vector_regions_rendered", 0) > 0
+    assert mock_vision.call_count == 4
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._collect_extracted_images")
+def test_estimate_figures_time_includes_mixed_regions(
+    mock_collect, mock_image_dir, vision_conn, tmp_path
+):
+    """ETA should include mixed-page vector regions in the estimate."""
+    conn = vision_conn
+
+    pdf_path = _make_mixed_page_pdf(tmp_path)
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Mixed ETA')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+    conn.commit()
+
+    mock_image_dir.return_value = tmp_path / "extracted"
+    mock_collect.return_value = [(tmp_path / "img_0.png", 1)]
+
+    from knowledge_base.vision import estimate_figures_time
+
+    result = estimate_figures_time(conn, paper_id=1)
+
+    assert result.get("extracted_images", 0) == 1
+    assert result.get("mixed_vector_regions", 0) > 0
+    assert result["estimated_seconds"] > 0
