@@ -428,7 +428,7 @@ polish ingest pipelines with follow-up enhancements.
   Knowledge-URI-to-Memory-fact linking.
 
 #111 (vision Phase 4)       ─── depends on #110 (done) ── done (PR #340)
-#155 (mixed raster+vector)  ─── depends on #110 (done)
+#155 (mixed raster+vector)  ─── depends on #110 (done) ── done (PR #338)
 #131 (web images, Phase 2)  ─── depends on #82 (done) ── done (PR #339)
 #132 (web images, Phase 3)  ─── depends on #131 (done) ── done (PR #347)
 #164 (<picture>/srcset)     ─── depends on #82 (done)
@@ -534,7 +534,7 @@ polish ingest pipelines with follow-up enhancements.
   candidates between larger features.
 - **#246** is the lowest-effort item in the entire roadmap — modifying MCP tool
   description strings only. Can be done at any time.
-- #111 (done, PR #340) and #155 (vision pipeline) are independent of integration work.
+- #111 (done, PR #340) and #155 (done, PR #338) are independent of integration work.
 - #63 (watch/sync) and #64 (workspace tagging) are standalone ingest
   improvements. #64 now also covers agent-identity-scoped isolation (companion
   to #264).
@@ -626,7 +626,7 @@ Phase 3                         Phase 4
 #162, #161, #147+#179
 #146, #145, #149, #164
 #131 (done) ──▶ #132 (done)
-#111 (done), #155
+#111 (done), #155 (done)
 #63, #64, #122
 #173, #246
 #263, #264 ──▶ #267
