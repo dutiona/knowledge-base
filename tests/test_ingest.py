@@ -1917,6 +1917,46 @@ def test_parse_image_candidates_srcset_dedup():
     assert result[0] == ("https://example.com/photo.jpg", "first")
 
 
+def test_parse_image_candidates_picture_media_source_skipped():
+    """Sources with media attribute are skipped (can't evaluate server-side)."""
+    html = """
+    <picture>
+      <source media="(max-width: 0px)" srcset="never.jpg 1200w">
+      <source srcset="actual.jpg 800w">
+      <img src="fallback.jpg" alt="test">
+    </picture>
+    """
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    assert len(result) == 1
+    # media source skipped, unconditional source wins
+    assert result[0][0] == "https://example.com/actual.jpg"
+
+
+def test_parse_image_candidates_picture_all_media_sources_fallback():
+    """When all sources have media, falls back to <img src>."""
+    html = """
+    <picture>
+      <source media="(min-width: 800px)" srcset="wide.jpg 1200w">
+      <source media="(max-width: 799px)" srcset="narrow.jpg 600w">
+      <img src="fallback.jpg" alt="test">
+    </picture>
+    """
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    assert len(result) == 1
+    assert result[0][0] == "https://example.com/fallback.jpg"
+
+
+def test_parse_image_candidates_img_srcset_without_src():
+    """<img srcset> without src is valid HTML and should resolve."""
+    html = '<img srcset="small.jpg 1x, large.jpg 2x" alt="test">'
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    assert len(result) == 1
+    assert result[0] == ("https://example.com/large.jpg", "test")
+
+
 # --- Integration: srcset/picture through _extract_html_images ---
 
 

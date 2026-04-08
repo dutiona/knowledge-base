@@ -162,6 +162,11 @@ class _ImgTagParser(html.parser.HTMLParser):
             # Skip SVG sources entirely
             if d.get("type", "").lower() == "image/svg+xml":
                 return
+            # Skip sources with media queries — we can't evaluate them
+            # server-side (no viewport context). Only unconditional sources
+            # are reliable for a content indexer.
+            if "media" in d:
+                return
             srcset = d.get("srcset", "")
             if srcset:
                 best = _parse_srcset(srcset)
@@ -184,7 +189,7 @@ class _ImgTagParser(html.parser.HTMLParser):
                     self.images.append(d)
             else:
                 # Standalone <img> — resolve srcset if present
-                if "srcset" in d and src:
+                if "srcset" in d:
                     best = _parse_srcset(d["srcset"], current_src=src)
                     if best:
                         d["src"] = best
