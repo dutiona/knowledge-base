@@ -1896,18 +1896,18 @@ def test_extract_figures_with_omniparser_multi_figure(
 
     assert result["pages_processed"] == 1
     assert result["chunks_created"] == 2
-    assert result["omniparser_enriched"] == 0  # no description enrichment
+    assert result["omniparser_enriched"] == 2  # OCR tagged on both figures
 
-    # Descriptions should NOT contain omniparser text
+    # OCR text should be in the [OCR] section, NOT in [Description]
     rows = conn.execute(
         "SELECT content, metadata FROM chunks WHERE source_type = 'figure' ORDER BY chunk_index"
     ).fetchall()
     for row in rows:
-        assert "X-axis label" not in row["content"]
-        # But metadata should have omniparser_elements
+        # OCR should appear in content (via [OCR] section)
+        assert "X-axis label" in row["content"]
         meta = json.loads(row["metadata"])
-        assert "omniparser_elements" in meta
-        assert len(meta["omniparser_elements"]) == 2
+        assert "omniparser" in meta["enrichment_layers"]
+        assert meta["ocr_source"] == "omniparser"
 
 
 @patch("knowledge_base.vision._embed_with_config")
@@ -2986,7 +2986,7 @@ def test_extract_figures_no_regression_pure_raster(
         {
             "figure_type": "chart",
             "description": "A blue chart.",
-            "title": "Fig 1",
+            "title": None,
             "entities_mentioned": [],
         }
     ]
@@ -2998,6 +2998,440 @@ def test_extract_figures_no_regression_pure_raster(
 
     assert result["figures_found"] == 1
     assert result.get("mixed_vector_regions_rendered", 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# Caption extraction tests
+# ---------------------------------------------------------------------------
+
+
+def test_extract_captions_finds_caption_near_image(vision_conn):
+    """_extract_captions finds caption text near image references."""
+    from knowledge_base.vision import _extract_captions
+
+    conn = vision_conn
+    chunk_text = (
+        "Some intro text.\n\n"
+        "![](img-0001.png)\n\n"
+        "Figure 1: Architecture of the proposed system.\n\n"
+        "More text follows."
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, "
+        "chunk_index, metadata) VALUES (?, ?, 'pdf', '/tmp/paper.pdf', 0, ?)",
+        ("hash1", chunk_text, json.dumps({"images": ["img-0001.png"], "pages": [1]})),
+    )
+    conn.commit()
+
+    result = _extract_captions(conn, "/tmp/paper.pdf")
+    assert result.for_image("img-0001.png") is not None
+    assert "Figure 1" in result.for_image("img-0001.png")
+    assert "Architecture" in result.for_image("img-0001.png")
+    # Also indexed by page (page 1 → 0-indexed = 0)
+    assert len(result.for_page(0)) == 1
+
+
+def test_extract_captions_returns_empty_when_no_captions(vision_conn):
+    """_extract_captions returns empty CaptionMap when no caption patterns."""
+    from knowledge_base.vision import _extract_captions
+
+    conn = vision_conn
+    chunk_text = "![](img-0001.png)\n\nJust some plain text, no figure caption."
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, "
+        "chunk_index, metadata) VALUES (?, ?, 'pdf', '/tmp/paper.pdf', 0, ?)",
+        ("hash2", chunk_text, json.dumps({"images": ["img-0001.png"], "pages": [1]})),
+    )
+    conn.commit()
+
+    result = _extract_captions(conn, "/tmp/paper.pdf")
+    assert result.by_image == {}
+    assert result.for_page(0) == []
+
+
+def test_extract_captions_multiple_images(vision_conn):
+    """_extract_captions handles multiple images across chunks."""
+    from knowledge_base.vision import _extract_captions
+
+    conn = vision_conn
+    chunk1 = "![](img-0001.png)\n\nFigure 1: First figure caption.\n\nText."
+    chunk2 = "![](img-0002.png)\n\nTable 2: Comparison of results.\n\nText."
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, "
+        "chunk_index, metadata) VALUES (?, ?, 'pdf', '/tmp/paper.pdf', 0, ?)",
+        ("hash3", chunk1, json.dumps({"images": ["img-0001.png"], "pages": [1]})),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, "
+        "chunk_index, metadata) VALUES (?, ?, 'pdf', '/tmp/paper.pdf', 1, ?)",
+        ("hash4", chunk2, json.dumps({"images": ["img-0002.png"], "pages": [3]})),
+    )
+    conn.commit()
+
+    result = _extract_captions(conn, "/tmp/paper.pdf")
+    assert len(result.by_image) == 2
+    assert "First figure" in result.for_image("img-0001.png")
+    assert "Comparison" in result.for_image("img-0002.png")
+    assert len(result.for_page(0)) == 1
+    assert len(result.for_page(2)) == 1
+
+
+def test_extract_captions_multi_image_same_chunk(vision_conn):
+    """Two image refs in one chunk each bind to the correct nearby caption."""
+    from knowledge_base.vision import _extract_captions
+
+    conn = vision_conn
+    chunk_text = (
+        "![](img-0001.png)\n\n"
+        "Figure 1: First result.\n\n"
+        "Some text between figures.\n\n"
+        "![](img-0002.png)\n\n"
+        "Figure 2: Second result."
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, "
+        "chunk_index, metadata) VALUES (?, ?, 'pdf', '/tmp/paper.pdf', 0, ?)",
+        (
+            "hash5",
+            chunk_text,
+            json.dumps({"images": ["img-0001.png", "img-0002.png"], "pages": [1]}),
+        ),
+    )
+    conn.commit()
+
+    result = _extract_captions(conn, "/tmp/paper.pdf")
+    assert result.for_image("img-0001.png") is not None
+    assert result.for_image("img-0002.png") is not None
+    assert "First" in result.for_image("img-0001.png")
+    assert "Second" in result.for_image("img-0002.png")
+
+
+# ---------------------------------------------------------------------------
+# Dynamic vision prompt tests
+# ---------------------------------------------------------------------------
+
+
+def test_build_figure_vision_prompt_no_caption():
+    """Without caption, prompt matches original _FIGURE_VISION_PROMPT."""
+    from knowledge_base.vision import _build_figure_vision_prompt, _FIGURE_VISION_PROMPT
+
+    prompt = _build_figure_vision_prompt()
+    assert prompt == _FIGURE_VISION_PROMPT
+
+
+def test_build_figure_vision_prompt_with_caption():
+    """With caption, prompt includes caption context and instruction."""
+    from knowledge_base.vision import _build_figure_vision_prompt
+
+    prompt = _build_figure_vision_prompt(
+        caption="Figure 3: ResNet accuracy over epochs"
+    )
+    assert "Figure 3: ResNet accuracy over epochs" in prompt
+    assert "caption" in prompt.lower()
+    assert "do not repeat" in prompt.lower() or "do NOT repeat" in prompt
+
+
+def test_build_page_vision_prompt_with_captions():
+    """Page prompt includes multiple caption contexts."""
+    from knowledge_base.vision import _build_page_vision_prompt
+
+    captions = ["Figure 1: System architecture", "Table 2: Benchmark results"]
+    prompt = _build_page_vision_prompt(captions=captions)
+    assert "System architecture" in prompt
+    assert "Benchmark results" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Content assembly tests
+# ---------------------------------------------------------------------------
+
+
+def test_assemble_figure_content_all_layers():
+    """All three layers produce structured content with section markers."""
+    from knowledge_base.vision import _assemble_figure_content
+
+    result = _assemble_figure_content(
+        caption="Figure 1: System architecture overview",
+        description="Block diagram showing three microservices connected via message queue",
+        ocr_text='Detected text: "Service A", "Service B", "RabbitMQ"',
+    )
+    assert "[Caption]" in result
+    assert "[Description]" in result
+    assert "[OCR]" in result
+    assert "System architecture" in result
+    assert "microservices" in result
+    assert "Service A" in result
+
+
+def test_assemble_figure_content_description_only():
+    """With only description, no section markers needed."""
+    from knowledge_base.vision import _assemble_figure_content
+
+    result = _assemble_figure_content(
+        caption=None,
+        description="Bar chart comparing model accuracy across datasets",
+        ocr_text=None,
+    )
+    assert result == "Bar chart comparing model accuracy across datasets"
+
+
+def test_assemble_figure_content_caption_and_description():
+    """Caption + description produce two sections."""
+    from knowledge_base.vision import _assemble_figure_content
+
+    result = _assemble_figure_content(
+        caption="Figure 2: Training loss curves",
+        description="Line chart showing loss decreasing over 100 epochs",
+        ocr_text=None,
+    )
+    assert "[Caption]" in result
+    assert "[Description]" in result
+    assert "[OCR]" not in result
+
+
+def test_assemble_figure_content_caption_only():
+    """Caption-only (degraded mode) returns just the caption."""
+    from knowledge_base.vision import _assemble_figure_content
+
+    result = _assemble_figure_content(
+        caption="Figure 5: Ablation study results",
+        description=None,
+        ocr_text=None,
+    )
+    assert result == "Figure 5: Ablation study results"
+
+
+def test_assemble_figure_content_all_none():
+    """All None returns empty string."""
+    from knowledge_base.vision import _assemble_figure_content
+
+    result = _assemble_figure_content(caption=None, description=None, ocr_text=None)
+    assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# OmniParser OCR formatter tests
+# ---------------------------------------------------------------------------
+
+
+def test_format_omniparser_ocr_text_and_icons():
+    """Formats both text and icon elements into a string."""
+    from knowledge_base.vision import _format_omniparser_ocr
+
+    elements = [
+        {"type": "text", "content": "Top-1 Accuracy (%)"},
+        {"type": "text", "content": "Training Steps (k)"},
+        {"type": "icon", "content": "legend marker"},
+    ]
+    result = _format_omniparser_ocr(elements)
+    assert result is not None
+    assert "Top-1 Accuracy" in result
+    assert "Training Steps" in result
+    assert "legend marker" in result
+
+
+def test_format_omniparser_ocr_empty():
+    """Empty elements returns None."""
+    from knowledge_base.vision import _format_omniparser_ocr
+
+    assert _format_omniparser_ocr([]) is None
+    assert _format_omniparser_ocr([{"type": "text", "content": ""}]) is None
+
+
+def test_format_omniparser_ocr_dedup_and_cap():
+    """Deduplicates case-insensitively and caps at budget."""
+    from knowledge_base.vision import _format_omniparser_ocr, _OMNIPARSER_MAX_APPEND
+
+    elements = [
+        {"type": "text", "content": "Label A"},
+        {"type": "text", "content": "label a"},  # dup
+        {"type": "text", "content": "x" * 600},  # oversized
+    ]
+    result = _format_omniparser_ocr(elements)
+    assert result is not None
+    assert result.count("Label A") == 1  # deduped
+    assert len(result) <= _OMNIPARSER_MAX_APPEND + 50  # margin for prefix
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — hybrid enrichment pipeline
+# ---------------------------------------------------------------------------
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
+def test_extract_figures_hybrid_content(
+    mock_vision, mock_embed, mock_img_dir, tmp_path
+):
+    """Hybrid enrichment produces structured content with section markers."""
+    from knowledge_base.vision import extract_figures
+    import struct
+    import zlib
+
+    mock_figures = [
+        {
+            "figure_type": "chart",
+            "description": "Line chart showing accuracy over epochs",
+            "title": None,
+            "entities_mentioned": ["ResNet"],
+        }
+    ]
+    mock_vision.return_value = mock_figures
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
+
+    conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
+
+    # Patch pdf_image_dir to return tmp_path subdir (hermetic test)
+    image_dir = tmp_path / "extracted_images"
+    mock_img_dir.return_value = image_dir
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create a minimal 1x1 PNG
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr_data = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    ihdr_crc = zlib.crc32(b"IHDR" + ihdr_data) & 0xFFFFFFFF
+    ihdr = struct.pack(">I", 13) + b"IHDR" + ihdr_data + struct.pack(">I", ihdr_crc)
+    raw = zlib.compress(b"\x00\x00\x00\x00")
+    idat_crc = zlib.crc32(b"IDAT" + raw) & 0xFFFFFFFF
+    idat = struct.pack(">I", len(raw)) + b"IDAT" + raw + struct.pack(">I", idat_crc)
+    iend_crc = zlib.crc32(b"IEND") & 0xFFFFFFFF
+    iend = struct.pack(">I", 0) + b"IEND" + struct.pack(">I", iend_crc)
+    (image_dir / "img-0001.png").write_bytes(sig + ihdr + idat + iend)
+
+    # Insert ingest chunk with image ref and caption
+    chunk_text = "![](img-0001.png)\n\nFigure 1: Accuracy comparison.\n\nMore text."
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, "
+        "chunk_index, metadata) VALUES (?, ?, 'pdf', ?, 1, ?)",
+        (
+            "caption_hash",
+            chunk_text,
+            str(pdf_path),
+            json.dumps({"images": ["img-0001.png"], "pages": [1]}),
+        ),
+    )
+    conn.commit()
+
+    result = extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
+    assert result["chunks_created"] >= 1
+
+    # Check the created chunk has structured content
+    fig_chunk = conn.execute(
+        "SELECT content, metadata FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    assert fig_chunk is not None
+    content = fig_chunk["content"]
+
+    # Should have section markers (caption + description = 2 sources)
+    assert "[Caption]" in content
+    assert "[Description]" in content
+    assert "Accuracy comparison" in content
+    assert "accuracy over epochs" in content
+
+    # Check metadata has enrichment tracking
+    meta = json.loads(fig_chunk["metadata"])
+    assert "enrichment_layers" in meta
+    assert "pymupdf4llm" in meta["enrichment_layers"]
+    assert "vision_llm" in meta["enrichment_layers"]
+    assert meta["caption_source"] == "pymupdf4llm"
+    assert meta["description_source"] == "vision_llm"
+
+
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
+def test_extract_figures_metadata_enrichment_layers(mock_vision, mock_embed, tmp_path):
+    """Metadata tracks which enrichment layers contributed."""
+    from knowledge_base.vision import extract_figures
+
+    mock_figures = [
+        {
+            "figure_type": "diagram",
+            "description": "Architecture diagram",
+            "title": "Fig 1",
+            "entities_mentioned": [],
+        }
+    ]
+    mock_vision.return_value = mock_figures
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
+
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
+    extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
+
+    fig_chunk = conn.execute(
+        "SELECT metadata FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    meta = json.loads(fig_chunk["metadata"])
+    assert "enrichment_layers" in meta
+    assert "vision_llm" in meta["enrichment_layers"]
+    # No caption extracted = no pymupdf4llm layer
+    assert "pymupdf4llm" not in meta["enrichment_layers"]
+
+
+# ---------------------------------------------------------------------------
+# Best-effort degradation tests
+# ---------------------------------------------------------------------------
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._embed_with_config")
+@patch("knowledge_base.vision._vision_call")
+def test_extract_figures_degrades_to_caption_on_vision_failure(
+    mock_vision, mock_embed, mock_img_dir, tmp_path
+):
+    """When vision fails but caption exists, a caption-only chunk is created."""
+    from knowledge_base.vision import extract_figures
+    import struct
+    import zlib
+
+    mock_vision.side_effect = Exception("Vision API timeout")
+    mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
+
+    conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
+
+    # Hermetic image dir
+    image_dir = tmp_path / "extracted_images"
+    mock_img_dir.return_value = image_dir
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    # Minimal PNG
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr_data = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    ihdr_crc = zlib.crc32(b"IHDR" + ihdr_data) & 0xFFFFFFFF
+    ihdr = struct.pack(">I", 13) + b"IHDR" + ihdr_data + struct.pack(">I", ihdr_crc)
+    raw = zlib.compress(b"\x00\x00\x00\x00")
+    idat_crc = zlib.crc32(b"IDAT" + raw) & 0xFFFFFFFF
+    idat = struct.pack(">I", len(raw)) + b"IDAT" + raw + struct.pack(">I", idat_crc)
+    iend_crc = zlib.crc32(b"IEND") & 0xFFFFFFFF
+    iend = struct.pack(">I", 0) + b"IEND" + struct.pack(">I", iend_crc)
+    (image_dir / "img-0001.png").write_bytes(sig + ihdr + idat + iend)
+
+    chunk_text = "![](img-0001.png)\n\nFigure 1: Key results.\n\nMore text."
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, "
+        "chunk_index, metadata) VALUES (?, ?, 'pdf', ?, 1, ?)",
+        (
+            "deg_hash",
+            chunk_text,
+            str(pdf_path),
+            json.dumps({"images": ["img-0001.png"], "pages": [1]}),
+        ),
+    )
+    conn.commit()
+
+    result = extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
+    # Vision failed but caption exists — should still create a chunk
+    assert result["chunks_created"] >= 1
+
+    fig_chunk = conn.execute(
+        "SELECT content, metadata FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    assert fig_chunk is not None
+    assert "Key results" in fig_chunk["content"]
+
+    meta = json.loads(fig_chunk["metadata"])
+    assert meta["enrichment_layers"] == ["pymupdf4llm"]
+    assert "vision_llm" not in meta["enrichment_layers"]
 
 
 @patch("knowledge_base.vision.pdf_image_dir")
