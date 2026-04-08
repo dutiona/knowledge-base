@@ -662,6 +662,7 @@ def _extract_web_figures(
         _get_omniparser_config,
         _get_vision_config,
         _merge_omniparser_elements,
+        _resolve_omniparser_server_url,
         _run_omniparser,
         _vision_call,
     )
@@ -695,11 +696,14 @@ def _extract_web_figures(
     if not figures:
         return 0
 
-    # Optional: OmniParser enrichment
+    # Optional: OmniParser enrichment (uses server mode when available, #334)
     omniparser_path = _get_omniparser_config(conn)
     omni_elements: list[dict] | None = None
     if omniparser_path:
-        omni_result = _run_omniparser(screenshot_path, omniparser_path)
+        server_url = _resolve_omniparser_server_url(conn, omniparser_path)
+        omni_result = _run_omniparser(
+            screenshot_path, omniparser_path, server_url=server_url
+        )
         if omni_result and omni_result.get("elements"):
             omni_elements = omni_result["elements"]
 

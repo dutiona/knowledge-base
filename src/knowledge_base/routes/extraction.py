@@ -285,19 +285,23 @@ def configure_vision_tool(
 
 
 @mcp.tool()
-def configure_omniparser_tool(path: str | None = None) -> str:
+def configure_omniparser_tool(
+    path: str | None = None, server_url: str | None = None
+) -> str:
     """Configure OmniParser for figure enrichment.
 
     OmniParser adds OCR text and icon detection to figure descriptions.
     Requires a local OmniParser installation with its own venv.
-    This is a local-only tool — the path is executed as a subprocess.
 
     Args:
         path: Absolute path to OmniParser directory (None to query, empty string to disable).
+        server_url: Optional HTTP server URL for persistent OmniParser server mode.
+            None to leave unchanged, empty string to clear (reverts to auto-start),
+            or a URL like "http://gpu-node:7862" for a remote server.
     """
     conn = _get_conn()
     try:
-        return json.dumps(configure_omniparser(conn, path))
+        return json.dumps(configure_omniparser(conn, path, server_url=server_url))
     except KnowledgeBaseError as e:
         err = {"error": str(e), **e.details}
         return json.dumps(err)
