@@ -808,22 +808,8 @@ def _extract_element_captures(
     base_url = vision_config["base_url"]
     model = vision_config["model"]
 
-    # Remove stale element-capture figures
-    old_ids = [
-        r["id"]
-        for r in conn.execute(
-            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' "
-            "AND chunk_index >= ?",
-            (source_url, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START),
-        ).fetchall()
-    ]
-    if old_ids:
-        _cleanup_figure_fk_refs(conn, old_ids)
-        delete_chunk_vecs(conn, old_ids)
-        _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
-
-    figures_added = 0
-
+    # --- Phase 1: Collect descriptions (fallible: vision calls) ---
+    collected: list[tuple[str, dict, int]] = []  # (desc, metadata_dict, capture_idx)
     for idx, capture in enumerate(captures):
         png_path: Path = capture["path"]
         tag: str = capture["tag"]
@@ -851,15 +837,49 @@ def _extract_element_captures(
         if not figures:
             continue
 
-        # Use the first (best) figure description
         fig = figures[0]
         desc = fig.get("description", "")
         if not desc:
             continue
 
-        embeddings = _embed_with_config(conn, [desc])
-        emb_vec = embeddings[0] if embeddings else None
+        fig_type_raw = fig.get("figure_type", "unknown")
+        fig_type = f"{tag}_capture" if fig_type_raw in ("unknown", "") else fig_type_raw
 
+        meta = {
+            "figure_type": fig_type,
+            "element_tag": tag,
+            "element_width": capture.get("width", 0),
+            "element_height": capture.get("height", 0),
+            "title": fig.get("title", ""),
+            "original_source_type": "web",
+            "source_url": source_url,
+            "vision_model": model,
+        }
+        collected.append((desc, meta, idx))
+
+    if not collected:
+        return 0
+
+    # --- Phase 2: Batch embed (fallible: embedding calls) ---
+    texts = [desc for desc, _, _ in collected]
+    embeddings = _embed_with_config(conn, texts)
+
+    # --- Phase 3: Atomic swap — delete stale, insert new (infallible) ---
+    old_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' "
+            "AND chunk_index >= ?",
+            (source_url, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START),
+        ).fetchall()
+    ]
+    if old_ids:
+        _cleanup_figure_fk_refs(conn, old_ids)
+        delete_chunk_vecs(conn, old_ids)
+        _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
+
+    figures_added = 0
+    for (desc, meta, cap_idx), emb_vec in zip(collected, embeddings):
         chunk_hash = _content_hash(desc)
         existing = conn.execute(
             "SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)
@@ -867,24 +887,8 @@ def _extract_element_captures(
         if existing:
             continue
 
-        # Map tag → figure_type prefix
-        fig_type_raw = fig.get("figure_type", "unknown")
-        fig_type = f"{tag}_capture" if fig_type_raw in ("unknown", "") else fig_type_raw
-
-        meta_json = json.dumps(
-            {
-                "figure_type": fig_type,
-                "element_tag": tag,
-                "element_width": capture.get("width", 0),
-                "element_height": capture.get("height", 0),
-                "title": fig.get("title", ""),
-                "original_source_type": "web",
-                "source_url": source_url,
-                "vision_model": model,
-            }
-        )
-
-        chunk_index = _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START + idx
+        meta_json = json.dumps(meta)
+        chunk_index = _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START + cap_idx
         _insert_chunk(
             conn,
             content_hash=chunk_hash,
