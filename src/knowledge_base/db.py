@@ -8,7 +8,10 @@ from pathlib import Path
 
 import sqlite_vec
 
-from .utils import serialize_f32 as _serialize_f32  # shared vec serialization
+from .utils import (
+    ELEMENT_INSERT_EXPR,
+    serialize_f32 as _serialize_f32,
+)  # shared vec serialization
 
 __all__ = [
     "DEFAULT_DB_PATH",
@@ -22,6 +25,7 @@ __all__ = [
     "escape_like",
     "get_active_space",
     "get_connection",
+    "get_space_element_type",
     "get_vec_table_name",
     "init_schema",
     "insert_chunk_vec",
@@ -400,16 +404,32 @@ def get_active_chunk_strategy(conn: sqlite3.Connection) -> str:
     return row["chunk_strategy"]
 
 
+def get_space_element_type(
+    conn: sqlite3.Connection,
+    table_name: str | None = None,
+) -> str:
+    """Return the element_type for the given (or active) space, defaulting to 'float32'."""
+    tbl = table_name or get_vec_table_name(conn)
+    row = conn.execute(
+        "SELECT element_type FROM embed_spaces WHERE table_name = ?", (tbl,)
+    ).fetchone()
+    if row is None:
+        return "float32"
+    return row["element_type"] or "float32"
+
+
 def insert_chunk_vec(
     conn: sqlite3.Connection,
     chunk_id: int,
     embedding: list[float],
     table_name: str | None = None,
+    element_type: str = "float32",
 ) -> None:
     """Insert a single chunk embedding into the specified (or active) vec table."""
     tbl = table_name or get_vec_table_name(conn)
+    expr = ELEMENT_INSERT_EXPR[element_type]
     conn.execute(
-        f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
+        f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, {expr}, ?)",
         (chunk_id, _serialize_f32(embedding), chunk_id),
     )
     # Keep embed_spaces.chunk_count in sync for the active space
@@ -475,6 +495,20 @@ def _migrate_embed_spaces_matryoshka(conn: sqlite3.Connection) -> None:
     if "matryoshka_base_dim" in columns:
         return
     conn.execute("ALTER TABLE embed_spaces ADD COLUMN matryoshka_base_dim INTEGER")
+    conn.commit()
+
+
+def _migrate_embed_spaces_element_type(conn: sqlite3.Connection) -> None:
+    """Add element_type column to embed_spaces if missing."""
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()
+    }
+    if "element_type" in columns:
+        return
+    conn.execute(
+        "ALTER TABLE embed_spaces ADD COLUMN element_type TEXT NOT NULL DEFAULT 'float32'"
+        " CHECK(element_type IN ('float32', 'int8'))"
+    )
     conn.commit()
 
 
@@ -796,7 +830,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
         chunk_count INTEGER DEFAULT 0,
         total_chunks INTEGER,
         matryoshka_base_dim INTEGER
-            CHECK(matryoshka_base_dim IS NULL OR matryoshka_base_dim > dim)
+            CHECK(matryoshka_base_dim IS NULL OR matryoshka_base_dim > dim),
+        element_type TEXT NOT NULL DEFAULT 'float32'
+            CHECK(element_type IN ('float32', 'int8'))
     );
     """)
 
@@ -849,5 +885,6 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_chunk_sessions(conn)
     _bootstrap_embed_spaces(conn, embed_dim)
     _migrate_embed_spaces_matryoshka(conn)
+    _migrate_embed_spaces_element_type(conn)
     _migrate_normalize_source_uri(conn)
     _migrate_extraction_source(conn)
