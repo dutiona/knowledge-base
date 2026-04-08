@@ -1914,6 +1914,7 @@ def ingest_url(
 
     browser_rendered = False
     figures_extracted = 0
+    rendered_html_for_phase2: str | None = None
 
     # Browser fallback: if trafilatura got insufficient content, try rendering
     if len(text.strip()) < _BROWSER_FALLBACK_MIN_CHARS:
@@ -1938,6 +1939,9 @@ def ingest_url(
                         text = rendered_text
                         browser_rendered = True
 
+                    # Capture rendered HTML for Phase 2 image extraction (#131)
+                    rendered_html_for_phase2 = render_result["html"]
+
                     # Extract figures from screenshot (isolated from text ingest)
                     screenshot = render_result.get("screenshot_path")
                     if screenshot and screenshot.exists():
@@ -1957,15 +1961,24 @@ def ingest_url(
                     if tmpdir:
                         shutil.rmtree(tmpdir, ignore_errors=True)
 
-    # Extract inline images from HTML (skip when screenshot figures already extracted)
-    if figures_extracted == 0:
-        try:
-            inline_figures = _extract_html_images(
-                conn, html, source_url=url, base_url=str(response.url)
-            )
-            figures_extracted += inline_figures
-        except Exception:
-            logger.warning("Inline image extraction failed for %s", url, exc_info=True)
+    # Extract inline images from HTML.
+    # Phase 1: always parse static HTML.
+    # Phase 2 (#131): when browser fallback fired, also parse rendered DOM.
+    extra_sources: list[tuple[str, str]] | None = None
+    if rendered_html_for_phase2 is not None:
+        extra_sources = [(rendered_html_for_phase2, str(response.url))]
+
+    try:
+        inline_figures = _extract_html_images(
+            conn,
+            html,
+            source_url=url,
+            base_url=str(response.url),
+            extra_html_sources=extra_sources,
+        )
+        figures_extracted += inline_figures
+    except Exception:
+        logger.warning("Inline image extraction failed for %s", url, exc_info=True)
 
     _base_result: dict = {
         "url": url,

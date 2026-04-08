@@ -2583,7 +2583,7 @@ def test_ingest_url_extracts_inline_images(
 @patch("knowledge_base.ingest._render_with_browser")
 @patch("knowledge_base.ingest._get_browser_config")
 @patch("knowledge_base.ingest.httpx.get")
-def test_ingest_url_skips_inline_when_screenshot_extracted(
+def test_ingest_url_runs_inline_even_with_screenshot_figures(
     mock_get,
     mock_browser_cfg,
     mock_render,
@@ -2591,11 +2591,10 @@ def test_ingest_url_skips_inline_when_screenshot_extracted(
     mock_html_images,
     tmp_path,
 ):
-    """When screenshot figures were extracted, _extract_html_images is NOT called."""
+    """Phase 1 inline extraction runs even when screenshot figures were extracted."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
-    # Page returns minimal text to trigger browser fallback
     resp = MagicMock()
     resp.status_code = 200
     resp.text = "<html><body>Short</body></html>"
@@ -2603,7 +2602,6 @@ def test_ingest_url_skips_inline_when_screenshot_extracted(
     resp.raise_for_status = MagicMock()
     mock_get.return_value = resp
 
-    # Browser fallback fires and extracts 2 figures
     mock_browser_cfg.return_value = {"mode": "local", "venv": "/tmp/venv"}
     mock_render.return_value = {
         "html": "<html><body>Rendered content that is long enough</body></html>",
@@ -2611,12 +2609,61 @@ def test_ingest_url_skips_inline_when_screenshot_extracted(
         "tmpdir": None,
     }
     mock_web_figures.return_value = 2
+    mock_html_images.return_value = 1
 
     with patch("knowledge_base.ingest.Path.exists", return_value=True):
-        ingest_url(conn, "https://example.com/page")
+        result = ingest_url(conn, "https://example.com/page")
 
-    # figures_extracted should be 2 from screenshot, _extract_html_images should NOT be called
-    mock_html_images.assert_not_called()
+    # Phase 1 always runs now — not skipped when screenshots extracted
+    mock_html_images.assert_called_once()
+    # Total = screenshot figures + inline figures
+    assert result["figures_extracted"] == 3
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.ingest._extract_html_images")
+@patch("knowledge_base.ingest._extract_web_figures")
+@patch("knowledge_base.ingest._render_with_browser")
+@patch("knowledge_base.ingest._get_browser_config")
+@patch("knowledge_base.ingest.httpx.get")
+def test_ingest_url_passes_rendered_html_to_extract_images(
+    mock_get,
+    mock_browser_cfg,
+    mock_render,
+    mock_web_figures,
+    mock_html_images,
+    tmp_path,
+):
+    """When browser fallback fires, rendered HTML is passed as extra_html_sources."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.text = "<html><body>Short</body></html>"
+    resp.url = "https://example.com/spa"
+    resp.raise_for_status = MagicMock()
+    mock_get.return_value = resp
+
+    rendered_html = (
+        "<html><body>Rendered with lots of content for the page</body></html>"
+    )
+    mock_browser_cfg.return_value = {"mode": "local", "venv": "/tmp/venv"}
+    mock_render.return_value = {
+        "html": rendered_html,
+        "screenshot_path": None,
+        "tmpdir": None,
+    }
+    mock_web_figures.return_value = 0
+    mock_html_images.return_value = 2
+
+    ingest_url(conn, "https://example.com/spa")
+
+    mock_html_images.assert_called_once()
+    call_kwargs = mock_html_images.call_args
+    assert call_kwargs.kwargs.get("extra_html_sources") == [
+        (rendered_html, "https://example.com/spa"),
+    ]
 
 
 _EMPTY_HTML_WITH_IMG = """<html>
