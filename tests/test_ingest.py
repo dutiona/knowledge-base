@@ -1695,6 +1695,23 @@ def test_parse_image_candidates_exclude_urls():
     assert result[0][0] == "https://example.com/new-image.png"
 
 
+def test_parse_image_candidates_returns_none_on_parse_failure():
+    """Parse failure returns None (not []) to prevent stale cleanup."""
+    # Feed a non-string to trigger an exception in HTMLParser
+    result = _parse_image_candidates("", "https://example.com/page")
+    # Empty HTML parses fine but has no images → empty list
+    assert result == []
+
+    # Inject a broken parser scenario via patching
+    with patch(
+        "knowledge_base.ingest._ImgTagParser.feed", side_effect=Exception("boom")
+    ):
+        result = _parse_image_candidates(
+            "<html><body></body></html>", "https://example.com/page"
+        )
+        assert result is None
+
+
 # --- Core extraction ---
 
 
@@ -2606,6 +2623,7 @@ def test_ingest_url_runs_inline_even_with_screenshot_figures(
     mock_render.return_value = {
         "html": "<html><body>Rendered content that is long enough</body></html>",
         "screenshot_path": Path("/tmp/fake.png"),
+        "final_url": "https://example.com/page",
         "tmpdir": None,
     }
     mock_web_figures.return_value = 2
@@ -2652,6 +2670,7 @@ def test_ingest_url_passes_rendered_html_to_extract_images(
     mock_render.return_value = {
         "html": rendered_html,
         "screenshot_path": None,
+        "final_url": "https://example.com/spa-final",
         "tmpdir": None,
     }
     mock_web_figures.return_value = 0
@@ -2661,8 +2680,9 @@ def test_ingest_url_passes_rendered_html_to_extract_images(
 
     mock_html_images.assert_called_once()
     call_kwargs = mock_html_images.call_args
+    # Base URL should use Playwright's final URL, not httpx response.url
     assert call_kwargs.kwargs.get("extra_html_sources") == [
-        (rendered_html, "https://example.com/spa"),
+        (rendered_html, "https://example.com/spa-final"),
     ]
 
 

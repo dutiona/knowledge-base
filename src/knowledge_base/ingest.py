@@ -1285,19 +1285,22 @@ def _parse_image_candidates(
     base_url: str,
     *,
     exclude_urls: frozenset[str] = frozenset(),
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str]] | None:
     """Parse ``<img>`` tags from *html_content* and return qualifying ``(url, alt)`` pairs.
 
     Applies all Phase 1 filtering: data URIs, SVGs, decorative patterns,
     HTML dimension pre-filter, and URL dedup.  *exclude_urls* skips images
     already collected from another HTML source (Phase 2 cross-source dedup).
+
+    Returns ``None`` on parse failure (caller should not trigger stale cleanup),
+    or an empty list when parsing succeeded but no images qualify.
     """
     parser = _ImgTagParser()
     try:
         parser.feed(html_content)
     except Exception:
         logger.warning("HTML parsing failed for %s", base_url, exc_info=True)
-        return []
+        return None
 
     if not parser.images:
         return []
@@ -1391,14 +1394,20 @@ def _extract_html_images(
     # --- Parse <img> tags ---
     candidates = _parse_image_candidates(html_content, base_url)
 
+    if candidates is None:
+        # Parse failure — do NOT trigger stale cleanup (non-destructive)
+        return 0
+
     # Phase 2 (#131): merge candidates from rendered DOM (or other extra sources)
     if extra_html_sources:
-        primary_urls = frozenset(url for url, _alt in candidates)
+        seen_urls: set[str] = {url for url, _alt in candidates}
         for extra_html, extra_base in extra_html_sources:
             extra = _parse_image_candidates(
-                extra_html, extra_base, exclude_urls=primary_urls
+                extra_html, extra_base, exclude_urls=frozenset(seen_urls)
             )
-            candidates.extend(extra)
+            if extra:
+                candidates.extend(extra)
+                seen_urls.update(url for url, _alt in extra)
 
     if not candidates:
         _cleanup_stale_inline_images(conn, source_url)
@@ -1705,9 +1714,17 @@ def _render_with_browser(
         return None
 
     html = html_path.read_text(encoding="utf-8")
+    # Final URL may differ from input after redirects or client-side navigation
+    final_url_path = tmpdir / "final_url.txt"
+    final_url = (
+        final_url_path.read_text(encoding="utf-8").strip()
+        if final_url_path.exists()
+        else None
+    )
     return {
         "html": html,
         "screenshot_path": screenshot_path if screenshot_path.exists() else None,
+        "final_url": final_url,
         "tmpdir": tmpdir,
     }
 
@@ -1915,6 +1932,9 @@ def ingest_url(
     browser_rendered = False
     figures_extracted = 0
     rendered_html_for_phase2: str | None = None
+    rendered_base_url: str = str(
+        response.url
+    )  # fallback; updated if browser provides final URL
 
     # Browser fallback: if trafilatura got insufficient content, try rendering
     if len(text.strip()) < _BROWSER_FALLBACK_MIN_CHARS:
@@ -1939,8 +1959,13 @@ def ingest_url(
                         text = rendered_text
                         browser_rendered = True
 
-                    # Capture rendered HTML for Phase 2 image extraction (#131)
+                    # Capture rendered HTML for Phase 2 image extraction (#131).
+                    # Use browser's final URL for resolving relative <img src>
+                    # (may differ from httpx response.url after client-side nav).
                     rendered_html_for_phase2 = render_result["html"]
+                    rendered_base_url = render_result.get("final_url") or str(
+                        response.url
+                    )
 
                     # Extract figures from screenshot (isolated from text ingest)
                     screenshot = render_result.get("screenshot_path")
@@ -1966,7 +1991,7 @@ def ingest_url(
     # Phase 2 (#131): when browser fallback fired, also parse rendered DOM.
     extra_sources: list[tuple[str, str]] | None = None
     if rendered_html_for_phase2 is not None:
-        extra_sources = [(rendered_html_for_phase2, str(response.url))]
+        extra_sources = [(rendered_html_for_phase2, rendered_base_url)]
 
     try:
         inline_figures = _extract_html_images(
