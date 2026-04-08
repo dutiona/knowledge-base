@@ -32,6 +32,7 @@ def embed_config() -> str:
     if active:
         config["active_space"] = active["name"]
         config["chunk_strategy"] = active["chunk_strategy"]
+        config["element_type"] = active.get("element_type", "float32")
         if active.get("matryoshka_base_dim"):
             config["matryoshka_base_dim"] = active["matryoshka_base_dim"]
     return json.dumps(config)
@@ -310,12 +311,14 @@ def benchmark_spaces_tool(
             conn, baseline_name, space["name"], queries, top_k, mode="vec"
         )
 
-        # Storage estimate
+        # Storage estimate: bytes per vector = bytes_per_element * dim
         bpe = _BYTES_PER_ELEMENT.get(space.get("element_type", "float32"), 4)
         baseline_bpe = _BYTES_PER_ELEMENT.get(
             baseline.get("element_type", "float32"), 4
         )
-        storage_ratio = bpe / baseline_bpe if baseline_bpe else 1.0
+        vec_bytes = bpe * space["dim"]
+        baseline_vec_bytes = baseline_bpe * baseline["dim"]
+        storage_ratio = vec_bytes / baseline_vec_bytes if baseline_vec_bytes else 1.0
 
         results.append(
             {
