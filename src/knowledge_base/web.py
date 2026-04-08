@@ -659,6 +659,8 @@ def _extract_web_figures(
     import base64
 
     from .vision import (
+        _OMNIPARSER_DEFAULT_PORT,
+        _ensure_omniparser_server,
         _get_omniparser_config,
         _get_vision_config,
         _merge_omniparser_elements,
@@ -695,11 +697,16 @@ def _extract_web_figures(
     if not figures:
         return 0
 
-    # Optional: OmniParser enrichment
+    # Optional: OmniParser enrichment (uses server mode when available, #334)
     omniparser_path = _get_omniparser_config(conn)
     omni_elements: list[dict] | None = None
     if omniparser_path:
-        omni_result = _run_omniparser(screenshot_path, omniparser_path)
+        server_url = _ensure_omniparser_server(
+            omniparser_path, _OMNIPARSER_DEFAULT_PORT
+        )
+        omni_result = _run_omniparser(
+            screenshot_path, omniparser_path, server_url=server_url
+        )
         if omni_result and omni_result.get("elements"):
             omni_elements = omni_result["elements"]
 

@@ -190,33 +190,65 @@ def _validate_omniparser_path(path: str) -> Path:
 def configure_omniparser(
     conn: sqlite3.Connection,
     path: str | None = None,
+    *,
+    server_url: str | None = None,
 ) -> dict:
     """Configure OmniParser for figure enrichment.
 
     Args:
         path: None to query, "" to disable, otherwise absolute path to set.
+        server_url: Optional HTTP server URL.  ``None`` leaves unchanged,
+            ``""`` clears (reverts to auto-start on localhost:7862),
+            any other string sets a custom server URL (e.g. for a remote
+            GPU node).
 
     The path is resolved (symlinks and ``..`` flattened) and validated before
     storage.  At execution time, ``_run_omniparser`` re-validates that the
     resolved files still exist on disk.
     """
-    if path is None:
-        return {"omniparser_path": _get_omniparser_config(conn)}
+    if path is None and server_url is None:
+        return {
+            "omniparser_path": _get_omniparser_config(conn),
+            "omniparser_server_url": _get_omniparser_server_url(conn),
+        }
 
-    if path == "":
-        conn.execute("DELETE FROM config WHERE key = 'omniparser_path'")
-        conn.commit()
-        return {"omniparser_path": None}
+    result: dict = {}
 
-    omni_dir = _validate_omniparser_path(path)
-    resolved = str(omni_dir)
+    if path is not None:
+        if path == "":
+            conn.execute("DELETE FROM config WHERE key = 'omniparser_path'")
+            conn.commit()
+            result["omniparser_path"] = None
+        else:
+            omni_dir = _validate_omniparser_path(path)
+            resolved = str(omni_dir)
+            conn.execute(
+                "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_path', ?)",
+                (resolved,),
+            )
+            conn.commit()
+            result["omniparser_path"] = resolved
 
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_path', ?)",
-        (resolved,),
-    )
-    conn.commit()
-    return {"omniparser_path": resolved}
+    if server_url is not None:
+        if server_url == "":
+            conn.execute("DELETE FROM config WHERE key = 'omniparser_server_url'")
+            conn.commit()
+            result["omniparser_server_url"] = None
+        else:
+            conn.execute(
+                "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_server_url', ?)",
+                (server_url,),
+            )
+            conn.commit()
+            result["omniparser_server_url"] = server_url
+
+    # Fill in whichever field wasn't explicitly set
+    if "omniparser_path" not in result:
+        result["omniparser_path"] = _get_omniparser_config(conn)
+    if "omniparser_server_url" not in result:
+        result["omniparser_server_url"] = _get_omniparser_server_url(conn)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -225,21 +257,226 @@ def configure_omniparser(
 
 _ETA_SECS_PER_PAGE_BASE = 4
 _ETA_SECS_PER_PAGE_OMNIPARSER = 40
+_ETA_SECS_PER_PAGE_OMNIPARSER_SERVER = 3
 _VISION_CALL_TIMEOUT = 120
 _OMNIPARSER_SUBPROCESS_TIMEOUT = 120
+_OMNIPARSER_SERVER_TIMEOUT = 30
+_OMNIPARSER_HEALTH_TIMEOUT = 3
+_OMNIPARSER_DEFAULT_PORT = 7862
 _TIMING_DRIFT_FACTOR = 2.0
 
 
-def _run_omniparser(
-    png_path: Path, omniparser_path: str, timeout: int = _OMNIPARSER_SUBPROCESS_TIMEOUT
-) -> dict | None:
-    """Invoke OmniParser as a subprocess. Returns parsed JSON or None on failure.
+# ---------------------------------------------------------------------------
+# OmniParser server-mode helpers (#334)
+# ---------------------------------------------------------------------------
 
-    Re-validates that the configured python binary and parse script still exist
-    and are accessible before spawning the subprocess.  This guards against
-    paths that were valid at configuration time but have since been moved or
-    deleted.
+
+def _get_omniparser_server_url(conn: sqlite3.Connection) -> str | None:
+    """Read omniparser_server_url from config table. Returns None when unset."""
+    row = conn.execute(
+        "SELECT value FROM config WHERE key = 'omniparser_server_url'"
+    ).fetchone()
+    return row["value"] if row else None
+
+
+def _check_omniparser_server(base_url: str) -> bool:
+    """Check whether an OmniParser server is healthy at *base_url*.
+
+    Validates that the response contains ``"status": "omniparser"`` to
+    distinguish from other services that might be listening on the same port.
     """
+    try:
+        resp = httpx.get(f"{base_url}/health", timeout=_OMNIPARSER_HEALTH_TIMEOUT)
+        if resp.status_code != 200:
+            return False
+        data = resp.json()
+        return data.get("status") == "omniparser"
+    except (httpx.ConnectError, httpx.TimeoutException, Exception):
+        return False
+
+
+def _run_omniparser_http(
+    png_path: Path, base_url: str, timeout: int = _OMNIPARSER_SERVER_TIMEOUT
+) -> dict | None:
+    """Send a PNG to the OmniParser HTTP server and return parsed JSON.
+
+    Returns None on any failure (timeout, connection error, server error).
+    """
+    try:
+        image_b64 = base64.b64encode(png_path.read_bytes()).decode()
+        resp = httpx.post(
+            f"{base_url}/parse",
+            json={"image_base64": image_b64},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except (
+        httpx.ConnectError,
+        httpx.TimeoutException,
+        httpx.HTTPStatusError,
+        json.JSONDecodeError,
+        OSError,
+    ) as exc:
+        logger.warning("OmniParser HTTP failed for %s: %s", png_path.name, exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# OmniParser server auto-start (#334)
+# ---------------------------------------------------------------------------
+
+# Sentinel printed by _omniparser_server.py when models are loaded.
+_READY_SENTINEL = "OMNIPARSER_READY"
+
+# Module-level state for the auto-started server process.
+_omniparser_process: subprocess.Popen | None = None
+_omniparser_lock = __import__("threading").Lock()
+
+
+def _shutdown_omniparser_server() -> None:
+    """Terminate the auto-started OmniParser server process.
+
+    Registered via ``atexit`` when the server is auto-started.
+    """
+    global _omniparser_process  # noqa: PLW0603
+    proc = _omniparser_process
+    if proc is not None and proc.poll() is None:
+        logger.info("Shutting down OmniParser server (PID %d)", proc.pid)
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            logger.warning("OmniParser server did not exit, sending SIGKILL")
+            proc.kill()
+        _omniparser_process = None
+
+
+def _ensure_omniparser_server(omniparser_path: str, port: int) -> str | None:
+    """Ensure an OmniParser HTTP server is running on localhost.
+
+    1. Health check — if already running, return the URL.
+    2. Acquire lock (double-checked locking to prevent concurrent spawns).
+    3. Locate the server script in the package.
+    4. Spawn via Popen, wait for readiness sentinel.
+    5. Register atexit handler for cleanup.
+
+    Returns the server URL on success, or ``None`` on failure (caller
+    should fall back to subprocess mode).
+    """
+    import atexit
+
+    base_url = f"http://127.0.0.1:{port}"
+
+    # Fast path: server already running
+    if _check_omniparser_server(base_url):
+        return base_url
+
+    with _omniparser_lock:
+        global _omniparser_process  # noqa: PLW0603
+
+        # Double-checked locking: another thread may have started it
+        if _check_omniparser_server(base_url):
+            return base_url
+
+        # Locate the server script
+        server_script = Path(__file__).parent / "_omniparser_server.py"
+        if not server_script.is_file():
+            logger.warning(
+                "OmniParser server script not found at %s — "
+                "auto-start unavailable (wheel install?)",
+                server_script,
+            )
+            return None
+
+        # Locate OmniParser's venv python
+        omni_dir = Path(omniparser_path)
+        venv_python = omni_dir / ".venv" / "bin" / "python"
+        if not venv_python.is_file():
+            logger.warning("OmniParser venv python not found: %s", venv_python)
+            return None
+
+        logger.info("Auto-starting OmniParser server on port %d ...", port)
+        try:
+            proc = subprocess.Popen(
+                [
+                    str(venv_python),
+                    str(server_script),
+                    "--port",
+                    str(port),
+                    "--omniparser-path",
+                    omniparser_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            )
+        except OSError as exc:
+            logger.warning("Failed to start OmniParser server: %s", exc)
+            return None
+
+        # Wait for readiness sentinel, polling for early exit
+        deadline = time.monotonic() + 120
+        ready = False
+        while time.monotonic() < deadline:
+            # Check if process died
+            if proc.poll() is not None:
+                logger.warning(
+                    "OmniParser server exited early with code %d",
+                    proc.returncode,
+                )
+                return None
+
+            # Try reading a line (non-blocking via select or small timeout)
+            assert proc.stdout is not None
+            line = proc.stdout.readline()
+            if line and _READY_SENTINEL in line.decode(errors="replace"):
+                ready = True
+                break
+
+        if not ready:
+            logger.warning("OmniParser server did not become ready within 120s")
+            proc.terminate()
+            return None
+
+        # Close stdout pipe to prevent fill
+        proc.stdout.close()
+
+        _omniparser_process = proc
+        atexit.register(_shutdown_omniparser_server)
+        logger.info("OmniParser server started (PID %d) on %s", proc.pid, base_url)
+        return base_url
+
+
+def _run_omniparser(
+    png_path: Path,
+    omniparser_path: str,
+    timeout: int = _OMNIPARSER_SUBPROCESS_TIMEOUT,
+    *,
+    server_url: str | None = None,
+) -> dict | None:
+    """Invoke OmniParser via HTTP server or subprocess fallback.
+
+    When *server_url* is provided, tries the HTTP server first.  On any
+    HTTP failure, falls back to the subprocess path.  When *server_url*
+    is ``None``, uses the subprocess path directly (backward compatible).
+
+    Re-validates that the configured python binary and parse script still
+    exist and are accessible before spawning the subprocess.
+    """
+    # --- Try HTTP server first ---
+    if server_url is not None:
+        result = _run_omniparser_http(
+            png_path, server_url, timeout=_OMNIPARSER_SERVER_TIMEOUT
+        )
+        if result is not None:
+            return result
+        logger.info(
+            "OmniParser HTTP failed for %s, falling back to subprocess",
+            png_path.name,
+        )
+
+    # --- Subprocess fallback ---
     omni = Path(omniparser_path)
     venv_python = omni / ".venv" / "bin" / "python"
     parse_script = omni / "parse.py"
@@ -1282,16 +1519,25 @@ def _check_eta_gate(
     confirmed: bool,
     *,
     n_mixed_regions: int = 0,
+    server_healthy: bool = False,
 ) -> tuple[dict | None, int]:
     """Return an ETA-confirmation dict if the job is large and unconfirmed.
 
     Mixed regions use base rate only (no OmniParser processing).
+    When *server_healthy* is True, uses the faster server ETA constant
+    instead of the cold-start subprocess constant.
 
     Returns (gate_dict_or_None, estimated_seconds).
     """
-    per_page = _ETA_SECS_PER_PAGE_BASE + (
-        _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
-    )
+    if omniparser_path:
+        omni_per_page = (
+            _ETA_SECS_PER_PAGE_OMNIPARSER_SERVER
+            if server_healthy
+            else _ETA_SECS_PER_PAGE_OMNIPARSER
+        )
+    else:
+        omni_per_page = 0
+    per_page = _ETA_SECS_PER_PAGE_BASE + omni_per_page
     estimated = n_items * per_page + n_mixed_regions * _ETA_SECS_PER_PAGE_BASE
     if estimated > 120 and not confirmed:
         return {
@@ -1361,13 +1607,16 @@ def _run_omniparser_pipeline(
             page_data=page_data, image_data=image_data, elapsed=0.0
         )
 
+    # Try to ensure the OmniParser HTTP server is running (#334)
+    server_url = _ensure_omniparser_server(omniparser_path, _OMNIPARSER_DEFAULT_PORT)
+
     if on_progress:
         on_progress("omniparser processing...")
     t_start = time.monotonic()
 
     # OmniParser on extracted images (already PNGs on disk)
     for img_path, _page_num in extracted_images:
-        omni_result = _run_omniparser(img_path, omniparser_path)
+        omni_result = _run_omniparser(img_path, omniparser_path, server_url=server_url)
         image_data[img_path.name] = (
             omni_result,
             [(0.0, 0.0, 1.0, 1.0)],
@@ -1380,7 +1629,9 @@ def _run_omniparser_pipeline(
         try:
             os.close(png_fd)
             Path(png_tmp).write_bytes(png_bytes)
-            omni_result = _run_omniparser(Path(png_tmp), omniparser_path)
+            omni_result = _run_omniparser(
+                Path(png_tmp), omniparser_path, server_url=server_url
+            )
         finally:
             Path(png_tmp).unlink(missing_ok=True)
 
@@ -1822,9 +2073,21 @@ def estimate_figures_time(
     n_mixed = sum(len(v) for v in inputs.mixed_page_regions.values())
 
     omniparser_path = _get_omniparser_config(conn)
-    per_page = _ETA_SECS_PER_PAGE_BASE + (
-        _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
-    )
+    # Use faster ETA when OmniParser server is confirmed healthy (#334)
+    server_healthy = False
+    if omniparser_path:
+        server_healthy = _check_omniparser_server(
+            f"http://127.0.0.1:{_OMNIPARSER_DEFAULT_PORT}"
+        )
+    if omniparser_path:
+        omni_per_page = (
+            _ETA_SECS_PER_PAGE_OMNIPARSER_SERVER
+            if server_healthy
+            else _ETA_SECS_PER_PAGE_OMNIPARSER
+        )
+    else:
+        omni_per_page = 0
+    per_page = _ETA_SECS_PER_PAGE_BASE + omni_per_page
     # Mixed regions don't go through OmniParser, so use base rate only
     estimated = (n_extracted + n_vector) * per_page + n_mixed * _ETA_SECS_PER_PAGE_BASE
     return {
@@ -1833,6 +2096,7 @@ def estimate_figures_time(
         "mixed_vector_regions": n_mixed,
         "estimated_seconds": estimated,
         "has_omniparser": omniparser_path is not None,
+        "omniparser_server_healthy": server_healthy,
     }
 
 
@@ -1867,10 +2131,20 @@ def extract_figures(
     inputs = _collect_dual_path_inputs(conn, ctx.source_uri, ctx.pdf_path, pages)
 
     # 4. ETA gate (computed after knowing the tri-path split)
+    # Check if OmniParser server is already healthy for a more accurate ETA
+    server_healthy = False
+    if omniparser_path:
+        server_healthy = _check_omniparser_server(
+            f"http://127.0.0.1:{_OMNIPARSER_DEFAULT_PORT}"
+        )
     n_mixed_regions = sum(len(v) for v in inputs.mixed_page_regions.values())
     n_items = len(inputs.extracted_images) + len(inputs.vector_pages)
     gate, estimated = _check_eta_gate(
-        n_items, omniparser_path, confirmed, n_mixed_regions=n_mixed_regions
+        n_items,
+        omniparser_path,
+        confirmed,
+        n_mixed_regions=n_mixed_regions,
+        server_healthy=server_healthy,
     )
     if gate is not None:
         gate["extracted_images"] = len(inputs.extracted_images)
