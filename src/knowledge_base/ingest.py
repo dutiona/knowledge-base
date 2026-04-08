@@ -1399,18 +1399,24 @@ def _extract_html_images(
         return 0
 
     # Phase 2 (#131): merge candidates from rendered DOM (or other extra sources)
+    any_parse_failed = False
     if extra_html_sources:
         seen_urls: set[str] = {url for url, _alt in candidates}
         for extra_html, extra_base in extra_html_sources:
             extra = _parse_image_candidates(
                 extra_html, extra_base, exclude_urls=frozenset(seen_urls)
             )
-            if extra:
+            if extra is None:
+                any_parse_failed = True
+            elif extra:
                 candidates.extend(extra)
                 seen_urls.update(url for url, _alt in extra)
 
     if not candidates:
-        _cleanup_stale_inline_images(conn, source_url)
+        # Only clean stale chunks when all sources parsed successfully but
+        # none yielded candidates.  A parse failure is non-destructive.
+        if not any_parse_failed:
+            _cleanup_stale_inline_images(conn, source_url)
         return 0
 
     # Cap
