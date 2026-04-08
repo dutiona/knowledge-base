@@ -2539,6 +2539,63 @@ def test_extract_html_images_rendered_only_when_static_empty(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
+def test_extract_html_images_aborts_on_extra_source_parse_failure(
+    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+):
+    """When an extra HTML source fails to parse, abort to avoid data loss.
+
+    The delete-all-then-reinsert pattern means proceeding with partial
+    candidates would lose figures previously extracted from the failed source.
+    """
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    mock_vision_cfg.return_value = _VISION_CFG
+    mock_vision_call.return_value = _FIGURE_RESPONSE
+    png_bytes = _make_test_png()
+    mock_stream.return_value = _mock_image_stream(png_bytes)
+
+    # Pre-seed a figure chunk to verify it survives
+    conn.execute(
+        "INSERT INTO chunks (source_uri, source_type, chunk_index, content, content_hash)"
+        " VALUES (?, 'figure', 10000, 'existing figure', 'hash_existing')",
+        ("https://example.com/page",),
+    )
+    conn.commit()
+    before = conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
+        ("https://example.com/page",),
+    ).fetchone()[0]
+    assert before == 1
+
+    static_html = '<html><body><img src="https://example.com/good.png"></body></html>'
+
+    with patch("knowledge_base.web._parse_image_candidates") as mock_parse:
+        # First call (primary HTML) succeeds, second call (extra source) fails
+        mock_parse.side_effect = [
+            [("https://example.com/good.png", "good image")],
+            None,  # parse failure
+        ]
+        count = _extract_html_images(
+            conn,
+            static_html,
+            source_url="https://example.com/page",
+            extra_html_sources=[("bad html", "https://example.com/page")],
+        )
+
+    assert count == 0, "should abort when extra source parse fails"
+
+    after = conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE source_uri = ? AND source_type = 'figure'",
+        ("https://example.com/page",),
+    ).fetchone()[0]
+    assert after == before, "existing figure chunks must not be deleted"
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+@patch("knowledge_base.web.is_private_ip", return_value=False)
+@patch("knowledge_base.web.httpx.stream")
 @patch("knowledge_base.web.httpx.get")
 def test_ingest_url_preserves_figures_on_extraction_failure(
     mock_get, mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
