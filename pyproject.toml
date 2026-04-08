@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 knowledge-base = "knowledge_base.server:main"
+knowledge-base-ingest = "knowledge_base.indexer:main"
 omniparser-server = "knowledge_base._omniparser_server:main"
 
 [tool.pytest.ini_options]

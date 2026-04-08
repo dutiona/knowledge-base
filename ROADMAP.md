@@ -1,8 +1,8 @@
 # Roadmap
 
-> Last updated: 2026-04-04
+> Last updated: 2026-04-09
 
-129 open issues across 8 workstreams. This document establishes priority, ordering,
+132 open issues across 8 workstreams. This document establishes priority, ordering,
 dependency chains, and parallelism opportunities.
 
 > **Gap Analysis Integration (2026-03-31):** Seven new Phase 3 issues and five
@@ -129,7 +129,10 @@ dependency chains, and parallelism opportunities.
 | 146 | workspace-scoped prediction error filtering              | Search      | 3     |                                                   |
 | 145 | scope_miss prediction error type                         | Search      | 3     |                                                   |
 | 125 | BM25-seeded HNSW insertion for graph quality             | Search      | 3     |                                                   |
-| 124 | decouple index construction from query serving           | Search      | 3     |                                                   |
+| 124 | decouple index construction from query serving           | Search      | 3     | umbrella → #349, #350, #351                       |
+| 349 | separate indexer CLI entry point (Phase 1)               | Foundation  | 3     | ✔ PR #358                                         |
+| 350 | serve-only MCP server mode (Phase 2)                     | Foundation  | 3     |                                                   |
+| 351 | horizontal scaling: replication + blue/green (Phase 3)   | Scale       | 3     | gated on multi-machine need                       |
 | 122 | docs: four-layer cognitive architecture                  | Foundation  | 3     |                                                   |
 | 94  | compressed vector indices (int8/bit)                     | Embedding   | 3     | ✔ PR #355                                         |
 | 344 | TurboQuant 4-bit embedding quantization                  | Embedding   | 3     | depends on #94                                    |
@@ -195,8 +198,9 @@ dependency chains, and parallelism opportunities.
 | 186 | ✔ extract_figures() 500-LOC god function          | ✔ #241                         |
 | 215 | papers.py god module — 5 responsibilities         | ✔ #238, ✔ #239                 |
 | 216 | server.py god module — 38 tools in 1083 LOC       | ✔ #242 (PR #310)               |
+| 124 | decouple index construction from query serving    | ✔ #349, #350, #351             |
 
-All 6 umbrella issues are now closed.
+Previous 6 umbrella issues are closed. #124 is open.
 
 **Plan issues** (reference-only, all closed):
 
@@ -441,7 +445,10 @@ polish ingest pipelines with follow-up enhancements.
 #344 (TurboQuant 4-bit)     ─── depends on #94 (done)
 #345 (binary+int8 rescore)  ─── depends on #94 (done)
 #125 (BM25-seeded HNSW)     ─── depends on #99 (done)
-#124 (build/serve pattern)  ─── independent
+#124 (build/serve umbrella) ─── children below:
+  #349 (indexer CLI, Phase 1)       ─── independent, foundation ── done (PR #358)
+  #350 (serve-only MCP, Phase 2)    ─── depends on #349, pairs with #63
+  #351 (horizontal scaling, Phase 3)─── depends on #349+#350, gated on multi-machine need
 
 #129 (retrieval plan IR)    ─── benefits from #106 (done)
 
@@ -533,6 +540,11 @@ polish ingest pipelines with follow-up enhancements.
   decontamination can identify per-agent biases.
 - **#253 → #268 → #269**: Query classifier enables Level 2 injection
   interface, which enables the dosing framework.
+- **#349 → #350 → #351**: Build/serve separation phases. #349 (indexer CLI)
+  is done (PR #358). #350 (serve-only MCP) requires #349 and pairs with #63
+  (document watch/sync). #351 (horizontal scaling) requires both and is
+  gated on actual multi-machine deployment need — do not implement
+  speculatively.
 
 **Parallelism:**
 
@@ -628,7 +640,8 @@ Phase 3                         Phase 4
        └──▶ #104                #107 (epic)
 ✔#94, #125 (need ✔#99)         #12, #65, #80
 #344, #345 (need ✔#94)
-#124, #129 (after ✔#106)
+✔#349 ──▶ #350 ──▶ #351 (#124 umbrella)
+#129 (after ✔#106)
 #253 ──▶ #254 ──▶ #257
 #253 ──▶ #268 ──▶ #269
 #162, #161, #147+#179
@@ -681,6 +694,9 @@ Do #276 first (quick fix), then #278 absorbs the shared utility + perf work.
 
 **Phase 3 follow-up enhancements** (depend on Phase 2 features already done):
 #162, ~~#164~~, #161, #147, #149, #146, #145, #122, #246, #253
+
+**Phase 3 build/serve separation** (#124 umbrella):
+✔ #349 (indexer CLI, PR #358), #350 (serve-only MCP), #351 (horizontal scaling)
 
 **Phase 3 gap-analysis additions** (independent, can start when Phase 3 begins):
 #263, #264, #265, #266
