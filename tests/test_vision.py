@@ -3599,3 +3599,307 @@ def test_estimate_figures_time_includes_mixed_regions(
     assert result.get("extracted_images", 0) == 1
     assert result.get("mixed_vector_regions", 0) > 0
     assert result["estimated_seconds"] > 0
+
+
+# ---------------------------------------------------------------------------
+# OmniParser HTTP server mode tests (#334)
+# ---------------------------------------------------------------------------
+
+
+class TestOmniParserServerHealth:
+    """Tests for _check_omniparser_server health endpoint."""
+
+    def test_healthy_server(self):
+        from knowledge_base.vision import _check_omniparser_server
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"status": "omniparser", "models_loaded": True}
+
+        with patch("knowledge_base.vision.httpx.get", return_value=mock_resp):
+            assert _check_omniparser_server("http://127.0.0.1:7862") is True
+
+    def test_unreachable_server(self):
+        import httpx
+
+        from knowledge_base.vision import _check_omniparser_server
+
+        with patch(
+            "knowledge_base.vision.httpx.get",
+            side_effect=httpx.ConnectError("refused"),
+        ):
+            assert _check_omniparser_server("http://127.0.0.1:7862") is False
+
+    def test_wrong_service_on_port(self):
+        from knowledge_base.vision import _check_omniparser_server
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"status": "nginx"}
+
+        with patch("knowledge_base.vision.httpx.get", return_value=mock_resp):
+            assert _check_omniparser_server("http://127.0.0.1:7862") is False
+
+
+class TestOmniParserHTTP:
+    """Tests for _run_omniparser_http client."""
+
+    def test_success(self, tmp_path):
+        from knowledge_base.vision import _run_omniparser_http
+
+        png = tmp_path / "test.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+        expected = {"elements": [{"text": "hello"}], "image_size": {"w": 100, "h": 100}}
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = expected
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
+            result = _run_omniparser_http(png, "http://127.0.0.1:7862", timeout=30)
+
+        assert result == expected
+
+    def test_timeout(self, tmp_path):
+        import httpx
+
+        from knowledge_base.vision import _run_omniparser_http
+
+        png = tmp_path / "test.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+        with patch(
+            "knowledge_base.vision.httpx.post",
+            side_effect=httpx.TimeoutException("timed out"),
+        ):
+            result = _run_omniparser_http(png, "http://127.0.0.1:7862", timeout=30)
+
+        assert result is None
+
+    def test_server_error(self, tmp_path):
+        import httpx
+
+        from knowledge_base.vision import _run_omniparser_http
+
+        png = tmp_path / "test.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "server error", request=MagicMock(), response=mock_resp
+        )
+
+        with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
+            result = _run_omniparser_http(png, "http://127.0.0.1:7862", timeout=30)
+
+        assert result is None
+
+
+class TestOmniParserFallback:
+    """Tests for _run_omniparser server-preferred-with-subprocess-fallback."""
+
+    def test_prefers_server_over_subprocess(self, tmp_path):
+        from knowledge_base.vision import _run_omniparser
+
+        png = tmp_path / "test.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+        http_result = {"elements": [{"text": "from_server"}]}
+
+        with (
+            patch(
+                "knowledge_base.vision._run_omniparser_http", return_value=http_result
+            ) as mock_http,
+            patch("knowledge_base.vision.subprocess") as mock_subprocess,
+        ):
+            result = _run_omniparser(
+                png, "/fake/omniparser", server_url="http://127.0.0.1:7862"
+            )
+
+        assert result == http_result
+        mock_http.assert_called_once()
+        mock_subprocess.run.assert_not_called()
+
+    def test_falls_back_to_subprocess_on_http_failure(self, tmp_path):
+        from knowledge_base.vision import _run_omniparser
+
+        png = tmp_path / "test.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+        # Create a fake omniparser dir with the expected structure
+        omni_dir = tmp_path / "omniparser"
+        omni_dir.mkdir()
+        (omni_dir / "parse.py").write_text("# fake")
+        venv_bin = omni_dir / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        fake_python = venv_bin / "python"
+        fake_python.write_text("#!/bin/sh\n")
+        fake_python.chmod(0o755)
+
+        subprocess_result = {"elements": [{"text": "from_subprocess"}]}
+
+        with (
+            patch("knowledge_base.vision._run_omniparser_http", return_value=None),
+            patch("knowledge_base.vision.subprocess.run"),
+            patch("knowledge_base.vision.json.load", return_value=subprocess_result),
+        ):
+            result = _run_omniparser(
+                png, str(omni_dir), server_url="http://127.0.0.1:7862"
+            )
+
+        assert result == subprocess_result
+
+
+class TestOmniParserConfig:
+    """Tests for configure_omniparser with server_url."""
+
+    def test_configure_with_server_url(self, vision_conn):
+        from knowledge_base.vision import configure_omniparser
+
+        # First set a path (required for omniparser to be "configured")
+        # We need to mock validation since path doesn't exist
+        with patch("knowledge_base.vision._validate_omniparser_path") as mock_val:
+            mock_val.return_value = Path("/fake/omniparser")
+            configure_omniparser(vision_conn, path="/fake/omniparser")
+
+        result = configure_omniparser(vision_conn, server_url="http://gpu-node:7862")
+
+        assert result["omniparser_server_url"] == "http://gpu-node:7862"
+
+    def test_query_server_url(self, vision_conn):
+        from knowledge_base.vision import configure_omniparser
+
+        vision_conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_server_url', 'http://gpu:7862')"
+        )
+        vision_conn.commit()
+
+        result = configure_omniparser(vision_conn)
+        assert result["omniparser_server_url"] == "http://gpu:7862"
+
+    def test_clear_server_url(self, vision_conn):
+        from knowledge_base.vision import configure_omniparser
+
+        vision_conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_server_url', 'http://gpu:7862')"
+        )
+        vision_conn.commit()
+
+        result = configure_omniparser(vision_conn, server_url="")
+        assert result["omniparser_server_url"] is None
+
+
+class TestOmniParserAutoStart:
+    """Tests for _ensure_omniparser_server auto-start logic."""
+
+    def test_already_running(self):
+        from knowledge_base.vision import _ensure_omniparser_server
+
+        with patch("knowledge_base.vision._check_omniparser_server", return_value=True):
+            url = _ensure_omniparser_server("/fake/omniparser", 7862)
+
+        assert url == "http://127.0.0.1:7862"
+
+    def test_auto_start_success(self, tmp_path):
+        import io
+
+        from knowledge_base.vision import (
+            _READY_SENTINEL,
+            _ensure_omniparser_server,
+        )
+
+        # Create fake omniparser dir
+        omni_dir = tmp_path / "omniparser"
+        omni_dir.mkdir()
+        venv_bin = omni_dir / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        fake_python = venv_bin / "python"
+        fake_python.write_text("#!/bin/sh\n")
+        fake_python.chmod(0o755)
+
+        # Mock health check: fail first (trigger start), then succeed
+        health_calls = iter([False, False, True])
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = io.BytesIO(
+            f"{_READY_SENTINEL} host=127.0.0.1 port=7862\n".encode()
+        )
+        mock_proc.poll.return_value = None  # process still running
+
+        with (
+            patch(
+                "knowledge_base.vision._check_omniparser_server",
+                side_effect=lambda _url: next(health_calls),
+            ),
+            patch(
+                "knowledge_base.vision.subprocess.Popen", return_value=mock_proc
+            ) as mock_popen,
+            patch("atexit.register"),
+        ):
+            url = _ensure_omniparser_server(str(omni_dir), 7862)
+
+        assert url == "http://127.0.0.1:7862"
+        mock_popen.assert_called_once()
+
+    def test_start_failure_returns_none(self, tmp_path):
+        from knowledge_base.vision import _ensure_omniparser_server
+
+        omni_dir = tmp_path / "omniparser"
+        omni_dir.mkdir()
+        venv_bin = omni_dir / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        fake_python = venv_bin / "python"
+        fake_python.write_text("#!/bin/sh\n")
+        fake_python.chmod(0o755)
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = MagicMock()
+        mock_proc.stdout.readline.return_value = b""
+        mock_proc.poll.return_value = 1  # process exited with error
+
+        with (
+            patch("knowledge_base.vision._check_omniparser_server", return_value=False),
+            patch("knowledge_base.vision.subprocess.Popen", return_value=mock_proc),
+        ):
+            url = _ensure_omniparser_server(str(omni_dir), 7862)
+
+        assert url is None
+
+    def test_early_exit_detected(self, tmp_path):
+        from knowledge_base.vision import _ensure_omniparser_server
+
+        omni_dir = tmp_path / "omniparser"
+        omni_dir.mkdir()
+        venv_bin = omni_dir / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        fake_python = venv_bin / "python"
+        fake_python.write_text("#!/bin/sh\n")
+        fake_python.chmod(0o755)
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = MagicMock()
+        mock_proc.stdout.readline.return_value = b""
+        # Process exits immediately (e.g. port in use)
+        mock_proc.poll.return_value = 1
+
+        with (
+            patch("knowledge_base.vision._check_omniparser_server", return_value=False),
+            patch("knowledge_base.vision.subprocess.Popen", return_value=mock_proc),
+        ):
+            url = _ensure_omniparser_server(str(omni_dir), 7862)
+
+        assert url is None
+
+    def test_atexit_terminates_server(self):
+        from knowledge_base.vision import _shutdown_omniparser_server
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None  # still running
+
+        with patch("knowledge_base.vision._omniparser_process", mock_proc):
+            _shutdown_omniparser_server()
+
+        mock_proc.terminate.assert_called_once()
+        mock_proc.wait.assert_called_once()
