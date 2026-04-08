@@ -307,9 +307,13 @@ def benchmark_spaces_tool(
         if space["status"] == "deprecated":
             continue
 
-        comparison = batch_compare_spaces(
-            conn, baseline_name, space["name"], queries, top_k, mode="vec"
-        )
+        try:
+            comparison = batch_compare_spaces(
+                conn, baseline_name, space["name"], queries, top_k, mode="vec"
+            )
+        except (ValueError, RuntimeError, ImportError, OSError) as e:
+            results.append({"space": space["name"], "error": str(e)})
+            continue
 
         # Storage estimate: bytes per vector = bytes_per_element * dim
         bpe = _BYTES_PER_ELEMENT.get(space.get("element_type", "float32"), 4)
