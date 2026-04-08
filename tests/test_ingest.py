@@ -24,6 +24,7 @@ from knowledge_base.web import (
     _extract_web_figures,
     _get_browser_config,
     _parse_image_candidates,
+    _parse_srcset,
     _render_with_browser,
     _validate_image_url,
     configure_browser,
@@ -1754,6 +1755,247 @@ def test_parse_image_candidates_empty_vs_parse_failure():
             "<html><body></body></html>", "https://example.com/page"
         )
         assert result is None
+
+
+# --- _parse_srcset unit tests ---
+
+
+def test_parse_srcset_w_descriptors():
+    result = _parse_srcset("small.jpg 300w, medium.jpg 600w, large.jpg 1200w")
+    assert result == "large.jpg"
+
+
+def test_parse_srcset_x_descriptors():
+    result = _parse_srcset("normal.jpg 1x, retina.jpg 2x, ultra.jpg 3x")
+    assert result == "ultra.jpg"
+
+
+def test_parse_srcset_x_with_src_baseline():
+    """src acts as implicit 1x — should not be downgraded by lower-density srcset."""
+    result = _parse_srcset("thumb.jpg 0.5x", current_src="default.jpg")
+    assert result == "default.jpg"
+
+
+def test_parse_srcset_x_upgrade_over_src():
+    """srcset with higher density should beat the implicit 1x src."""
+    result = _parse_srcset("retina.jpg 2x", current_src="default.jpg")
+    assert result == "retina.jpg"
+
+
+def test_parse_srcset_no_descriptors():
+    result = _parse_srcset("first.jpg, second.jpg, third.jpg")
+    assert result == "third.jpg"
+
+
+def test_parse_srcset_skips_svg():
+    result = _parse_srcset("vector.svg 2x, raster.png 1x")
+    assert result == "raster.png"
+
+
+def test_parse_srcset_skips_data_uri():
+    result = _parse_srcset("data:image/png;base64,abc 1x, real.jpg 2x")
+    assert result == "real.jpg"
+
+
+def test_parse_srcset_malformed():
+    """Malformed descriptors are skipped; valid entries survive."""
+    result = _parse_srcset("bad.jpg ???, good.jpg 2x, broken.jpg w")
+    assert result == "good.jpg"
+
+
+def test_parse_srcset_whitespace():
+    """Handles extraneous whitespace around entries."""
+    result = _parse_srcset("  small.jpg 300w ,  large.jpg 1200w  ")
+    assert result == "large.jpg"
+
+
+def test_parse_srcset_empty():
+    assert _parse_srcset("") is None
+    assert _parse_srcset("   ") is None
+
+
+def test_parse_srcset_all_svg():
+    """All candidates are SVG — returns None."""
+    assert _parse_srcset("a.svg 1x, b.svgz 2x") is None
+
+
+# --- _parse_image_candidates with srcset/picture ---
+
+
+def test_parse_image_candidates_img_srcset():
+    """Standalone <img srcset> resolves to best candidate."""
+    html = (
+        '<img src="fallback.jpg" srcset="small.jpg 300w, large.jpg 1200w" alt="test">'
+    )
+    result = _parse_image_candidates(html, "https://example.com/page")
+    assert result is not None
+    assert len(result) == 1
+    assert result[0] == ("https://example.com/large.jpg", "test")
+
+
+def test_parse_image_candidates_picture_element():
+    """<picture> with <source> picks first qualifying source's best candidate."""
+    html = """
+    <picture>
+      <source srcset="hero.webp 1200w, hero-sm.webp 600w" type="image/webp">
+      <source srcset="hero.jpg 1200w, hero-sm.jpg 600w" type="image/jpeg">
+      <img src="fallback.jpg" alt="Hero">
+    </picture>
+    """
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    assert len(result) == 1
+    assert result[0] == ("https://example.com/hero.webp", "Hero")
+
+
+def test_parse_image_candidates_picture_source_ordering():
+    """Second source is ignored when first qualifies."""
+    html = """
+    <picture>
+      <source srcset="first.jpg 800w">
+      <source srcset="second.jpg 1200w">
+      <img src="fallback.jpg" alt="test">
+    </picture>
+    """
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    assert len(result) == 1
+    # First source wins even though second has higher resolution
+    assert result[0][0] == "https://example.com/first.jpg"
+
+
+def test_parse_image_candidates_picture_fallback():
+    """No qualifying sources → falls back to <img src>."""
+    html = """
+    <picture>
+      <source srcset="vector.svg 2x" type="image/svg+xml">
+      <img src="fallback.jpg" alt="test">
+    </picture>
+    """
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    assert len(result) == 1
+    assert result[0] == ("https://example.com/fallback.jpg", "test")
+
+
+def test_parse_image_candidates_picture_svg_source_skipped():
+    """type='image/svg+xml' source is skipped; next raster source wins."""
+    html = """
+    <picture>
+      <source srcset="vector.svg 2x" type="image/svg+xml">
+      <source srcset="raster.jpg 1200w" type="image/jpeg">
+      <img src="fallback.jpg" alt="test">
+    </picture>
+    """
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    assert len(result) == 1
+    assert result[0][0] == "https://example.com/raster.jpg"
+
+
+def test_parse_image_candidates_srcset_mixed_svg_raster():
+    """SVG filtered pre-selection in srcset; raster candidate wins over SVG."""
+    # With 2x raster surviving after SVG filter, it beats implicit 1x src
+    html = '<img src="fallback.jpg" srcset="vector.svg 3x, raster.png 2x" alt="test">'
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    assert len(result) == 1
+    assert result[0][0] == "https://example.com/raster.png"
+
+
+def test_parse_image_candidates_srcset_dedup():
+    """srcset URL deduped against plain src from another img."""
+    html = """
+    <img src="photo.jpg" alt="first">
+    <img src="other.jpg" srcset="photo.jpg 2x" alt="second">
+    """
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    # photo.jpg appears once (from first img); second img's srcset resolves
+    # to photo.jpg which is deduped
+    assert len(result) == 1
+    assert result[0] == ("https://example.com/photo.jpg", "first")
+
+
+def test_parse_image_candidates_picture_media_source_skipped():
+    """Sources with media attribute are skipped (can't evaluate server-side)."""
+    html = """
+    <picture>
+      <source media="(max-width: 0px)" srcset="never.jpg 1200w">
+      <source srcset="actual.jpg 800w">
+      <img src="fallback.jpg" alt="test">
+    </picture>
+    """
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    assert len(result) == 1
+    # media source skipped, unconditional source wins
+    assert result[0][0] == "https://example.com/actual.jpg"
+
+
+def test_parse_image_candidates_picture_all_media_sources_fallback():
+    """When all sources have media, falls back to <img src>."""
+    html = """
+    <picture>
+      <source media="(min-width: 800px)" srcset="wide.jpg 1200w">
+      <source media="(max-width: 799px)" srcset="narrow.jpg 600w">
+      <img src="fallback.jpg" alt="test">
+    </picture>
+    """
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    assert len(result) == 1
+    assert result[0][0] == "https://example.com/fallback.jpg"
+
+
+def test_parse_image_candidates_img_srcset_without_src():
+    """<img srcset> without src is valid HTML and should resolve."""
+    html = '<img srcset="small.jpg 1x, large.jpg 2x" alt="test">'
+    result = _parse_image_candidates(html, "https://example.com/")
+    assert result is not None
+    assert len(result) == 1
+    assert result[0] == ("https://example.com/large.jpg", "test")
+
+
+# --- Integration: srcset/picture through _extract_html_images ---
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+@patch("knowledge_base.web.is_private_ip", return_value=False)
+@patch("knowledge_base.web.httpx.stream")
+def test_extract_html_images_srcset_end_to_end(
+    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+):
+    """Full pipeline: <picture> + srcset HTML -> vision -> figure chunks."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    mock_vision_cfg.return_value = _VISION_CFG
+    mock_vision_call.return_value = _FIGURE_RESPONSE
+
+    png_bytes = _make_test_png()
+    mock_stream.return_value = _mock_image_stream(png_bytes)
+
+    html = """<html><body>
+    <picture>
+      <source srcset="hero-sm.webp 600w, hero-lg.webp 1200w" type="image/webp">
+      <img src="hero-fallback.jpg" alt="Hero diagram">
+    </picture>
+    </body></html>"""
+    count = _extract_html_images(conn, html, "https://example.com/page")
+    assert count == 1
+
+    row = conn.execute(
+        "SELECT content, metadata FROM chunks WHERE source_type = 'figure'"
+    ).fetchone()
+    assert row is not None
+    meta = json.loads(row["metadata"])
+    assert meta["figure_type"] == "web_image"
+    # Should have resolved to the best srcset candidate (hero-lg.webp 1200w)
+    assert meta["image_url"] == "https://example.com/hero-lg.webp"
+    assert meta["alt_text"] == "Hero diagram"
 
 
 # --- Core extraction ---
