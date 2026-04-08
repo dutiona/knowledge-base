@@ -2390,6 +2390,89 @@ def test_cleanup_stale_inline_images_noop_when_none(tmp_path):
     assert deleted == 0
 
 
+# --- Rendered DOM (Phase 2) ---
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+@patch("knowledge_base.ingest._is_private_ip", return_value=False)
+@patch("knowledge_base.ingest.httpx.stream")
+def test_extract_html_images_rendered_dom_dedup(
+    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+):
+    """Rendered DOM adds JS-injected images but deduplicates shared ones."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    mock_vision_cfg.return_value = _VISION_CFG
+    mock_vision_call.side_effect = [
+        [{"description": f"Fig {i}.", "figure_type": "diagram", "title": f"F{i}"}]
+        for i in range(3)
+    ]
+    png_bytes = _make_test_png()
+    mock_stream.side_effect = [_mock_image_stream(png_bytes) for _ in range(3)]
+
+    static_html = (
+        "<html><body>"
+        '<img src="https://example.com/shared.png">'
+        '<img src="https://example.com/static-only.png">'
+        "</body></html>"
+    )
+    rendered_html = (
+        "<html><body>"
+        '<img src="https://example.com/shared.png">'
+        '<img src="https://example.com/js-injected.png">'
+        "</body></html>"
+    )
+    count = _extract_html_images(
+        conn,
+        static_html,
+        source_url="https://example.com/page",
+        extra_html_sources=[(rendered_html, "https://example.com/page")],
+    )
+    assert count == 3
+
+    urls = {
+        json.loads(r["metadata"])["image_url"]
+        for r in conn.execute(
+            "SELECT metadata FROM chunks WHERE source_type = 'figure'"
+        ).fetchall()
+    }
+    assert urls == {
+        "https://example.com/shared.png",
+        "https://example.com/static-only.png",
+        "https://example.com/js-injected.png",
+    }
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+@patch("knowledge_base.ingest._is_private_ip", return_value=False)
+@patch("knowledge_base.ingest.httpx.stream")
+def test_extract_html_images_rendered_only_when_static_empty(
+    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+):
+    """When static HTML has no images, rendered DOM images are still extracted."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    mock_vision_cfg.return_value = _VISION_CFG
+    mock_vision_call.return_value = _FIGURE_RESPONSE
+    png_bytes = _make_test_png()
+    mock_stream.return_value = _mock_image_stream(png_bytes)
+
+    static_html = "<html><body>No images here.</body></html>"
+    rendered_html = '<html><body><img src="https://example.com/lazy.png"></body></html>'
+
+    count = _extract_html_images(
+        conn,
+        static_html,
+        source_url="https://example.com/page",
+        extra_html_sources=[(rendered_html, "https://example.com/page")],
+    )
+    assert count == 1
+
+
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")

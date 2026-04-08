@@ -1350,6 +1350,8 @@ def _extract_html_images(
     html_content: str,
     source_url: str,
     base_url: str | None = None,
+    *,
+    extra_html_sources: list[tuple[str, str]] | None = None,
 ) -> int:
     """Extract inline ``<img>`` tags from HTML, describe via vision, store as figure chunks.
 
@@ -1360,6 +1362,11 @@ def _extract_html_images(
     ``urljoin``.  Defaults to *source_url* when not provided.  Pass
     ``str(response.url)`` when the page redirected so relative paths resolve
     against the final location.
+
+    *extra_html_sources* is an optional list of ``(html, base_url)`` pairs
+    (e.g. rendered DOM HTML from Playwright).  Images from these sources are
+    merged with the primary HTML candidates and URL-deduplicated — images
+    already found in the primary HTML are not re-downloaded.
 
     Returns the number of figure chunks added.  Returns 0 if vision is not
     configured or no qualifying images are found.
@@ -1383,6 +1390,15 @@ def _extract_html_images(
 
     # --- Parse <img> tags ---
     candidates = _parse_image_candidates(html_content, base_url)
+
+    # Phase 2 (#131): merge candidates from rendered DOM (or other extra sources)
+    if extra_html_sources:
+        primary_urls = frozenset(url for url, _alt in candidates)
+        for extra_html, extra_base in extra_html_sources:
+            extra = _parse_image_candidates(
+                extra_html, extra_base, exclude_urls=primary_urls
+            )
+            candidates.extend(extra)
 
     if not candidates:
         _cleanup_stale_inline_images(conn, source_url)
