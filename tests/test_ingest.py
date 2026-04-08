@@ -23,6 +23,7 @@ from knowledge_base.web import (
     _extract_html_images,
     _extract_web_figures,
     _get_browser_config,
+    _parse_image_candidates,
     _render_with_browser,
     _validate_image_url,
     configure_browser,
@@ -1708,6 +1709,51 @@ def _mock_image_stream(image_bytes, url="https://example.com/img.png"):
     return mock_response
 
 
+# --- Candidate parsing ---
+
+
+def test_parse_image_candidates_basic():
+    """Parses qualifying <img> tags and returns (url, alt) tuples."""
+    html = (
+        "<html><body>"
+        '<img src="https://example.com/fig.png" alt="A figure">'
+        '<img src="data:image/png;base64,abc" alt="inline">'
+        '<img src="https://example.com/icon.svg">'
+        "</body></html>"
+    )
+    result = _parse_image_candidates(html, "https://example.com/page")
+    assert result == [("https://example.com/fig.png", "A figure")]
+
+
+def test_parse_image_candidates_exclude_urls():
+    """Images in exclude_urls are skipped (cross-source dedup)."""
+    html = (
+        "<html><body>"
+        '<img src="https://example.com/already-seen.png">'
+        '<img src="https://example.com/new-image.png">'
+        "</body></html>"
+    )
+    result = _parse_image_candidates(
+        html,
+        "https://example.com/page",
+        exclude_urls=frozenset({"https://example.com/already-seen.png"}),
+    )
+    assert len(result) == 1
+    assert result[0][0] == "https://example.com/new-image.png"
+
+
+def test_parse_image_candidates_returns_none_on_parse_failure():
+    """Parse failure returns None (not []) to prevent stale cleanup."""
+    result = _parse_image_candidates("", "https://example.com/page")
+    assert result == []
+
+    with patch("knowledge_base.web._ImgTagParser.feed", side_effect=Exception("boom")):
+        result = _parse_image_candidates(
+            "<html><body></body></html>", "https://example.com/page"
+        )
+        assert result is None
+
+
 # --- Core extraction ---
 
 
@@ -2403,6 +2449,89 @@ def test_cleanup_stale_inline_images_noop_when_none(tmp_path):
     assert deleted == 0
 
 
+# --- Rendered DOM (Phase 2) ---
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+@patch("knowledge_base.web.is_private_ip", return_value=False)
+@patch("knowledge_base.web.httpx.stream")
+def test_extract_html_images_rendered_dom_dedup(
+    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+):
+    """Rendered DOM adds JS-injected images but deduplicates shared ones."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    mock_vision_cfg.return_value = _VISION_CFG
+    mock_vision_call.side_effect = [
+        [{"description": f"Fig {i}.", "figure_type": "diagram", "title": f"F{i}"}]
+        for i in range(3)
+    ]
+    png_bytes = _make_test_png()
+    mock_stream.side_effect = [_mock_image_stream(png_bytes) for _ in range(3)]
+
+    static_html = (
+        "<html><body>"
+        '<img src="https://example.com/shared.png">'
+        '<img src="https://example.com/static-only.png">'
+        "</body></html>"
+    )
+    rendered_html = (
+        "<html><body>"
+        '<img src="https://example.com/shared.png">'
+        '<img src="https://example.com/js-injected.png">'
+        "</body></html>"
+    )
+    count = _extract_html_images(
+        conn,
+        static_html,
+        source_url="https://example.com/page",
+        extra_html_sources=[(rendered_html, "https://example.com/page")],
+    )
+    assert count == 3
+
+    urls = {
+        json.loads(r["metadata"])["image_url"]
+        for r in conn.execute(
+            "SELECT metadata FROM chunks WHERE source_type = 'figure'"
+        ).fetchall()
+    }
+    assert urls == {
+        "https://example.com/shared.png",
+        "https://example.com/static-only.png",
+        "https://example.com/js-injected.png",
+    }
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+@patch("knowledge_base.web.is_private_ip", return_value=False)
+@patch("knowledge_base.web.httpx.stream")
+def test_extract_html_images_rendered_only_when_static_empty(
+    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+):
+    """When static HTML has no images, rendered DOM images are still extracted."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    mock_vision_cfg.return_value = _VISION_CFG
+    mock_vision_call.return_value = _FIGURE_RESPONSE
+    png_bytes = _make_test_png()
+    mock_stream.return_value = _mock_image_stream(png_bytes)
+
+    static_html = "<html><body>No images here.</body></html>"
+    rendered_html = '<html><body><img src="https://example.com/lazy.png"></body></html>'
+
+    count = _extract_html_images(
+        conn,
+        static_html,
+        source_url="https://example.com/page",
+        extra_html_sources=[(rendered_html, "https://example.com/page")],
+    )
+    assert count == 1
+
+
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
@@ -2513,7 +2642,7 @@ def test_ingest_url_extracts_inline_images(
 @patch("knowledge_base.web._render_with_browser")
 @patch("knowledge_base.web._get_browser_config")
 @patch("knowledge_base.web.httpx.get")
-def test_ingest_url_skips_inline_when_screenshot_extracted(
+def test_ingest_url_runs_inline_even_with_screenshot_figures(
     mock_get,
     mock_browser_cfg,
     mock_render,
@@ -2521,11 +2650,10 @@ def test_ingest_url_skips_inline_when_screenshot_extracted(
     mock_html_images,
     tmp_path,
 ):
-    """When screenshot figures were extracted, _extract_html_images is NOT called."""
+    """Phase 1 inline extraction runs even when screenshot figures were extracted."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
-    # Page returns minimal text to trigger browser fallback
     resp = MagicMock()
     resp.status_code = 200
     resp.text = "<html><body>Short</body></html>"
@@ -2533,20 +2661,71 @@ def test_ingest_url_skips_inline_when_screenshot_extracted(
     resp.raise_for_status = MagicMock()
     mock_get.return_value = resp
 
-    # Browser fallback fires and extracts 2 figures
     mock_browser_cfg.return_value = {"mode": "local", "venv": "/tmp/venv"}
     mock_render.return_value = {
         "html": "<html><body>Rendered content that is long enough</body></html>",
         "screenshot_path": Path("/tmp/fake.png"),
+        "final_url": "https://example.com/page",
         "tmpdir": None,
     }
     mock_web_figures.return_value = 2
+    mock_html_images.return_value = 1
 
     with patch("knowledge_base.web.Path.exists", return_value=True):
-        ingest_url(conn, "https://example.com/page")
+        result = ingest_url(conn, "https://example.com/page")
 
-    # figures_extracted should be 2 from screenshot, _extract_html_images should NOT be called
-    mock_html_images.assert_not_called()
+    # Phase 1 always runs now — not skipped when screenshots extracted
+    mock_html_images.assert_called_once()
+    # Total = screenshot figures + inline figures
+    assert result["figures_extracted"] == 3
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.web._extract_html_images")
+@patch("knowledge_base.web._extract_web_figures")
+@patch("knowledge_base.web._render_with_browser")
+@patch("knowledge_base.web._get_browser_config")
+@patch("knowledge_base.web.httpx.get")
+def test_ingest_url_passes_rendered_html_to_extract_images(
+    mock_get,
+    mock_browser_cfg,
+    mock_render,
+    mock_web_figures,
+    mock_html_images,
+    tmp_path,
+):
+    """When browser fallback fires, rendered HTML is passed as extra_html_sources."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.text = "<html><body>Short</body></html>"
+    resp.url = "https://example.com/spa"
+    resp.raise_for_status = MagicMock()
+    mock_get.return_value = resp
+
+    rendered_html = (
+        "<html><body>Rendered with lots of content for the page</body></html>"
+    )
+    mock_browser_cfg.return_value = {"mode": "local", "venv": "/tmp/venv"}
+    mock_render.return_value = {
+        "html": rendered_html,
+        "screenshot_path": None,
+        "final_url": "https://example.com/spa-final",
+        "tmpdir": None,
+    }
+    mock_web_figures.return_value = 0
+    mock_html_images.return_value = 2
+
+    ingest_url(conn, "https://example.com/spa")
+
+    mock_html_images.assert_called_once()
+    call_kwargs = mock_html_images.call_args
+    # Base URL should use Playwright's final URL, not httpx response.url
+    assert call_kwargs.kwargs.get("extra_html_sources") == [
+        (rendered_html, "https://example.com/spa-final"),
+    ]
 
 
 _EMPTY_HTML_WITH_IMG = """<html>
