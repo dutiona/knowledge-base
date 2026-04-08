@@ -3628,3 +3628,74 @@ class TestElementCapture:
         assert meta["figure_type"] == "chart"
         assert meta["element_tag"] == "canvas"
         assert "D3.js bar chart" in row["content"]
+
+    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
+    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @patch("knowledge_base.vision._vision_call")
+    @patch("knowledge_base.vision._get_vision_config")
+    @patch("knowledge_base.web.is_private_ip", return_value=False)
+    @patch("knowledge_base.web._render_with_browser")
+    @patch("knowledge_base.web._get_browser_config")
+    @patch("knowledge_base.web.httpx")
+    def test_ingest_url_extracts_element_captures(
+        self,
+        mock_httpx,
+        mock_browser_cfg,
+        mock_render,
+        _mock_ip,
+        mock_vision_cfg,
+        mock_vision_call,
+        tmp_path,
+    ):
+        """ingest_url processes element captures from browser rendering."""
+        mock_vision_cfg.return_value = {
+            "base_url": "http://localhost:11434",
+            "model": "gemma3:27b",
+        }
+        mock_vision_call.return_value = [
+            {
+                "description": "A D3 scatter plot of gene expression levels.",
+                "figure_type": "chart",
+                "title": "Expression Scatter",
+            }
+        ]
+
+        # httpx returns minimal content (triggers browser fallback)
+        mock_resp = MagicMock()
+        mock_resp.text = "<html><body>short</body></html>"
+        mock_resp.url = "https://example.com/viz"
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_httpx.get.return_value = mock_resp
+
+        mock_browser_cfg.return_value = {"venv": "/fake", "mode": "local"}
+
+        # Browser render returns element captures
+        tmpdir = tmp_path / "browser_out"
+        tmpdir.mkdir()
+        capture_png = tmpdir / "element_0.png"
+        capture_png.write_bytes(_make_test_png(500, 400))
+
+        mock_render.return_value = {
+            "html": "<html><canvas width='500' height='400'></canvas></html>",
+            "screenshot_path": None,
+            "final_url": "https://example.com/viz",
+            "tmpdir": tmpdir,
+            "element_captures": [
+                {"path": capture_png, "tag": "canvas", "width": 500, "height": 400},
+            ],
+        }
+
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        init_schema(conn)
+
+        result = ingest_url(conn, "https://example.com/viz")
+
+        assert result["figures_extracted"] >= 1
+        row = conn.execute(
+            "SELECT * FROM chunks WHERE source_type = 'figure'"
+            " AND chunk_index >= 3000000"
+        ).fetchone()
+        assert row is not None
+        assert "scatter plot" in row["content"].lower()

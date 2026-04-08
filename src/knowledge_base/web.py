@@ -394,12 +394,18 @@ def _extract_html_images(
     embeddings = _embed_with_config(conn, texts)
 
     # --- Delete stale inline image chunks (only after embeddings succeed) ---
+    # Scoped to [_WEB_IMAGE_CHUNK_INDEX_START, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START)
+    # to avoid deleting element captures from Phase 3.
     old_ids = [
         r["id"]
         for r in conn.execute(
             "SELECT id FROM chunks WHERE source_uri = ? "
-            "AND source_type = 'figure' AND chunk_index >= ?",
-            (source_url, _WEB_IMAGE_CHUNK_INDEX_START),
+            "AND source_type = 'figure' AND chunk_index >= ? AND chunk_index < ?",
+            (
+                source_url,
+                _WEB_IMAGE_CHUNK_INDEX_START,
+                _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START,
+            ),
         ).fetchall()
     ]
     if old_ids:
@@ -910,12 +916,18 @@ def _cleanup_stale_inline_images(conn: sqlite3.Connection, source_uri: str) -> i
 
     Returns the number of chunks deleted.
     """
+    # Scoped to [_WEB_IMAGE_CHUNK_INDEX_START, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START)
+    # to avoid deleting element captures from Phase 3.
     old_ids = [
         r["id"]
         for r in conn.execute(
             "SELECT id FROM chunks WHERE source_uri = ? "
-            "AND source_type = 'figure' AND chunk_index >= ?",
-            (source_uri, _WEB_IMAGE_CHUNK_INDEX_START),
+            "AND source_type = 'figure' AND chunk_index >= ? AND chunk_index < ?",
+            (
+                source_uri,
+                _WEB_IMAGE_CHUNK_INDEX_START,
+                _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START,
+            ),
         ).fetchall()
     ]
     if not old_ids:
@@ -1034,6 +1046,20 @@ def ingest_url(
                                 exc_info=True,
                             )
                             figures_extracted = 0
+
+                    # Extract per-element captures (Phase 3, #132)
+                    element_captures = render_result.get("element_captures")
+                    if element_captures:
+                        try:
+                            figures_extracted += _extract_element_captures(
+                                conn, url, element_captures
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Element capture extraction failed for %s",
+                                url,
+                                exc_info=True,
+                            )
                 finally:
                     tmpdir = render_result.get("tmpdir")
                     if tmpdir:
