@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import struct
@@ -89,6 +90,92 @@ def _batched_select(
             ).fetchall()
         )
     return results
+
+
+def _cleanup_chunk_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> dict:
+    """Clean FK references to chunks before deletion. Optimized with json_each (#277, #278).
+
+    Returns a dict with:
+        'affected_paper_ids': list[int]
+        'affected_entities': dict[str, list[dict]]  # table -> list of {id, name, old_chunk_id}
+    """
+    if not chunk_ids:
+        return {"affected_paper_ids": [], "affected_entities": {}}
+
+    id_set = set(chunk_ids)
+
+    # 1. papers.abstract_chunk_id → SET NULL
+    affected_paper_ids = [
+        r["id"]
+        for r in _batched_select(
+            conn, "SELECT id FROM papers WHERE abstract_chunk_id IN ({ph})", chunk_ids
+        )
+    ]
+    _batched_execute(
+        conn,
+        "UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({ph})",
+        chunk_ids,
+    )
+
+    # 2. relationships.evidence_chunk_id → SET NULL
+    _batched_execute(
+        conn,
+        "UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({ph})",
+        chunk_ids,
+    )
+
+    # 3. conclusions.source_chunk_ids — JSON array, remove deleted IDs (#160)
+    # Optimized: only fetch conclusions that contain any of the chunk_ids
+    rows = _batched_select(
+        conn,
+        "SELECT DISTINCT conclusions.id, source_chunk_ids FROM conclusions, json_each(source_chunk_ids) "
+        "WHERE json_each.value IN ({ph})",
+        chunk_ids,
+    )
+    for row in rows:
+        cids = json.loads(row["source_chunk_ids"])
+        filtered = [cid for cid in cids if cid not in id_set]
+        if len(filtered) != len(cids):
+            if filtered:
+                conn.execute(
+                    "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
+                    (json.dumps(filtered), row["id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE conclusions SET superseded_by = NULL WHERE superseded_by = ?",
+                    (row["id"],),
+                )
+                conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
+
+    # 4. methods/datasets/metrics.chunk_id → SET NULL
+    affected_entities: dict[str, list[dict]] = {}
+    for table in ("methods", "datasets", "metrics"):
+        affected_entities[table] = [
+            {"id": r["id"], "name": r["name"], "old_chunk_id": r["chunk_id"]}
+            for r in _batched_select(
+                conn,
+                f"SELECT id, name, chunk_id FROM {table} WHERE chunk_id IN ({{ph}})",
+                chunk_ids,
+            )
+        ]
+        _batched_execute(
+            conn,
+            f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",
+            chunk_ids,
+        )
+
+    # 5. entity_mentions.chunk_id — NOT NULL FK, must delete
+    _batched_execute(
+        conn,
+        "DELETE FROM entity_mentions WHERE chunk_id IN ({ph})",
+        chunk_ids,
+    )
+
+    return {
+        "affected_paper_ids": affected_paper_ids,
+        "affected_entities": affected_entities,
+    }
 
 
 def co_occurrence_pairs(conn: sqlite3.Connection, min_sessions: int = 1) -> list[dict]:

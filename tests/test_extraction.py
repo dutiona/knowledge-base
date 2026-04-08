@@ -1389,6 +1389,8 @@ def test_batch_commit_atomicity(tmp_path):
 # ── _store_resolved: malformed resolution groups ──────────────────────
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_store_resolved_skips_group_missing_canonical(tmp_path, caplog):
     """Groups without 'canonical' key are skipped with a warning, not KeyError."""
     conn = _setup(tmp_path)
@@ -1427,6 +1429,8 @@ def test_store_resolved_skips_group_missing_canonical(tmp_path, caplog):
     assert any("missing 'canonical'" in msg for msg in caplog.messages)
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_store_resolved_skips_group_with_empty_canonical(tmp_path, caplog):
     """Groups with empty-string canonical are skipped like missing ones."""
     conn = _setup(tmp_path)
@@ -1449,6 +1453,8 @@ def test_store_resolved_skips_group_with_empty_canonical(tmp_path, caplog):
     assert any("missing 'canonical'" in msg for msg in caplog.messages)
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_store_resolved_all_groups_malformed(tmp_path, caplog):
     """All groups malformed — function completes without crash, 0 entities."""
     conn = _setup(tmp_path)
@@ -1913,6 +1919,8 @@ def test_map_reduce_result_includes_timing(tmp_path):
 # --- Parallel map phase (issue #15) ---
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_parallel_map_phase_produces_same_results(tmp_path):
     """Parallel extraction (max_workers>1) produces identical results to sequential."""
     conn = _setup(tmp_path)
@@ -1962,6 +1970,8 @@ def test_parallel_map_phase_produces_same_results(tmp_path):
     assert seq_result["metrics_added"] == par_result["metrics_added"]
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_parallel_map_handles_partial_failures(tmp_path):
     """Parallel map phase continues past per-chunk failures."""
     conn = _setup(tmp_path)
@@ -1990,6 +2000,8 @@ def test_parallel_map_handles_partial_failures(tmp_path):
     assert "errors" in result
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_parallel_map_calls_with_cfg_not_conn(tmp_path):
     """Parallel path passes pre-read cfg dict, not conn, to _map_extract."""
     conn = _setup(tmp_path)
@@ -2024,6 +2036,8 @@ def test_parallel_map_calls_with_cfg_not_conn(tmp_path):
     )
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_parallel_map_progress_callback(tmp_path):
     """Progress callback fires for each chunk in parallel mode."""
     conn = _setup(tmp_path)
@@ -2051,6 +2065,8 @@ def test_parallel_map_progress_callback(tmp_path):
     assert len(progress_calls) >= len(chunks)
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_max_workers_clamped_to_chunk_count(tmp_path):
     """max_workers is clamped to the number of chunks (no idle threads)."""
     conn = _setup(tmp_path)
@@ -2073,6 +2089,8 @@ def test_max_workers_clamped_to_chunk_count(tmp_path):
     assert "error" not in result
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_max_workers_defaults_to_sequential(tmp_path):
     """Default max_workers=1 preserves sequential behavior."""
     conn = _setup(tmp_path)

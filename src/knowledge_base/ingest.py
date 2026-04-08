@@ -24,8 +24,10 @@ import trafilatura
 from .db import (
     _batched_execute,
     _batched_select,
+    _cleanup_chunk_fk_refs,
     delete_chunk_vecs,
     get_active_space,
+    get_vec_table_name,
     insert_chunk_vec,
 )
 from .embed_swap import get_embed_config
@@ -115,6 +117,102 @@ def _flush_deferred_session_links(
             "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
             [(cid, session_id) for cid in chunk_ids],
         )
+
+
+def _insert_chunks(
+    conn: sqlite3.Connection,
+    chunks: list[dict],
+    source_type: str,
+    source_uri: str,
+    session_id: str | None,
+    strategy: str,
+    historical_sessions: set[str] | None = None,
+    embeddings: list[list[float]] | None = None,
+) -> dict:
+    """Unified chunk deduplication, embedding, and insertion helper (#236).
+
+    If *embeddings* is provided, it must have the same length as *chunks*.
+
+    Returns a dict with:
+        'added': int (number of new chunks added)
+        'skipped': int (number of existing chunks deduplicated)
+    """
+    if not chunks:
+        return {"added": 0, "skipped": 0}
+
+    new_items = []
+    skipped_ids = []
+    new_indices = []
+
+    # 1. Identify new vs existing chunks
+    for idx, item in enumerate(chunks):
+        text = item["text"]
+        h = _content_hash(text)
+        existing = conn.execute(
+            "SELECT id FROM chunks WHERE content_hash = ?", (h,)
+        ).fetchone()
+        if existing:
+            skipped_ids.append(existing["id"])
+        else:
+            new_items.append({**item, "hash": h})
+            new_indices.append(idx)
+
+    if not new_items:
+        # All chunks deduped — safe to flush session links (no embedding needed)
+        if session_id:
+            _flush_deferred_session_links(conn, skipped_ids, session_id)
+        return {"added": 0, "skipped": len(skipped_ids)}
+
+    # 2. Embed new chunks (if not provided)
+    if embeddings is None:
+        texts_to_embed = [item["text"] for item in new_items]
+        new_embeddings = _embed_with_config(conn, texts_to_embed)
+    else:
+        if len(embeddings) != len(chunks):
+            raise ValueError("embeddings length must match chunks length")
+        new_embeddings = [embeddings[i] for i in new_indices]
+
+    # 3. Flush skipped session links (now that embeddings succeeded)
+    if session_id:
+        _flush_deferred_session_links(conn, skipped_ids, session_id)
+
+    # 4. Insert new chunks
+    all_sessions = set(historical_sessions or [])
+    if session_id:
+        all_sessions.add(session_id)
+
+    vec_table = get_vec_table_name(conn)
+    for item, emb_vec in zip(new_items, new_embeddings):
+        meta_json = json.dumps(item["metadata"])
+        cursor = conn.execute(
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, "
+            "chunk_index, session_id, chunk_strategy, metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                item["hash"],
+                item["text"],
+                source_type,
+                source_uri,
+                item["index"],
+                session_id,
+                strategy,
+                meta_json,
+            ),
+        )
+        chunk_id = cursor.lastrowid
+        assert chunk_id is not None
+
+        # Record session memberships
+        if all_sessions:
+            conn.executemany(
+                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
+                [(chunk_id, sid) for sid in all_sessions],
+            )
+
+        if emb_vec is not None:
+            insert_chunk_vec(conn, chunk_id, emb_vec, table_name=vec_table)
+
+    return {"added": len(new_items), "skipped": len(skipped_ids)}
 
 
 def _chunk_text(
@@ -707,31 +805,17 @@ def ingest_file(
         "semantic" if source_type == "pdf" and strategy == "semantic" else "mechanical"
     )
 
-    # Defer chunk_sessions writes until after embeddings succeed (#180).
-    # If _embed_with_config raises, no orphan session rows are left behind.
-    deferred_session_links: list[int] = []
-
+    chunk_data: list[dict] = []
     if ast_chunks:
         # AST-aware path: each chunk has metadata
-        new_chunks = []
-        skipped = 0
         for i, ac in enumerate(ast_chunks):
-            h = _content_hash(ac["text"])
-            existing = conn.execute(
-                "SELECT id FROM chunks WHERE content_hash = ?", (h,)
-            ).fetchone()
-            if existing:
-                if session_id is not None:
-                    deferred_session_links.append(existing["id"])
-                skipped += 1
-                continue
             meta = {
                 "name": ac["name"],
                 "type": ac["type"],
                 "start_line": ac["start_line"],
                 "end_line": ac["end_line"],
             }
-            new_chunks.append((i, ac["text"], h, json.dumps(meta)))
+            chunk_data.append({"text": ac["text"], "index": i, "metadata": meta})
     elif source_type == "pdf":
         # Dispatch based on chunk strategy
         if effective_strategy == "semantic":
@@ -748,8 +832,7 @@ def ingest_file(
             )
         if not md_chunks:
             return {"file": str(path), "chunks_added": 0, "chunks_skipped": 0}
-        new_chunks = []
-        skipped = 0
+
         # Build extractor version string
         try:
             import pymupdf4llm
@@ -757,44 +840,36 @@ def ingest_file(
             extractor_tag = f"pymupdf4llm@{pymupdf4llm.__version__}"
         except (ImportError, AttributeError):
             extractor_tag = "pymupdf4llm"
+
         for i, (chunk_text, chunk_pages) in enumerate(md_chunks):
-            h = _content_hash(chunk_text)
-            existing = conn.execute(
-                "SELECT id FROM chunks WHERE content_hash = ?", (h,)
-            ).fetchone()
-            if existing:
-                if session_id is not None:
-                    deferred_session_links.append(existing["id"])
-                skipped += 1
-                continue
             # Collect verified image basenames from chunk text
             images = [Path(m.group(2)).name for m in _IMAGE_REF_RE.finditer(chunk_text)]
-            meta = {"extractor": extractor_tag, "pages": chunk_pages}
+            meta: dict = {"extractor": extractor_tag, "pages": chunk_pages}
             if images:
                 meta["images"] = images
-            new_chunks.append((i, chunk_text, h, json.dumps(meta)))
+            chunk_data.append({"text": chunk_text, "index": i, "metadata": meta})
     else:
         # Fixed-size chunking path
         fixed_chunks = _chunk_text(text)
         if not fixed_chunks:
             return {"file": str(path), "chunks_added": 0, "chunks_skipped": 0}
-        new_chunks = []
-        skipped = 0
         for i, chunk in enumerate(fixed_chunks):
-            h = _content_hash(chunk)
-            existing = conn.execute(
-                "SELECT id FROM chunks WHERE content_hash = ?", (h,)
-            ).fetchone()
-            if existing:
-                if session_id is not None:
-                    deferred_session_links.append(existing["id"])
-                skipped += 1
-                continue
-            new_chunks.append((i, chunk, h, "{}"))
+            chunk_data.append({"text": chunk, "index": i, "metadata": {}})
 
-    if not new_chunks:
-        # All chunks deduped — safe to flush session links (no embedding needed)
-        _flush_deferred_session_links(conn, deferred_session_links, session_id)
+    # Unified insertion (deduplication, embedding, storage)
+    res = _insert_chunks(
+        conn,
+        chunk_data,
+        source_type,
+        str(path),
+        session_id,
+        effective_strategy,
+    )
+    added = res["added"]
+    skipped = res["skipped"]
+
+    if added == 0:
+        # All chunks deduped — safe to commit now
         conn.commit()
         result = {"file": str(path), "chunks_added": 0, "chunks_skipped": skipped}
         if skipped > 0:
@@ -813,47 +888,13 @@ def ingest_file(
                     result["duplicate_of_paper_id"] = existing_paper["paper_id"]
         return result
 
-    # Embed all new chunks using configured model
-    texts_to_embed = [c[1] for c in new_chunks]
-    embeddings = _embed_with_config(conn, texts_to_embed)
-
-    # Insert
-    source_uri = str(path)
-    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(
-        new_chunks, embeddings
-    ):
-        cursor = conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, chunk_strategy, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                chunk_hash,
-                chunk_text,
-                source_type,
-                source_uri,
-                idx,
-                session_id,
-                effective_strategy,
-                meta_json,
-            ),
-        )
-        chunk_id = cursor.lastrowid
-        if session_id is not None:
-            conn.execute(
-                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                (chunk_id, session_id),
-            )
-        if emb_vec is not None:
-            insert_chunk_vec(conn, chunk_id, emb_vec)
-
-    # Embeddings succeeded — now flush deferred session links for deduped chunks
-    _flush_deferred_session_links(conn, deferred_session_links, session_id)
-
     conn.commit()
     if not _skip_folder_summary:
         _update_folder_summary_safe(conn, path)
 
     return {
         "file": str(path),
-        "chunks_added": len(new_chunks),
+        "chunks_added": added,
         "chunks_skipped": skipped,
     }
 
@@ -880,72 +921,11 @@ def reingest_file(
         return {"error": f"No chunks found for source_uri: {source_uri}"}
 
     old_ids = [r["id"] for r in existing]
-    old_id_set = set(old_ids)
 
     # --- FK cleanup (batched to stay under SQLITE_MAX_VARIABLE_NUMBER) ---
-    # 1. papers.abstract_chunk_id → SET NULL (track affected papers for re-linking)
-    affected_paper_ids = [
-        r["id"]
-        for r in _batched_select(
-            conn, "SELECT id FROM papers WHERE abstract_chunk_id IN ({ph})", old_ids
-        )
-    ]
-    _batched_execute(
-        conn,
-        "UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({ph})",
-        old_ids,
-    )
-
-    # 2. relationships.evidence_chunk_id → SET NULL
-    _batched_execute(
-        conn,
-        "UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({ph})",
-        old_ids,
-    )
-
-    # 3. conclusions.source_chunk_ids — JSON array, remove deleted IDs;
-    #    delete conclusion entirely if no evidence remains (#160)
-    rows = conn.execute("SELECT id, source_chunk_ids FROM conclusions").fetchall()
-    for row in rows:
-        chunk_ids = json.loads(row["source_chunk_ids"])
-        filtered = [cid for cid in chunk_ids if cid not in old_id_set]
-        if len(filtered) != len(chunk_ids):
-            if filtered:
-                conn.execute(
-                    "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
-                    (json.dumps(filtered), row["id"]),
-                )
-            else:
-                conn.execute(
-                    "UPDATE conclusions SET superseded_by = NULL "
-                    "WHERE superseded_by = ?",
-                    (row["id"],),
-                )
-                conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
-
-    # 4. methods/datasets/metrics.chunk_id → SET NULL (track for re-linking)
-    affected_entities: dict[str, list[dict]] = {}
-    for table in ("methods", "datasets", "metrics"):
-        affected_entities[table] = [
-            {"id": r["id"], "name": r["name"], "old_chunk_id": r["chunk_id"]}
-            for r in _batched_select(
-                conn,
-                f"SELECT id, name, chunk_id FROM {table} WHERE chunk_id IN ({{ph}})",
-                old_ids,
-            )
-        ]
-        _batched_execute(
-            conn,
-            f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",
-            old_ids,
-        )
-
-    # 5. entity_mentions.chunk_id — NOT NULL FK, must delete (re-created by extraction)
-    _batched_execute(
-        conn,
-        "DELETE FROM entity_mentions WHERE chunk_id IN ({ph})",
-        old_ids,
-    )
+    affected = _cleanup_chunk_fk_refs(conn, old_ids)
+    affected_paper_ids = affected["affected_paper_ids"]
+    affected_entities = affected["affected_entities"]
 
     # --- Preserve historical session associations ---
     historical_sessions = {
@@ -989,18 +969,16 @@ def reingest_file(
     if source_type == "code" and path.suffix.lower() == ".py":
         ast_chunks = _chunk_python_ast(text)
 
+    chunk_data: list[dict] = []
     if ast_chunks:
-        insert_items = []
         for i, ac in enumerate(ast_chunks):
-            meta = json.dumps(
-                {
-                    "name": ac["name"],
-                    "type": ac["type"],
-                    "start_line": ac["start_line"],
-                    "end_line": ac["end_line"],
-                }
-            )
-            insert_items.append((i, ac["text"], _content_hash(ac["text"]), meta))
+            meta = {
+                "name": ac["name"],
+                "type": ac["type"],
+                "start_line": ac["start_line"],
+                "end_line": ac["end_line"],
+            }
+            chunk_data.append({"text": ac["text"], "index": i, "metadata": meta})
     elif source_type == "pdf":
         if effective_strategy == "semantic":
             md_chunks = _chunk_by_section(
@@ -1028,15 +1006,13 @@ def reingest_file(
             extractor_tag = f"pymupdf4llm@{pymupdf4llm.__version__}"
         except (ImportError, AttributeError):
             extractor_tag = "pymupdf4llm"
-        insert_items = []
+
         for i, (chunk_text, chunk_pages) in enumerate(md_chunks):
             images = [Path(m.group(2)).name for m in _IMAGE_REF_RE.finditer(chunk_text)]
             meta: dict = {"extractor": extractor_tag, "pages": chunk_pages}
             if images:
                 meta["images"] = images
-            insert_items.append(
-                (i, chunk_text, _content_hash(chunk_text), json.dumps(meta))
-            )
+            chunk_data.append({"text": chunk_text, "index": i, "metadata": meta})
     else:
         fixed_chunks = _chunk_text(text)
         if not fixed_chunks:
@@ -1047,47 +1023,39 @@ def reingest_file(
                 "chunks_deleted": len(old_ids),
                 "chunks_added": 0,
             }
-        insert_items = [
-            (i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)
-        ]
+        for i, chunk in enumerate(fixed_chunks):
+            chunk_data.append({"text": chunk, "index": i, "metadata": {}})
 
-    if not insert_items:
+    if not chunk_data:
         conn.commit()
         _update_folder_summary_safe(conn, path)
         return {"file": source_uri, "chunks_deleted": len(old_ids), "chunks_added": 0}
 
-    texts_to_embed = [item[1] for item in insert_items]
+    # --- Compute embeddings (safety: last fallible step before deletion) ---
+    texts_to_embed = [item["text"] for item in chunk_data]
     embeddings = _embed_with_config(conn, texts_to_embed)
 
-    # --- Restore historical + current session associations on new chunks ---
-    all_sessions = historical_sessions
-    if session_id is not None:
-        all_sessions = historical_sessions | {session_id}
+    # --- Delete old chunks (triggers handle FTS cleanup) ---
+    # Delete from vec table first (no trigger)
+    delete_chunk_vecs(conn, old_ids)
+    # Delete from chunks (triggers clean up FTS)
+    conn.execute(
+        "DELETE FROM chunks WHERE source_uri = ?",
+        (source_uri,),
+    )
 
-    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(
-        insert_items, embeddings
-    ):
-        cursor = conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, chunk_strategy, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                chunk_hash,
-                chunk_text,
-                source_type,
-                source_uri,
-                idx,
-                session_id,
-                effective_strategy,
-                meta_json,
-            ),
-        )
-        chunk_id = cursor.lastrowid
-        for sid in all_sessions:
-            conn.execute(
-                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                (chunk_id, sid),
-            )
-        if emb_vec is not None:
-            insert_chunk_vec(conn, chunk_id, emb_vec)
+    # Unified insertion (deduplication, embedding, storage)
+    res = _insert_chunks(
+        conn,
+        chunk_data,
+        source_type,
+        source_uri,
+        session_id,
+        effective_strategy,
+        historical_sessions=historical_sessions,
+        embeddings=embeddings,
+    )
+    added = res["added"]
 
     # --- Re-link papers whose abstract_chunk_id was nullified ---
     if affected_paper_ids:
@@ -1138,9 +1106,8 @@ def reingest_file(
     return {
         "file": source_uri,
         "chunks_deleted": len(old_ids),
-        "chunks_added": len(insert_items),
+        "chunks_added": added,
     }
-
 
 _BROWSER_FALLBACK_MIN_CHARS = 200
 """Below this character count, trafilatura output is likely boilerplate/nav-only."""
@@ -1233,51 +1200,7 @@ def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> N
     Mirrors the FK cleanup in ``reingest_file`` (papers, relationships,
     conclusions, methods, datasets, metrics, entity_mentions).
     """
-    if not chunk_ids:
-        return
-    id_set = set(chunk_ids)
-
-    _batched_execute(
-        conn,
-        "UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({ph})",
-        chunk_ids,
-    )
-    _batched_execute(
-        conn,
-        "UPDATE relationships SET evidence_chunk_id = NULL "
-        "WHERE evidence_chunk_id IN ({ph})",
-        chunk_ids,
-    )
-
-    rows = conn.execute("SELECT id, source_chunk_ids FROM conclusions").fetchall()
-    for row in rows:
-        cids = json.loads(row["source_chunk_ids"])
-        filtered = [cid for cid in cids if cid not in id_set]
-        if len(filtered) != len(cids):
-            if filtered:
-                conn.execute(
-                    "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
-                    (json.dumps(filtered), row["id"]),
-                )
-            else:
-                conn.execute(
-                    "UPDATE conclusions SET superseded_by = NULL "
-                    "WHERE superseded_by = ?",
-                    (row["id"],),
-                )
-                conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
-
-    for table in ("methods", "datasets", "metrics"):
-        _batched_execute(
-            conn,
-            f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",
-            chunk_ids,
-        )
-    _batched_execute(
-        conn,
-        "DELETE FROM entity_mentions WHERE chunk_id IN ({ph})",
-        chunk_ids,
-    )
+    _cleanup_chunk_fk_refs(conn, chunk_ids)
 
 
 def _extract_html_images(
@@ -1470,11 +1393,21 @@ def _extract_html_images(
     if not collected:
         return 0
 
-    # --- Compute embeddings (last fallible step) ---
-    texts = [desc for desc, _ in collected]
+    chunk_data = []
+    for idx, (desc, meta) in enumerate(collected):
+        chunk_data.append(
+            {
+                "text": desc,
+                "index": _WEB_IMAGE_CHUNK_INDEX_START + idx,
+                "metadata": meta,
+            }
+        )
+
+    # --- Compute embeddings (safety: last fallible step before deletion) ---
+    texts = [item["text"] for item in chunk_data]
     embeddings = _embed_with_config(conn, texts)
 
-    # --- Delete stale inline image chunks (only after embeddings succeed) ---
+    # --- Delete stale inline image chunks ---
     old_ids = [
         r["id"]
         for r in conn.execute(
@@ -1489,27 +1422,16 @@ def _extract_html_images(
         _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
 
     # --- Insert new figure chunks ---
-    figures_added = 0
-    for idx, ((desc, meta), emb_vec) in enumerate(zip(collected, embeddings)):
-        chunk_hash = _content_hash(desc)
-        existing = conn.execute(
-            "SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)
-        ).fetchone()
-        if existing:
-            continue
-
-        meta_json = json.dumps(meta)
-        chunk_index = _WEB_IMAGE_CHUNK_INDEX_START + idx
-        cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
-               chunk_index, metadata)
-               VALUES (?, ?, 'figure', ?, ?, ?)""",
-            (chunk_hash, desc, source_url, chunk_index, meta_json),
-        )
-        chunk_id = cursor.lastrowid
-        if emb_vec is not None:
-            insert_chunk_vec(conn, chunk_id, emb_vec)
-        figures_added += 1
+    res = _insert_chunks(
+        conn,
+        chunk_data,
+        "figure",
+        source_url,
+        None,  # session_id not currently passed to this internal helper
+        "mechanical",
+        embeddings=embeddings,
+    )
+    figures_added = res["added"]
 
     if figures_added or old_ids:
         conn.commit()
@@ -1766,6 +1688,24 @@ def _extract_web_figures(
     if not texts:
         return 0
 
+    chunk_data = []
+    for idx, (fig, desc) in enumerate(zip(valid_figures, texts)):
+        meta = {
+            "figure_type": fig.get("figure_type", "web_screenshot"),
+            "title": fig.get("title", ""),
+            "original_source_type": "web",
+            "source_url": source_url,
+            "vision_model": model,
+        }
+        chunk_data.append(
+            {
+                "text": desc,
+                "index": _WEB_FIGURE_CHUNK_INDEX_START + idx,
+                "metadata": meta,
+            }
+        )
+
+    # --- Compute embeddings (safety: last fallible step before deletion) ---
     embeddings = _embed_with_config(conn, texts)
 
     # Remove stale screenshot figure chunks only (scope to < _WEB_IMAGE_CHUNK_INDEX_START
@@ -1783,39 +1723,19 @@ def _extract_web_figures(
         delete_chunk_vecs(conn, old_fig_ids)
         _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_fig_ids)
 
-    figures_added = 0
+    # --- Insert new figure chunks ---
+    res = _insert_chunks(
+        conn,
+        chunk_data,
+        "figure",
+        source_url,
+        None,
+        "mechanical",
+        embeddings=embeddings,
+    )
+    figures_added = res["added"]
 
-    for idx, (fig, desc, emb_vec) in enumerate(zip(valid_figures, texts, embeddings)):
-        chunk_hash = _content_hash(desc)
-        existing = conn.execute(
-            "SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)
-        ).fetchone()
-        if existing:
-            continue
-
-        meta_json = json.dumps(
-            {
-                "figure_type": fig.get("figure_type", "web_screenshot"),
-                "title": fig.get("title", ""),
-                "original_source_type": "web",
-                "source_url": source_url,
-                "vision_model": model,
-            }
-        )
-
-        chunk_index = _WEB_FIGURE_CHUNK_INDEX_START + idx
-        cursor = conn.execute(
-            """INSERT INTO chunks (content_hash, content, source_type, source_uri,
-               chunk_index, metadata)
-               VALUES (?, ?, 'figure', ?, ?, ?)""",
-            (chunk_hash, desc, source_url, chunk_index, meta_json),
-        )
-        chunk_id = cursor.lastrowid
-        if emb_vec is not None:
-            insert_chunk_vec(conn, chunk_id, emb_vec)
-        figures_added += 1
-
-    if figures_added:
+    if figures_added or old_fig_ids:
         conn.commit()
     return figures_added
 
@@ -1959,51 +1879,33 @@ def ingest_url(
 
     # Compute content hashes, skip duplicates.
     # Defer chunk_sessions writes until after embeddings succeed (#180).
-    new_chunks = []
-    skipped = 0
-    deferred_session_links: list[int] = []
-    meta_json = json.dumps({"title": extracted_title} if extracted_title else {})
+    chunk_data = []
+    meta = {"title": extracted_title} if extracted_title else {}
     for i, chunk in enumerate(chunks):
-        h = _content_hash(chunk)
-        existing = conn.execute(
-            "SELECT id FROM chunks WHERE content_hash = ?", (h,)
-        ).fetchone()
-        if existing:
-            if session_id is not None:
-                deferred_session_links.append(existing["id"])
-            skipped += 1
-            continue
-        new_chunks.append((i, chunk, h))
-
-    if not new_chunks:
-        _flush_deferred_session_links(conn, deferred_session_links, session_id)
-        conn.commit()
-        return {**_base_result, "chunks_added": 0, "chunks_skipped": skipped}
-
-    texts_to_embed = [c[1] for c in new_chunks]
-    embeddings = _embed_with_config(conn, texts_to_embed)
-
-    for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings):
-        cursor = conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, metadata) VALUES (?, ?, 'web', ?, ?, ?, ?)",
-            (chunk_hash, chunk_text, url, idx, session_id, meta_json),
+        chunk_data.append(
+            {
+                "text": chunk,
+                "index": i,
+                "metadata": meta,
+            }
         )
-        chunk_id = cursor.lastrowid
-        if session_id is not None:
-            conn.execute(
-                "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
-                (chunk_id, session_id),
-            )
-        if emb_vec is not None:
-            insert_chunk_vec(conn, chunk_id, emb_vec)
 
-    # Embeddings succeeded — flush deferred session links for deduped chunks
-    _flush_deferred_session_links(conn, deferred_session_links, session_id)
+    # Unified insertion (deduplication, embedding, storage)
+    res = _insert_chunks(
+        conn,
+        chunk_data,
+        "web",
+        url,
+        session_id,
+        "mechanical",
+    )
+    added = res["added"]
+    skipped = res["skipped"]
 
     conn.commit()
     return {
         **_base_result,
-        "chunks_added": len(new_chunks),
+        "chunks_added": added,
         "chunks_skipped": skipped,
         "title": extracted_title,
     }
