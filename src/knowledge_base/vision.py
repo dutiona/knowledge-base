@@ -890,7 +890,13 @@ def _detect_mixed_page_vector_regions(
             for item in page.get_images(full=True):
                 try:
                     bbox = page.get_image_bbox(item)
-                except Exception:
+                except Exception as exc:
+                    logger.debug(
+                        "Page %d: get_image_bbox failed for xref %s: %s",
+                        page_idx,
+                        item[0] if item else "?",
+                        exc,
+                    )
                     continue
                 if bbox.is_empty or abs(bbox.get_area()) < 1.0:
                     continue
@@ -907,7 +913,9 @@ def _detect_mixed_page_vector_regions(
             if not exclusion_zones:
                 continue
 
-            # 2. Filter drawings — keep those NOT overlapping any exclusion zone
+            # 2. Filter drawings — keep those NOT overlapping any exclusion zone.
+            # Non-strict inequalities on all axes so zero-area rects (lines)
+            # that touch the exclusion zone boundary are treated as inside.
             drawings = page.get_drawings()
             outside_drawings: list[fitz.Rect] = []
             for d in drawings:
@@ -915,8 +923,8 @@ def _detect_mixed_page_vector_regions(
                 if d_rect.is_infinite or (d_rect.width == 0 and d_rect.height == 0):
                     continue
                 inside = any(
-                    d_rect.x0 < zone.x1
-                    and d_rect.x1 > zone.x0
+                    d_rect.x0 <= zone.x1
+                    and d_rect.x1 >= zone.x0
                     and d_rect.y0 <= zone.y1
                     and d_rect.y1 >= zone.y0
                     for zone in exclusion_zones
@@ -1079,18 +1087,25 @@ def _check_eta_gate(
     n_items: int,
     omniparser_path: str | None,
     confirmed: bool,
-) -> dict | None:
-    """Return an ETA-confirmation dict if the job is large and unconfirmed."""
+    *,
+    n_mixed_regions: int = 0,
+) -> tuple[dict | None, int]:
+    """Return an ETA-confirmation dict if the job is large and unconfirmed.
+
+    Mixed regions use base rate only (no OmniParser processing).
+
+    Returns (gate_dict_or_None, estimated_seconds).
+    """
     per_page = _ETA_SECS_PER_PAGE_BASE + (
         _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
     )
-    estimated = n_items * per_page
+    estimated = n_items * per_page + n_mixed_regions * _ETA_SECS_PER_PAGE_BASE
     if estimated > 120 and not confirmed:
         return {
             "confirm_required": True,
             "estimated_seconds": estimated,
-        }
-    return None
+        }, estimated
+    return None, estimated
 
 
 def _render_vector_pages(
@@ -1608,19 +1623,15 @@ def extract_figures(
 
     # 4. ETA gate (computed after knowing the tri-path split)
     n_mixed_regions = sum(len(v) for v in inputs.mixed_page_regions.values())
-    per_page = _ETA_SECS_PER_PAGE_BASE + (
-        _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
-    )
     n_items = len(inputs.extracted_images) + len(inputs.vector_pages)
-    estimated = n_items * per_page + n_mixed_regions * _ETA_SECS_PER_PAGE_BASE
-    if estimated > 120 and not confirmed:
-        return {
-            "confirm_required": True,
-            "estimated_seconds": estimated,
-            "extracted_images": len(inputs.extracted_images),
-            "vector_pages": len(inputs.vector_pages),
-            "mixed_vector_regions": n_mixed_regions,
-        }
+    gate, estimated = _check_eta_gate(
+        n_items, omniparser_path, confirmed, n_mixed_regions=n_mixed_regions
+    )
+    if gate is not None:
+        gate["extracted_images"] = len(inputs.extracted_images)
+        gate["vector_pages"] = len(inputs.vector_pages)
+        gate["mixed_vector_regions"] = n_mixed_regions
+        return gate
 
     # 5c. Render vector pages AND mixed-page vector regions
     rendered, mixed_rendered = _render_vector_pages(
