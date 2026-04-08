@@ -82,6 +82,7 @@ def create_embed_space_tool(
     provider: str,
     chunk_strategy: str = "mechanical",
     matryoshka_base_dim: int | None = None,
+    element_type: str = "float32",
 ) -> str:
     """Create a new embedding space in 'populating' status.
 
@@ -97,11 +98,21 @@ def create_embed_space_tool(
             the system truncates to ``dim`` and L2 re-normalizes before storage.
             Must be greater than ``dim``. Only useful with MRL-capable models
             (e.g. Qwen3-Embedding, nomic-embed-text-v2-moe).
+        element_type: Vector element type for storage. ``'float32'`` (default)
+            stores full-precision vectors. ``'int8'`` uses sqlite-vec's scalar
+            quantization (4x storage reduction, typically <2% quality loss).
     """
     conn = _get_conn()
     try:
         result = create_space(
-            conn, name, model, dim, provider, chunk_strategy, matryoshka_base_dim
+            conn,
+            name,
+            model,
+            dim,
+            provider,
+            chunk_strategy,
+            matryoshka_base_dim,
+            element_type=element_type,
         )
         return json.dumps(result)
     except ValueError as e:
@@ -231,3 +242,104 @@ def batch_compare_spaces_tool(
         return json.dumps(result)
     except ValueError as e:
         return json.dumps({"error": str(e)})
+
+
+# --- Storage size helpers ---------------------------------------------------
+
+_BYTES_PER_ELEMENT: dict[str, int] = {
+    "float32": 4,
+    "int8": 1,
+}
+
+
+@mcp.tool()
+def benchmark_spaces_tool(
+    baseline_space: str | None = None,
+    sample_queries: int = 50,
+    top_k: int = 10,
+) -> str:
+    """Benchmark all non-deprecated spaces against a baseline.
+
+    Samples random chunk content as queries, runs batch_compare_spaces
+    for each non-baseline space, and reports aggregated quality metrics
+    plus storage estimates.
+
+    Args:
+        baseline_space: Name of the baseline space. Defaults to the active space.
+        sample_queries: Number of random chunk texts to use as queries (default 50).
+        top_k: Number of results per space per query (default 10).
+    """
+    conn = _get_conn()
+
+    spaces = list_spaces(conn)
+    if not spaces:
+        return json.dumps({"error": "No embedding spaces found"})
+
+    # Resolve baseline
+    baseline_name: str
+    if baseline_space is not None:
+        baseline_name = baseline_space
+    else:
+        active = get_active_space(conn)
+        if active is None:
+            return json.dumps({"error": "No active space and no baseline specified"})
+        baseline_name = active["name"]
+
+    baseline = next((s for s in spaces if s["name"] == baseline_name), None)
+    if baseline is None:
+        return json.dumps({"error": f"Baseline space {baseline_name!r} not found"})
+
+    # Sample queries from chunks
+    rows = conn.execute(
+        "SELECT content FROM chunks ORDER BY RANDOM() LIMIT ?",
+        (sample_queries,),
+    ).fetchall()
+    queries = [r["content"] for r in rows]
+    if not queries:
+        return json.dumps({"error": "No chunks in database to sample queries from"})
+
+    # Compare each non-deprecated, non-baseline space
+    results = []
+    for space in spaces:
+        if space["name"] == baseline_name:
+            continue
+        if space["status"] == "deprecated":
+            continue
+
+        comparison = batch_compare_spaces(
+            conn, baseline_name, space["name"], queries, top_k, mode="vec"
+        )
+
+        # Storage estimate
+        bpe = _BYTES_PER_ELEMENT.get(space.get("element_type", "float32"), 4)
+        baseline_bpe = _BYTES_PER_ELEMENT.get(
+            baseline.get("element_type", "float32"), 4
+        )
+        storage_ratio = bpe / baseline_bpe if baseline_bpe else 1.0
+
+        results.append(
+            {
+                "space": space["name"],
+                "element_type": space.get("element_type", "float32"),
+                "dim": space["dim"],
+                "status": space["status"],
+                "chunk_count": space.get("chunk_count", 0),
+                "storage_ratio_vs_baseline": round(storage_ratio, 4),
+                "metrics": {
+                    "overlap_at_k": comparison["overlap_at_k"],
+                    "jaccard": comparison["jaccard"],
+                    "rank_correlation": comparison["rank_correlation"],
+                },
+                "warnings": comparison.get("warnings", []),
+            }
+        )
+
+    return json.dumps(
+        {
+            "baseline": baseline_name,
+            "baseline_element_type": baseline.get("element_type", "float32"),
+            "queries_sampled": len(queries),
+            "top_k": top_k,
+            "comparisons": results,
+        }
+    )
