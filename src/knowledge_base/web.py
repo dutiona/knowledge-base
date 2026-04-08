@@ -852,12 +852,17 @@ def ingest_url(
                         browser_rendered = True
 
                     # Capture rendered HTML for Phase 2 image extraction (#131).
+                    # Intentionally unconditional: the rendered DOM may contain
+                    # JS-injected images even when the rendered *text* was not
+                    # better than static (browser_rendered stays False).
+                    rendered_html_for_phase2 = render_result["html"]
                     # Use browser's final URL for resolving relative <img src>
                     # (may differ from httpx response.url after client-side nav).
-                    rendered_html_for_phase2 = render_result["html"]
-                    rendered_base_url = render_result.get("final_url") or str(
-                        response.url
-                    )
+                    final = render_result.get("final_url") or ""
+                    if final and urlparse(final).scheme in ("http", "https"):
+                        rendered_base_url = final
+                    else:
+                        rendered_base_url = str(response.url)
 
                     # Extract figures from screenshot (isolated from text ingest)
                     screenshot = render_result.get("screenshot_path")

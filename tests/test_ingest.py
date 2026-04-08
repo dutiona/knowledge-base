@@ -1742,11 +1742,13 @@ def test_parse_image_candidates_exclude_urls():
     assert result[0][0] == "https://example.com/new-image.png"
 
 
-def test_parse_image_candidates_returns_none_on_parse_failure():
-    """Parse failure returns None (not []) to prevent stale cleanup."""
+def test_parse_image_candidates_empty_vs_parse_failure():
+    """Empty HTML returns [] (no images); parse failure returns None."""
+    # Empty HTML parses fine but has no <img> tags → empty list
     result = _parse_image_candidates("", "https://example.com/page")
     assert result == []
 
+    # Parse exception → None (caller must not trigger stale cleanup)
     with patch("knowledge_base.web._ImgTagParser.feed", side_effect=Exception("boom")):
         result = _parse_image_candidates(
             "<html><body></body></html>", "https://example.com/page"
