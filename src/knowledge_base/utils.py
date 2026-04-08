@@ -95,6 +95,9 @@ def serialize_f32(vec: list[float]) -> bytes:
 
 # SQL expression templates for typed vector operations.
 # Each wraps a float32 blob parameter (?) for the target element type.
+# INSERT and QUERY are separate dicts because future quantization schemes
+# (e.g. TurboQuant #344) may use different expressions for storage vs. lookup
+# (asymmetric quantization: store with codebook, query with fast approximate).
 ELEMENT_INSERT_EXPR: dict[str, str] = {
     "float32": "?",
     "int8": "vec_quantize_int8(vec_f32(?), 'unit')",

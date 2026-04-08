@@ -423,10 +423,16 @@ def insert_chunk_vec(
     chunk_id: int,
     embedding: list[float],
     table_name: str | None = None,
-    element_type: str = "float32",
+    element_type: str | None = None,
 ) -> None:
-    """Insert a single chunk embedding into the specified (or active) vec table."""
+    """Insert a single chunk embedding into the specified (or active) vec table.
+
+    If *element_type* is ``None`` (the default), it is auto-resolved from the
+    space registry so callers never need to look it up themselves.
+    """
     tbl = table_name or get_vec_table_name(conn)
+    if element_type is None:
+        element_type = get_space_element_type(conn, tbl)
     expr = ELEMENT_INSERT_EXPR[element_type]
     conn.execute(
         f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, {expr}, ?)",
