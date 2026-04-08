@@ -659,11 +659,10 @@ def _extract_web_figures(
     import base64
 
     from .vision import (
-        _OMNIPARSER_DEFAULT_PORT,
-        _ensure_omniparser_server,
         _get_omniparser_config,
         _get_vision_config,
         _merge_omniparser_elements,
+        _resolve_omniparser_server_url,
         _run_omniparser,
         _vision_call,
     )
@@ -701,9 +700,7 @@ def _extract_web_figures(
     omniparser_path = _get_omniparser_config(conn)
     omni_elements: list[dict] | None = None
     if omniparser_path:
-        server_url = _ensure_omniparser_server(
-            omniparser_path, _OMNIPARSER_DEFAULT_PORT
-        )
+        server_url = _resolve_omniparser_server_url(conn, omniparser_path)
         omni_result = _run_omniparser(
             screenshot_path, omniparser_path, server_url=server_url
         )

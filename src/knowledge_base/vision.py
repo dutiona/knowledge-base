@@ -279,18 +279,26 @@ def _get_omniparser_server_url(conn: sqlite3.Connection) -> str | None:
     return row["value"] if row else None
 
 
-def _check_omniparser_server(base_url: str) -> bool:
+def _check_omniparser_server(base_url: str, *, require_models: bool = False) -> bool:
     """Check whether an OmniParser server is healthy at *base_url*.
 
     Validates that the response contains ``"status": "omniparser"`` to
     distinguish from other services that might be listening on the same port.
+
+    When *require_models* is True, also checks that ``models_loaded`` is
+    True — the server may be running but in subprocess-fallback mode
+    (models failed to import), which is not faster than direct subprocess.
     """
     try:
         resp = httpx.get(f"{base_url}/health", timeout=_OMNIPARSER_HEALTH_TIMEOUT)
         if resp.status_code != 200:
             return False
         data = resp.json()
-        return data.get("status") == "omniparser"
+        if data.get("status") != "omniparser":
+            return False
+        if require_models and not data.get("models_loaded"):
+            return False
+        return True
     except (httpx.ConnectError, httpx.TimeoutException, Exception):
         return False
 
@@ -418,6 +426,7 @@ def _ensure_omniparser_server(omniparser_path: str, port: int) -> str | None:
         # Wait for readiness sentinel, polling for early exit
         deadline = time.monotonic() + 120
         ready = False
+        assert proc.stdout is not None
         while time.monotonic() < deadline:
             # Check if process died
             if proc.poll() is not None:
@@ -427,12 +436,17 @@ def _ensure_omniparser_server(omniparser_path: str, port: int) -> str | None:
                 )
                 return None
 
-            # Try reading a line (non-blocking via select or small timeout)
-            assert proc.stdout is not None
+            # Read a line with timeout enforcement via poll + readline.
+            # readline() on PIPE is blocking, but process.poll() above
+            # catches early death, and PYTHONUNBUFFERED ensures prompt
+            # output.  We break the wait into short poll() intervals.
             line = proc.stdout.readline()
             if line and _READY_SENTINEL in line.decode(errors="replace"):
                 ready = True
                 break
+            if not line:
+                # No data yet — brief sleep before retrying
+                time.sleep(0.5)
 
         if not ready:
             logger.warning("OmniParser server did not become ready within 120s")
@@ -1585,11 +1599,35 @@ def _render_vector_pages(
     return rendered, mixed_rendered
 
 
+def _resolve_omniparser_server_url(
+    conn: sqlite3.Connection, omniparser_path: str
+) -> str | None:
+    """Resolve the OmniParser server URL to use.
+
+    Priority:
+    1. Explicitly configured ``omniparser_server_url`` (e.g. remote GPU).
+    2. Auto-start on localhost (if no explicit URL configured).
+    """
+    configured = _get_omniparser_server_url(conn)
+    if configured:
+        # User configured an explicit URL — use it directly, no auto-start
+        if _check_omniparser_server(configured):
+            return configured
+        logger.warning(
+            "Configured OmniParser server at %s is not reachable", configured
+        )
+        return None
+    # No explicit URL — try auto-start on localhost
+    return _ensure_omniparser_server(omniparser_path, _OMNIPARSER_DEFAULT_PORT)
+
+
 def _run_omniparser_pipeline(
     omniparser_path: str | None,
     extracted_images: list[tuple[Path, int]],
     rendered: dict[int, bytes],
     on_progress: Callable[[str], None] | None,
+    *,
+    server_url: str | None = None,
 ) -> OmniParserResults:
     """Run OmniParser on extracted images and rendered vector pages."""
     page_data: dict[
@@ -1606,9 +1644,6 @@ def _run_omniparser_pipeline(
         return OmniParserResults(
             page_data=page_data, image_data=image_data, elapsed=0.0
         )
-
-    # Try to ensure the OmniParser HTTP server is running (#334)
-    server_url = _ensure_omniparser_server(omniparser_path, _OMNIPARSER_DEFAULT_PORT)
 
     if on_progress:
         on_progress("omniparser processing...")
@@ -2076,9 +2111,9 @@ def estimate_figures_time(
     # Use faster ETA when OmniParser server is confirmed healthy (#334)
     server_healthy = False
     if omniparser_path:
-        server_healthy = _check_omniparser_server(
-            f"http://127.0.0.1:{_OMNIPARSER_DEFAULT_PORT}"
-        )
+        configured_url = _get_omniparser_server_url(conn)
+        check_url = configured_url or f"http://127.0.0.1:{_OMNIPARSER_DEFAULT_PORT}"
+        server_healthy = _check_omniparser_server(check_url, require_models=True)
     if omniparser_path:
         omni_per_page = (
             _ETA_SECS_PER_PAGE_OMNIPARSER_SERVER
@@ -2134,9 +2169,9 @@ def extract_figures(
     # Check if OmniParser server is already healthy for a more accurate ETA
     server_healthy = False
     if omniparser_path:
-        server_healthy = _check_omniparser_server(
-            f"http://127.0.0.1:{_OMNIPARSER_DEFAULT_PORT}"
-        )
+        configured_url = _get_omniparser_server_url(conn)
+        check_url = configured_url or f"http://127.0.0.1:{_OMNIPARSER_DEFAULT_PORT}"
+        server_healthy = _check_omniparser_server(check_url, require_models=True)
     n_mixed_regions = sum(len(v) for v in inputs.mixed_page_regions.values())
     n_items = len(inputs.extracted_images) + len(inputs.vector_pages)
     gate, estimated = _check_eta_gate(
@@ -2162,9 +2197,18 @@ def extract_figures(
     base_url = config["base_url"]
     model = config["model"]
 
-    # 6b. Run OmniParser BEFORE vision calls
+    # 6b. Resolve OmniParser server URL (uses config or auto-start)
+    omni_server_url = None
+    if omniparser_path:
+        omni_server_url = _resolve_omniparser_server_url(conn, omniparser_path)
+
+    # 6c. Run OmniParser BEFORE vision calls
     omni = _run_omniparser_pipeline(
-        omniparser_path, inputs.extracted_images, rendered, on_progress
+        omniparser_path,
+        inputs.extracted_images,
+        rendered,
+        on_progress,
+        server_url=omni_server_url,
     )
 
     caption_map = inputs.caption_map or CaptionMap(by_image={}, by_page={})
