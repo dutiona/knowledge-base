@@ -68,9 +68,25 @@ Filtering heuristics skip non-content images:
 - **Non-raster formats** -- SVG and data URI images are excluded
 - **SSRF protection** -- Image URLs are validated against private/loopback IP ranges, including post-redirect targets
 
-Up to 10 images per page are processed, with a 10 MB cap per image download. Inline image extraction only runs when browser-based screenshot extraction did not already fire (to avoid duplicate figure descriptions for the same visual content).
+Up to 10 images per page are processed, with a 10 MB cap per image download.
 
 Only `http` and `https` URLs are accepted.
+
+### Rendered DOM Image Extraction
+
+When browser fallback fires, the rendered DOM is also parsed for `<img>` tags that may not appear in the static HTML (e.g., images injected by JavaScript). These are deduplicated against images found in the static HTML to avoid duplicate figure descriptions.
+
+### Canvas and SVG Element Capture
+
+Some pages render meaningful visualizations via `<canvas>` (D3.js charts, WebGL diagrams) or complex `<svg>` elements that cannot be extracted as `<img>` tags. During browser fallback, Playwright captures per-element screenshots for qualifying `<canvas>` and `<svg>` elements:
+
+- **Size filter** -- Elements smaller than 80×80 pixels are skipped (likely icons or decorations)
+- **Visibility filter** -- Elements outside the viewport or with zero area are skipped
+- **Cap** -- Up to 10 element captures per page
+
+Each captured element is sent individually to the vision model for description, producing focused descriptions rather than asking the model to parse a dense full-page screenshot. Captures are stored as figure chunks with `source_type='figure'` and metadata including `element_tag` (`"canvas"` or `"svg"`), element dimensions, and the vision model's `figure_type` classification.
+
+Element capture requires both browser rendering and a vision model to be configured.
 
 ## Directory Ingestion
 

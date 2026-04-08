@@ -54,6 +54,9 @@ _WEB_FIGURE_CHUNK_INDEX_START = 1_000_000
 _WEB_IMAGE_CHUNK_INDEX_START = 2_000_000
 """Chunk index offset for inline web image figures (avoids collision with screenshot figures)."""
 
+_WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START = 3_000_000
+"""Chunk index offset for per-element canvas/SVG captures (avoids collision with inline images)."""
+
 _MIN_IMAGE_DIMENSION = 100
 """Minimum width/height in pixels for an image to be considered non-decorative."""
 
@@ -391,12 +394,18 @@ def _extract_html_images(
     embeddings = _embed_with_config(conn, texts)
 
     # --- Delete stale inline image chunks (only after embeddings succeed) ---
+    # Scoped to [_WEB_IMAGE_CHUNK_INDEX_START, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START)
+    # to avoid deleting element captures from Phase 3.
     old_ids = [
         r["id"]
         for r in conn.execute(
             "SELECT id FROM chunks WHERE source_uri = ? "
-            "AND source_type = 'figure' AND chunk_index >= ?",
-            (source_url, _WEB_IMAGE_CHUNK_INDEX_START),
+            "AND source_type = 'figure' AND chunk_index >= ? AND chunk_index < ?",
+            (
+                source_url,
+                _WEB_IMAGE_CHUNK_INDEX_START,
+                _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START,
+            ),
         ).fetchall()
     ]
     if old_ids:
@@ -598,10 +607,31 @@ def _render_with_browser(
         if final_url_path.exists()
         else None
     )
+    # Per-element captures (Phase 3, #132)
+    element_captures: list[dict] = []
+    elements_json_path = tmpdir / "elements.json"
+    if elements_json_path.exists():
+        try:
+            raw = json.loads(elements_json_path.read_text(encoding="utf-8"))
+            for entry in raw:
+                png_path = tmpdir / entry["file"]
+                if png_path.exists():
+                    element_captures.append(
+                        {
+                            "path": png_path,
+                            "tag": entry["tag"],
+                            "width": entry.get("width", 0),
+                            "height": entry.get("height", 0),
+                        }
+                    )
+        except (json.JSONDecodeError, KeyError, TypeError):
+            logger.warning("Failed to parse elements.json for %s", url)
+
     return {
         "html": html,
         "screenshot_path": screenshot_path if screenshot_path.exists() else None,
         "final_url": final_url,
+        "element_captures": element_captures,
         "tmpdir": tmpdir,
     }
 
@@ -746,6 +776,137 @@ def _extract_web_figures(
 
 
 # ---------------------------------------------------------------------------
+# Per-element canvas/SVG capture extraction (Phase 3, #132)
+# ---------------------------------------------------------------------------
+
+
+def _extract_element_captures(
+    conn: sqlite3.Connection,
+    source_url: str,
+    captures: list[dict],
+) -> int:
+    """Extract figures from per-element browser captures.
+
+    Each capture dict has ``{"path": Path, "tag": str, "width": int, "height": int}``.
+    Sends each PNG to the vision model and stores as a figure chunk with
+    ``chunk_index >= _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START``.
+
+    Returns number of figure chunks added.
+    """
+    import base64
+
+    from .vision import _get_vision_config, _vision_call
+
+    if not captures:
+        return 0
+
+    try:
+        vision_config = _get_vision_config(conn)
+    except Exception:
+        return 0
+
+    base_url = vision_config["base_url"]
+    model = vision_config["model"]
+
+    # --- Phase 1: Collect descriptions (fallible: vision calls) ---
+    collected: list[tuple[str, dict, int]] = []  # (desc, metadata_dict, capture_idx)
+    for idx, capture in enumerate(captures):
+        png_path: Path = capture["path"]
+        tag: str = capture["tag"]
+        if not png_path.exists():
+            continue
+
+        b64 = base64.b64encode(png_path.read_bytes()).decode("ascii")
+        prompt = (
+            f"Describe this {tag} element captured from a web page. "
+            "What does it show? Respond with a JSON list of objects "
+            'with keys: "description", "figure_type", "title".'
+        )
+
+        try:
+            figures = _vision_call(b64, prompt, base_url=base_url, model=model)
+        except Exception:
+            logger.warning(
+                "Vision call failed for element capture %s/%s",
+                source_url,
+                png_path.name,
+                exc_info=True,
+            )
+            continue
+
+        if not figures:
+            continue
+
+        fig = figures[0]
+        desc = fig.get("description", "")
+        if not desc:
+            continue
+
+        fig_type_raw = fig.get("figure_type", "unknown")
+        fig_type = f"{tag}_capture" if fig_type_raw in ("unknown", "") else fig_type_raw
+
+        meta = {
+            "figure_type": fig_type,
+            "element_tag": tag,
+            "element_width": capture.get("width", 0),
+            "element_height": capture.get("height", 0),
+            "title": fig.get("title", ""),
+            "original_source_type": "web",
+            "source_url": source_url,
+            "vision_model": model,
+        }
+        collected.append((desc, meta, idx))
+
+    if not collected:
+        return 0
+
+    # --- Phase 2: Batch embed (fallible: embedding calls) ---
+    texts = [desc for desc, _, _ in collected]
+    embeddings = _embed_with_config(conn, texts)
+
+    # --- Phase 3: Atomic swap — delete stale, insert new (infallible) ---
+    old_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' "
+            "AND chunk_index >= ?",
+            (source_url, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START),
+        ).fetchall()
+    ]
+    if old_ids:
+        _cleanup_figure_fk_refs(conn, old_ids)
+        delete_chunk_vecs(conn, old_ids)
+        _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
+
+    figures_added = 0
+    for (desc, meta, cap_idx), emb_vec in zip(collected, embeddings):
+        chunk_hash = _content_hash(desc)
+        existing = conn.execute(
+            "SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)
+        ).fetchone()
+        if existing:
+            continue
+
+        meta_json = json.dumps(meta)
+        chunk_index = _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START + cap_idx
+        _insert_chunk(
+            conn,
+            content_hash=chunk_hash,
+            content=desc,
+            source_type="figure",
+            source_uri=source_url,
+            chunk_index=chunk_index,
+            embedding=emb_vec,
+            metadata=meta_json,
+        )
+        figures_added += 1
+
+    if figures_added:
+        conn.commit()
+    return figures_added
+
+
+# ---------------------------------------------------------------------------
 # Stale inline image cleanup
 # ---------------------------------------------------------------------------
 
@@ -759,12 +920,18 @@ def _cleanup_stale_inline_images(conn: sqlite3.Connection, source_uri: str) -> i
 
     Returns the number of chunks deleted.
     """
+    # Scoped to [_WEB_IMAGE_CHUNK_INDEX_START, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START)
+    # to avoid deleting element captures from Phase 3.
     old_ids = [
         r["id"]
         for r in conn.execute(
             "SELECT id FROM chunks WHERE source_uri = ? "
-            "AND source_type = 'figure' AND chunk_index >= ?",
-            (source_uri, _WEB_IMAGE_CHUNK_INDEX_START),
+            "AND source_type = 'figure' AND chunk_index >= ? AND chunk_index < ?",
+            (
+                source_uri,
+                _WEB_IMAGE_CHUNK_INDEX_START,
+                _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START,
+            ),
         ).fetchall()
     ]
     if not old_ids:
@@ -883,6 +1050,20 @@ def ingest_url(
                                 exc_info=True,
                             )
                             figures_extracted = 0
+
+                    # Extract per-element captures (Phase 3, #132)
+                    element_captures = render_result.get("element_captures")
+                    if element_captures:
+                        try:
+                            figures_extracted += _extract_element_captures(
+                                conn, url, element_captures
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Element capture extraction failed for %s",
+                                url,
+                                exc_info=True,
+                            )
                 finally:
                     tmpdir = render_result.get("tmpdir")
                     if tmpdir:

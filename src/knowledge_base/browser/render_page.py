@@ -12,9 +12,54 @@ Security notes:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
+
+_MIN_ELEMENT_DIMENSION = 80  # px – skip tiny icons/decorations
+_MAX_ELEMENT_CAPTURES = 10
+
+
+def _capture_elements(page, out_dir: Path) -> None:  # type: ignore[no-untyped-def]
+    """Screenshot visible <canvas> and <svg> elements, write manifest."""
+    elements = page.query_selector_all("canvas, svg")
+    captures: list[dict[str, object]] = []
+
+    for el in elements:
+        if len(captures) >= _MAX_ELEMENT_CAPTURES:
+            break
+        try:
+            box = el.bounding_box()
+        except Exception:
+            continue
+        if not box:
+            continue
+        w, h = box["width"], box["height"]
+        if w < _MIN_ELEMENT_DIMENSION or h < _MIN_ELEMENT_DIMENSION:
+            continue
+        # Skip elements outside the viewport (negative coords or zero-area)
+        if box["x"] + w <= 0 or box["y"] + h <= 0:
+            continue
+
+        tag = el.evaluate("el => el.tagName.toLowerCase()")
+        filename = f"element_{len(captures)}.png"
+        try:
+            el.screenshot(path=str(out_dir / filename))
+        except Exception:
+            continue
+
+        captures.append(
+            {
+                "file": filename,
+                "tag": tag,
+                "width": int(w),
+                "height": int(h),
+            }
+        )
+
+    if captures:
+        (out_dir / "elements.json").write_text(json.dumps(captures))
 
 
 def main() -> None:
@@ -61,6 +106,9 @@ def main() -> None:
                     path=str(out / "screenshot.png"),
                     clip={"x": 0, "y": 0, "width": 1280, "height": 8000},
                 )
+
+                # 3. Per-element captures for <canvas> and complex <svg> (#132)
+                _capture_elements(page, out)
             finally:
                 context.close()
         finally:
