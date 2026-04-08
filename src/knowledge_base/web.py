@@ -153,11 +153,81 @@ def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> N
 # ---------------------------------------------------------------------------
 
 
+def _parse_image_candidates(
+    html_content: str,
+    base_url: str,
+    *,
+    exclude_urls: frozenset[str] = frozenset(),
+) -> list[tuple[str, str]] | None:
+    """Parse ``<img>`` tags from *html_content* and return qualifying ``(url, alt)`` pairs.
+
+    Applies all filtering: data URIs, SVGs, decorative patterns,
+    HTML dimension pre-filter, and URL dedup.  *exclude_urls* skips images
+    already collected from another HTML source (Phase 2 cross-source dedup).
+
+    Returns ``None`` on parse failure (caller should not trigger stale cleanup),
+    or an empty list when parsing succeeded but no images qualify.
+    """
+    parser = _ImgTagParser()
+    try:
+        parser.feed(html_content)
+    except Exception:
+        logger.warning("HTML parsing failed for %s", base_url, exc_info=True)
+        return None
+
+    if not parser.images:
+        return []
+
+    seen_urls: set[str] = set(exclude_urls)
+    candidates: list[tuple[str, str]] = []
+
+    for img in parser.images:
+        src = img["src"]
+
+        if src.startswith("data:"):
+            continue
+        if src.lower().endswith((".svg", ".svgz")):
+            continue
+
+        resolved = urljoin(base_url, src)
+
+        if not _validate_image_url(resolved):
+            continue
+
+        if _DECORATIVE_URL_PATTERNS.search(resolved):
+            continue
+
+        alt = img.get("alt", "")
+        if alt and _DECORATIVE_ALT_PATTERNS.search(alt):
+            continue
+
+        w_str = img.get("width", "")
+        h_str = img.get("height", "")
+        try:
+            w = int(w_str) if w_str else None
+            h = int(h_str) if h_str else None
+        except ValueError:
+            w, h = None, None
+        if w is not None and h is not None:
+            if w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION:
+                continue
+
+        if resolved in seen_urls:
+            continue
+        seen_urls.add(resolved)
+
+        candidates.append((resolved, alt))
+
+    return candidates
+
+
 def _extract_html_images(
     conn: sqlite3.Connection,
     html_content: str,
     source_url: str,
     base_url: str | None = None,
+    *,
+    extra_html_sources: list[tuple[str, str]] | None = None,
 ) -> int:
     """Extract inline ``<img>`` tags from HTML, describe via vision, store as figure chunks.
 
@@ -168,6 +238,11 @@ def _extract_html_images(
     ``urljoin``.  Defaults to *source_url* when not provided.  Pass
     ``str(response.url)`` when the page redirected so relative paths resolve
     against the final location.
+
+    *extra_html_sources* is an optional list of ``(html, base_url)`` pairs
+    (e.g. rendered DOM HTML from Playwright).  Images from these sources are
+    merged with the primary HTML candidates and URL-deduplicated — images
+    already found in the primary HTML are not re-downloaded.
 
     Returns the number of figure chunks added.  Returns 0 if vision is not
     configured or no qualifying images are found.
@@ -190,66 +265,29 @@ def _extract_html_images(
     vis_model = vision_config["model"]
 
     # --- Parse <img> tags ---
-    parser = _ImgTagParser()
-    try:
-        parser.feed(html_content)
-    except Exception:
-        logger.warning("HTML parsing failed for %s", base_url, exc_info=True)
+    candidates = _parse_image_candidates(html_content, base_url)
+
+    if candidates is None:
+        # Parse failure — do NOT trigger stale cleanup (non-destructive)
         return 0
 
-    if not parser.images:
-        # Page has no <img> tags — clean up any stale inline image chunks (#152)
-        _cleanup_stale_inline_images(conn, source_url)
-        return 0
-
-    # --- Pre-filter ---
-    seen_urls: set[str] = set()
-    candidates: list[tuple[str, str]] = []  # (resolved_url, alt_text)
-
-    for img in parser.images:
-        src = img["src"]
-
-        # Skip data URIs and SVGs
-        if src.startswith("data:"):
-            continue
-        if src.lower().endswith((".svg", ".svgz")):
-            continue
-
-        resolved = urljoin(base_url, src)
-
-        if not _validate_image_url(resolved):
-            continue
-
-        # Decorative URL patterns
-        if _DECORATIVE_URL_PATTERNS.search(resolved):
-            continue
-
-        alt = img.get("alt", "")
-        if alt and _DECORATIVE_ALT_PATTERNS.search(alt):
-            continue
-
-        # HTML dimension pre-filter
-        w_str = img.get("width", "")
-        h_str = img.get("height", "")
-        try:
-            w = int(w_str) if w_str else None
-            h = int(h_str) if h_str else None
-        except ValueError:
-            w, h = None, None
-        if w is not None and h is not None:
-            if w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION:
-                continue
-
-        # URL dedup
-        if resolved in seen_urls:
-            continue
-        seen_urls.add(resolved)
-
-        candidates.append((resolved, alt))
+    # Phase 2 (#131): merge candidates from rendered DOM (or other extra sources)
+    any_parse_failed = False
+    if extra_html_sources:
+        seen_urls: set[str] = {url for url, _alt in candidates}
+        for extra_html, extra_base in extra_html_sources:
+            extra = _parse_image_candidates(
+                extra_html, extra_base, exclude_urls=frozenset(seen_urls)
+            )
+            if extra is None:
+                any_parse_failed = True
+            elif extra:
+                candidates.extend(extra)
+                seen_urls.update(url for url, _alt in extra)
 
     if not candidates:
-        # Images exist but none qualify — clean up stale chunks (#152)
-        _cleanup_stale_inline_images(conn, source_url)
+        if not any_parse_failed:
+            _cleanup_stale_inline_images(conn, source_url)
         return 0
 
     # Cap
@@ -548,9 +586,17 @@ def _render_with_browser(
         return None
 
     html = html_path.read_text(encoding="utf-8")
+    # Final URL may differ from input after redirects or client-side navigation
+    final_url_path = tmpdir / "final_url.txt"
+    final_url = (
+        final_url_path.read_text(encoding="utf-8").strip()
+        if final_url_path.exists()
+        else None
+    )
     return {
         "html": html,
         "screenshot_path": screenshot_path if screenshot_path.exists() else None,
+        "final_url": final_url,
         "tmpdir": tmpdir,
     }
 
@@ -779,6 +825,8 @@ def ingest_url(
 
     browser_rendered = False
     figures_extracted = 0
+    rendered_html_for_phase2: str | None = None
+    rendered_base_url: str = str(response.url)
 
     # Browser fallback: if trafilatura got insufficient content, try rendering
     if len(text.strip()) < _BROWSER_FALLBACK_MIN_CHARS:
@@ -803,6 +851,19 @@ def ingest_url(
                         text = rendered_text
                         browser_rendered = True
 
+                    # Capture rendered HTML for Phase 2 image extraction (#131).
+                    # Intentionally unconditional: the rendered DOM may contain
+                    # JS-injected images even when the rendered *text* was not
+                    # better than static (browser_rendered stays False).
+                    rendered_html_for_phase2 = render_result["html"]
+                    # Use browser's final URL for resolving relative <img src>
+                    # (may differ from httpx response.url after client-side nav).
+                    final = render_result.get("final_url") or ""
+                    if final and urlparse(final).scheme in ("http", "https"):
+                        rendered_base_url = final
+                    else:
+                        rendered_base_url = str(response.url)
+
                     # Extract figures from screenshot (isolated from text ingest)
                     screenshot = render_result.get("screenshot_path")
                     if screenshot and screenshot.exists():
@@ -822,15 +883,24 @@ def ingest_url(
                     if tmpdir:
                         shutil.rmtree(tmpdir, ignore_errors=True)
 
-    # Extract inline images from HTML (skip when screenshot figures already extracted)
-    if figures_extracted == 0:
-        try:
-            inline_figures = _extract_html_images(
-                conn, html, source_url=url, base_url=str(response.url)
-            )
-            figures_extracted += inline_figures
-        except Exception:
-            logger.warning("Inline image extraction failed for %s", url, exc_info=True)
+    # Extract inline images from HTML.
+    # Phase 1: always parse static HTML.
+    # Phase 2 (#131): when browser fallback fired, also parse rendered DOM.
+    extra_sources: list[tuple[str, str]] | None = None
+    if rendered_html_for_phase2 is not None:
+        extra_sources = [(rendered_html_for_phase2, rendered_base_url)]
+
+    try:
+        inline_figures = _extract_html_images(
+            conn,
+            html,
+            source_url=url,
+            base_url=str(response.url),
+            extra_html_sources=extra_sources,
+        )
+        figures_extracted += inline_figures
+    except Exception:
+        logger.warning("Inline image extraction failed for %s", url, exc_info=True)
 
     _base_result: dict = {
         "url": url,

@@ -53,6 +53,9 @@ def main() -> None:
                 # 1. Rendered HTML
                 (out / "page.html").write_text(page.content(), encoding="utf-8")
 
+                # 1b. Final URL (may differ from input after redirects/client navigation)
+                (out / "final_url.txt").write_text(page.url, encoding="utf-8")
+
                 # 2. Screenshot (clip caps height to bound memory on long pages)
                 page.screenshot(
                     path=str(out / "screenshot.png"),
