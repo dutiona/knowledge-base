@@ -12,8 +12,11 @@ from urllib.parse import urlparse
 from knowledge_base.exceptions import ValidationError
 
 __all__ = [
+    "ELEMENT_INSERT_EXPR",
+    "ELEMENT_QUERY_EXPR",
     "STOPWORDS",
     "TITLE_STOPWORDS",
+    "VALID_ELEMENT_TYPES",
     "compute_file_hash",
     "content_hash",
     "is_private_ip",
@@ -88,6 +91,24 @@ def content_hash(text: str) -> str:
 def serialize_f32(vec: list[float]) -> bytes:
     """Serialize a float vector to bytes for sqlite-vec."""
     return struct.pack(f"{len(vec)}f", *vec)
+
+
+# SQL expression templates for typed vector operations.
+# Each wraps a float32 blob parameter (?) for the target element type.
+# INSERT and QUERY are separate dicts because future quantization schemes
+# (e.g. TurboQuant #344) may use different expressions for storage vs. lookup
+# (asymmetric quantization: store with codebook, query with fast approximate).
+ELEMENT_INSERT_EXPR: dict[str, str] = {
+    "float32": "?",
+    "int8": "vec_quantize_int8(vec_f32(?), 'unit')",
+}
+
+ELEMENT_QUERY_EXPR: dict[str, str] = {
+    "float32": "?",
+    "int8": "vec_quantize_int8(vec_f32(?), 'unit')",
+}
+
+VALID_ELEMENT_TYPES: frozenset[str] = frozenset(ELEMENT_INSERT_EXPR.keys())
 
 
 # Common English stopwords — shared across keyword extraction and title matching.

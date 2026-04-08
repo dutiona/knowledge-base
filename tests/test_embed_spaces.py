@@ -13,6 +13,7 @@ from knowledge_base.db import (
     get_active_chunk_strategy,
     get_active_space,
     get_connection,
+    get_space_element_type,
     get_vec_table_name,
     init_schema,
     insert_chunk_vec,
@@ -446,3 +447,138 @@ def test_backfill_matryoshka_space(mock_get_prov, tmp_path):
     row = conn.execute("SELECT embedding FROM chunks_vec_mat").fetchone()
     vec = struct.unpack(f"{4}f", row["embedding"])
     assert len(vec) == 4
+
+
+# ---------------------------------------------------------------------------
+# element_type support
+# ---------------------------------------------------------------------------
+
+
+def test_create_space_with_int8_element_type(tmp_path):
+    conn = _setup(tmp_path)
+    result = create_space(
+        conn, "int8_space", "bge-m3", 4, "ollama", element_type="int8"
+    )
+    assert result["space"] == "int8_space"
+
+    row = conn.execute(
+        "SELECT element_type FROM embed_spaces WHERE name = 'int8_space'"
+    ).fetchone()
+    assert row["element_type"] == "int8"
+
+    # The vec0 table must exist and be queryable
+    conn.execute("SELECT COUNT(*) FROM [chunks_vec_int8_space]").fetchone()
+
+
+def test_create_space_default_element_type(tmp_path):
+    conn = _setup(tmp_path)
+    create_space(conn, "f32_space", "bge-m3", 4, "ollama")
+
+    row = conn.execute(
+        "SELECT element_type FROM embed_spaces WHERE name = 'f32_space'"
+    ).fetchone()
+    assert row["element_type"] == "float32"
+
+
+def test_create_space_invalid_element_type(tmp_path):
+    conn = _setup(tmp_path)
+    with pytest.raises(ValueError, match="element_type"):
+        create_space(conn, "bad_type", "bge-m3", 4, "ollama", element_type="float16")
+
+
+@patch(
+    "knowledge_base.embed_swap.get_provider",
+    return_value=_FakeProvider(),
+)
+def test_backfill_int8_space(mock_prov, tmp_path):
+    conn = _setup(tmp_path)
+    _add_chunk(conn, "int8 chunk", 0)
+
+    create_space(conn, "bf_int8", "bge-m3", 4, "ollama", element_type="int8")
+    result = backfill_space(conn, "bf_int8", batch_size=10)
+
+    assert result["chunks_processed"] == 1
+    count = conn.execute("SELECT COUNT(*) FROM [chunks_vec_bf_int8]").fetchone()[0]
+    assert count == 1
+
+
+@patch(
+    "knowledge_base.embed_swap.get_provider",
+    return_value=_FakeProvider(),
+)
+def test_search_int8_space(mock_prov, tmp_path):
+    conn = _setup(tmp_path)
+    _add_chunk(conn, "searchable int8 content", 0)
+
+    create_space(conn, "search_int8", "bge-m3", 4, "ollama", element_type="int8")
+    backfill_space(conn, "search_int8", batch_size=10)
+    promote_space(conn, "search_int8")
+
+    from knowledge_base.search import _vec_search
+
+    results = _vec_search(conn, [0.1] * 4, limit=5)
+    assert len(results) > 0
+
+
+@patch(
+    "knowledge_base.embed_swap.get_provider",
+    return_value=_FakeProvider(),
+)
+def test_promote_int8_space_syncs_config(mock_prov, tmp_path):
+    conn = _setup(tmp_path)
+    _add_chunk(conn, "config sync chunk", 0)
+
+    create_space(conn, "cfg_int8", "bge-m3", 4, "ollama", element_type="int8")
+    backfill_space(conn, "cfg_int8", batch_size=10)
+    promote_space(conn, "cfg_int8")
+
+    row = conn.execute(
+        "SELECT value FROM config WHERE key = 'embed_element_type'"
+    ).fetchone()
+    assert row is not None
+    assert row["value"] == "int8"
+
+
+def test_migration_adds_element_type(tmp_path):
+    conn = _setup(tmp_path)
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()
+    }
+    assert "element_type" in columns
+
+
+def test_get_space_element_type_default(tmp_path):
+    conn = _setup(tmp_path)
+    # Default space is float32
+    assert get_space_element_type(conn) == "float32"
+
+
+def test_get_space_element_type_int8(tmp_path):
+    conn = _setup(tmp_path)
+    create_space(conn, "et_int8", "bge-m3", 4, "ollama", element_type="int8")
+    assert get_space_element_type(conn, "chunks_vec_et_int8") == "int8"
+
+
+@patch(
+    "knowledge_base.embed_swap.get_provider",
+    return_value=_FakeProvider(),
+)
+def test_insert_chunk_vec_auto_resolves_element_type(mock_prov, tmp_path):
+    conn = _setup(tmp_path)
+    _add_chunk(conn, "auto resolve chunk", 0)
+
+    create_space(conn, "auto_int8", "bge-m3", 4, "ollama", element_type="int8")
+    backfill_space(conn, "auto_int8", batch_size=10)
+    promote_space(conn, "auto_int8")
+
+    cid = _add_chunk(conn, "new chunk after promotion", 1)
+    # Call insert_chunk_vec without element_type — should auto-detect int8
+    insert_chunk_vec(conn, cid, [0.1] * 4)
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT chunk_id FROM [chunks_vec_auto_int8] WHERE chunk_id = ?", (cid,)
+    ).fetchone()
+    assert row is not None
+    assert row["chunk_id"] == cid

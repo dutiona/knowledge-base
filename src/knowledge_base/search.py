@@ -10,13 +10,14 @@ from dataclasses import dataclass
 from .db import (
     _batched_select,
     get_active_space,
+    get_space_element_type,
     get_vec_table_name,
 )
 from .embed_swap import get_embed_config
 from .embeddings import embed_single, truncate_embedding
 from .exceptions import ValidationError
 from .keywords import build_fts_query, extract_keywords
-from .utils import serialize_f32 as _serialize_f32
+from .utils import ELEMENT_QUERY_EXPR, serialize_f32 as _serialize_f32
 
 logger = logging.getLogger(__name__)
 
@@ -100,9 +101,11 @@ def _vec_search(
 ) -> list[tuple[int, float]]:
     """Vector similarity search. Returns (chunk_id, distance) pairs."""
     vec_table = table_name or get_vec_table_name(conn)
+    element_type = get_space_element_type(conn, vec_table)
+    query_expr = ELEMENT_QUERY_EXPR[element_type]
     rows = conn.execute(
         f"SELECT chunk_id, distance FROM [{vec_table}]"
-        " WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+        f" WHERE embedding MATCH {query_expr} ORDER BY distance LIMIT ?",
         (_serialize_f32(query_embedding), limit),
     ).fetchall()
     return [(row["chunk_id"], row["distance"]) for row in rows]

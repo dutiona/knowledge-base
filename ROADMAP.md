@@ -131,7 +131,9 @@ dependency chains, and parallelism opportunities.
 | 125 | BM25-seeded HNSW insertion for graph quality             | Search      | 3     |                                                   |
 | 124 | decouple index construction from query serving           | Search      | 3     |                                                   |
 | 122 | docs: four-layer cognitive architecture                  | Foundation  | 3     |                                                   |
-| 94  | compressed vector indices (int8/bit)                     | Embedding   | 3     |                                                   |
+| 94  | compressed vector indices (int8/bit)                     | Embedding   | 3     | ✔ PR #355                                         |
+| 344 | TurboQuant 4-bit embedding quantization                  | Embedding   | 3     | depends on #94                                    |
+| 345 | binary quantization + int8 rescoring (two-stage search)  | Search      | 3     | depends on #94                                    |
 | 111 | pymupdf4llm Phase 4: hybrid enrichment                   | Ingest      | 3     | ✔ PR #340                                         |
 | 334 | persistent OmniParser HTTP server (model caching)        | Vision      | 3     | ✔ PR #352                                         |
 | 131 | web image extraction Phase 2: rendered DOM images        | Ingest      | 3     | done                                              |
@@ -435,7 +437,9 @@ polish ingest pipelines with follow-up enhancements.
 #132 (web images, Phase 3)  ─── depends on #131 (done) ── done (PR #347)
 #164 (<picture>/srcset)     ─── depends on #82 (done)
 
-#94 (int8/bit quantization) ─── depends on #99 (done)
+#94 (int8/bit quantization) ─── depends on #99 (done) ── done (PR #355)
+#344 (TurboQuant 4-bit)     ─── depends on #94 (done)
+#345 (binary+int8 rescore)  ─── depends on #94 (done)
 #125 (BM25-seeded HNSW)     ─── depends on #99 (done)
 #124 (build/serve pattern)  ─── independent
 
@@ -516,7 +520,8 @@ polish ingest pipelines with follow-up enhancements.
   External dependency: `memory-engine` must expose an MCP server.
   NYX12 bidirectional linking: KnowledgeBaseConnector needs intent-aware
   retrieval and Knowledge-URI-to-Memory-fact linking.
-- **#94, #125** both build on #99 (multi-space), now done.
+- **#94** done (PR #355). Follow-ups #344 (TurboQuant) and #345 (binary+int8 rescoring) depend on it.
+- **#125** builds on #99 (multi-space), now done.
 - **#129 (retrieval plan IR)** benefits from #106 (reranking) — plan can
   specify reranking directives per sub-query.
 - **#147 + #179** should be implemented together — #147 adds configurability,
@@ -621,7 +626,8 @@ Phase 3                         Phase 4
 ────────                        ────────
 #102 ──┬──▶ #103                #108, #109, #247
        └──▶ #104                #107 (epic)
-#94, #125 (need ✔#99)          #12, #65, #80
+✔#94, #125 (need ✔#99)         #12, #65, #80
+#344, #345 (need ✔#94)
 #124, #129 (after ✔#106)
 #253 ──▶ #254 ──▶ #257
 #253 ──▶ #268 ──▶ #269
