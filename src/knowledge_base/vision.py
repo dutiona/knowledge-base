@@ -69,6 +69,7 @@ class DualPathInputs:
     vector_pages: list[int]
     pages_with_images: set[int]
     mixed_page_regions: dict[int, list]  # page_num -> list[fitz.Rect]
+    caption_map: CaptionMap | None = None
 
 
 @dataclasses.dataclass
@@ -459,12 +460,12 @@ def _elements_in_region(
     return result
 
 
-def _merge_omniparser_elements(figure: dict, elements: list[dict]) -> dict:
-    """Append OmniParser OCR text and icon captions to figure description.
+def _format_omniparser_ocr(elements: list[dict]) -> str | None:
+    """Format OmniParser elements into an OCR text string.
 
-    Deduplicates (case-insensitive), skips content < 2 chars,
-    and caps total appended text at _OMNIPARSER_MAX_APPEND chars.
-    Returns original dict if nothing to merge.
+    Deduplicates (case-insensitive), skips content < 2 chars, and caps
+    total text at _OMNIPARSER_MAX_APPEND chars. Returns None if no
+    usable text found.
     """
     seen: set[str] = set()
     texts: list[str] = []
@@ -484,7 +485,7 @@ def _merge_omniparser_elements(figure: dict, elements: list[dict]) -> dict:
             icons.append(content)
 
     if not texts and not icons:
-        return figure
+        return None
 
     parts: list[str] = []
     budget = _OMNIPARSER_MAX_APPEND
@@ -502,7 +503,19 @@ def _merge_omniparser_elements(figure: dict, elements: list[dict]) -> dict:
             line = line[: budget - 1] + "\u2026"
         parts.append(line)
 
-    return {**figure, "description": figure["description"] + "\n\n" + "\n".join(parts)}
+    return "\n".join(parts) if parts else None
+
+
+def _merge_omniparser_elements(figure: dict, elements: list[dict]) -> dict:
+    """Append OmniParser OCR text and icon captions to figure description.
+
+    Delegates formatting to _format_omniparser_ocr. Returns original dict
+    if nothing to merge.
+    """
+    ocr_text = _format_omniparser_ocr(elements)
+    if ocr_text is None:
+        return figure
+    return {**figure, "description": figure["description"] + "\n\n" + ocr_text}
 
 
 # ---------------------------------------------------------------------------
@@ -628,39 +641,75 @@ def _heuristic_filter(pdf_path: str) -> list[int]:
 # Step 5: Vision API call
 # ---------------------------------------------------------------------------
 
-_VISION_PROMPT = """Analyze this PDF page image. Identify all figures, diagrams, charts, tables, or significant visual elements.
 
+def _build_page_vision_prompt(captions: list[str] | None = None) -> str:
+    """Build the vision prompt for a full PDF page render.
+
+    When captions are available from the document text layer, they are
+    injected so the vision LLM focuses on visual content.
+    """
+    caption_block = ""
+    if captions:
+        formatted = "\n".join(f"  - {c}" for c in captions)
+        caption_block = (
+            f"\nCaptions already extracted from document text:\n{formatted}\n"
+            "Do NOT repeat these captions. Focus on describing visual content.\n"
+        )
+
+    return f"""Analyze this PDF page image. Identify all figures, diagrams, charts, tables, or significant visual elements.
+{caption_block}
 Return a JSON array. One object per distinct figure. For sub-figures (a), (b), (c), create separate objects if they represent different concepts.
 
 Each object:
-{
+{{
   "figure_type": "diagram|chart|table|photo|equation",
   "title": "Exact caption as shown, or null if none visible",
   "description": "Detailed natural language description of visual content and relationships",
   "entities_mentioned": ["only names explicitly visible in the figure"]
-}
+}}
 
 Rules:
 - Do NOT fabricate text not visible in the image
 - If text is illegible, describe layout rather than guessing
 - Return [] if no figures/diagrams/charts/tables are present"""
 
-_FIGURE_VISION_PROMPT = """Analyze this figure image extracted from a research paper.
 
+def _build_figure_vision_prompt(caption: str | None = None) -> str:
+    """Build the vision prompt for an isolated extracted figure image.
+
+    When a caption is available from the document text layer, it is injected
+    so the vision LLM can focus on describing visual content rather than
+    re-reading the caption.
+    """
+    caption_block = ""
+    if caption:
+        caption_block = (
+            f'\nCaption from document text: "{caption}"\n'
+            "Do NOT repeat this caption. Focus on describing the visual content, "
+            "data relationships, and key takeaways that are NOT captured by the caption.\n"
+        )
+
+    return f"""Analyze this figure image extracted from a research paper.
+{caption_block}
 Return a JSON array with one object describing this figure.
 
 Each object:
-{
+{{
   "figure_type": "diagram|chart|table|photo|equation",
   "title": "Exact caption if visible, or null",
   "description": "Detailed natural language description of visual content, data relationships, and key takeaways",
   "entities_mentioned": ["only names explicitly visible in the figure"]
-}
+}}
 
 Rules:
 - Do NOT fabricate text not visible in the image
 - If text is illegible, describe layout rather than guessing
 - Return [] if the image contains no meaningful visual content"""
+
+
+# Backward-compatible aliases for no-caption calls
+_VISION_PROMPT = _build_page_vision_prompt()
+_FIGURE_VISION_PROMPT = _build_figure_vision_prompt()
 
 
 def _vision_call(
@@ -1000,6 +1049,144 @@ def _collect_extracted_images(
 
 
 # ---------------------------------------------------------------------------
+# Step 5b: Caption extraction from ingest chunks
+# ---------------------------------------------------------------------------
+
+# Regex to find image references in pymupdf4llm markdown
+_IMAGE_REF_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+
+# Caption search window: lines before/after an image reference
+_CAPTION_SEARCH_LINES = 3
+
+
+@dataclasses.dataclass
+class CaptionMap:
+    """Captions extracted from ingest chunks, indexed two ways."""
+
+    by_image: dict[str, str]  # image basename -> caption string
+    by_page: dict[int, list[str]]  # 0-indexed page -> caption strings
+
+    def for_image(self, name: str | None) -> str | None:
+        if name is None:
+            return None
+        return self.by_image.get(name)
+
+    def for_page(self, page_0idx: int) -> list[str]:
+        return self.by_page.get(page_0idx, [])
+
+
+def _extract_captions(
+    conn: sqlite3.Connection,
+    source_uri: str,
+) -> CaptionMap:
+    """Extract caption strings associated with images from ingest chunks.
+
+    Scans PDF chunks for image references (``![](img.png)``) and searches
+    nearby lines for caption patterns matching ``_CAPTION_RE``
+    (Figure/Fig./Table N).
+
+    Also scans all chunks for standalone caption patterns keyed by page,
+    enabling caption lookup for vector-drawn figures that pymupdf4llm
+    can't extract as images.
+
+    Returns:
+        CaptionMap with both image-keyed and page-keyed lookups.
+    """
+    rows = conn.execute(
+        "SELECT content, metadata FROM chunks "
+        "WHERE source_uri = ? AND source_type = 'pdf'",
+        (source_uri,),
+    ).fetchall()
+
+    by_image: dict[str, str] = {}
+    by_page: dict[int, list[str]] = {}  # 0-indexed
+
+    for row in rows:
+        content = row["content"] or ""
+        try:
+            meta = json.loads(row["metadata"]) if row["metadata"] else {}
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+        pages = meta.get("pages", [])  # 1-indexed from pymupdf4llm
+        lines = content.splitlines()
+
+        # Track image refs found in this chunk
+        images_in_chunk: list[tuple[int, str]] = []
+        for line_idx, line in enumerate(lines):
+            for m in _IMAGE_REF_RE.finditer(line):
+                img_name = Path(m.group(1)).name
+                images_in_chunk.append((line_idx, img_name))
+
+        # For each image ref, find nearby captions
+        for line_idx, img_name in images_in_chunk:
+            if img_name in by_image:
+                continue  # first occurrence wins
+
+            start = max(0, line_idx - _CAPTION_SEARCH_LINES)
+            end = min(len(lines), line_idx + _CAPTION_SEARCH_LINES + 1)
+            for nearby_idx in range(start, end):
+                if nearby_idx == line_idx:
+                    continue
+                candidate = lines[nearby_idx].strip()
+                if _CAPTION_RE.search(candidate):
+                    by_image[img_name] = candidate
+                    break
+
+        # Collect page-indexed captions (for vector-page fallback).
+        # Attribute to ALL pages in the chunk, not just the first, since
+        # pymupdf4llm chunks can span multiple pages and we can't determine
+        # which page a caption belongs to from the text alone.
+        if pages:
+            caption_lines: list[str] = []
+            for line in lines:
+                stripped = line.strip()
+                if _CAPTION_RE.search(stripped):
+                    caption_lines.append(stripped)
+            for pg in pages:
+                page_0idx = pg - 1  # convert to 0-indexed
+                for cap in caption_lines:
+                    if cap not in by_page.get(page_0idx, []):
+                        by_page.setdefault(page_0idx, []).append(cap)
+
+    return CaptionMap(by_image=by_image, by_page=by_page)
+
+
+# ---------------------------------------------------------------------------
+# Step 5c: Structured content assembly
+# ---------------------------------------------------------------------------
+
+
+def _assemble_figure_content(
+    *,
+    caption: str | None,
+    description: str | None,
+    ocr_text: str | None,
+) -> str:
+    """Assemble unified figure chunk content from all extraction layers.
+
+    When multiple layers contribute, content is structured with section
+    markers for debuggability. When only one layer contributes, the raw
+    text is returned without markers.
+
+    Section order: [Caption] > [Description] > [OCR]
+    """
+    sections: list[tuple[str, str]] = []
+    if caption:
+        sections.append(("[Caption]", caption))
+    if description:
+        sections.append(("[Description]", description))
+    if ocr_text:
+        sections.append(("[OCR]", ocr_text))
+
+    if not sections:
+        return ""
+    if len(sections) == 1:
+        return sections[0][1]
+
+    return "\n\n".join(f"{marker} {text}" for marker, text in sections)
+
+
+# ---------------------------------------------------------------------------
 # Pipeline stages
 # ---------------------------------------------------------------------------
 
@@ -1052,6 +1239,11 @@ def _collect_dual_path_inputs(
     """Collect extracted images and determine vector-page fallback set."""
     image_dir = pdf_image_dir(pdf_path)
     extracted_images = _collect_extracted_images(conn, source_uri, image_dir)
+
+    # 5a. Extract captions from ingest chunks for hybrid enrichment
+    caption_map = _extract_captions(conn, source_uri)
+
+    # Convert 1-indexed page numbers (from ingest metadata) to 0-indexed (for fitz)
     pages_with_images: set[int] = {pn - 1 for _, pn in extracted_images}
 
     if pages is not None:
@@ -1080,6 +1272,7 @@ def _collect_dual_path_inputs(
         vector_pages=vector_pages,
         pages_with_images=pages_with_images,
         mixed_page_regions=mixed_page_regions,
+        caption_map=caption_map,
     )
 
 
@@ -1224,6 +1417,7 @@ def _dispatch_vision_calls(
         int,
         tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]],
     ],
+    caption_map: CaptionMap,
     base_url: str,
     model: str,
     on_progress: Callable[[str], None] | None,
@@ -1240,7 +1434,7 @@ def _dispatch_vision_calls(
     with ThreadPoolExecutor(max_workers=4) as executor:
         future_to_key: dict = {}
 
-        # Extracted images — page-local indices to avoid collision with mixed regions
+        # 7a. Extracted images — page-local indices + caption-aware prompt.
         page_image_counter: dict[int, int] = {}
         for img_path, page_num in extracted_images:
             page_0idx = page_num - 1
@@ -1248,20 +1442,25 @@ def _dispatch_vision_calls(
             page_image_counter[page_0idx] = local_idx + 1
             img_bytes = img_path.read_bytes()
             b64 = base64.b64encode(img_bytes).decode("ascii")
+            caption = caption_map.for_image(img_path.name)
+            prompt = _build_figure_vision_prompt(caption=caption)
             future = executor.submit(
                 _vision_call,
                 b64,
-                _FIGURE_VISION_PROMPT,
+                prompt,
                 base_url=base_url,
                 model=model,
             )
             future_to_key[future] = (page_0idx, local_idx, img_path.name)
 
-        # Vector page fallback — use _VISION_PROMPT
+        # 7b. Vector page fallback — use caption-aware page prompt.
         for page_num, png_bytes in rendered.items():
             _, regions, crops = omni_page_data.get(
                 page_num, (None, [(0.0, 0.0, 1.0, 1.0)], [])
             )
+            # Use page-indexed captions (works for vector pages without images)
+            page_captions = caption_map.for_page(page_num)
+            page_prompt = _build_page_vision_prompt(captions=page_captions or None)
 
             if len(crops) > 1:
                 for region_idx, crop_bytes in enumerate(crops):
@@ -1269,7 +1468,7 @@ def _dispatch_vision_calls(
                     future = executor.submit(
                         _vision_call,
                         b64,
-                        _VISION_PROMPT,
+                        page_prompt,
                         base_url=base_url,
                         model=model,
                     )
@@ -1279,7 +1478,7 @@ def _dispatch_vision_calls(
                 future = executor.submit(
                     _vision_call,
                     b64,
-                    _VISION_PROMPT,
+                    page_prompt,
                     base_url=base_url,
                     model=model,
                 )
@@ -1322,6 +1521,20 @@ def _dispatch_vision_calls(
                     region_idx,
                     exc,
                 )
+                # Best-effort: if this was an extracted image with a known
+                # caption, create a fallback figure dict from the caption alone
+                if source_image_name and caption_map.for_image(source_image_name):
+                    fallback_fig = {
+                        "figure_type": "unknown",
+                        "description": "",
+                        "title": caption_map.for_image(source_image_name),
+                        "entities_mentioned": [],
+                        "_source_image": source_image_name,
+                        "_vision_failed": True,
+                    }
+                    page_figures_by_region.setdefault(page_num, {})[region_idx] = [
+                        fallback_fig
+                    ]
 
         # Flatten: merge all regions for each page into a single list
         for page_num, region_map in page_figures_by_region.items():
@@ -1350,7 +1563,15 @@ def _enrich_with_omniparser(
     page_results: dict[int, list[dict]],
     omni: OmniParserResults,
 ) -> int:
-    """Enrich vision results with OmniParser text/icon data. Returns enriched count."""
+    """Extract OCR text from OmniParser for content assembly.
+
+    Tags figures with ``_ocr_text`` (formatted via ``_format_omniparser_ocr``).
+    This replaces the old ``_merge_omniparser_elements`` enrichment — OCR text
+    is assembled into the unified content field by ``_assemble_figure_content``,
+    not appended directly to the description.
+
+    Returns enriched count.
+    """
     omniparser_enriched = 0
 
     for page_num in page_results:
@@ -1359,53 +1580,32 @@ def _enrich_with_omniparser(
 
         figures_on_page = page_results[page_num]
 
-        # Extracted images: look up OmniParser data by image name
         for i, fig in enumerate(figures_on_page):
             source_image_name = fig.get("_source_image")
             if source_image_name and source_image_name in omni.image_data:
                 omni_result, _, _ = omni.image_data[source_image_name]
                 if omni_result and omni_result.get("elements"):
-                    enriched = _merge_omniparser_elements(fig, omni_result["elements"])
-                    if enriched is not fig:
+                    ocr = _format_omniparser_ocr(omni_result["elements"])
+                    if ocr:
+                        figures_on_page[i] = {**fig, "_ocr_text": ocr}
                         omniparser_enriched += 1
-                    figures_on_page[i] = enriched
-
-        # Vector pages: look up OmniParser data by page number
-        omni_result, regions, crops = omni.page_data.get(
-            page_num, (None, [(0.0, 0.0, 1.0, 1.0)], [])
-        )
-        if not omni_result or not omni_result.get("elements"):
-            continue
-
-        vector_figs = [
-            (i, fig)
-            for i, fig in enumerate(figures_on_page)
-            if not fig.get("_source_image")
-        ]
-        if not vector_figs:
-            continue
-
-        omni_elements = omni_result["elements"]
-
-        if len(vector_figs) == 1:
-            idx, fig = vector_figs[0]
-            enriched = _merge_omniparser_elements(fig, omni_elements)
-            if enriched is not fig:
-                omniparser_enriched += 1
-            figures_on_page[idx] = enriched
-        else:
-            for idx, fig in vector_figs:
-                region_idx = fig.get("_region_idx")
-                if region_idx is not None and region_idx < len(regions):
-                    region_elements = _elements_in_region(
-                        omni_elements, regions[region_idx]
-                    )
-                else:
-                    region_elements = omni_elements
-                figures_on_page[idx] = {
-                    **fig,
-                    "_omniparser_elements": region_elements,
-                }
+            elif not source_image_name:
+                # Vector page — use page-level OmniParser data
+                omni_result_page, regions_page, _ = omni.page_data.get(
+                    page_num, (None, [(0.0, 0.0, 1.0, 1.0)], [])
+                )
+                if omni_result_page and omni_result_page.get("elements"):
+                    region_idx = fig.get("_region_idx")
+                    if region_idx is not None and region_idx < len(regions_page):
+                        els = _elements_in_region(
+                            omni_result_page["elements"], regions_page[region_idx]
+                        )
+                    else:
+                        els = omni_result_page["elements"]
+                    ocr = _format_omniparser_ocr(els)
+                    if ocr:
+                        figures_on_page[i] = {**fig, "_ocr_text": ocr}
+                        omniparser_enriched += 1
 
     return omniparser_enriched
 
@@ -1415,19 +1615,46 @@ def _persist_figures(
     source_uri: str,
     pages: list[int] | None,
     page_results: dict[int, list[dict]],
+    caption_map: CaptionMap,
     model: str,
     on_progress: Callable[[str], None] | None,
 ) -> int:
     """Embed figures and persist to DB in an atomic transaction. Returns chunks_created."""
-    # Collect all figure descriptions for batch embedding
+    # 8. Assemble unified content and collect for batch embedding
     if on_progress:
         on_progress("embedding figures...")
     all_figures: list[tuple[int, int, dict]] = []
     texts: list[str] = []
     for page_num in sorted(page_results):
         for fig_idx, figure in enumerate(page_results[page_num]):
+            # Look up caption: image-keyed for extracted images, page-keyed
+            # for vector-page figures. Only pymupdf4llm-sourced captions
+            # count — vision LLM titles are already in the description.
+            source_image_name = figure.get("_source_image")
+            caption = (
+                caption_map.for_image(source_image_name) if source_image_name else None
+            )
+            if caption is None and not source_image_name:
+                # Vector-page fallback: use first page caption from text layer
+                page_caps = caption_map.for_page(page_num)
+                if page_caps:
+                    caption = page_caps[0]
+
+            description = (
+                figure["description"] if not figure.get("_vision_failed") else None
+            )
+            content = _assemble_figure_content(
+                caption=caption,
+                description=description,
+                ocr_text=figure.get("_ocr_text"),
+            )
+            if not content:
+                continue  # skip figures with no content at all
+            figure["_assembled_content"] = content
+            figure["_caption"] = caption
+
             all_figures.append((page_num, fig_idx, figure))
-            texts.append(figure["description"])
+            texts.append(content)
 
     # Compute embeddings in one batch
     embeddings: list[list[float]] = []
@@ -1474,7 +1701,7 @@ def _persist_figures(
 
         if all_figures:
             for i, (page_num, fig_idx, figure) in enumerate(all_figures):
-                content = figure["description"]
+                content = figure.get("_assembled_content", figure["description"])
                 content_hash = _content_hash(content)
 
                 existing = conn.execute(
@@ -1491,18 +1718,36 @@ def _persist_figures(
                     )
                     fig_idx = _FIGS_PER_PAGE - 1
                 chunk_index = _FIGURE_BASE + page_num * _FIGS_PER_PAGE + fig_idx
-                meta_dict = {
+
+                # Build enrichment tracking
+                caption = figure.get("_caption")
+                vision_failed = figure.get("_vision_failed", False)
+                enrichment_layers: list[str] = []
+                if caption:
+                    enrichment_layers.append("pymupdf4llm")
+                if not vision_failed:
+                    enrichment_layers.append("vision_llm")
+                if figure.get("_ocr_text"):
+                    enrichment_layers.append("omniparser")
+
+                meta_dict: dict = {
                     "page": page_num,
                     "figure_type": figure["figure_type"],
                     "title": figure["title"],
                     "entities_mentioned": figure["entities_mentioned"],
                     "vision_model": model,
+                    "enrichment_layers": enrichment_layers,
                 }
+                if not vision_failed:
+                    meta_dict["description_source"] = "vision_llm"
+                if caption:
+                    meta_dict["caption_source"] = "pymupdf4llm"
+                if figure.get("_ocr_text"):
+                    meta_dict["ocr_source"] = "omniparser"
+                # Track source image for extracted-image figures
                 source_image_name = figure.get("_source_image")
                 if source_image_name:
                     meta_dict["source_image"] = source_image_name
-                if "_omniparser_elements" in figure:
-                    meta_dict["omniparser_elements"] = figure["_omniparser_elements"]
                 metadata = json.dumps(meta_dict)
 
                 _insert_chunk(
@@ -1648,25 +1893,34 @@ def extract_figures(
         omniparser_path, inputs.extracted_images, rendered, on_progress
     )
 
+    caption_map = inputs.caption_map or CaptionMap(by_image={}, by_page={})
+
     # 7. Dispatch vision calls in thread pool
     vision = _dispatch_vision_calls(
         inputs.extracted_images,
         rendered,
         mixed_rendered,
         omni.page_data,
+        caption_map,
         base_url,
         model,
         on_progress,
     )
 
-    # 7c. Enrich with OmniParser text/icon data
+    # 7c. Enrich with OmniParser OCR text
     omniparser_enriched = 0
     if omniparser_path:
         omniparser_enriched = _enrich_with_omniparser(vision.page_results, omni)
 
     # 8-10. Embed and persist figures
     chunks_created = _persist_figures(
-        conn, ctx.source_uri, pages, vision.page_results, model, on_progress
+        conn,
+        ctx.source_uri,
+        pages,
+        vision.page_results,
+        caption_map,
+        model,
+        on_progress,
     )
 
     # 11. Save rendered PNGs to disk
