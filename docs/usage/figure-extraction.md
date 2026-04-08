@@ -20,19 +20,20 @@ Some figures are vector-drawn (plots, diagrams composed of PDF drawing primitive
 
 2. **Vector page detection** -- Identifies pages with many vector drawings (>10) that lack extracted images. When pages are explicitly requested, all pages without extracted images are rendered (regardless of drawing count).
 
-3. **ETA gate** -- If estimated time for (extracted images + vector pages) exceeds 2 minutes, returns a confirmation prompt.
+3. **Mixed page detection** -- For pages that have both extracted raster images AND vector drawings, computes raster image bounding boxes via `page.get_image_bbox()`, then finds vector drawing clusters outside those bboxes. Only the vector-figure regions are rendered (cropped), preserving the "one image = one figure" property for extracted images while also capturing vector figures. Uses the same >10 drawing threshold as vector page detection.
 
-4. **OmniParser (optional)** -- If configured, each extracted image and each rendered vector page is analyzed by OmniParser. For extracted images, no multi-region splitting (each image IS a single figure). For vector pages, spatial clustering may split a page into subregions.
+4. **ETA gate** -- If estimated time for (extracted images + vector pages + mixed-page vector regions) exceeds 2 minutes, returns a confirmation prompt.
 
-5. **Vision model** -- Extracted images use a figure-specific prompt (tailored for single-figure analysis). Vector pages use the original full-page prompt. Vision calls run in a thread pool (max 4 workers).
+5. **OmniParser (optional)** -- If configured, each extracted image and each rendered vector page is analyzed by OmniParser. For extracted images, no multi-region splitting (each image IS a single figure). For vector pages, spatial clustering may split a page into subregions. Mixed-page vector regions are not yet processed by OmniParser.
 
-6. **Enrichment** -- OmniParser text/icons are merged into figure descriptions (keyed by image name for extracted images, by page number for vector pages).
+6. **Vision model** -- Extracted images use a figure-specific prompt (tailored for single-figure analysis). Vector pages and mixed-page vector regions use the original full-page prompt. Vision calls run in a thread pool (max 4 workers).
 
-7. **Storage** -- Figure descriptions are embedded and stored as chunks with `source_type='figure'`. Old figure chunks are deleted first (unscoped for full refresh, page-scoped for explicit pages). Vector-rendered PNGs are saved to `~/.local/share/knowledge-base/figures/<paper_id>/`.
+7. **Enrichment** -- OmniParser text/icons are merged into figure descriptions (keyed by image name for extracted images, by page number for vector pages).
+
+8. **Storage** -- Figure descriptions are embedded and stored as chunks with `source_type='figure'`. Old figure chunks are deleted first (unscoped for full refresh, page-scoped for explicit pages). Vector-rendered PNGs and mixed-page vector region crops are saved to `~/.local/share/knowledge-base/figures/<paper_id>/`.
 
 ### Known limitations
 
-- **Mixed raster+vector pages**: If a page has an extracted raster image, the full-page render is skipped even if the page also contains vector figures. The extracted image is processed; the vector figure is missed. This is by design — the primary path prioritizes extracted images.
 - **Multi-page chunk images**: A chunk may span multiple PDF pages. All images in the chunk are assigned to the chunk's first page since pymupdf4llm doesn't provide per-image page mapping.
 
 ## Vision Model Configuration

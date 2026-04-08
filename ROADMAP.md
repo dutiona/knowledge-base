@@ -124,7 +124,7 @@ dependency chains, and parallelism opportunities.
 | 161 | keyword stopwords strips compound technical terms        | Search      | 3     |                                                   |
 | 147 | configurable stopword list for keyword extraction        | Search      | 3     |                                                   |
 | 179 | multilingual stopword support (lingua-py)                | Search      | 3     |                                                   |
-| 155 | mixed raster+vector pages in vision pipeline             | Ingest      | 3     |                                                   |
+| 155 | mixed raster+vector pages in vision pipeline             | Ingest      | 3     | done                                              |
 | 149 | ONNXProvider: pre-tokenized model support                | Embedding   | 3     |                                                   |
 | 146 | workspace-scoped prediction error filtering              | Search      | 3     |                                                   |
 | 145 | scope_miss prediction error type                         | Search      | 3     |                                                   |

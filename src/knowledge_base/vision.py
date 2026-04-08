@@ -63,11 +63,12 @@ class PaperContext:
 
 @dataclasses.dataclass
 class DualPathInputs:
-    """Inputs for the dual-path extraction pipeline."""
+    """Inputs for the tri-path extraction pipeline."""
 
     extracted_images: list[tuple[Path, int]]
     vector_pages: list[int]
     pages_with_images: set[int]
+    mixed_page_regions: dict[int, list]  # page_num -> list[fitz.Rect]
 
 
 @dataclasses.dataclass
@@ -782,6 +783,170 @@ def _detect_vector_pages(
 
 
 # ---------------------------------------------------------------------------
+# Step 6b2: Detect vector regions on mixed raster+vector pages (#155)
+# ---------------------------------------------------------------------------
+
+_MIXED_REGION_OFFSET = 500
+
+
+def _cluster_drawing_rects(
+    rects: list[fitz.Rect],
+    page_height: float,
+    page_width: float,
+    *,
+    gap_fraction: float = 0.15,
+) -> list[fitz.Rect]:
+    """Cluster drawing bounding boxes into spatially separated figure regions.
+
+    Same Y-then-X gap-splitting algorithm as ``_cluster_bboxes`` but works on
+    ``fitz.Rect`` in page coordinates (points) instead of ratio tuples.
+
+    Returns one ``fitz.Rect`` per cluster (union bbox).  Single-element list
+    when everything is one contiguous group.
+    """
+    if len(rects) < 2:
+        if rects:
+            return [rects[0]]
+        return []
+
+    sorted_rects = sorted(rects, key=lambda r: (r.y0 + r.y1) / 2)
+
+    y_gap = page_height * gap_fraction
+    x_gap = page_width * gap_fraction
+
+    # Y-axis splitting
+    y_clusters: list[list[fitz.Rect]] = [[sorted_rects[0]]]
+    for prev, cur in zip(sorted_rects, sorted_rects[1:]):
+        if cur.y0 - prev.y1 >= y_gap:
+            y_clusters.append([cur])
+        else:
+            y_clusters[-1].append(cur)
+
+    # X-axis splitting within each Y-cluster
+    final_clusters: list[list[fitz.Rect]] = []
+    for cluster in y_clusters:
+        if len(cluster) < 2:
+            final_clusters.append(cluster)
+            continue
+        x_sorted = sorted(cluster, key=lambda r: (r.x0 + r.x1) / 2)
+        sub: list[list[fitz.Rect]] = [[x_sorted[0]]]
+        for prev, cur in zip(x_sorted, x_sorted[1:]):
+            if cur.x0 - prev.x1 >= x_gap:
+                sub.append([cur])
+            else:
+                sub[-1].append(cur)
+        final_clusters.extend(sub)
+
+    # Compute union bbox per cluster
+    regions = []
+    for cluster in final_clusters:
+        regions.append(
+            fitz.Rect(
+                min(r.x0 for r in cluster),
+                min(r.y0 for r in cluster),
+                max(r.x1 for r in cluster),
+                max(r.y1 for r in cluster),
+            )
+        )
+    return regions
+
+
+def _detect_mixed_page_vector_regions(
+    pdf_path: str,
+    pages_with_extracted_images: set[int],
+    *,
+    drawing_threshold: int = _VECTOR_DRAWING_THRESHOLD,
+    margin: float = 5.0,
+) -> dict[int, list[fitz.Rect]]:
+    """Detect vector drawing clusters on pages that also have raster images.
+
+    For each page in ``pages_with_extracted_images``, finds vector drawings
+    outside the raster image bounding boxes and clusters them into regions
+    suitable for cropped rendering.
+
+    Args:
+        pdf_path: Path to the PDF file.
+        pages_with_extracted_images: Set of 0-indexed page numbers that have
+            extracted raster images.
+        drawing_threshold: Minimum drawings outside image bboxes to qualify.
+        margin: Pixel margin to expand image bboxes before exclusion.
+
+    Returns:
+        Dict mapping 0-indexed page number to a list of ``fitz.Rect`` regions
+        containing vector-only figure clusters.
+    """
+    if not pages_with_extracted_images:
+        return {}
+
+    result: dict[int, list[fitz.Rect]] = {}
+    with fitz.open(pdf_path) as doc:
+        for page_idx in sorted(pages_with_extracted_images):
+            if page_idx >= len(doc):
+                continue
+            page = doc[page_idx]
+
+            # 1. Build exclusion zones from raster image bboxes
+            exclusion_zones: list[fitz.Rect] = []
+            for item in page.get_images(full=True):
+                try:
+                    bbox = page.get_image_bbox(item)
+                except Exception as exc:
+                    logger.debug(
+                        "Page %d: get_image_bbox failed for xref %s: %s",
+                        page_idx,
+                        item[0] if item else "?",
+                        exc,
+                    )
+                    continue
+                if bbox.is_empty or abs(bbox.get_area()) < 1.0:
+                    continue
+                exclusion_zones.append(
+                    fitz.Rect(
+                        bbox.x0 - margin,
+                        bbox.y0 - margin,
+                        bbox.x1 + margin,
+                        bbox.y1 + margin,
+                    )
+                )
+
+            # Skip pages where no valid image bboxes were found
+            if not exclusion_zones:
+                continue
+
+            # 2. Filter drawings — keep those NOT overlapping any exclusion zone.
+            # Non-strict inequalities on all axes so zero-area rects (lines)
+            # that touch the exclusion zone boundary are treated as inside.
+            drawings = page.get_drawings()
+            outside_drawings: list[fitz.Rect] = []
+            for d in drawings:
+                d_rect = fitz.Rect(d["rect"])
+                if d_rect.is_infinite or (d_rect.width == 0 and d_rect.height == 0):
+                    continue
+                inside = any(
+                    d_rect.x0 <= zone.x1
+                    and d_rect.x1 >= zone.x0
+                    and d_rect.y0 <= zone.y1
+                    and d_rect.y1 >= zone.y0
+                    for zone in exclusion_zones
+                )
+                if not inside:
+                    outside_drawings.append(d_rect)
+
+            if len(outside_drawings) <= drawing_threshold:
+                continue
+
+            regions = _cluster_drawing_rects(
+                outside_drawings,
+                page_height=page.rect.height,
+                page_width=page.rect.width,
+            )
+            if regions:
+                result[page_idx] = regions
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Step 6c: Collect extracted images from ingest metadata
 # ---------------------------------------------------------------------------
 
@@ -902,10 +1067,19 @@ def _collect_dual_path_inputs(
     else:
         vector_pages = _detect_vector_pages(str(pdf_path), pages_with_images)
 
+    # Detect vector regions on mixed pages (#155)
+    candidate_mixed = (
+        (pages_with_images & set(pages)) if pages is not None else pages_with_images
+    )
+    mixed_page_regions = _detect_mixed_page_vector_regions(
+        str(pdf_path), candidate_mixed
+    )
+
     return DualPathInputs(
         extracted_images=extracted_images,
         vector_pages=vector_pages,
         pages_with_images=pages_with_images,
+        mixed_page_regions=mixed_page_regions,
     )
 
 
@@ -913,37 +1087,63 @@ def _check_eta_gate(
     n_items: int,
     omniparser_path: str | None,
     confirmed: bool,
-) -> dict | None:
-    """Return an ETA-confirmation dict if the job is large and unconfirmed."""
+    *,
+    n_mixed_regions: int = 0,
+) -> tuple[dict | None, int]:
+    """Return an ETA-confirmation dict if the job is large and unconfirmed.
+
+    Mixed regions use base rate only (no OmniParser processing).
+
+    Returns (gate_dict_or_None, estimated_seconds).
+    """
     per_page = _ETA_SECS_PER_PAGE_BASE + (
         _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
     )
-    estimated = n_items * per_page
+    estimated = n_items * per_page + n_mixed_regions * _ETA_SECS_PER_PAGE_BASE
     if estimated > 120 and not confirmed:
         return {
             "confirm_required": True,
             "estimated_seconds": estimated,
-        }
-    return None
+        }, estimated
+    return None, estimated
 
 
 def _render_vector_pages(
     pdf_path: Path,
     vector_pages: list[int],
+    mixed_page_regions: dict[int, list],
     on_progress: Callable[[str], None] | None,
-) -> dict[int, bytes]:
-    """Render full-page PNGs for vector-figure fallback pages."""
-    if not vector_pages:
-        return {}
-    if on_progress:
-        on_progress(f"rendering {len(vector_pages)} vector-figure pages...")
+) -> tuple[dict[int, bytes], dict[int, list[tuple[fitz.Rect, bytes]]]]:
+    """Render full-page PNGs for vector pages AND cropped regions for mixed pages."""
     rendered: dict[int, bytes] = {}
+    mixed_rendered: dict[int, list[tuple[fitz.Rect, bytes]]] = {}
+
+    if not vector_pages and not mixed_page_regions:
+        return rendered, mixed_rendered
+
+    if on_progress:
+        msg_parts = []
+        if vector_pages:
+            msg_parts.append(f"{len(vector_pages)} vector-figure pages")
+        if mixed_page_regions:
+            n_mr = sum(len(v) for v in mixed_page_regions.values())
+            msg_parts.append(f"{n_mr} mixed-page vector regions")
+        on_progress(f"rendering {', '.join(msg_parts)}...")
+
     with fitz.open(str(pdf_path)) as doc:
         for page_num in vector_pages:
             page = doc[page_num]
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
             rendered[page_num] = pix.tobytes("png")
-    return rendered
+        for page_num, regions in mixed_page_regions.items():
+            page = doc[page_num]
+            for region_rect in regions:
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=region_rect)
+                mixed_rendered.setdefault(page_num, []).append(
+                    (region_rect, pix.tobytes("png"))
+                )
+
+    return rendered, mixed_rendered
 
 
 def _run_omniparser_pipeline(
@@ -1019,6 +1219,7 @@ def _run_omniparser_pipeline(
 def _dispatch_vision_calls(
     extracted_images: list[tuple[Path, int]],
     rendered: dict[int, bytes],
+    mixed_rendered: dict[int, list[tuple[fitz.Rect, bytes]]],
     omni_page_data: dict[
         int,
         tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]],
@@ -1039,9 +1240,12 @@ def _dispatch_vision_calls(
     with ThreadPoolExecutor(max_workers=4) as executor:
         future_to_key: dict = {}
 
-        # Extracted images — use _FIGURE_VISION_PROMPT
-        for image_idx, (img_path, page_num) in enumerate(extracted_images):
+        # Extracted images — page-local indices to avoid collision with mixed regions
+        page_image_counter: dict[int, int] = {}
+        for img_path, page_num in extracted_images:
             page_0idx = page_num - 1
+            local_idx = page_image_counter.get(page_0idx, 0)
+            page_image_counter[page_0idx] = local_idx + 1
             img_bytes = img_path.read_bytes()
             b64 = base64.b64encode(img_bytes).decode("ascii")
             future = executor.submit(
@@ -1051,7 +1255,7 @@ def _dispatch_vision_calls(
                 base_url=base_url,
                 model=model,
             )
-            future_to_key[future] = (page_0idx, image_idx, img_path.name)
+            future_to_key[future] = (page_0idx, local_idx, img_path.name)
 
         # Vector page fallback — use _VISION_PROMPT
         for page_num, png_bytes in rendered.items():
@@ -1080,6 +1284,23 @@ def _dispatch_vision_calls(
                     model=model,
                 )
                 future_to_key[future] = (page_num, None, None)
+
+        # Mixed-page vector regions — use _VISION_PROMPT (#155)
+        for page_num, region_renders in mixed_rendered.items():
+            for region_idx, (region_rect, png_bytes) in enumerate(region_renders):
+                b64 = base64.b64encode(png_bytes).decode("ascii")
+                future = executor.submit(
+                    _vision_call,
+                    b64,
+                    _VISION_PROMPT,
+                    base_url=base_url,
+                    model=model,
+                )
+                future_to_key[future] = (
+                    page_num,
+                    _MIXED_REGION_OFFSET + region_idx,
+                    None,
+                )
 
         # Collect results, grouping by page
         page_figures_by_region: dict[int, dict[int | None, list[dict]]] = {}
@@ -1305,9 +1526,13 @@ def _persist_figures(
     return chunks_created
 
 
-def _save_rendered_pngs(paper_id: int, rendered: dict[int, bytes]) -> None:
-    """Save rendered vector-page PNGs to disk."""
-    if not rendered:
+def _save_rendered_pngs(
+    paper_id: int,
+    rendered: dict[int, bytes],
+    mixed_rendered: dict[int, list[tuple[fitz.Rect, bytes]]] | None = None,
+) -> None:
+    """Save rendered vector-page PNGs and mixed-page region crops to disk."""
+    if not rendered and not mixed_rendered:
         return
     figures_dir = (
         Path.home() / ".local" / "share" / "knowledge-base" / "figures" / str(paper_id)
@@ -1316,6 +1541,12 @@ def _save_rendered_pngs(paper_id: int, rendered: dict[int, bytes]) -> None:
         figures_dir.mkdir(parents=True, exist_ok=True)
         for page_num, png_bytes in rendered.items():
             (figures_dir / f"page_{page_num}.png").write_bytes(png_bytes)
+        if mixed_rendered:
+            for page_num, region_renders in mixed_rendered.items():
+                for i, (_, png_bytes) in enumerate(region_renders):
+                    (figures_dir / f"page_{page_num}_vector_{i}.png").write_bytes(
+                        png_bytes
+                    )
     except OSError as exc:
         logger.warning("Failed to save figure PNGs: %s", exc)
 
@@ -1343,15 +1574,18 @@ def estimate_figures_time(
     inputs = _collect_dual_path_inputs(conn, ctx.source_uri, ctx.pdf_path, pages)
     n_extracted = len(inputs.extracted_images)
     n_vector = len(inputs.vector_pages)
+    n_mixed = sum(len(v) for v in inputs.mixed_page_regions.values())
 
     omniparser_path = _get_omniparser_config(conn)
     per_page = _ETA_SECS_PER_PAGE_BASE + (
         _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
     )
-    estimated = (n_extracted + n_vector) * per_page
+    # Mixed regions don't go through OmniParser, so use base rate only
+    estimated = (n_extracted + n_vector) * per_page + n_mixed * _ETA_SECS_PER_PAGE_BASE
     return {
         "extracted_images": n_extracted,
         "vector_pages": n_vector,
+        "mixed_vector_regions": n_mixed,
         "estimated_seconds": estimated,
         "has_omniparser": omniparser_path is not None,
     }
@@ -1387,16 +1621,22 @@ def extract_figures(
     # 5+5b. Collect extracted images and determine vector-page fallback set
     inputs = _collect_dual_path_inputs(conn, ctx.source_uri, ctx.pdf_path, pages)
 
-    # 4. ETA gate (computed after knowing the dual-path split)
+    # 4. ETA gate (computed after knowing the tri-path split)
+    n_mixed_regions = sum(len(v) for v in inputs.mixed_page_regions.values())
     n_items = len(inputs.extracted_images) + len(inputs.vector_pages)
-    gate = _check_eta_gate(n_items, omniparser_path, confirmed)
+    gate, estimated = _check_eta_gate(
+        n_items, omniparser_path, confirmed, n_mixed_regions=n_mixed_regions
+    )
     if gate is not None:
         gate["extracted_images"] = len(inputs.extracted_images)
         gate["vector_pages"] = len(inputs.vector_pages)
+        gate["mixed_vector_regions"] = n_mixed_regions
         return gate
 
-    # 5c. Render vector pages (fallback path)
-    rendered = _render_vector_pages(ctx.pdf_path, inputs.vector_pages, on_progress)
+    # 5c. Render vector pages AND mixed-page vector regions
+    rendered, mixed_rendered = _render_vector_pages(
+        ctx.pdf_path, inputs.vector_pages, inputs.mixed_page_regions, on_progress
+    )
 
     # 6. Read vision config once (main thread)
     config = _get_vision_config(conn)
@@ -1410,7 +1650,13 @@ def extract_figures(
 
     # 7. Dispatch vision calls in thread pool
     vision = _dispatch_vision_calls(
-        inputs.extracted_images, rendered, omni.page_data, base_url, model, on_progress
+        inputs.extracted_images,
+        rendered,
+        mixed_rendered,
+        omni.page_data,
+        base_url,
+        model,
+        on_progress,
     )
 
     # 7c. Enrich with OmniParser text/icon data
@@ -1424,15 +1670,12 @@ def extract_figures(
     )
 
     # 11. Save rendered PNGs to disk
-    _save_rendered_pngs(paper_id, rendered)
+    _save_rendered_pngs(paper_id, rendered, mixed_rendered)
 
     # Build result summary
     total_figures = sum(len(figs) for figs in vision.page_results.values())
     total_elapsed = vision.elapsed + omni.elapsed
-    per_page = _ETA_SECS_PER_PAGE_BASE + (
-        _ETA_SECS_PER_PAGE_OMNIPARSER if omniparser_path else 0
-    )
-    estimated = n_items * per_page
+    n_mixed_rendered = sum(len(v) for v in mixed_rendered.values())
 
     result = {
         "pages_processed": len(vision.page_results),
@@ -1441,6 +1684,7 @@ def extract_figures(
         "chunks_created": chunks_created,
         "extracted_images_processed": len(inputs.extracted_images),
         "vector_pages_rendered": len(rendered),
+        "mixed_vector_regions_rendered": n_mixed_rendered,
         "omniparser_enriched": omniparser_enriched,
         "errors": vision.errors,
         "timing": {
