@@ -133,7 +133,7 @@ dependency chains, and parallelism opportunities.
 | 122 | docs: four-layer cognitive architecture                  | Foundation  | 3     |                                                   |
 | 94  | compressed vector indices (int8/bit)                     | Embedding   | 3     |                                                   |
 | 111 | pymupdf4llm Phase 4: hybrid enrichment                   | Ingest      | 3     |                                                   |
-| 131 | web image extraction Phase 2: rendered DOM images        | Ingest      | 3     |                                                   |
+| 131 | web image extraction Phase 2: rendered DOM images        | Ingest      | 3     | done                                              |
 | 132 | web image extraction Phase 3: canvas/SVG screenshots     | Ingest      | 3     |                                                   |
 | 129 | retrieval plan intermediate representation               | Search      | 3     |                                                   |
 | 63  | document watch/sync for auto-re-ingestion                | Ingest      | 3     |                                                   |
