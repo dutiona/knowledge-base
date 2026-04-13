@@ -31,6 +31,14 @@ establishes priority, ordering, dependency chains, and parallelism opportunities
 > KB-P2-G/H and KB-P3-I are tracking-only — see Parking Lot. See also new
 > "Verification" section, the new "Phase 3I" subphase, and
 > `autonomous-agent-project/raw/docs/summaries/04-results-and-roadmap.md` §11.2.
+>
+> **Cross-repo coordination**: The analogous §11.1 memory-engine gaps
+> (ME-P0-A through ME-P3-I) are tracked as a single umbrella in
+> [dutiona/memory-engine#237](https://github.com/dutiona/memory-engine/issues/237).
+> In particular, **KB-P1-D (#362) mirrors ME-P1-D** — both repos want
+> Ataraxy-Labs `sem` as a structural-hash backend (KB at ingest/chunk
+> level, ME at supersession/fact level). A single Python↔Rust integration
+> spike should inform both sides.
 
 ---
 
@@ -286,7 +294,7 @@ All 13 items complete: ~~#95~~ (PR #135), ~~#15~~ (PR #133), ~~#110~~ (PR #137),
 
 All 17 items complete:
 
-```
+```text
 ✔ #163 (qwen3.5 thinking-mode)        ✔ #160 (zombie conclusions, PR #272)
 ✔ #152 (stale inline images, PR #271)  ✔ #151 (getaddrinfo SSRF, PR #270)
 ✔ #150 (zero-norm embeddings, PR #274) ✔ #165 (auto_relate fallback, PR #280)
@@ -331,7 +339,7 @@ but should land before Phase 3 features to prevent compounding tech debt.
 
 ### Security & Validation -- 7 items ✔
 
-```
+```text
 ✔ #187 (bare except, PR #312)          ✔ #188 (search validation, PR #313)
 ✔ #189 (omniparser_path, PR #316)      ✔ #190 (LLM SSRF, PR #318)
 ✔ #191 (JSON validation, PR #314)      ✔ #192 (prompt injection, PR #317)
@@ -340,7 +348,7 @@ but should land before Phase 3 features to prevent compounding tech debt.
 
 ### Performance (N+1, O(n^2)) -- 11 items
 
-```
+```text
 #181 (auto_relate O(P*C^2))            #199 (unbounded IN compare_papers)
 #200 (chunk_strategy unbatched IN)     #205 (get_paper N+1)
 #206 (suggest_relationships all)       #207 (O(n*m) entity dedup)
@@ -351,7 +359,7 @@ but should land before Phase 3 features to prevent compounding tech debt.
 
 ### Code Quality & Coupling -- 9 items
 
-```
+```text
 #194 (f-string SQL assembly)           #196 (add_relationship error ignored)
 #214 (vision <-> ingest coupling)      #218 (reingest owns relationship inv.)
 #219 (primitive obsession -- dicts)    #220 (duplicated FK cleanup)
@@ -361,7 +369,7 @@ but should land before Phase 3 features to prevent compounding tech debt.
 
 ### Documentation & Tests -- 13 items
 
-```
+```text
 #217 (status() 9 inline SQL)           #222 (ingest_file no docstring)
 #223 (ingest_directory no docstring)   #224 (keyword_prefilter docs gap)
 #225 (max_workers docs gap)            #226 (phantom threshold in docs)
@@ -373,7 +381,7 @@ but should land before Phase 3 features to prevent compounding tech debt.
 
 ### Aggregate / Deferred -- 2 items
 
-```
+```text
 #232 (low findings, 55 items)          #233 (info findings, 30 items)
 ```
 
@@ -392,7 +400,7 @@ ingest pipelines with follow-up enhancements.
 
 ### Completed Phase 3 items
 
-```
+```text
 ✔ #94  (int8/bit quantization, PR #355)          ✔ #125 (closed N/A: DiskANN)
 ✔ #111 (hybrid enrichment, PR #340)               ✔ #334 (OmniParser server, PR #352)
 ✔ #155 (mixed raster+vector, PR #338)             ✔ #131 (web images Phase 2, PR #339)
@@ -405,7 +413,7 @@ ingest pipelines with follow-up enhancements.
 **Goal:** Highest-impact improvements to retrieval accuracy. This is the core
 value proposition of the knowledge base.
 
-```
+```text
            independent                    depends on #130 (done)
            ┌──────────────┐               ┌──────────────┐
            │ #325 context │               │ #253 query   │
@@ -461,7 +469,7 @@ value proposition of the knowledge base.
 
 **Goal:** Compression, versioning, and model evaluation for the embedding layer.
 
-```
+```text
 #344 (TurboQuant 4-bit)     ─── depends on ✔ #94
 #345 (binary+int8 rescore)  ─── depends on ✔ #94
 #328 (embedding versioning) ─── independent, #1 production pain point
@@ -480,7 +488,7 @@ require full re-embedding with no way to track which vectors use which model.
 
 **Goal:** Harden ingestion with table-awareness, provenance, and follow-up fixes.
 
-```
+```text
 Critical / bugs:
   #275 (stale inline images on extraction switch) ─── bug, independent
   #342 (_extract_captions full paragraph)         ─── bug, independent
@@ -509,7 +517,7 @@ then new capabilities based on need.
 
 **Goal:** Keyword quality, prediction errors, and extraction safety.
 
-```
+```text
 Keyword / stopword (implement together):
   #161 (compound technical terms)    ─── depends on ✔ #130
   #147 (configurable stopwords)      ─── depends on ✔ #130
@@ -532,7 +540,7 @@ group, implement #147 first, then #161 and #179 together.
 **Goal:** Connect knowledge-base to memory-engine for the four-layer cognitive
 architecture (intelligence -> memory -> wisdom -> knowledge).
 
-```
+```text
 #102 (hook-based ME integration)
   ├──▶ #103 (wisdom -> knowledge pipeline)
   └──▶ #104 (memory -> wisdom consolidation)
@@ -553,7 +561,7 @@ leverages the indexer CLI (✔ #349).
 **Goal:** ACL, provenance tracking, evidence basis, and decontamination for
 multi-agent environments.
 
-```
+```text
 Independent (can start immediately):
   #263 (MCP server ACL layer)        ─── capability-token write-gating
   #264 (contributing_agent field)    ─── prerequisite for #267
@@ -565,14 +573,13 @@ Depends on #264:
   #267 (contrastive decontamination) ─── MemCollab: -5.4pp naive transfer
 ```
 
-**Parallelism:** #263, #264, #265, #266, #324 are all independent. #267 requires
-#264 (contributing_agent field must exist before per-agent bias detection works).
+**Parallelism:** #263, #264, #265, #266, #324 are all independent. #267 requires #264 (contributing_agent field must exist before per-agent bias detection works).
 
 ### Phase 3G -- Infrastructure & Documentation
 
 **Goal:** Build/serve separation and architecture documentation.
 
-```
+```text
 #350 (serve-only MCP mode)        ─── depends on ✔ #349, pairs with #63
 #351 (horizontal scaling)         ─── depends on #350, gated on need
 #122 (cognitive architecture docs)─── independent, anytime
@@ -586,7 +593,7 @@ actually needed.
 **Goal:** Research items and evaluations that inform future phases. These can run
 in parallel with any other work but are not on the critical path.
 
-```
+```text
 #331 (Gemma 4 26B benchmark)            ─── operational eval, independent
 #256 (olmOCR-bench eval)                ─── operational eval, independent
 #329 (late chunking evaluation)         ─── research, needs 8K+ embed model
@@ -610,7 +617,7 @@ in parallel with any other work but are not on the critical path.
 Two P0 items with proposed ADRs, four P1 items (two require research before
 an ADR is drafted).
 
-```
+```text
 P0 (critical, ADRs drafted)
   #359 KB-P0-A LongTracer Phase 2 ingestion quality gate
        → docs/adr/phase2-longtracer-gate.md
@@ -663,7 +670,8 @@ P1 (research / docs)
 
 **Cross-repo coordination:**
 
-- #362 (sem) mirrors memory-engine ME-P1-D (same external dependency, different integration point). Coordinate to avoid duplicate Python↔Rust integration spikes.
+- #362 (sem) mirrors memory-engine ME-P1-D (same external dependency, different integration point). Coordinate via the ME umbrella issue [dutiona/memory-engine#237](https://github.com/dutiona/memory-engine/issues/237) to avoid duplicate Python↔Rust integration spikes. One comparative study of integration options (subprocess / HTTP server / MCP client / PyO3 / reimplement) should inform both repos.
+- **ME umbrella ([dutiona/memory-engine#237](https://github.com/dutiona/memory-engine/issues/237))** tracks the analogous §11.1 memory-engine gaps (ME-P0-A Wisdom Revision Gate DSL, ME-P0-B Allen Interval Algebra, ME-P0-C prospective-memory docs, ME-P1-D sem code-fact backend, ME-P1-E event-based predicate DSL, ME-P2-F/G/H docs and callout mechanism, ME-P3-I Frona tracking). Knowledge-base is not responsible for those, but KB-P1-D coordination flows through the umbrella.
 - #360 (MemArch-Bench) aligns with paper #2 (MemArch-Bench) publication opportunity in autonomous-agent-project. Test cases written under `tests/memarchbench/` are directly reusable as paper #2's KB empirical section.
 
 **Not in Phase 3I (tracking-only, see Parking Lot):**
@@ -747,7 +755,7 @@ not here. This is a deliberate scope boundary.
 
 **Goal:** Extend the knowledge base beyond research papers.
 
-```
+```text
 #108 (OCR preprocessing)  ─┐
                            ├── document extraction evaluations (parallel)
 #109 (Docling + Marker)   ─┤
@@ -789,7 +797,7 @@ storage) and #328 (embedding versioning).
 
 The shortest path through Phase 3 to reach Phase 4 items #107, #80, and #262:
 
-```
+```text
                 NOW
                  │
     ┌────────────┼────────────────┐
@@ -838,6 +846,7 @@ The shortest path through Phase 3 to reach Phase 4 items #107, #80, and #262:
 - All of 3F (multi-agent safety)
 - All of 3G (infrastructure)
 - All of 3H (research)
+- All of 3I except #364, which requires #325 (see below)
 - 3A items after #325/#327/#253 (diminishing returns)
 - 3B items #344/#345 (quantization -- nice to have, not blocking)
 
@@ -845,11 +854,20 @@ The shortest path through Phase 3 to reach Phase 4 items #107, #80, and #262:
 worked on in parallel once the gate items above are done. #107 benefits most
 from Phase 3 work; #80 is truly standalone; #262 is blocked on upstream.
 
+**Phase 3I interactions with the critical path:**
+
+- **#359 (LongTracer gate)** is independent — default-off and CPU-only, lands in parallel with any 3A/3B/3C work.
+- **#360 (MemArch-Bench pivot)** is independent for the docs/scaffolding slice; the `test_retrieval_quality.py` suite is gated on #250 (golden set) landing first.
+- **#361, #362 (research issues)** produce ADRs as deliverables, not code — run in parallel with anything.
+- **#363 (positioning docs)** is docs-only, independent.
+- **#364 (paragraph provenance)** must land **after #325 (contextual retrieval)** — contextual retrieval mutates chunk text at ingest time, and paragraph offsets must be computed on the **original** chunk text before that mutation to preserve anchor semantics. #364 is therefore a post-#325 item, not a parallel-with-#325 item.
+- **#362 (sem structural-hash)** overlaps the #107 (code indexing epic) Phase 4 work and should coordinate with it — sem would be a natural fit inside #107's first phase. Decide once #362's integration-path ADR is drafted.
+
 ---
 
 ## Dependency Graph
 
-```
+```text
 Phase 0 ✔       Phase 1 ✔       Phase 2 ✔            Phase 2.5a ✔
 ────────        ────────        ────────             ────────
 #89 ──┐                         ✔ #95, ✔ #99        All 17 items ✔
@@ -974,20 +992,31 @@ Source: `autonomous-agent-project/raw/docs/summaries/04-results-and-roadmap.md`
 ## Quick Wins (< 1 session each)
 
 **Phase 2.5c doc/test gaps** (independent, low risk):
-#222, #223, #224, #225, #226, #227, #229, #230, #231, #309
+
+- #222, #223, #224, #225, #226, #227, #229, #230, #231, #309
 
 **Phase 3A quick wins:**
-#246 (retrieval budget annotations -- zero code change, MCP description only),
-#252 (entity-overlap signal -- low effort)
+
+- #246 (retrieval budget annotations -- zero code change, MCP description only)
+- #252 (entity-overlap signal -- low effort)
 
 **Phase 3C bugs** (should land before new ingest work):
-#275 (stale inline images), #342 (caption extraction)
+
+- #275 (stale inline images), #342 (caption extraction)
 
 **Phase 3C follow-ups** (depend on completed work):
-#162, #335, #354
+
+- #162, #335, #354
 
 **Phase 3D keyword group** (implement together):
-#147 + #161 + #179
+
+- #147 + #161 + #179
 
 **Phase 3F independent items:**
-#263, #264, #265, #266, #324
+
+- #263, #264, #265, #266, #324
+
+**Phase 3I quick wins** (notes 31-32 landscape gaps):
+
+- #363 (KB-P1-E compile-upfront positioning -- docs only, README + architecture-overview update)
+- #360 (KB-P0-B MemArch-Bench pivot -- ROADMAP/README doc updates + test scaffolding landed here; full retrieval-quality suite is gated on #250)
