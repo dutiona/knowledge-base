@@ -18,6 +18,19 @@ establishes priority, ordering, dependency chains, and parallelism opportunities
 > query expansion, embedding versioning, table-aware chunking, late chunking,
 > Gemma 4 and EmbeddingGemma evaluation, Docling/Marker extraction, and
 > Chandra v2 OCR. See `docs/summaries/steal-list-notes-29-30.md`.
+>
+> **Notes 31-32 Integration (2026-04-13):** Six new roadmap gaps derived from
+> landscape review #32 (April week 2), filed as Phase 3I. Two P0 with proposed
+> ADRs: KB-P0-A LongTracer Phase 2 ingestion gate (#359,
+> [docs/adr/phase2-longtracer-gate.md](docs/adr/phase2-longtracer-gate.md)) and
+> KB-P0-B benchmark strategy pivot to MemArch-Bench-first (#360,
+> [docs/adr/phase2-benchmark-memarch-bench-first.md](docs/adr/phase2-benchmark-memarch-bench-first.md)).
+> Four P1: KB-P1-C Embedding Adapters V2 (#361, research), KB-P1-D sem
+> structural-hash ingest (#362, research), KB-P1-E compile-upfront positioning
+> (#363, docs), KB-P1-F paragraph-level provenance (#364, depends on #325).
+> KB-P2-G/H and KB-P3-I are tracking-only — see Parking Lot. See also new
+> "Verification" section, the new "Phase 3I" subphase, and
+> `autonomous-agent-project/raw/docs/summaries/04-results-and-roadmap.md` §11.2.
 
 ---
 
@@ -199,6 +212,12 @@ establishes priority, ordering, dependency chains, and parallelism opportunities
 | 65  | evaluate LanceDB as sqlite-vec alternative               | Scale       | 4     |                                                   |
 | 80  | web UI (Svelte + Rust WASM graph)                        | Scale       | 4     |                                                   |
 | 262 | multimodal embedding as secondary retrieval signal       | Embedding   | 4+    | depends on Ollama #5304 or ONNX image path        |
+| 359 | KB-P0-A LongTracer Phase 2 ingestion quality gate        | Ingest      | 3I    | notes 31-32 P0. ADR drafted                       |
+| 360 | KB-P0-B pivot verification to MemArch-Bench-first        | Foundation  | 3I    | notes 31-32 P0. ADR drafted                       |
+| 361 | KB-P1-C Embedding Adapters V2 (research)                 | Embedding   | 3I    | notes 31-32 P1. needs research                    |
+| 362 | KB-P1-D sem structural-hash for code ingest (research)   | Ingest      | 3I    | notes 31-32 P1. needs research                    |
+| 363 | KB-P1-E compile-upfront positioning docs                 | Foundation  | 3I    | notes 31-32 P1. docs only                         |
+| 364 | KB-P1-F paragraph-level provenance                       | Ingest      | 3I    | notes 31-32 P1. depends on #325                   |
 
 **Umbrella issues** (closed when child decomposition issues land):
 
@@ -584,6 +603,79 @@ in parallel with any other work but are not on the critical path.
 - #253 -> #268 -> #269: Query classifier -> Level 2 injection -> dosing framework.
 - #250 -> #261: Golden set required for Bayesian optimization.
 
+### Phase 3I -- April 2026 Landscape Gaps (notes 31-32)
+
+**Goal:** Integrate the six new roadmap gaps derived from landscape review #32
+(§11.2 of `autonomous-agent-project/raw/docs/summaries/04-results-and-roadmap.md`).
+Two P0 items with proposed ADRs, four P1 items (two require research before
+an ADR is drafted).
+
+```
+P0 (critical, ADRs drafted)
+  #359 KB-P0-A LongTracer Phase 2 ingestion quality gate
+       → docs/adr/phase2-longtracer-gate.md
+       → independent, CPU-only, default-off
+  #360 KB-P0-B pivot verification to MemArch-Bench-first
+       → docs/adr/phase2-benchmark-memarch-bench-first.md
+       → gated on #250 for test_retrieval_quality.py
+
+P1 (research / docs)
+  #361 KB-P1-C Embedding Adapters V2 (research label)
+       → needs license verification, registry coverage, recall
+         retention measurement before ADR
+       → complements ✔ #99, in-progress #328
+  #362 KB-P1-D sem structural-hash for code ingest (research label)
+       → needs Python↔Rust integration decision (subprocess / HTTP /
+         MCP / PyO3 / reimplement)
+       → cross-repo coordination with memory-engine ME-P1-D
+  #363 KB-P1-E compile-upfront positioning vs Karpathy/rohitg00/atomicmemory
+       → docs-only, README + architecture-overview update
+       → paper #3 §Related Work alignment
+  #364 KB-P1-F paragraph-level provenance attribution
+       → depends on #325 (contextual retrieval) for non-interference
+       → benefits #260 (figure-in-context chunking), #162 (folder summary
+         for ingest_url)
+```
+
+**Priority order:**
+
+1. **#359** (LongTracer gate) — landing first. Closes the "summaries silently
+   contradicting chunks" failure mode and establishes the `review_queue`
+   surface that other quality-gate work can reuse.
+2. **#360** (MemArch-Bench pivot) — docs + test scaffolding, no external
+   deps, unblocks all future verification claims.
+3. **#363** (positioning docs) — low cost, high value for paper #3. Can
+   run in parallel with #359/#360.
+4. **#361** and **#362** (research) — can run in parallel with each other
+   and with the other Phase 3I items. Each produces an ADR as its
+   deliverable, not code.
+5. **#364** (paragraph provenance) — last, because it depends on #325
+   (contextual retrieval) landing first to avoid chunk-text-mutation
+   ordering conflicts.
+
+**Dependency chains:**
+
+- #359 independent of all Phase 3 items
+- #360 → gates on #250 for `test_retrieval_quality.py` (other three MemArch-Bench suites are independent)
+- #361, #362 independent; produce ADRs as deliverables
+- #363 independent; documentation only
+- #364 blocked by #325 (chunk-text-mutation ordering)
+
+**Cross-repo coordination:**
+
+- #362 (sem) mirrors memory-engine ME-P1-D (same external dependency, different integration point). Coordinate to avoid duplicate Python↔Rust integration spikes.
+- #360 (MemArch-Bench) aligns with paper #2 (MemArch-Bench) publication opportunity in autonomous-agent-project. Test cases written under `tests/memarchbench/` are directly reusable as paper #2's KB empirical section.
+
+**Not in Phase 3I (tracking-only, see Parking Lot):**
+
+- KB-P2-G (DocLing + olmOCR ADR) — overlaps existing #108, #109 in Phase 4
+- KB-P2-H (RDF-star Bayesian confidence propagation) — exploratory, no owner
+- KB-P3-I (Graphify / atomicmemory / HydraDB) — positioning reference only
+
+**Exit criteria for Phase 3I:** All six issues resolved (either implemented,
+ADR-drafted-and-rejected, or explicitly deferred with rationale in the issue).
+At minimum, #359 and #360 must land for the Phase 3I banner to clear.
+
 ### Phase 3 Summary
 
 | Subphase | Items | Theme                        | Blocking? |
@@ -596,14 +688,58 @@ in parallel with any other work but are not on the critical path.
 | 3F       | 6     | Multi-agent safety           | Optional  |
 | 3G       | 3     | Infrastructure               | Optional  |
 | 3H       | 7     | Research & evaluation        | Deferred  |
+| 3I       | 6     | April 2026 landscape gaps    | Mixed     |
 
-**Total Phase 3 open items: 57** (plus 9 already completed).
+**Total Phase 3 open items: 63** (plus 9 already completed).
 
 **Phase 3 exit criteria:** Search pipeline has contextual retrieval + query
 expansion + reranking + retrieval plans. Chunk enrichment operational. Multi-agent
 write operations are ACL-gated with contributing_agent provenance. Evidence-basis
 metadata on conclusions. Staleness detection operational. Memory-engine hooks
 connected.
+
+---
+
+## Verification
+
+> Added 2026-04-13 per KB-P0-B (notes 31-32 integration).
+> Full rationale: [docs/adr/phase2-benchmark-memarch-bench-first.md](docs/adr/phase2-benchmark-memarch-bench-first.md).
+
+**Primary instrument: MemArch-Bench (KB slice).** Knowledge-base's
+verification plan is property-test-first, not benchmark-score-first. The
+[MemPalace drama](https://www.reddit.com/r/AIMemory/comments/1sgvsxb/)
+(April 2026) established that LoCoMo has a 6.4% ground-truth error rate,
+its LLM judge accepts 63% of intentionally-incorrect answers, and
+LongMemEval-S's 115K-token per-question contexts permit retrieval bypass.
+These defects make public LoCoMo/LongMemEval numbers untrustworthy for
+cross-system comparison, so KB pivots to architectural-property testing.
+
+The KB slice of MemArch-Bench lives under `tests/memarchbench/` and
+consists of four invariant suites:
+
+| Suite                       | Property                                                    | Status                   |
+| --------------------------- | ----------------------------------------------------------- | ------------------------ |
+| `test_supersession.py`      | `reingest(newer)` ⇒ search returns newer, not older         | proposed                 |
+| `test_retrieval_quality.py` | Recall@k / nDCG@k / MRR on KB golden set                    | gated on #250            |
+| `test_prediction_errors.py` | Prediction-error fires iff stale; precision + recall ≥ 0.9  | proposed                 |
+| `test_entity_stability.py`  | Same paper → same entity IDs across chunking strategy swap  | proposed                 |
+
+**Secondary reference: LoCoMo / LongMemEval with caveats.** Kept only as
+reference numbers, always reported alongside: (1) the MemPalace drama
+citation, (2) recall@k and end-to-end QA accuracy in separate tables with
+explicit column labels, (3) no cross-system claims until the upstream
+answer-key and judge issues are resolved.
+
+**Gated on:** issue #250 (retrieval coverage golden set, 100+ questions)
+for `test_retrieval_quality.py`. Other three suites are independent.
+
+**Paper #2 alignment:** MemArch-Bench is also the empirical framework for
+paper #2 (MemArch-Bench). Test cases under `tests/memarchbench/` are
+directly reusable as the KB empirical section of that paper.
+
+**Out of KB scope:** bi-temporal point-in-time accuracy and
+type-appropriate decay are memory-engine properties and are tested there,
+not here. This is a deliberate scope boundary.
 
 ---
 
@@ -767,6 +903,13 @@ Phase 3 (9 done, 57 open)
   #331, #256, #329               #253 ──▶ #268 ──▶ #269
   #253+#254 ──▶ #257             #250 ──▶ #261
 
+3I April 2026 landscape gaps ──────────────────────────────────────
+  #359 (LongTracer gate), #360 (MemArch-Bench pivot) ── P0, ADRs drafted
+  #361 (Embedding Adapters, research), #362 (sem, research)
+  #363 (positioning docs)        #364 (paragraph provenance, needs #325)
+  #360 ──▶ depends on #250 (golden set) for retrieval-quality suite
+  #364 ──▶ depends on #325 (contextual retrieval)
+
 
 Phase 4 ────────────────────────────────────────────────────────────
   #108, #109, #247 (extraction evals, parallel)
@@ -796,6 +939,35 @@ Issues that are valid but have no immediate timeline. Re-evaluate quarterly.
   a specific item becomes relevant.
 - **#351** (horizontal scaling) -- Gated on actual multi-machine deployment need.
   Do not implement speculatively.
+
+### April 2026 landscape gaps (notes 31-32 tracking)
+
+P0 and P1 gaps from landscape #32 §11.2 are tracked via GitHub issues (see
+Notes 31-32 Integration banner at the top of this file). P2 and P3 gaps are
+tracking-only entries, listed here:
+
+- **KB-P2-G (DocLing + olmOCR ADR — PDF ingestion backends).** The KB
+  ingestion ADR comparing Marker / Docling / olmOCR / MinerU on OmniDocBench
+  remains overdue per landscape #32 §14. Marker is fastest (20-120 pages/s on
+  H100), Docling pairs with Markdown-first targets, olmOCR has the best layout
+  fidelity for scanned archives, MinerU is strong on Chinese and scientific
+  content. Choose based on corpus. Proposed ADR path:
+  `docs/adr/phase2-pdf-ingestion-backend.md`. Overlaps existing issues #108
+  (OCR preprocessing + Chandra v2) and #109 (Docling + Marker evaluation) in
+  the Phase 4 extraction-evals cluster.
+- **KB-P2-H (RDF-star Bayesian confidence propagation exploration).**
+  arshadansari27/knowledge-service (landscape #32 §17.2.7) implements
+  RDF-star with Bayesian confidence scores attached to triples and Noisy-OR
+  propagation through forward-chaining inference. Evaluate whether confidence
+  propagation is worth the added complexity over a simpler "confidence as a
+  fact attribute with decay" model. Exploratory, Phase 3 or 4, no ADR yet.
+- **KB-P3-I (Track Graphify, atomicmemory/llm-wiki-compiler, HydraDB).**
+  Parallel compile-upfront knowledge-compilation implementations. Track
+  feature additions but do not integrate — they are positioning references
+  for paper #3 §Related Work, not dependencies.
+
+Source: `autonomous-agent-project/raw/docs/summaries/04-results-and-roadmap.md`
+§11.2 and `autonomous-agent-project/raw/landscape/32-memory-knowledge-landscape-april-week2-2026.md`.
 
 ---
 
