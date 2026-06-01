@@ -83,17 +83,31 @@ migrate_row() {
 }
 
 log "== migrate open issues from $MAP =="
-# skip header; read tab-separated
-{
-	read -r _header
-	while IFS=$'\t' read -r num type area xcut phase needs_review _title _labels; do
-		[[ -z "${num:-}" ]] && continue
-		if [[ -n "$needs_review" ]]; then
-			warn "#$num flagged ($needs_review) — ensure mapping.tsv was reviewed"
-		fi
+# Parse tab-separated, PRESERVING empty fields. `read` with a whitespace-only IFS
+# (tab) collapses consecutive delimiters and drops empty fields, which would shift
+# columns left (empty xcut → phase read as xcut, title read as phase). Splitting
+# with awk into NUL-delimited records and reading each field with `IFS= read -rd ''`
+# preserves empties exactly. Also strips any trailing CR from CRLF files.
+parse_and_migrate() {
+	local num type area xcut phase needs_review
+	# awk emits, per data row, the 6 fields we use each terminated by NUL.
+	while IFS= read -r -d '' num &&
+		IFS= read -r -d '' type &&
+		IFS= read -r -d '' area &&
+		IFS= read -r -d '' xcut &&
+		IFS= read -r -d '' phase &&
+		IFS= read -r -d '' needs_review; do
+		[[ -z "$num" ]] && continue
+		[[ -n "$needs_review" ]] && warn "#$num flagged ($needs_review) — ensure mapping.tsv was reviewed"
 		migrate_row "$num" "$type" "$area" "$xcut" "$phase"
-	done
-} <"$MAP"
+	done < <(
+		awk -F'\t' 'NR>1 {
+			gsub(/\r/,"")                       # strip CR (CRLF files)
+			printf "%s\0%s\0%s\0%s\0%s\0%s\0", $1,$2,$3,$4,$5,$6
+		}' "$MAP"
+	)
+}
+parse_and_migrate
 
 # ---- Critical-Path board: fixed membership ----------------------------------
 CRITPATH=(325 326 328 275 342 107 80 262 253)
