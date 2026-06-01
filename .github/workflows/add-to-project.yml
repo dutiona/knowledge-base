@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/add-to-project@v1
         with:
-          project-url: https://github.com/users/dutiona/projects/MAIN_NUMBER
+          project-url: https://github.com/users/dutiona/projects/7
           github-token: ${{ secrets.KB_PROJECT_TOKEN }}
 
   add-to-triage:
@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/add-to-project@v1
         with:
-          project-url: https://github.com/users/dutiona/projects/TRIAGE_NUMBER
+          project-url: https://github.com/users/dutiona/projects/9
           github-token: ${{ secrets.KB_PROJECT_TOKEN }}
 
   add-to-research-eval:
@@ -53,5 +53,5 @@ jobs:
     steps:
       - uses: actions/add-to-project@v1
         with:
-          project-url: https://github.com/users/dutiona/projects/RESEARCH_NUMBER
+          project-url: https://github.com/users/dutiona/projects/10
           github-token: ${{ secrets.KB_PROJECT_TOKEN }}
