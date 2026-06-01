@@ -288,9 +288,9 @@ deliberately split:
 name: Auto-add to project
 on:
   issues:
-    types: [opened, reopened]
+    types: [opened, reopened, labeled]
   pull_request:
-    types: [opened]
+    types: [opened, labeled]
 jobs:
   add-to-main:
     runs-on: ubuntu-latest
@@ -302,8 +302,12 @@ jobs:
   add-to-triage:
     runs-on: ubuntu-latest
     if: >-
-      contains(github.event.issue.labels.*.name, 'type:bug') ||
-      contains(github.event.issue.labels.*.name, 'type:security')
+      (github.event_name == 'issues' &&
+        (contains(github.event.issue.labels.*.name, 'type:bug') ||
+         contains(github.event.issue.labels.*.name, 'type:security'))) ||
+      (github.event_name == 'pull_request' &&
+        (contains(github.event.pull_request.labels.*.name, 'type:bug') ||
+         contains(github.event.pull_request.labels.*.name, 'type:security')))
     steps:
       - uses: actions/add-to-project@v1
         with:
@@ -312,14 +316,25 @@ jobs:
   add-to-research-eval:
     runs-on: ubuntu-latest
     if: >-
-      contains(github.event.issue.labels.*.name, 'type:research') ||
-      contains(github.event.issue.labels.*.name, 'type:eval')
+      (github.event_name == 'issues' &&
+        (contains(github.event.issue.labels.*.name, 'type:research') ||
+         contains(github.event.issue.labels.*.name, 'type:eval'))) ||
+      (github.event_name == 'pull_request' &&
+        (contains(github.event.pull_request.labels.*.name, 'type:research') ||
+         contains(github.event.pull_request.labels.*.name, 'type:eval')))
     steps:
       - uses: actions/add-to-project@v1
         with:
           project-url: https://github.com/users/dutiona/projects/<RESEARCH_N>
           github-token: ${{ secrets.KB_PROJECT_TOKEN }}
 ```
+
+> **Event-aware conditions (per PR #365 review):** `github.event.issue` is null
+> on `pull_request` events, so the triage/research jobs branch on
+> `github.event_name` and read `github.event.pull_request.labels` for PRs. The
+> `labeled` trigger ensures items route when a `type:` label is applied _after_
+> creation (the common triage flow), not only at open. `add-to-project` is
+> idempotent, so the extra `labeled`/`reopened` runs are safe no-ops.
 
 > **Out-of-band setup (manual, like coraly's `deploy:prod`):** the Action needs
 > a **classic PAT** with **`repo` + `project`** scope, stored as repo secret

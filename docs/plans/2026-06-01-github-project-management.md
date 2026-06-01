@@ -207,10 +207,15 @@ Members I add: #325, #326, #328, #275, #342, #107, #80, #262, #253.
 ## 6. Phase 5 — Automation & CI files (**mine**, committed)
 
 1. `.github/workflows/add-to-project.yml` — 3 jobs (project numbers from
-   `.pm-ids.env`):
-   - `add-to-main` — always, `issues:[opened,reopened]` + `pull_request:[opened]`.
-   - `add-to-triage` — `if contains(labels,'type:bug')||contains(labels,'type:security')`.
-   - `add-to-research-eval` — `if contains(labels,'type:research')||contains(labels,'type:eval')`.
+   `.pm-ids.env`). Triggers `issues:[opened,reopened,labeled]` +
+   `pull_request:[opened,labeled]` (the `labeled` trigger routes items when a
+   `type:` label is applied post-creation — the normal triage flow):
+   - `add-to-main` — always.
+   - `add-to-triage` — event-aware `if`: `type:bug`/`type:security`, reading
+     `github.event.issue.labels` for `issues` and
+     `github.event.pull_request.labels` for `pull_request` (the `issue` object is
+     null on PR events — see design §5.1, per PR #365 review).
+   - `add-to-research-eval` — same event-aware `if` for `type:research`/`type:eval`.
    - `actions/add-to-project@v1`, token `${{ secrets.KB_PROJECT_TOKEN }}`.
 2. `.github/workflows/ci.yml` — `[push, pull_request]`: `astral-sh/setup-uv@v5` →
    `uv sync` → `uv run ruff check src/ tests/` → `uv run ruff format --check
