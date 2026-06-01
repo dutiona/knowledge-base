@@ -86,10 +86,22 @@ confirm() {
 }
 
 # ---- helpers ----------------------------------------------------------------
+# Cached label snapshot — one API call, reused across many label_exists() checks.
+# sync-labels.sh checks ~15 labels in a burst; per-check API calls risk a
+# transient blip silently returning "absent". Fetch once, refresh after mutation.
+PM_LABELS_CACHE=""
+refresh_labels_cache() {
+	PM_LABELS_CACHE="$(gh label list -R "$SLUG" --limit 300 --json name -q '.[].name' 2>/dev/null)" ||
+		die "failed to list labels for $SLUG (gh error)"
+	# A repo always has >=1 label here; empty almost certainly means a gh failure.
+	[[ -n "$PM_LABELS_CACHE" ]] || die "empty label list for $SLUG — refusing to proceed (likely a gh/API error, not a truly empty repo)"
+}
+
 label_exists() {
-	# 0 if label "$1" exists in REPO. Exact-name match.
-	gh label list -R "$SLUG" --limit 300 --json name \
-		--jq 'any(.[]; .name == $n)' --arg n "$1" 2>/dev/null | grep -qx true
+	# 0 if label "$1" exists in REPO. Exact full-line match (handles spaces, e.g.
+	# "good first issue"). Uses the cached snapshot; populates it on first use.
+	[[ -n "$PM_LABELS_CACHE" ]] || refresh_labels_cache
+	grep -qxF -- "$1" <<<"$PM_LABELS_CACHE"
 }
 
 # Standard arg parse shared by the scripts. Sets DRY_RUN/ASSUME_YES.
