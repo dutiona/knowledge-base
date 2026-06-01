@@ -1,0 +1,57 @@
+name: Auto-add to project
+
+# Routes new/labeled issues and PRs onto the GitHub Projects boards.
+#
+# Requires repo secret KB_PROJECT_TOKEN: a CLASSIC PAT with `repo` + `project`
+# scope. The default GITHUB_TOKEN cannot write user-level Projects v2, so without
+# this secret every job 403s on the first item (harmless until set).
+#
+# Project numbers are placeholders — fill from scripts/.pm-ids.env after
+# setup-projects.sh has created the boards.
+
+on:
+  issues:
+    types: [opened, reopened, labeled]
+  pull_request:
+    types: [opened, labeled]
+
+jobs:
+  add-to-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/add-to-project@v1
+        with:
+          project-url: https://github.com/users/dutiona/projects/MAIN_NUMBER
+          github-token: ${{ secrets.KB_PROJECT_TOKEN }}
+
+  add-to-triage:
+    runs-on: ubuntu-latest
+    # github.event.issue is null on pull_request events — branch on event_name
+    # and read the matching labels source for each.
+    if: >-
+      (github.event_name == 'issues' &&
+        (contains(github.event.issue.labels.*.name, 'type:bug') ||
+         contains(github.event.issue.labels.*.name, 'type:security'))) ||
+      (github.event_name == 'pull_request' &&
+        (contains(github.event.pull_request.labels.*.name, 'type:bug') ||
+         contains(github.event.pull_request.labels.*.name, 'type:security')))
+    steps:
+      - uses: actions/add-to-project@v1
+        with:
+          project-url: https://github.com/users/dutiona/projects/TRIAGE_NUMBER
+          github-token: ${{ secrets.KB_PROJECT_TOKEN }}
+
+  add-to-research-eval:
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'issues' &&
+        (contains(github.event.issue.labels.*.name, 'type:research') ||
+         contains(github.event.issue.labels.*.name, 'type:eval'))) ||
+      (github.event_name == 'pull_request' &&
+        (contains(github.event.pull_request.labels.*.name, 'type:research') ||
+         contains(github.event.pull_request.labels.*.name, 'type:eval')))
+    steps:
+      - uses: actions/add-to-project@v1
+        with:
+          project-url: https://github.com/users/dutiona/projects/RESEARCH_NUMBER
+          github-token: ${{ secrets.KB_PROJECT_TOKEN }}
