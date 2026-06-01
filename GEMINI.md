@@ -45,6 +45,17 @@ Tests in `tests/`, one file per module. Test/source ratio: 1.35x.
 - **Deduplication**: SHA-256 content hash on chunk content. Maintain this for any new content types.
 - **SQL safety**: use `_batched_execute`/`_batched_select` from `db.py` for IN-clause queries (SQLite 999 variable limit)
 
+## Issue & PR Labels
+
+Title format `type(area): description`. Every issue carries **exactly one
+`type:`** (bug · feature · enhancement · perf · refactor · test · docs · chore ·
+research · eval · security · epic · plan) and **one `area:`** (ingest · search ·
+embeddings · extraction · vision · papers · db · mcp · infra · integration ·
+docs). Additive: `priority:{critical,high,medium,low}`, `severity:*` (super-qa
+only), `status:{blocked,needs-design}`, `super-qa`. Deferral = Project **Phase**
+field value `Deferred`, not a label. New issues/PRs auto-add to GitHub Projects.
+Full scheme: `docs/design/project-management.md`; scripts in `scripts/`.
+
 ## Deep-Dive Docs
 
 Read only when working on the relevant area:
@@ -59,4 +70,5 @@ Read only when working on the relevant area:
 | Structured extraction        | `docs/usage/structured-extraction.md`     |
 | Figure extraction            | `docs/usage/figure-extraction.md`         |
 | Paper relationships          | `docs/usage/relationships-conclusions.md` |
+| Project management           | `docs/design/project-management.md`       |
 | Roadmap & priorities         | `ROADMAP.md`                              |
