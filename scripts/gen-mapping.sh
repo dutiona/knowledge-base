@@ -62,11 +62,37 @@ PREFIX2TYPE = {
     "epic":"epic","test":"test",
 }
 prefix_re = re.compile(r'^([a-z]+)(\([^)]*\))?:', re.I)
+# super-qa issues are titled "[super-qa] <severity>: <desc>" (or "[super-qa] <kind> (N)")
+superqa_re = re.compile(r'^\[super-qa\]\s*(critical|high|medium|low|info)?\b', re.I)
+
+def classify_superqa(title):
+    """Infer type from a super-qa finding's description keywords."""
+    t = title.lower()
+    if any(k in t for k in ("n+1","o(p","o(n","o(e","unbatched","round-trip",
+                            "full table scan","uncompiled regex","fetches all","per-paper")):
+        return "perf"
+    if any(k in t for k in ("no tests","zero tests","untested","no docstring",
+                            "docstrings","missing from","phantom","docs gap")):
+        # docs vs test: "tests" → test, else docs
+        return "test" if ("test" in t or "untested" in t) else "docs"
+    if any(k in t for k in ("coupling","god module","wet code","duplicat","primitive obsession",
+                            "consolidate","fragile pattern","f-string sql","owns relationship",
+                            "inline sql")):
+        return "refactor"
+    if any(k in t for k in ("injection","ssrf","auth","secret","sanitiz","validation")):
+        return "security"
+    return "enhancement"
 
 def derive_type(title, labels):
     m = prefix_re.match(title)
     if m and m.group(1).lower() in PREFIX2TYPE:
         return PREFIX2TYPE[m.group(1).lower()], False
+    sq = superqa_re.match(title)
+    if sq or "super-qa" in labels:
+        typ = classify_superqa(title)
+        # confident on perf/test/docs/refactor/security keyword hits; flag only the
+        # fallthrough 'enhancement' (no keyword matched → genuinely ambiguous).
+        return typ, (typ == "enhancement")
     if "bug" in labels:        return "bug", False
     if "documentation" in labels: return "docs", False
     if "refactoring" in labels: return "refactor", False
@@ -90,20 +116,32 @@ def derive_area(num, title, labels):
         return "infra", True
     return "infra", True
 
-def derive_xcut(num, labels):
+def derive_xcut(num, title, labels):
+    # super-qa findings carry an intrinsic severity — from the bare high/med/low/
+    # info label OR the "[super-qa] <severity>:" title prefix. Everything else:
+    # priority is a forward-looking SCHEDULING decision the user makes on the
+    # board — NOT derivable from labels, so a blank priority is EXPECTED, never
+    # a review flag.
     sev = next((l for l in ("critical","high","medium","low","info") if l in labels), None)
-    if "super-qa" in labels:
-        return (f"severity:{sev}" if sev else "", False)
+    sq = superqa_re.match(title)
+    if sq or "super-qa" in labels:
+        tsev = sq.group(1).lower() if (sq and sq.group(1)) else None
+        eff = sev or tsev
+        return (f"severity:{eff}" if eff else "severity:medium", bool(not eff))
     if sev in ("high","medium","low"):
-        return (f"priority:{sev}", False)
-    return ("", True)  # no priority signal — judge
+        return (f"priority:{sev}", False)   # bare high/med/low outside super-qa → priority
+    return ("", False)  # no signal → leave blank, NOT a flag
 
 def derive_phase(num):
+    # Only phases in PHASE_OK are valid open-work buckets. The ROADMAP index table
+    # also lists completed Phase 0/1/2/2.5a/2.5b rows; an OPEN issue mapping to one
+    # of those means the roadmap is stale for it → blank phase + flag, don't emit
+    # an invalid option the board can't accept.
     ph = rm.get(num, (None,None))[1]
     if not ph: return ("", True)
     ph = ph.replace("3C+","3C")
     if ph in PHASE_OK: return (ph, False)
-    return (ph, True)
+    return ("", True)  # phase present but not an open-work bucket (e.g. 0/1/2/2.5a) → review
 
 rows = []
 for it in issues:
@@ -111,13 +149,13 @@ for it in issues:
     labels = [l["name"] for l in it["labels"]]
     typ, t_flag = derive_type(title, labels)
     area, a_flag = derive_area(num, title, labels)
-    xcut, x_flag = derive_xcut(num, labels)
+    xcut, x_flag = derive_xcut(num, title, labels)
     phase, p_flag = derive_phase(num)
     flags = []
-    if t_flag: flags.append("type")
-    if a_flag: flags.append("area")
-    if x_flag: flags.append("prio")
-    if p_flag: flags.append("phase")
+    if t_flag: flags.append("type")     # enhancement→feature? ambiguous
+    if a_flag: flags.append("area")     # guessed area (Foundation/Mixed split)
+    if x_flag: flags.append("sev")      # super-qa issue missing a severity signal
+    if p_flag: flags.append("phase")    # no valid open-work phase in roadmap
     if num not in rm: flags.append("not-in-roadmap")
     nr = "⚠:" + ",".join(flags) if flags else ""
     rows.append((num, f"type:{typ}", f"area:{area}", xcut, phase, nr,
