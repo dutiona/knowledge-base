@@ -268,10 +268,33 @@ priority:  phase  needs_review`.
 
 ### 8c — `scripts/migrate-issues.sh mapping.tsv`
 
-Per row, idempotently: `gh issue edit` add new + remove resolved-legacy labels;
-`gh project item-add <MAIN_N>`; set Phase+Priority via `gh project item-edit`
-(IDs from `.pm-ids.env`). Then add the fixed Critical-Path member list.
-`--dry-run` prints every call; re-runnable.
+Per row, idempotently:
+
+1. `gh issue edit <#> --add-label … --remove-label <legacy>`.
+2. **Add to Main and capture the project item-id** (per PR #365 review —
+   `item-edit` targets the project-internal **item-id**, NOT the issue number or
+   URL):
+   ```bash
+   ITEM_ID=$(gh project item-add <MAIN_N> --owner dutiona \
+       --url "$ISSUE_URL" --format json --jq '.id')
+   ```
+   (Re-runnable: `item-add` on an already-added issue returns the existing item,
+   so the captured id is stable.)
+3. Set fields with that id + the field/option IDs from `.pm-ids.env`:
+   ```bash
+   gh project item-edit --id "$ITEM_ID" --project-id "$MAIN_PID" \
+       --field-id "$PHASE_FIELD_ID"    --single-select-option-id "$PHASE_OPT_ID"
+   gh project item-edit --id "$ITEM_ID" --project-id "$MAIN_PID" \
+       --field-id "$PRIORITY_FIELD_ID" --single-select-option-id "$PRIO_OPT_ID"
+   ```
+
+Then add the fixed Critical-Path member list (same item-add → capture-id
+pattern). `--dry-run` prints every call; re-runnable.
+
+> `gen-mapping.sh`/`setup-projects.sh` must therefore record, in `.pm-ids.env`,
+> the **project node-id** (`$MAIN_PID`), each **field-id**, and the
+> **option-id per single-select value** — `item-edit` needs all three, not the
+> human-readable names.
 
 ### 8d — Final cleanup
 
