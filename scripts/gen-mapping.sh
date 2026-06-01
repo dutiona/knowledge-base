@@ -64,6 +64,10 @@ PREFIX2TYPE = {
 prefix_re = re.compile(r'^([a-z]+)(\([^)]*\))?:', re.I)
 # super-qa issues are titled "[super-qa] <severity>: <desc>" (or "[super-qa] <kind> (N)")
 superqa_re = re.compile(r'^\[super-qa\]\s*(critical|high|medium|low|info)?\b', re.I)
+# landscape-gap issues titled "KB-P<n>-<letter>: <desc>" carry a deliberate priority.
+kbpx_re = re.compile(r'^KB-P([0-4])-[A-Z]\b', re.I)
+# P0=critical(blocker), P1=high, P2=medium, P3/P4=low (low+info folded into low).
+KBPX_PRIORITY = {"0":"critical","1":"high","2":"medium","3":"low","4":"low"}
 
 def classify_superqa(title):
     """Infer type from a super-qa finding's description keywords."""
@@ -93,6 +97,21 @@ def derive_type(title, labels):
         # confident on perf/test/docs/refactor/security keyword hits; flag only the
         # fallthrough 'enhancement' (no keyword matched → genuinely ambiguous).
         return typ, (typ == "enhancement")
+    # bracket-prefixed issues: "[security] ...", "[extraction] ..." etc.
+    b = re.match(r'^\[([a-z-]+)\]\s*(.*)', title, re.I)
+    if b:
+        tag, rest = b.group(1).lower(), b.group(2).lower()
+        if tag == "security" or "injection" in rest or "ssrf" in rest:
+            return "security", False
+        # otherwise fall through using the remaining text for keyword hints
+    # KB-Px landscape-gap issues are deliberate work items — classify by keywords,
+    # not flagged as ambiguous (their priority is set from the P-number elsewhere).
+    if kbpx_re.match(title):
+        t = title.lower()
+        if any(k in t for k in ("benchmark","evaluate","eval ")): return "eval", False
+        if any(k in t for k in ("document","positioning","docs")): return "docs", False
+        if any(k in t for k in ("research","structural-hash","adapters")): return "research", False
+        return "feature", False
     if "bug" in labels:        return "bug", False
     if "documentation" in labels: return "docs", False
     if "refactoring" in labels: return "refactor", False
@@ -128,6 +147,9 @@ def derive_xcut(num, title, labels):
         tsev = sq.group(1).lower() if (sq and sq.group(1)) else None
         eff = sev or tsev
         return (f"severity:{eff}" if eff else "severity:medium", bool(not eff))
+    kb = kbpx_re.match(title)
+    if kb:
+        return (f"priority:{KBPX_PRIORITY[kb.group(1)]}", False)  # deliberate P0-P4 priority
     if sev in ("high","medium","low"):
         return (f"priority:{sev}", False)   # bare high/med/low outside super-qa → priority
     return ("", False)  # no signal → leave blank, NOT a flag
