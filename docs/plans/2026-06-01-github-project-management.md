@@ -116,14 +116,17 @@ scheme — for `dutiona/knowledge-base`. Adapted from `dutiona/reify` and
 
 ## 3. Phase 2 — `scripts/sync-labels.sh` (labels; **mine**, idempotent)
 
-1. **Upsert** the full taxonomy: `gh label create <name> --color <hex>
---description <desc> --force`. Colors per design palette
-   (`priority:critical`/`severity:critical`=`b60205`, area=blue/green, etc.).
-2. **Rename-in-place** unambiguous legacy labels (preserves associations,
-   guarded by exists-check):
+1. **Rename-in-place FIRST** unambiguous legacy labels (preserves associations,
+   guarded by exists-check). **Order matters** (per PR #365 review): rename
+   _before_ the upsert, else `gh label edit bug --name type:bug` collides with a
+   `type:bug` the upsert would have just created, and fails.
    `database→area:db`, `retrieval→area:search`, `refactoring→type:refactor`,
    `research→type:research`, `security→type:security`, `plan→type:plan`,
    `bug→type:bug`, `documentation→type:docs`.
+2. **Then upsert** the full taxonomy: `gh label create <name> --color <hex>
+--description <desc> --force`. Idempotent, so any label already produced by
+   step 1's rename is a safe no-op. Colors per design palette
+   (`priority:critical`/`severity:critical`=`b60205`, area=blue/green, etc.).
 3. **Leave ambiguous legacy labels** for Phase 6 per-issue resolution:
    `enhancement`, `quality`, `high`, `medium`, `low`, `info`.
 4. **Delete noise defaults** — usage-report first (`gh issue list --label <l>
