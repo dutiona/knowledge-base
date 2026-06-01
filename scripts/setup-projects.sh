@@ -42,9 +42,13 @@ PHASE_OPTS="2.5c,3A,3B,3C,3D,3E,3F,3G,3H,3I,4,4+,Deferred"
 PRIORITY_OPTS="Critical,High,Medium,Low"
 
 # Find a project number by exact title, else empty.
+# NOTE: gh's --jq does NOT accept jq's --arg, so the title is matched by piping
+# the raw JSON into a real jq invocation (which does support --arg). Using
+# gh --jq with --arg silently errors → empty → every project reads as "absent"
+# → duplicate projects created on each run. (Same class of bug as label_exists.)
 project_number() {
-	gh project list --owner "$OWNER" --format json \
-		--jq '(.projects // [])[] | select(.title == $t) | .number' --arg t "$1" 2>/dev/null | head -1
+	gh project list --owner "$OWNER" --format json 2>/dev/null |
+		jq -r --arg t "$1" '(.projects // [])[] | select(.title == $t) | .number' | head -1
 }
 project_field_names() {
 	gh project field-list "$1" --owner "$OWNER" --format json \
