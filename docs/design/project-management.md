@@ -218,7 +218,15 @@ Manually curated (matches reify). Same Status/Priority/Phase fields as Main.
 
 `type:bug` + `type:security` + super-qa findings. Severity-ordered. Immediately
 useful — KB has a large super-qa backlog (#181, #199–#233, #297, #298, #309,
-#319). Own view sorted by `severity:` then `priority:`.
+#319). Own view sorted by **Severity** then **Priority**.
+
+> **Sortable fields (added post-rollout):** a Projects table can only sort/group
+> by a _field_, not a label — so this board carries its own `Priority`,
+> `Severity`, and `Phase` single-select fields (`scripts/sync-board-fields.sh`),
+> populated from the issues' `priority:`/`severity:` labels + Main's `Phase`, and
+> re-synced on `migrate-issues.sh` re-runs. Projects fields are per-board, so
+> these mirror — they do not share — Main's; the **labels stay the source of
+> truth**.
 
 ### 3.4 `KB — Research & Eval` (auto-populated by label) — **accepted**
 
@@ -232,7 +240,9 @@ parallel-workstream boards):
 - **Research / ADR:** #361 (Embedding Adapters V2), #362 (sem structural-hash),
   #268/#269 (Level-2 injection), the 3I ADR items.
 
-Own view grouped by `type:` then sorted by Phase. Same fields as Main.
+Own view grouped by `type:` (Labels) then sorted by **Phase**. Carries its own
+`Priority`/`Severity`/`Phase` fields (same mechanism as Triage §3.3 — see the
+sortable-fields note there).
 
 > **Why a board, not just a filter:** these items have a different cadence
 > (deliverable = numbers or an ADR, not a merged feature) and often run in

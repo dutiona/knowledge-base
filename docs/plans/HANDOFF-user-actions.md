@@ -27,10 +27,21 @@ Per the view-spec sheet in
 | By Area          | Table  | `is:open`                                           | Slice: Labels (area)           |
 | Hot              | Table  | `is:open label:"priority:critical","priority:high"` | Sort: Phase ↑                  |
 
-**KB — Bug & Security Triage (#9):** Table, `is:open label:"type:bug","type:security"`, sort by severity.
-**KB — Research & Eval (#10):** Table, `is:open label:"type:research","type:eval"`, group by type.
+**KB — Bug & Security Triage (#9):** Table, `is:open label:"type:bug","type:security"`,
+**sort by Severity ↓ then Priority** (these are now real single-select **fields** on
+this board — see note below — so you can sort/group on them natively).
+**KB — Research & Eval (#10):** Table, `is:open label:"type:research","type:eval"`,
+group by **Labels** (type) or by **Phase**; the board also has Priority/Severity/Phase fields.
 **KB — Critical Path (#8):** Board, manual membership (the agent added the 9 gate
 items #325/#326/#328/#275/#342 + #107/#80/#262/#253), group by Status.
+
+> **Fields on #9 and #10:** `Priority`, `Severity`, and `Phase` single-select
+> fields exist on both boards (run by `scripts/sync-board-fields.sh`), populated
+> from each issue's `priority:`/`severity:` labels and Main's `Phase`. They re-sync
+> on any `migrate-issues.sh` re-run. Note: Projects fields are **per-board**, so
+> these are independent copies of Main's — the **labels remain the source of
+> truth**; the fields are a sort/group convenience. (Severity is sparse outside
+> super-qa issues — by design, severity is a super-qa-only dimension.)
 
 ## 3. PAT for the auto-add workflow
 
