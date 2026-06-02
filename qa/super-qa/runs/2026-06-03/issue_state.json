@@ -1,0 +1,318 @@
+{
+  "epic:master": {
+    "number": "367",
+    "node": "I_kwDORfNh_s8AAAABELyhCw"
+  },
+  "epic:autofix": {
+    "number": "368",
+    "node": "I_kwDORfNh_s8AAAABELyheg"
+  },
+  "epic:area:db": {
+    "number": "369",
+    "node": "I_kwDORfNh_s8AAAABELyh2g"
+  },
+  "epic:area:extraction": {
+    "number": "370",
+    "node": "I_kwDORfNh_s8AAAABELyiPQ"
+  },
+  "epic:area:infra": {
+    "number": "371",
+    "node": "I_kwDORfNh_s8AAAABELyimA"
+  },
+  "epic:area:ingest": {
+    "number": "372",
+    "node": "I_kwDORfNh_s8AAAABELyjiQ"
+  },
+  "epic:area:mcp": {
+    "number": "373",
+    "node": "I_kwDORfNh_s8AAAABELyj-Q"
+  },
+  "epic:area:papers": {
+    "number": "374",
+    "node": "I_kwDORfNh_s8AAAABELykSQ"
+  },
+  "epic:area:search": {
+    "number": "375",
+    "node": "I_kwDORfNh_s8AAAABELykrg"
+  },
+  "epic:area:vision": {
+    "number": "376",
+    "node": "I_kwDORfNh_s8AAAABELylGQ"
+  },
+  "find:db/testing-escape-like-untested": {
+    "number": "377",
+    "node": "I_kwDORfNh_s8AAAABELyrbw"
+  },
+  "find:db/testing-delete-chunk-vecs-untested": {
+    "number": "378",
+    "node": "I_kwDORfNh_s8AAAABELyr-Q"
+  },
+  "find:db/testing-delete-chunks-cascade-untested": {
+    "number": "379",
+    "node": "I_kwDORfNh_s8AAAABELytIQ"
+  },
+  "find:extraction/refactoring-store-resolved-split": {
+    "number": "380",
+    "node": "I_kwDORfNh_s8AAAABELytsA"
+  },
+  "find:web/refactoring-god-functions": {
+    "number": "381",
+    "node": "I_kwDORfNh_s8AAAABELyuNw"
+  },
+  "find:web/refactoring-figure-extraction-dup": {
+    "number": "382",
+    "node": "I_kwDORfNh_s8AAAABELyusQ"
+  },
+  "find:web/refactoring-ingest-url-orchestration": {
+    "number": "383",
+    "node": "I_kwDORfNh_s8AAAABELyvRg"
+  },
+  "find:render-page/testing-zero-coverage": {
+    "number": "384",
+    "node": "I_kwDORfNh_s8AAAABELyv5w"
+  },
+  "find:web/testing-postredirect-ssrf-untested": {
+    "number": "385",
+    "node": "I_kwDORfNh_s8AAAABELyw9Q"
+  },
+  "find:ingest/testing-matryoshka-embed-path": {
+    "number": "386",
+    "node": "I_kwDORfNh_s8AAAABELyxfw"
+  },
+  "find:search/correctness-rerank-scale-mismatch": {
+    "number": "387",
+    "node": "I_kwDORfNh_s8AAAABELyx_g"
+  },
+  "find:search/testing-space-name-path": {
+    "number": "388",
+    "node": "I_kwDORfNh_s8AAAABELyydg"
+  },
+  "find:search/testing-matryoshka-truncation-branch": {
+    "number": "389",
+    "node": "I_kwDORfNh_s8AAAABELyy_w"
+  },
+  "find:vision/design-god-module": {
+    "number": "390",
+    "node": "I_kwDORfNh_s8AAAABELyz1A"
+  },
+  "find:vision/testing-real-fs-write": {
+    "number": "391",
+    "node": "I_kwDORfNh_s8AAAABELy0gg"
+  },
+  "find:db/performance-per-row-chunk-count-update": {
+    "number": "392",
+    "node": "I_kwDORfNh_s8AAAABELy06g"
+  },
+  "find:db/refactoring-init-schema-god-fn": {
+    "number": "393",
+    "node": "I_kwDORfNh_s8AAAABELy1ag"
+  },
+  "find:db/testing-insert-chunk-count-increment": {
+    "number": "394",
+    "node": "I_kwDORfNh_s8AAAABELy2eA"
+  },
+  "find:db/testing-data-migrations-uncovered": {
+    "number": "395",
+    "node": "I_kwDORfNh_s8AAAABELy28g"
+  },
+  "find:db/testing-bootstrap-legacy-path": {
+    "number": "396",
+    "node": "I_kwDORfNh_s8AAAABELy3XQ"
+  },
+  "find:db/documentation-missing-element-type-column": {
+    "number": "397",
+    "node": "I_kwDORfNh_s8AAAABELy3yQ"
+  },
+  "find:extraction/performance-compare-papers-n-plus-1": {
+    "number": "398",
+    "node": "I_kwDORfNh_s8AAAABELy4WQ"
+  },
+  "find:extraction/performance-upsert-then-select": {
+    "number": "399",
+    "node": "I_kwDORfNh_s8AAAABELy4zQ"
+  },
+  "find:extraction/refactoring-map-reduce-split": {
+    "number": "400",
+    "node": "I_kwDORfNh_s8AAAABELy5Sg"
+  },
+  "find:extraction/testing-paper-not-found": {
+    "number": "401",
+    "node": "I_kwDORfNh_s8AAAABELy6Fg"
+  },
+  "find:extraction/testing-estimate-time-branches": {
+    "number": "402",
+    "node": "I_kwDORfNh_s8AAAABELy68Q"
+  },
+  "find:extraction/documentation-stale-return-doc": {
+    "number": "403",
+    "node": "I_kwDORfNh_s8AAAABELy7bg"
+  },
+  "find:web/performance-n+1-content-hash": {
+    "number": "404",
+    "node": "I_kwDORfNh_s8AAAABELy78g"
+  },
+  "find:web/security-ssrf-redirect-chain": {
+    "number": "405",
+    "node": "I_kwDORfNh_s8AAAABELy8hA"
+  },
+  "find:web/design-inconsistent-delete-api": {
+    "number": "406",
+    "node": "I_kwDORfNh_s8AAAABELy9IA"
+  },
+  "find:web/design-primitive-obsession-dicts": {
+    "number": "407",
+    "node": "I_kwDORfNh_s8AAAABELy9zw"
+  },
+  "find:web/design-resource-ownership-tmpdir": {
+    "number": "408",
+    "node": "I_kwDORfNh_s8AAAABELy-SQ"
+  },
+  "find:web/design-circular-import-local-imports": {
+    "number": "409",
+    "node": "I_kwDORfNh_s8AAAABELy_aA"
+  },
+  "find:web/testing-malformed-elements-json": {
+    "number": "410",
+    "node": "I_kwDORfNh_s8AAAABELy_-A"
+  },
+  "find:web/documentation-ingest-url-no-params": {
+    "number": "411",
+    "node": "I_kwDORfNh_s8AAAABELzAgQ"
+  },
+  "find:web/documentation-configure-browser-args": {
+    "number": "412",
+    "node": "I_kwDORfNh_s8AAAABELzBCA"
+  },
+  "find:render-browser/documentation-stale-return-keys": {
+    "number": "413",
+    "node": "I_kwDORfNh_s8AAAABELzBiw"
+  },
+  "find:ingest/design-long-produce-insert": {
+    "number": "414",
+    "node": "I_kwDORfNh_s8AAAABELzCCA"
+  },
+  "find:ingest/design-long-reingest": {
+    "number": "415",
+    "node": "I_kwDORfNh_s8AAAABELzClA"
+  },
+  "find:ingest/design-chunk-tuple-obsession": {
+    "number": "416",
+    "node": "I_kwDORfNh_s8AAAABELzDtg"
+  },
+  "find:ingest/testing-detect-source-type": {
+    "number": "417",
+    "node": "I_kwDORfNh_s8AAAABELzEOw"
+  },
+  "find:ingest/testing-pdf-runtime-fallback": {
+    "number": "418",
+    "node": "I_kwDORfNh_s8AAAABELzErw"
+  },
+  "find:ingest/testing-semantic-pdf-chunking": {
+    "number": "419",
+    "node": "I_kwDORfNh_s8AAAABELzFNA"
+  },
+  "find:ingest/testing-directory-extension-filter": {
+    "number": "420",
+    "node": "I_kwDORfNh_s8AAAABELzFng"
+  },
+  "find:ingest/documentation-missing-ingest-file-docstring": {
+    "number": "421",
+    "node": "I_kwDORfNh_s8AAAABELzGDg"
+  },
+  "find:ingest/documentation-missing-ingest-directory-docstring": {
+    "number": "422",
+    "node": "I_kwDORfNh_s8AAAABELzGiQ"
+  },
+  "find:search/correctness-source-type-postfilter": {
+    "number": "423",
+    "node": "I_kwDORfNh_s8AAAABELzHWg"
+  },
+  "find:search/refactoring-god-function": {
+    "number": "424",
+    "node": "I_kwDORfNh_s8AAAABELzIBw"
+  },
+  "find:search/testing-none-embedding-vec-skip": {
+    "number": "425",
+    "node": "I_kwDORfNh_s8AAAABELzInQ"
+  },
+  "find:search/testing-rerank-degradation-path": {
+    "number": "426",
+    "node": "I_kwDORfNh_s8AAAABELzJBA"
+  },
+  "find:search/testing-fts-operationalerror-skip": {
+    "number": "427",
+    "node": "I_kwDORfNh_s8AAAABELzJhA"
+  },
+  "find:vision/design-module-singleton": {
+    "number": "428",
+    "node": "I_kwDORfNh_s8AAAABELzKNA"
+  },
+  "find:vision/refactoring-figure-dataclass": {
+    "number": "429",
+    "node": "I_kwDORfNh_s8AAAABELzKtg"
+  },
+  "find:vision/design-long-dispatch-vision": {
+    "number": "430",
+    "node": "I_kwDORfNh_s8AAAABELzLxQ"
+  },
+  "find:vision/design-long-persist-figures": {
+    "number": "431",
+    "node": "I_kwDORfNh_s8AAAABELzMWA"
+  },
+  "find:vision/documentation-stale-error-return": {
+    "number": "432",
+    "node": "I_kwDORfNh_s8AAAABELzNlg"
+  },
+  "group:li:db": {
+    "number": "433",
+    "node": "I_kwDORfNh_s8AAAABELzXCw"
+  },
+  "group:li:extraction": {
+    "number": "434",
+    "node": "I_kwDORfNh_s8AAAABELzYRA"
+  },
+  "group:li:infra": {
+    "number": "435",
+    "node": "I_kwDORfNh_s8AAAABELzZqw"
+  },
+  "group:li:ingest": {
+    "number": "436",
+    "node": "I_kwDORfNh_s8AAAABELzalA"
+  },
+  "group:li:search": {
+    "number": "437",
+    "node": "I_kwDORfNh_s8AAAABELzbUg"
+  },
+  "group:li:vision": {
+    "number": "438",
+    "node": "I_kwDORfNh_s8AAAABELzbzw"
+  },
+  "autofix:medium": {
+    "number": "439",
+    "node": "I_kwDORfNh_s8AAAABELzcfw"
+  },
+  "autofix:low": {
+    "number": "440",
+    "node": "I_kwDORfNh_s8AAAABELzdlQ"
+  },
+  "autofix:info": {
+    "number": "441",
+    "node": "I_kwDORfNh_s8AAAABELzeGQ"
+  },
+  "observer:high": {
+    "number": "442",
+    "node": "I_kwDORfNh_s8AAAABELzf4Q"
+  },
+  "observer:medium": {
+    "number": "443",
+    "node": "I_kwDORfNh_s8AAAABELzgrA"
+  },
+  "observer:low": {
+    "number": "444",
+    "node": "I_kwDORfNh_s8AAAABELzhLA"
+  },
+  "observer:info": {
+    "number": "445",
+    "node": "I_kwDORfNh_s8AAAABELzhpw"
+  }
+}
