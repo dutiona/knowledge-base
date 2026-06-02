@@ -5,6 +5,13 @@
 249 issues total (104 open, 145 closed) across 8 workstreams. This document
 establishes priority, ordering, dependency chains, and parallelism opportunities.
 
+> **Live tracker:** day-to-day status lives in the GitHub Projects (KB — Main,
+> Critical Path to Phase 4, Bug & Security Triage, Research & Eval), not here.
+> This file is the dependency-graph narrative; the Projects are the live board.
+> The roadmap **Phase** column maps 1:1 to the Project **Phase** field
+> (2.5c, 3A–3I, 4, 4+, Deferred). Label taxonomy & workflow:
+> `docs/design/project-management.md`.
+
 > **Gap Analysis Integration (2026-03-31):** Seven new Phase 3 issues and five
 > existing-issue updates derive from the notes 23-28 gap analysis in
 > `autonomous-agent-project` (`docs/summaries/gap-analysis-notes-23-25.md`).
@@ -725,12 +732,12 @@ cross-system comparison, so KB pivots to architectural-property testing.
 The KB slice of MemArch-Bench lives under `tests/memarchbench/` and
 consists of four invariant suites:
 
-| Suite                       | Property                                                    | Status                   |
-| --------------------------- | ----------------------------------------------------------- | ------------------------ |
-| `test_supersession.py`      | `reingest(newer)` ⇒ search returns newer, not older         | proposed                 |
-| `test_retrieval_quality.py` | Recall@k / nDCG@k / MRR on KB golden set                    | gated on #250            |
-| `test_prediction_errors.py` | Prediction-error fires iff stale; precision + recall ≥ 0.9  | proposed                 |
-| `test_entity_stability.py`  | Same paper → same entity IDs across chunking strategy swap  | proposed                 |
+| Suite                       | Property                                                   | Status        |
+| --------------------------- | ---------------------------------------------------------- | ------------- |
+| `test_supersession.py`      | `reingest(newer)` ⇒ search returns newer, not older        | proposed      |
+| `test_retrieval_quality.py` | Recall@k / nDCG@k / MRR on KB golden set                   | gated on #250 |
+| `test_prediction_errors.py` | Prediction-error fires iff stale; precision + recall ≥ 0.9 | proposed      |
+| `test_entity_stability.py`  | Same paper → same entity IDs across chunking strategy swap | proposed      |
 
 **Secondary reference: LoCoMo / LongMemEval with caveats.** Kept only as
 reference numbers, always reported alongside: (1) the MemPalace drama

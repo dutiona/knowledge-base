@@ -80,4 +80,62 @@ Read these when the task touches the corresponding area:
 
 ## Roadmap
 
-See `ROADMAP.md` for the full dependency graph. Currently in Phase 2 (embedding architecture + search quality).
+`ROADMAP.md` is the dependency-graph narrative (phases, ordering, parallelism).
+**GitHub Projects is the live tracker** — see Project Management below. Currently
+in Phase 3 (intelligence, integration & search refinement).
+
+## Project Management
+
+Issues and PRs are tracked with a `prefix:value` label taxonomy fed into four
+GitHub Projects. Design: `docs/design/project-management.md`. The label/project/
+migration scripts live in `scripts/` (`sync-labels.sh`, `setup-projects.sh`,
+`gen-mapping.sh`, `migrate-issues.sh` — all idempotent, all `--dry-run`-aware;
+see `scripts/README.md`).
+
+**Title convention:** `type(area): description` (Conventional-Commits style),
+e.g. `feat(search): query-type classifier`.
+
+**Required labels — every issue carries exactly one `type:` and one `area:`:**
+
+- **`type:`** — bug · feature · enhancement · perf · refactor · test · docs ·
+  chore · research · eval · security · epic · plan
+- **`area:`** — ingest · search · embeddings · extraction · vision · papers ·
+  db · mcp · infra · integration · docs (the subsystem the code lands in)
+
+**Additive (optional):**
+
+- **`priority:`** critical · high · medium · low — scheduling urgency. Mirrors
+  the Project **Priority** field 1:1. (KB-P0→critical, P1→high, P2→medium,
+  P3/P4→low.)
+- **`severity:`** critical · high · medium · low · info — `/super-qa` findings
+  only; intrinsic technical impact (distinct from priority).
+- **`status:`** blocked · needs-design — only when non-default.
+- **`super-qa`** — provenance marker for audit findings.
+
+> Deferral is **not** a priority — it is the **`Deferred`** value of the Project
+> **Phase** field (the parking lot). Phase is a field, never a label.
+
+**Projects** (auto-populated by `.github/workflows/add-to-project.yml`):
+
+| Project                            | Contents                                          |
+| ---------------------------------- | ------------------------------------------------- |
+| KB — Main (#7)                     | every open issue/PR; fields Status/Priority/Phase |
+| KB — Critical Path to Phase 4 (#8) | manually curated gate + Phase-4 targets           |
+| KB — Bug & Security Triage (#9)    | auto: `type:bug` \|\| `type:security`             |
+| KB — Research & Eval (#10)         | auto: `type:research` \|\| `type:eval`            |
+
+**Epics:** reserve `type:epic` + native sub-issues for large decomposable
+features (e.g. #107 code indexing, #124 build/serve). Roadmap _phase_ grouping
+is the Project **Phase** field, not epics. Link a child to its epic via GraphQL:
+
+```bash
+PARENT=$(gh api graphql -f query='{ repository(owner:"dutiona",name:"knowledge-base"){ issue(number:EPIC){ id }}}' --jq '.data.repository.issue.id')
+CHILD=$(gh api graphql -f query='{ repository(owner:"dutiona",name:"knowledge-base"){ issue(number:NEW){ id }}}' --jq '.data.repository.issue.id')
+gh api graphql -f query="mutation { addSubIssue(input:{issueId:\"$PARENT\", subIssueId:\"$CHILD\"}){ subIssue { number }}}"
+```
+
+> **Division of labour:** the `scripts/` automate labels, project containers,
+> fields, and migration. Project **views/boards** and the built-in Status field's
+> **In Review** option are web-UI-only (`gh` has no `view-create`/`field-edit`) —
+> see `scripts/README.md`. The auto-add workflow needs a `KB_PROJECT_TOKEN`
+> secret (classic PAT, `repo`+`project` scope).
