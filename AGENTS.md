@@ -53,6 +53,22 @@ docs/              # Sphinx-compatible documentation
 7. **Content-hash dedup** — ingestion uses SHA-256 hashes. If adding new content types, maintain this pattern.
 8. **Batched SQL** — use `_batched_execute`/`_batched_select` from `db.py` for any IN-clause query to stay under SQLite's 999 variable limit.
 
+## Issue & PR Labels
+
+Title format `type(area): description`. Every issue carries **exactly one
+`type:` and one `area:`** label:
+
+- **`type:`** bug · feature · enhancement · perf · refactor · test · docs · chore
+  · research · eval · security · epic · plan
+- **`area:`** ingest · search · embeddings · extraction · vision · papers · db ·
+  mcp · infra · integration · docs
+
+Additive: `priority:{critical,high,medium,low}`, `severity:{…}` (super-qa only),
+`status:{blocked,needs-design}`, `super-qa`. Deferral is the Project **Phase**
+field value `Deferred`, not a label. New issues/PRs auto-add to the GitHub
+Projects via `.github/workflows/add-to-project.yml`. Full scheme:
+`docs/design/project-management.md`; scripts in `scripts/` (`scripts/README.md`).
+
 ## Architecture Docs
 
 For deeper context, read these files (only when working on the relevant area):
@@ -60,4 +76,5 @@ For deeper context, read these files (only when working on the relevant area):
 - `docs/design/architecture-overview.md` — module responsibilities, data flow diagrams
 - `docs/reference/schema.md` — ER diagram, all tables and columns
 - `docs/reference/mcp-tools.md` — full tool reference
+- `docs/design/project-management.md` — label taxonomy, Projects, migration
 - `ROADMAP.md` — issue dependency graph, current phase
