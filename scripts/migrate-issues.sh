@@ -118,6 +118,15 @@ if [[ -n "${CRITPATH_NUMBER:-}" ]]; then
 	done
 else warn "CRITPATH_NUMBER not in .pm-ids.env — skipping Critical-Path population"; fi
 
+# ---- secondary-board fields (Triage #9, R&E #10) ----------------------------
+# These boards have their own Priority/Severity/Phase fields (a Projects table
+# can't sort by a label). Re-sync them from the labels + Main's Phase so they
+# never drift from the global source of truth. Idempotent + dry-run-aware.
+if [[ -x "$HERE/sync-board-fields.sh" ]]; then
+	log "== re-sync secondary-board fields (Triage/R&E) =="
+	"$HERE/sync-board-fields.sh" $([[ "$DRY_RUN" == "1" ]] && echo --dry-run) $([[ "$ASSUME_YES" == "1" ]] && echo --yes) || warn "sync-board-fields returned non-zero (continuing)"
+fi
+
 ok "migrate-issues complete (dry_run=$DRY_RUN)"
 warn "Phase 7d: after verifying, delete now-unreferenced ambiguous labels:"
 warn "  for l in enhancement quality high medium low info; do gh label delete \"\$l\" -R $SLUG; done"
