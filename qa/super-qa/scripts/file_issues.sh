@@ -50,6 +50,7 @@ st_set() {
 
 # ---- prefetch for title-match fallback ----
 PREFETCH=$(mktemp)
+trap 'rm -f "$PREFETCH"' EXIT
 gh issue list --repo "$REPO" --label super-qa --state all --limit 600 \
 	--json number,title >"$PREFETCH" 2>/dev/null || echo '[]' >"$PREFETCH"
 title_num() { jq -r --arg t "$1" '[.[]|select(.title==$t)|.number][0] // empty' "$PREFETCH"; }

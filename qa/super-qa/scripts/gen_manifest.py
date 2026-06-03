@@ -14,7 +14,6 @@ file_issues.sh links it in. Re-runnable: keys are stable; file_issues.sh is idem
 """
 
 import json
-import sys
 from collections import Counter, defaultdict
 
 RUN = "2026-06-03"
@@ -121,7 +120,6 @@ def autofix_body(sev, items):
 def main():
     findings = json.load(open(CONS))
     dupe = {k: v for k, v in json.load(open(DUPE)).items() if not k.startswith("_")}
-    by_fp = {f["fingerprint"]: f for f in findings}
 
     manifest = []
     links_existing = {}  # prior_issue_number -> area_epic_key
