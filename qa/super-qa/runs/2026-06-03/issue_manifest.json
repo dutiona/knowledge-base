@@ -1,0 +1,1109 @@
+{
+  "run": "2026-06-03",
+  "manifest": [
+    {
+      "key": "epic:master",
+      "kind": "master",
+      "parent": null,
+      "severity": null,
+      "title": "[super-qa] master epic \u2014 round 2 (2026-06-03)",
+      "labels": [
+        "super-qa",
+        "type:epic"
+      ],
+      "body": "Master umbrella for the `/super-qa` round-2 sweep (2026-06-03; 167 findings across 6 audited units).\n\nChildren: per-area epics + the auto-fix epic. Per-severity **observer** issues index every non-autofixable finding by #. Prior-round issues (#181-233, ~3mo old) are relabeled and linked into their area epics for reconciliation.\n\nArtifacts: `qa/super-qa/runs/2026-06-03/`\n\n<!-- super-qa-key: epic:master -->"
+    },
+    {
+      "key": "epic:autofix",
+      "kind": "autofix-epic",
+      "parent": "epic:master",
+      "severity": null,
+      "title": "[super-qa] auto-fix epic \u2014 round 2 (2026-06-03)",
+      "labels": [
+        "super-qa",
+        "type:epic",
+        "super-qa:auto-fix"
+      ],
+      "body": "Umbrella for all mechanically auto-fixable findings, grouped one issue per severity. Apply via `/super-qa` Phase 3.\n\n<!-- super-qa-key: epic:autofix -->"
+    },
+    {
+      "key": "epic:area:db",
+      "kind": "area-epic",
+      "parent": "epic:master",
+      "severity": null,
+      "title": "[super-qa] area epic: db \u2014 round 2 (2026-06-03)",
+      "labels": [
+        "super-qa",
+        "type:epic",
+        "area:db"
+      ],
+      "body": "All `/super-qa` round-2 (2026-06-03) findings in `area:db`. Non-autofixable critical/high/medium are individual sub-issues; low/info are one grouped sub-issue.\n\n**New-finding breakdown:** high: 3 \u00b7 medium: 6 \u00b7 low: 9 \u00b7 info: 1\n\nFilter: `label:area:db` or `parent-issue:#<this>`\n\n<!-- super-qa-key: epic:area:db -->"
+    },
+    {
+      "key": "epic:area:extraction",
+      "kind": "area-epic",
+      "parent": "epic:master",
+      "severity": null,
+      "title": "[super-qa] area epic: extraction \u2014 round 2 (2026-06-03)",
+      "labels": [
+        "super-qa",
+        "type:epic",
+        "area:extraction"
+      ],
+      "body": "All `/super-qa` round-2 (2026-06-03) findings in `area:extraction`. Non-autofixable critical/high/medium are individual sub-issues; low/info are one grouped sub-issue.\n\n**New-finding breakdown:** high: 1 \u00b7 medium: 6 \u00b7 low: 10 \u00b7 info: 1\n\nFilter: `label:area:extraction` or `parent-issue:#<this>`\n\n<!-- super-qa-key: epic:area:extraction -->"
+    },
+    {
+      "key": "epic:area:infra",
+      "kind": "area-epic",
+      "parent": "epic:master",
+      "severity": null,
+      "title": "[super-qa] area epic: infra \u2014 round 2 (2026-06-03)",
+      "labels": [
+        "super-qa",
+        "type:epic",
+        "area:infra"
+      ],
+      "body": "All `/super-qa` round-2 (2026-06-03) findings in `area:infra`. Non-autofixable critical/high/medium are individual sub-issues; low/info are one grouped sub-issue.\n\n**New-finding breakdown:** low: 1\n\nFilter: `label:area:infra` or `parent-issue:#<this>`\n\n<!-- super-qa-key: epic:area:infra -->"
+    },
+    {
+      "key": "epic:area:ingest",
+      "kind": "area-epic",
+      "parent": "epic:master",
+      "severity": null,
+      "title": "[super-qa] area epic: ingest \u2014 round 2 (2026-06-03)",
+      "labels": [
+        "super-qa",
+        "type:epic",
+        "area:ingest"
+      ],
+      "body": "All `/super-qa` round-2 (2026-06-03) findings in `area:ingest`. Non-autofixable critical/high/medium are individual sub-issues; low/info are one grouped sub-issue.\n\n**New-finding breakdown:** high: 6 \u00b7 medium: 19 \u00b7 low: 18 \u00b7 info: 7\n\nFilter: `label:area:ingest` or `parent-issue:#<this>`\n\n<!-- super-qa-key: epic:area:ingest -->"
+    },
+    {
+      "key": "epic:area:mcp",
+      "kind": "area-epic",
+      "parent": "epic:master",
+      "severity": null,
+      "title": "[super-qa] area epic: mcp \u2014 round 2 (2026-06-03)",
+      "labels": [
+        "super-qa",
+        "type:epic",
+        "area:mcp"
+      ],
+      "body": "All `/super-qa` round-2 (2026-06-03) findings in `area:mcp`. Non-autofixable critical/high/medium are individual sub-issues; low/info are one grouped sub-issue. Also parents relabeled prior-round issues.\n\n**New-finding breakdown:** (none \u2014 retrofit only)\n\nFilter: `label:area:mcp` or `parent-issue:#<this>`\n\n<!-- super-qa-key: epic:area:mcp -->"
+    },
+    {
+      "key": "epic:area:papers",
+      "kind": "area-epic",
+      "parent": "epic:master",
+      "severity": null,
+      "title": "[super-qa] area epic: papers \u2014 round 2 (2026-06-03)",
+      "labels": [
+        "super-qa",
+        "type:epic",
+        "area:papers"
+      ],
+      "body": "All `/super-qa` round-2 (2026-06-03) findings in `area:papers`. Non-autofixable critical/high/medium are individual sub-issues; low/info are one grouped sub-issue. Also parents relabeled prior-round issues.\n\n**New-finding breakdown:** (none \u2014 retrofit only)\n\nFilter: `label:area:papers` or `parent-issue:#<this>`\n\n<!-- super-qa-key: epic:area:papers -->"
+    },
+    {
+      "key": "epic:area:search",
+      "kind": "area-epic",
+      "parent": "epic:master",
+      "severity": null,
+      "title": "[super-qa] area epic: search \u2014 round 2 (2026-06-03)",
+      "labels": [
+        "super-qa",
+        "type:epic",
+        "area:search"
+      ],
+      "body": "All `/super-qa` round-2 (2026-06-03) findings in `area:search`. Non-autofixable critical/high/medium are individual sub-issues; low/info are one grouped sub-issue.\n\n**New-finding breakdown:** high: 3 \u00b7 medium: 5 \u00b7 low: 9 \u00b7 info: 2\n\nFilter: `label:area:search` or `parent-issue:#<this>`\n\n<!-- super-qa-key: epic:area:search -->"
+    },
+    {
+      "key": "epic:area:vision",
+      "kind": "area-epic",
+      "parent": "epic:master",
+      "severity": null,
+      "title": "[super-qa] area epic: vision \u2014 round 2 (2026-06-03)",
+      "labels": [
+        "super-qa",
+        "type:epic",
+        "area:vision"
+      ],
+      "body": "All `/super-qa` round-2 (2026-06-03) findings in `area:vision`. Non-autofixable critical/high/medium are individual sub-issues; low/info are one grouped sub-issue.\n\n**New-finding breakdown:** high: 2 \u00b7 medium: 5 \u00b7 low: 10 \u00b7 info: 2\n\nFilter: `label:area:vision` or `parent-issue:#<this>`\n\n<!-- super-qa-key: epic:area:vision -->"
+    },
+    {
+      "key": "find:db/testing-escape-like-untested",
+      "kind": "finding",
+      "parent": "epic:area:db",
+      "severity": "high",
+      "title": "[super-qa] high: escape_like has zero tests despite 5+ production LIKE-clause call sites",
+      "labels": [
+        "super-qa",
+        "area:db",
+        "type:test",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nescape_like() escapes backslash, percent, and underscore for SQLite LIKE clauses (ESCAPE '\\\\'). It is imported by conclusions.py:69, folder_summaries.py:27, bibtex.py:106, and papers.py:234 \u2014 every wildcard search in the codebase funnels through it. No test file references escape_like (confirmed: grep across tests/ returns 0 hits). The function is pure, order-sensitive (backslash MUST be escaped first or the %/_ escapes get double-escaped), and a regression here silently breaks search correctness or opens a LIKE-injection where a user keyword containing % matches everything. The ordering of the three .replace() calls is exactly the kind of subtle invariant that needs a guard test.\n\n## Location\n`src/knowledge_base/db.py:54-59`\n\n## Suggested approach\nAdd tests/test_db.py cases covering: no special chars (identity), a lone '%' -> '\\\\%', a lone '_' -> '\\\\_', a lone '\\\\' -> '\\\\\\\\', and a combined input like 'a_b%c\\\\d' to lock the backslash-first ordering. Optionally add a hypothesis property: for any string s, escaping then using it in a LIKE ... ESCAPE '\\\\' against the literal s matches exactly that row in an in-memory SQLite table (round-trip invariant).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `db/testing-escape-like-untested` \u00b7 **fingerprint:** `eafb0ba48107`\n- **Category:** testing \u00b7 **Area:** `area:db` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** src/knowledge_base/conclusions.py:69, src/knowledge_base/folder_summaries.py:27, src/knowledge_base/bibtex.py:106, src/knowledge_base/papers.py:234\n- **Filter:** `label:area:db` + `label:severity:high`\n\n<!-- super-qa-key: find:db/testing-escape-like-untested -->"
+    },
+    {
+      "key": "find:db/testing-delete-chunk-vecs-untested",
+      "kind": "finding",
+      "parent": "epic:area:db",
+      "severity": "high",
+      "title": "[super-qa] high: delete_chunk_vecs has no direct unit test for empty-input, chunk_count decrement",
+      "labels": [
+        "super-qa",
+        "area:db",
+        "type:test",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\ndelete_chunk_vecs() is exported in __all__ and called from web.py (lines 843, 984, 1046) and indirectly via delete_chunks_cascade. No test references it directly (grep tests/ = 0). Three behaviours are uncovered: (1) the empty-list early return at line 458-459 (`if not chunk_ids: return`); (2) the chunk_count bookkeeping at 468-473 \u2014 it counts ACTUAL rows present before deleting (count_rows) and decrements embed_spaces.chunk_count with a MAX(0, ...) clamp, only when actual_deleted>0. Nothing asserts that count stays correct when some chunk_ids have no embedding, nor that the clamp prevents going negative; (3) the table_name override path. The batching boundary is exercised only indirectly through reingest (test_ingest.py:753 patches _SQL_BATCH_SIZE=2) but that test asserts reingest outcomes, not this function's chunk_count contract.\n\n## Location\n`src/knowledge_base/db.py:449-473`\n\n## Suggested approach\nAdd direct tests: (a) delete_chunk_vecs(conn, []) is a no-op and leaves chunk_count unchanged; (b) insert N vecs into the active space, delete a subset, assert embed_spaces.chunk_count decremented by exactly the number of rows that actually existed (mix in chunk_ids with no embedding to verify count uses actual rows); (c) verify MAX(0,...) clamp by deleting more than chunk_count and asserting count floors at 0; (d) delete from an explicit non-active table_name. Parametrize across element_type float32/int8.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `db/testing-delete-chunk-vecs-untested` \u00b7 **fingerprint:** `47498600266b`\n- **Category:** testing \u00b7 **Area:** `area:db` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** src/knowledge_base/web.py:843, src/knowledge_base/web.py:984, tests/test_ingest.py:753-794\n- **Filter:** `label:area:db` + `label:severity:high`\n\n<!-- super-qa-key: find:db/testing-delete-chunk-vecs-untested -->"
+    },
+    {
+      "key": "find:db/testing-delete-chunks-cascade-untested",
+      "kind": "finding",
+      "parent": "epic:area:db",
+      "severity": "high",
+      "title": "[super-qa] high: delete_chunks_cascade lacks direct test for return value and empty-list path",
+      "labels": [
+        "super-qa",
+        "area:db",
+        "type:test",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\ndelete_chunks_cascade() (exported, called from vision.py:1986, web.py:515, ingest.py:576) has no direct unit test (grep tests/ = 0). Uncovered: (1) the empty-list early return returning 0 (line 489-490); (2) the documented return value `len(chunk_ids)` \u2014 note this is the INPUT count, not the number of rows actually deleted, so calling it with non-existent ids returns a non-zero count while deleting nothing; that off-by-semantics is a real trap worth pinning with a test; (3) the two-step cascade ordering (vec rows before chunk rows so the chunks_ad FTS trigger fires correctly) and that the FTS index is cleaned up after cascade.\n\n## Location\n`src/knowledge_base/db.py:476-493`\n\n## Suggested approach\nAdd tests: (a) delete_chunks_cascade(conn, []) returns 0 and mutates nothing; (b) insert chunks + vecs + an FTS-indexed body, call cascade, assert return == len(input), assert chunks/chunks_vec rows gone AND chunks_fts no longer MATCHes the deleted content; (c) pin the return-count semantics by passing one real id and one bogus id and asserting return==2 while only one row was actually removed (documents the contract or surfaces it as a bug to the reviewer).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `db/testing-delete-chunks-cascade-untested` \u00b7 **fingerprint:** `98bbb7f82999`\n- **Category:** testing \u00b7 **Area:** `area:db` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** src/knowledge_base/vision.py:1986, src/knowledge_base/web.py:515, src/knowledge_base/ingest.py:576\n- **Filter:** `label:area:db` + `label:severity:high`\n\n<!-- super-qa-key: find:db/testing-delete-chunks-cascade-untested -->"
+    },
+    {
+      "key": "find:extraction/refactoring-store-resolved-split",
+      "kind": "finding",
+      "parent": "epic:area:extraction",
+      "severity": "high",
+      "title": "[super-qa] high: _store_resolved is a ~180-LOC multi-responsibility function",
+      "labels": [
+        "super-qa",
+        "area:extraction",
+        "type:refactor",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: `_store_resolved` (lines 558-738, ~180 LOC inside one try/except) performs at least five distinct jobs: (1) clear prior extraction, (2) build surface->canonical lookup from resolution groups (568-579), (3) aggregate per-canonical entity_data via a defaultdict-of-dict (581-612), (4) insert into entities + entity_mentions (614-638), (5) write methods/datasets tables with a member-alias fan-out (640-690), (6) write metrics with canonical re-resolution (692-727). Abstraction levels are mixed (raw SQL strings interleaved with dict bookkeeping). Target state: extract `_build_canonical_lookup(resolution) -> dict[tuple[str,str], str]`, `_aggregate_entities(map_results, lookup) -> dict[...]`, `_insert_entities_and_mentions(conn, entity_data, paper_id) -> dict`, `_write_metrics(conn, map_results, lookup, method_map, dataset_map, paper_id) -> int`, leaving `_store_resolved` as a ~25-LOC orchestrator wrapped in the existing transaction. Pattern: Extract Method / Compose Method. Motivation: each helper becomes unit-testable in isolation; the transaction boundary stays in one place. Estimated scope: single module, ~5 new private helpers, plus test additions. Prerequisites: none. Risk: medium \u2014 control flow and the metric attribution fan-out (685-690) must be preserved exactly; cover with characterization tests on entity_id_map / method_map ordering before refactoring.\n\n## Location\n`src/knowledge_base/extraction.py:558-738`\n\n## Suggested approach\nDecompose into the named private helpers above; keep `conn.commit()/rollback()` boundary in the orchestrator. Add characterization tests asserting current methods_added/datasets_added/metrics_added/entities_resolved counts before extracting.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `extraction/refactoring-store-resolved-split` \u00b7 **fingerprint:** `221af430c062`\n- **Category:** refactoring \u00b7 **Area:** `area:extraction` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** Fowler, Refactoring: Extract Method, Compose Method\n- **Filter:** `label:area:extraction` + `label:severity:high`\n\n<!-- super-qa-key: find:extraction/refactoring-store-resolved-split -->"
+    },
+    {
+      "key": "find:web/refactoring-god-functions",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "high",
+      "title": "[super-qa] high: _extract_html_images is a ~215-LOC function mixing 5 responsibilities",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:refactor",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: `_extract_html_images` (lines 329-543, ~215 body LOC) parses candidates, merges extra HTML sources with dedup, downloads+size-guards+SSRF-rechecks each image, decodes via Pillow, calls vision per image, embeds, deletes stale chunks, and inserts new chunks with hash dedup \u2014 all in one function body. It far exceeds the 50-LOC threshold and operates at four different abstraction levels (byte streaming, image decoding, DB cleanup, embedding).\nTarget state: Extract cohesive helpers: `_download_image_bytes(url) -> bytes | None` (the httpx.stream + byte-cap + post-redirect SSRF block, lines 409-447), `_decode_image_to_png_b64(bytes) -> str | None` (lines 450-461), `_describe_image(b64, alt) -> list[(desc, meta)]` (lines 463-489), and a shared `_swap_figure_chunks(conn, source_url, collected, index_start, index_end)` that owns the delete-stale + embed + insert-with-dedup tail (lines 494-543). The top-level function then orchestrates at one altitude.\nPattern name: Extract Method / Compose Method.\nMotivation: Testability (each fallible stage independently mockable), readability, and it exposes the duplication shared with `_extract_web_figures`/`_extract_element_captures`.\nEstimated scope: 1 file, ~6 new private helpers, plus test updates.\nPrerequisites: none.\nRisk: Medium \u2014 the embed-before-delete ordering (lines 494-516) is a deliberate crash-safety invariant; the extraction must preserve 'delete stale only after embeddings succeed' or it silently corrupts idempotency.\n\n## Location\n`src/knowledge_base/web.py:329-543`\n\n## Suggested approach\nDecompose into _download_image_bytes / _decode_image_to_png_b64 / _describe_image / _swap_figure_chunks helpers; keep the embed-then-delete ordering intact in the shared swap helper.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/refactoring-god-functions` \u00b7 **fingerprint:** `d62e24666253`\n- **Category:** refactoring \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** https://refactoring.com/catalog/extractFunction.html\n- **Filter:** `label:area:ingest` + `label:severity:high`\n\n<!-- super-qa-key: find:web/refactoring-god-functions -->"
+    },
+    {
+      "key": "find:web/refactoring-figure-extraction-dup",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "high",
+      "title": "[super-qa] high: Three figure-extraction functions duplicate the embed/delete-stale/insert-dedup ",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:refactor",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: `_extract_html_images` (494-543), `_extract_web_figures` (829-881), and `_extract_element_captures` (969-1012) each repeat the identical pipeline: build `texts` list, call `_embed_with_config`, query stale `chunk_index` range for `source_type='figure'`, call `_cleanup_figure_fk_refs` + delete (via `delete_chunks_cascade` in one, `delete_chunk_vecs`+`_batched_execute` in the other two \u2014 an inconsistency, see separate finding), then loop `zip(collected, embeddings)` computing `_content_hash`, skip-if-exists, `_insert_chunk`, increment counter, `conn.commit()` if changed. Each also opens with `import base64` + `from .vision import _get_vision_config` + reads `base_url`/`model`.\nTarget state: A single `_swap_figure_chunks(conn, source_url, collected, *, index_start, index_end=None)` that takes `collected: list[tuple[str, dict, int]]` (desc, meta, index-offset) and performs embed \u2192 scoped-delete \u2192 hash-dedup insert \u2192 commit. The three callers reduce to per-source collection logic only.\nPattern name: Form Template Method / Extract Superclass (here: extract shared procedure).\nMotivation: ~120 lines of near-identical logic; the chunk-index-range scoping is subtle and currently copy-pasted, so a fix to one (e.g. the delete-API inconsistency) must be remembered in three places.\nEstimated scope: 1 file, 1 new helper, 3 call-site rewrites, test consolidation.\nPrerequisites: reconcile the delete-API inconsistency (delete_chunks_cascade vs delete_chunk_vecs+manual DELETE) first.\nRisk: Medium \u2014 the index ranges differ per caller and encode an ordering contract between the three figure sources; must be parameterized exactly.\n\n## Location\n`src/knowledge_base/web.py:494-543,829-881,969-1012`\n\n## Suggested approach\nExtract a parameterized _swap_figure_chunks(conn, source_url, collected, index_start, index_end) and route all three figure extractors through it.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/refactoring-figure-extraction-dup` \u00b7 **fingerprint:** `4ea387295477`\n- **Category:** refactoring \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** https://refactoring.com/catalog/extractFunction.html\n- **Filter:** `label:area:ingest` + `label:severity:high`\n\n<!-- super-qa-key: find:web/refactoring-figure-extraction-dup -->"
+    },
+    {
+      "key": "find:web/refactoring-ingest-url-orchestration",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "high",
+      "title": "[super-qa] high: ingest_url is a ~200-LOC procedure conflating fetch, browser fallback, figure or",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:refactor",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: `ingest_url` (1058-1260, ~200 body LOC) does URL validation+SSRF, httpx fetch, post-redirect SSRF, trafilatura extract, the entire browser-fallback block (1110-1176: render, re-extract, screenshot figures, element captures, tmpdir cleanup in a nested try/finally), inline-image extraction, then text-chunk dedup+embed+insert. The browser-fallback block alone is ~67 lines nested 4 levels deep.\nTarget state: Extract `_fetch_and_validate(url) -> (html, response)`, `_maybe_browser_fallback(conn, url, response, text, extracted_title) -> BrowserOutcome` (returns figures_extracted, browser_rendered, rendered_html, rendered_base_url, possibly-improved text/title), and `_ingest_text_chunks(conn, text, url, title, session_id) -> dict`. `ingest_url` becomes a ~30-line orchestrator.\nPattern name: Extract Method / Compose Method; introduce a small result dataclass for the browser outcome.\nMotivation: The nested try/finally with tmpdir lifecycle (1173-1176) and the 'unconditional rendered_html capture even when text not better' subtlety (1132-1143) are easy to break; isolating them makes the invariant explicit and testable.\nEstimated scope: 1 file, 3 helpers + 1 dataclass, test updates.\nPrerequisites: dataclass for browser outcome (see primitive-obsession finding).\nRisk: Medium \u2014 the control flow that mutates `text`/`extracted_title`/`browser_rendered` conditionally must be preserved exactly.\n\n## Location\n`src/knowledge_base/web.py:1058-1260`\n\n## Suggested approach\nSplit ingest_url into _fetch_and_validate, _maybe_browser_fallback (returning a BrowserOutcome dataclass), and _ingest_text_chunks; reduce ingest_url to orchestration.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/refactoring-ingest-url-orchestration` \u00b7 **fingerprint:** `a06f3c34ddb2`\n- **Category:** refactoring \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** https://refactoring.com/catalog/extractFunction.html\n- **Filter:** `label:area:ingest` + `label:severity:high`\n\n<!-- super-qa-key: find:web/refactoring-ingest-url-orchestration -->"
+    },
+    {
+      "key": "find:render-page/testing-zero-coverage",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "high",
+      "title": "[super-qa] high: browser/render_page.py has zero test coverage",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:test",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nThe entire render_page.py module is untested. `_capture_elements` (lines 24-62) and `main` (lines 65-116) have no test imports or calls anywhere in tests/. The only `test_render_page_*` tests (tests/test_vision.py:364-379) target `knowledge_base.vision._render_page` (PDF rasterization) \u2014 an unrelated function with a colliding name, NOT this browser module. Untested logic includes: the canvas/svg element selection, the `_MIN_ELEMENT_DIMENSION`/`_MAX_ELEMENT_CAPTURES` (80px / 10-cap) filters, the viewport-bounds rejection (`box['x']+w <= 0`), the bounding_box/screenshot try/except continue paths, the manifest write-only-if-nonempty branch (line 61), and `main`'s non-http(s) scheme rejection + sys.exit(1) (lines 76-78). Playwright is the hard dependency, but `_capture_elements` takes a `page` object and can be driven with a Mock exposing `query_selector_all`, and `main`'s scheme guard runs before the playwright import (line 80) so it is unit-testable without playwright.\n\n## Location\n`src/knowledge_base/browser/render_page.py:24-120`\n\n## Suggested approach\nAdd tests/test_render_page.py. (1) `_capture_elements`: feed a fake `page` whose `query_selector_all` returns Mock elements with controllable `bounding_box()`, `evaluate()`, and `screenshot()`; assert filtering by min dimension, the 10-element cap, viewport-bounds rejection, the bounding_box-raises-skip path, and that elements.json is only written when at least one capture survives. (2) `main` scheme guard: invoke with `sys.argv` set to a `ftp://` URL via monkeypatch and assert `SystemExit(1)` is raised before the playwright import \u2014 this needs no browser.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `render-page/testing-zero-coverage` \u00b7 **fingerprint:** `bbd94df29838`\n- **Category:** testing \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** \u2014\n- **Filter:** `label:area:ingest` + `label:severity:high`\n\n<!-- super-qa-key: find:render-page/testing-zero-coverage -->"
+    },
+    {
+      "key": "find:web/testing-postredirect-ssrf-untested",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "high",
+      "title": "[super-qa] high: ingest_url post-redirect SSRF rejection has no test",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:test",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\ningest_url's post-redirect SSRF guard (lines 1091-1095: raise ValidationError 'URL redirected to a private/internal address') is never asserted. grep across tests/ finds no test that drives `ingest_url` with a `response.url` whose hostname is a private IP. The existing redirect-to-private test (tests/test_ingest.py:2300 `test_extract_html_images_rejects_redirect_to_private`) exercises the image-download path in `_extract_html_images`, not the page-fetch guard in `ingest_url`. This is a security-relevant branch (SSRF defense-in-depth) left uncovered.\n\n## Location\n`src/knowledge_base/web.py:1090-1095`\n\n## Suggested approach\nAdd a test that patches `knowledge_base.web.httpx.get` to return a response whose `.url` is e.g. `http://169.254.169.254/` (or `http://127.0.0.1/`) while the requested URL is public, and assert `pytest.raises(ValidationError, match='redirected to a private')`. Patch `is_private_ip` if needed to make the final-host check deterministic.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/testing-postredirect-ssrf-untested` \u00b7 **fingerprint:** `f1c00df19183`\n- **Category:** testing \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** \u2014\n- **Filter:** `label:area:ingest` + `label:severity:high`\n\n<!-- super-qa-key: find:web/testing-postredirect-ssrf-untested -->"
+    },
+    {
+      "key": "find:ingest/testing-matryoshka-embed-path",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "high",
+      "title": "[super-qa] high: _embed_with_config matryoshka base_dim branch never exercised",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:test",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\n_embed_with_config has two branches gated on get_active_space(conn) returning a space with a 'matryoshka_base_dim' (lines 92-102). When base_dim is set, it embeds at base_dim then truncates every vector to cfg['dim'] via truncate_embedding, mapping None passthrough for zero-norm vectors. No test in tests/test_ingest.py creates an active space with matryoshka_base_dim, so this branch and the truncate-on-each-vector logic are completely uncovered in the ingest pipeline. truncate_embedding is unit-tested in isolation (tests/test_embeddings.py:280) but never integrated here. The only test that references _embed_with_config (test_embed_failure_does_not_leave_orphan_session_rows) patches it with a RuntimeError side_effect, so the real function body is never run with a configured space. A bug in the base_dim/truncate path (e.g. truncating to the wrong dim, or mishandling the None entry inside the list comprehension at line 101) would ship silently.\n\n## Location\n`src/knowledge_base/ingest.py:90-108`\n\n## Suggested approach\nAdd a test that sets an active embedding space with matryoshka_base_dim > cfg['dim'], patches knowledge_base.ingest.embed to return base_dim-length vectors (and one None), then calls _embed_with_config directly and asserts: (a) embed() was invoked with expected_dim == base_dim, (b) returned non-None vectors have len == cfg['dim'], (c) the None entry is preserved as None. Add a companion test for the non-matryoshka branch asserting expected_dim == cfg['dim'] and no truncation.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `ingest/testing-matryoshka-embed-path` \u00b7 **fingerprint:** `8f4fdd678dae`\n- **Category:** testing \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** src/knowledge_base/ingest.py:90-108, tests/test_ingest.py:3633-3637, tests/test_embeddings.py:280-284\n- **Filter:** `label:area:ingest` + `label:severity:high`\n\n<!-- super-qa-key: find:ingest/testing-matryoshka-embed-path -->"
+    },
+    {
+      "key": "find:search/correctness-rerank-scale-mismatch",
+      "kind": "finding",
+      "parent": "epic:area:search",
+      "severity": "high",
+      "title": "[super-qa] high: Reranker scores and RRF scores mixed on incomparable scales during final sort",
+      "labels": [
+        "super-qa",
+        "area:search",
+        "type:bug",
+        "severity:high"
+      ],
+      "body": "> Verified by multi-model debate (Gemini+Codex). See verdict below.\n\n## Problem\nWhen rerank=True, the cross-encoder is run only on rerank_candidates (capped at rerank_top_n, line 402-406) and only fetchable_cids get score_map[cid] = rs (line 418). Every other entry in score_map keeps its RRF score. reranker.rerank documents scores in [0, 1] (reranker.py:193), while RRF scores are 1/(RRF_K+rank+1) \u2248 0.016 at best and decreasing. The re-sort at line 422 sorts these two incompatible scales together. A reranked candidate that the cross-encoder judged a weak match (e.g. score 0.01, a legitimate value in [0,1]) is then sorted BELOW an un-reranked candidate whose RRF score is ~0.016 \u2014 even though that un-reranked candidate was excluded from reranking precisely because it ranked lower. This inverts the intended ordering: items the reranker explicitly scored can be pushed beneath items it never saw. The defect is masked whenever every reranked score happens to exceed the top RRF score (~0.016), so it surfaces intermittently on poor-match pools.\n\n## Location\n`src/knowledge_base/search.py:402-422`\n\n## Suggested approach\nDo not mix scales. Either (a) restrict the final ranked list to only the reranked (scored) candidates when rerank succeeds \u2014 drop un-reranked entries from score_map before the re-sort \u2014 or (b) order primarily by a reranked/not-reranked tier (reranked items always above un-reranked tail), or (c) normalize RRF and reranker scores into a common scale before combining. Option (a)/(b) preserves the contract that reranker order wins.\n\n## Debate verdict\n- original **high** \u00b7 gemini **high** \u00b7 codex **medium** -> verdict **high**\n- Opus HIGH: reranker[0,1] vs RRF(~0.016) co-sort; triggers at default top_k when source_type/chunk_strategy filter set; compounds with under-fetch; default unfiltered path unaffected (Codex caveat).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `search/correctness-rerank-scale-mismatch` \u00b7 **fingerprint:** `36524b636962`\n- **Category:** correctness \u00b7 **Area:** `area:search` \u00b7 **Type:** `type:bug` \u00b7 **Auto-fixable:** no\n- **Lens:** specialist \u00b7 **References:** src/knowledge_base/search.py:417-422, src/knowledge_base/reranker.py:193\n- **Filter:** `label:area:search` + `label:severity:high`\n\n<!-- super-qa-key: find:search/correctness-rerank-scale-mismatch -->"
+    },
+    {
+      "key": "find:search/testing-space-name-path",
+      "kind": "finding",
+      "parent": "epic:area:search",
+      "severity": "high",
+      "title": "[super-qa] high: space_name (non-active space) search path is entirely untested",
+      "labels": [
+        "super-qa",
+        "area:search",
+        "type:test",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nThe `space_name` branch of `search()` resolves a specific embedding space via `get_space()`, builds `space_cfg` from the space's model/dim/provider, reads `matryoshka_base_dim`, sets a non-None `vec_table`, and computes `skip_folder_boost = not active or space['name'] != active['name']`. No test in tests/test_search.py, tests/test_reranker.py, tests/test_folder_summaries.py, or tests/test_embed_spaces.py ever calls `search(..., space_name=...)` (grep for `space_name=` in tests/ returns zero matches). This means the folder-boost-skip logic, the per-space provider/model selection, and the explicit `vec_table` plumbing into `_vec_search` are unverified. A regression that, e.g., applied folder boost to a non-active space (folder_summaries_vec is dimensioned for the active space) or queried the wrong vec table would not be caught.\n\n## Location\n`src/knowledge_base/search.py:256-271`\n\n## Suggested approach\nAdd tests that create a second space (reuse `create_space`/`backfill_space`/`promote_space` helpers from test_embed_spaces.py), then call `search(conn, q, space_name='other')`. Assert (a) results come from the named space's vec table, (b) `_folder_boost` is NOT invoked when the named space != active (patch `knowledge_base.search._folder_boost` and assert_not_called), and (c) when space_name equals the active space name, folder boost IS still eligible.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `search/testing-space-name-path` \u00b7 **fingerprint:** `761bbea74afa`\n- **Category:** testing \u00b7 **Area:** `area:search` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** \u2014\n- **Filter:** `label:area:search` + `label:severity:high`\n\n<!-- super-qa-key: find:search/testing-space-name-path -->"
+    },
+    {
+      "key": "find:search/testing-matryoshka-truncation-branch",
+      "kind": "finding",
+      "parent": "epic:area:search",
+      "severity": "high",
+      "title": "[super-qa] high: Matryoshka query-embedding truncation branch is uncovered",
+      "labels": [
+        "super-qa",
+        "area:search",
+        "type:test",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nWhen `space_base_dim` is truthy, `search()` embeds the query at `space_base_dim` then calls `truncate_embedding(query_embedding, space_cfg['dim'])` to shrink it to the space dim before vector search. Grep for `matryoshka` and `truncate_embedding` in tests/test_search.py and tests/test_embed_spaces.py returns no hits for this search code path \u2014 matryoshka spaces are tested at ingestion/backfill level (test_create_matryoshka_space, test_backfill_matryoshka_space) but never through `search()`. The truncation-at-query-time logic (and the subsequent None-guard before truncating) is unverified, so a mismatch between query-embedding dim and the stored vec-table dim would surface only at runtime.\n\n## Location\n`src/knowledge_base/search.py:305-313`\n\n## Suggested approach\nCreate a matryoshka space (base_dim > dim), make it active, ingest a chunk, and call `search()`. Patch `knowledge_base.search.embed_single` to return a base_dim-length vector and assert the vector handed to `_vec_search` has been truncated to `space_cfg['dim']` (e.g. patch `_vec_search` and inspect the embedding length argument).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `search/testing-matryoshka-truncation-branch` \u00b7 **fingerprint:** `94ed3e83757b`\n- **Category:** testing \u00b7 **Area:** `area:search` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** \u2014\n- **Filter:** `label:area:search` + `label:severity:high`\n\n<!-- super-qa-key: find:search/testing-matryoshka-truncation-branch -->"
+    },
+    {
+      "key": "find:vision/design-god-module",
+      "kind": "finding",
+      "parent": "epic:area:vision",
+      "severity": "high",
+      "title": "[super-qa] high: God module: 2279 LOC mixing config, server lifecycle, clustering, captions, and ",
+      "labels": [
+        "super-qa",
+        "area:vision",
+        "type:refactor",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: vision.py is 2279 lines (well past the project's own 1000+ god-module threshold) holding at least six distinct concerns: (a) config read/write (_get_vision_config, configure_vision, _get_omniparser_config, _validate_omniparser_path, configure_omniparser), (b) OmniParser server lifecycle + HTTP (_check_omniparser_server, _run_omniparser_http, _ensure_omniparser_server, _shutdown_omniparser_server, _run_omniparser), (c) geometric clustering/cropping (_cluster_bboxes, _split_cluster_x, _crop_regions, _cluster_drawing_rects, _detect_mixed_page_vector_regions, _elements_in_region), (d) caption extraction (CaptionMap, _extract_captions), (e) prompt building, (f) the multi-stage extraction pipeline (extract_figures and its _resolve/_collect/_render/_dispatch/_enrich/_persist stages). Target state: a vision/ package split into config.py, omniparser_server.py, clustering.py, captions.py, prompts.py, and pipeline.py, with vision/__init__.py re-exporting the four public names. Pattern: Package-by-feature / module extraction. Motivation: a single file of this size is hard to navigate, has high merge-conflict surface, and forces unrelated changes to touch the same file. Estimated scope: HEAVY (~6 new modules, import rewiring across server routes and tests). Prerequisites: stable public API (only 4 names in __all__) makes the boundary clean. Risk: medium \u2014 internal imports and test imports (tests reach into private helpers, e.g. _build_figure_vision_prompt) must be repointed; circular-import care around .papers/.ingest/.web.\n\n## Location\n`src/knowledge_base/vision.py:1-2279`\n\n## Suggested approach\nSplit vision.py into a vision/ package by concern (config, omniparser_server, clustering, captions, prompts, pipeline); keep the 4 public functions re-exported from vision/__init__.py.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `vision/design-god-module` \u00b7 **fingerprint:** `4b47b9eb3864`\n- **Category:** design \u00b7 **Area:** `area:vision` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** CLAUDE.md: 'god modules (1000+ lines)'\n- **Filter:** `label:area:vision` + `label:severity:high`\n\n<!-- super-qa-key: find:vision/design-god-module -->"
+    },
+    {
+      "key": "find:vision/testing-real-fs-write",
+      "kind": "finding",
+      "parent": "epic:area:vision",
+      "severity": "high",
+      "title": "[super-qa] high: _save_rendered_pngs writes to real ~/.local/share, never isolated in tests",
+      "labels": [
+        "super-qa",
+        "area:vision",
+        "type:test",
+        "severity:high"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\n_save_rendered_pngs() unconditionally builds its output dir from Path.home() / '.local/share/knowledge-base/figures/<paper_id>' and writes PNG bytes there. It is called at the tail of extract_figures() (vision.py:2245) and is NEVER patched, and Path.home()/$HOME is never redirected via monkeypatch in tests/test_vision.py (grep for '_save_rendered_pngs|home|HOME|figures' returns no isolation). Any end-to-end test that exercises the vector-page render path (e.g. test_extract_figures_falls_back_to_render_for_vector_pages, test_extract_figures_processes_mixed_page_vector_regions) writes real files into the developer's/CI's actual home directory, outside tmp_path. Consequences: cross-run pollution keyed by paper_id, CI artifact leakage, and a latent test failure if $HOME is read-only. This is a test-isolation defect, not merely a coverage gap. Fix requires making the figures base dir injectable (parameter or env lookup) in production code so tests can point it at tmp_path; mark as not auto-fixable because it touches the production signature plus the call site plus existing tests.\n\n## Location\n`src/knowledge_base/vision.py:2060-2082`\n\n## Suggested approach\nRefactor _save_rendered_pngs to accept an optional base_dir (or read a KB data-dir resolved once, defaulting to Path.home()/...), then in tests pass tmp_path (or monkeypatch the data-dir resolver). Add an assertion-bearing test: run extract_figures over a vector-only PDF with the figures dir redirected to tmp_path, assert page_<n>.png and page_<n>_vector_<i>.png are written there and that nothing is created under the real home. Also add an OSError-on-mkdir test to cover the except OSError warning branch at vision.py:2081.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `vision/testing-real-fs-write` \u00b7 **fingerprint:** `7c235c7a6679`\n- **Category:** testing \u00b7 **Area:** `area:vision` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** tests/test_vision.py, src/knowledge_base/vision.py:2244-2245\n- **Filter:** `label:area:vision` + `label:severity:high`\n\n<!-- super-qa-key: find:vision/testing-real-fs-write -->"
+    },
+    {
+      "key": "find:db/performance-per-row-chunk-count-update",
+      "kind": "finding",
+      "parent": "epic:area:db",
+      "severity": "medium",
+      "title": "[super-qa] medium: Per-row embed_spaces.chunk_count UPDATE in insert_chunk_vec causes N+1 writes du",
+      "labels": [
+        "super-qa",
+        "area:db",
+        "type:perf",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\ninsert_chunk_vec() fires a second statement `UPDATE embed_spaces SET chunk_count = chunk_count + 1 WHERE table_name = ? AND status = 'active'` on every single call, right after the vec INSERT. The sole caller (src/knowledge_base/ingest.py:180) invokes insert_chunk_vec once per chunk inside the per-chunk ingestion path, so a document producing N chunks generates N redundant UPDATE statements against embed_spaces. Each UPDATE is a separate round-trip and a table scan/filter on (table_name, status). The chunk_count is pure bookkeeping derived from row inserts; it does not need to be incremented one-at-a-time. This is the classic N+1 write amplification pattern and is the dominant per-chunk overhead beyond the actual vector insert. The symmetric delete_chunk_vecs() already does a single batched count+decrement, showing the bulk-aware pattern is intended.\n\n## Location\n`src/knowledge_base/db.py:442-446`\n\n## Suggested approach\nDecouple the count bookkeeping from the per-row insert: have insert_chunk_vec only do the vec INSERT, and add a separate `bump_chunk_count(conn, table_name, delta)` (or a bulk insert_chunk_vecs(...)) that the ingestion loop calls once after inserting all chunks for a document (delta = number inserted). Alternatively, drop the redundant counter entirely and compute chunk_count on demand via `SELECT COUNT(*) FROM [tbl]` when reporting status, since it is denormalized state that can drift. If keeping the per-call API for compatibility, add a `bump_count: bool = True` parameter so bulk callers can pass bump_count=False and update once.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `db/performance-per-row-chunk-count-update` \u00b7 **fingerprint:** `beeed9a7e30d`\n- **Category:** performance \u00b7 **Area:** `area:db` \u00b7 **Type:** `type:perf` \u00b7 **Auto-fixable:** no\n- **Lens:** specialist \u00b7 **References:** src/knowledge_base/ingest.py:179-180\n- **Filter:** `label:area:db` + `label:severity:medium`\n\n<!-- super-qa-key: find:db/performance-per-row-chunk-count-update -->"
+    },
+    {
+      "key": "find:db/refactoring-init-schema-god-fn",
+      "kind": "finding",
+      "parent": "epic:area:db",
+      "severity": "medium",
+      "title": "[super-qa] medium: init_schema is a ~300 LOC god function mixing DDL, seeding, and migration orches",
+      "labels": [
+        "super-qa",
+        "area:db",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: init_schema() runs ~300 lines spanning four distinct responsibilities: (1) config table creation + default seeding (597-621), (2) a giant executescript() DDL block creating all ~16 tables/vtables/triggers (623-843), (3) index creation and config INSERT-OR-IGNORE seeding (845-877), and (4) sequential invocation of 14 migration steps (881-896). It far exceeds the 50 LOC smell threshold and mixes abstraction levels (raw SQL string templating next to high-level migration sequencing). Target state: extract a `_create_base_schema(conn, embed_dim)` for the DDL block, a `_seed_default_config(conn)` for config seeding (currently split awkwardly across 607-615 and 855-871), and a `_run_migrations(conn, embed_dim)` driving an ordered list/registry of migration callables; init_schema becomes a ~15 LOC orchestrator. Pattern name: Extract Method / Replace Method-with-Method-Object; migration registry is a Collecting Parameter / pipeline pattern. Motivation: testability (each phase independently testable), readability, and reduced merge-conflict surface as schema grows. Estimated scope: single file, ~5 new private functions, no behavior change. Prerequisites: none (all logic already private to db.py). Risk: LOW-MEDIUM \u2014 ordering of migration calls is load-bearing (e.g. _migrate_session_id must precede _migrate_chunk_sessions backfill, _bootstrap_embed_spaces sits between specific migrations); the extraction must preserve exact call order. Recommend asserting current order via a test before refactor.\n\n## Location\n`src/knowledge_base/db.py:595-896`\n\n## Suggested approach\nSplit init_schema into _create_base_schema, _seed_default_config, and a _run_migrations driver iterating an explicit ordered tuple of migration functions; keep init_schema as a thin orchestrator. Preserve exact migration ordering and add a regression test pinning it.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `db/refactoring-init-schema-god-fn` \u00b7 **fingerprint:** `81deb6c988c2`\n- **Category:** refactoring \u00b7 **Area:** `area:db` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** https://refactoring.guru/replace-method-with-method-object, https://refactoring.guru/extract-method\n- **Filter:** `label:area:db` + `label:severity:medium`\n\n<!-- super-qa-key: find:db/refactoring-init-schema-god-fn -->"
+    },
+    {
+      "key": "find:db/testing-insert-chunk-count-increment",
+      "kind": "finding",
+      "parent": "epic:area:db",
+      "severity": "medium",
+      "title": "[super-qa] medium: insert_chunk_vec chunk_count increment side-effect is never asserted",
+      "labels": [
+        "super-qa",
+        "area:db",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\ntest_embed_spaces.py exercises insert_chunk_vec for row insertion (test_insert_chunk_vec_helper at line 359, test_insert_chunk_vec_explicit_table at 372, test_insert_chunk_vec_auto_resolves_element_type at 567), but none assert the second side-effect at lines 442-446: incrementing embed_spaces.chunk_count for the active space matching table_name. The UPDATE is gated on `status = 'active'`, so inserting into a non-active explicit table (the test_insert_chunk_vec_explicit_table case targets a 'populating' space) must NOT bump the active default's count \u2014 an easy-to-break invariant that keeps backfill bookkeeping honest. delete_chunk_vecs decrements unconditionally by table_name (no status filter), so insert/delete are asymmetric on the status condition; only a test pins this.\n\n## Location\n`src/knowledge_base/db.py:441-446`\n\n## Suggested approach\nExtend the existing insert_chunk_vec tests: after insert into the active 'default' space, assert embed_spaces.chunk_count incremented by 1; after insert into a non-active explicit table, assert the active space's chunk_count is UNCHANGED (locks the status='active' gate). Pair with a delete to show the round-trip returns chunk_count to its starting value.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `db/testing-insert-chunk-count-increment` \u00b7 **fingerprint:** `805d25720189`\n- **Category:** testing \u00b7 **Area:** `area:db` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** tests/test_embed_spaces.py:359-383, src/knowledge_base/db.py:468-473\n- **Filter:** `label:area:db` + `label:severity:medium`\n\n<!-- super-qa-key: find:db/testing-insert-chunk-count-increment -->"
+    },
+    {
+      "key": "find:db/testing-data-migrations-uncovered",
+      "kind": "finding",
+      "parent": "epic:area:db",
+      "severity": "medium",
+      "title": "[super-qa] medium: Table-rebuild legacy migrations have no legacy-path tests (only the no-op fresh-",
+      "labels": [
+        "super-qa",
+        "area:db",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nSeveral migrations perform real data transforms only on legacy schemas, but tests only ever call init_schema on a FRESH DB where these short-circuit at the guard (e.g. `if not row or \\'figure\\' in row[0]: return`). No test constructs the old schema to exercise the transform body. Untested transform bodies: _migrate_source_type_figure (165-217, rebuilds chunks adding 'figure' to the source_type CHECK + re-creates the 3 FTS triggers and the INSERT INTO ... SELECT with conditional session_id/chunk_strategy columns); _migrate_relationship_types (220-248, rebuilds relationships to add 'similar'); _migrate_jobs_types (303-337, rebuilds jobs to add 'auto_relate' and re-creates idx_jobs_status_created); _migrate_papers_fts (251-264, backfill guarded on empty FTS + non-empty papers); _migrate_extraction_source (539-549, adds 'source' col to 4 tables). By contrast _migrate_session_id, _migrate_chunk_strategy, _migrate_chunk_sessions, and _migrate_normalize_source_uri DO have legacy-path tests \u2014 so the pattern exists and just needs extending. The riskiest is _migrate_source_type_figure: a column-list mismatch in INSERT INTO chunks_new SELECT silently drops/misaligns data and is invisible on fresh DBs.\n\n## Location\n`src/knowledge_base/db.py:165-248`\n\n## Suggested approach\nAdd one legacy-path test per transform mirroring test_chunk_strategy_migration / test_migrate_chunk_sessions_backfill: build the pre-migration schema (old CHECK constraint, no 'figure'/'similar'/'auto_relate'), insert representative rows, run init_schema, then assert (a) the new constraint value is accepted, (b) every pre-existing row survived with correct column values, (c) for source_type_figure that the FTS triggers still fire after the table swap, (d) for jobs that idx_jobs_status_created exists post-migration. For _migrate_papers_fts, create papers + empty papers_fts and assert the backfill populates it (and is skipped when FTS already has rows).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `db/testing-data-migrations-uncovered` \u00b7 **fingerprint:** `bee4b802bbde`\n- **Category:** testing \u00b7 **Area:** `area:db` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** tests/test_db.py:283-326, tests/test_db.py:411-464, src/knowledge_base/db.py:539-549\n- **Filter:** `label:area:db` + `label:severity:medium`\n\n<!-- super-qa-key: find:db/testing-data-migrations-uncovered -->"
+    },
+    {
+      "key": "find:db/testing-bootstrap-legacy-path",
+      "kind": "finding",
+      "parent": "epic:area:db",
+      "severity": "medium",
+      "title": "[super-qa] medium: _bootstrap_embed_spaces legacy branch (non-empty chunks_vec) and config-driven m",
+      "labels": [
+        "super-qa",
+        "area:db",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\n_bootstrap_embed_spaces registers the 'default' space. The fresh-DB path (count=0, model/provider from defaults) is implicitly covered by every _setup() in test_embed_spaces.py, but two branches are not: (1) the legacy path where chunks_vec already has rows \u2014 line 574 COUNT(*) should set chunk_count to the existing embedding count, and the comment at 578-584 explains why strategy is forced to 'mechanical' regardless of config.chunk_strategy; nothing asserts the count is propagated or that strategy stays 'mechanical' even when config says 'semantic'; (2) the model/provider override read from the config table (lines 562-570) vs the DEFAULT_* fallback when config rows are absent (the sqlite3.OperationalError fallback at 575-576 when chunks_vec doesn't exist is also unexercised).\n\n## Location\n`src/knowledge_base/db.py:552-592`\n\n## Suggested approach\nAdd tests: (a) pre-populate chunks_vec with K embeddings and config.chunk_strategy='semantic', run _bootstrap_embed_spaces, assert the default space has chunk_count==K and chunk_strategy=='mechanical'; (b) set config embed_model/embed_provider to custom values and assert the bootstrapped space picks them up; (c) call on a DB lacking chunks_vec and assert count falls back to 0 without raising. Guard idempotency: a second call is a no-op (existing-space early return at 558-560).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `db/testing-bootstrap-legacy-path` \u00b7 **fingerprint:** `a1c3afdb37c7`\n- **Category:** testing \u00b7 **Area:** `area:db` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** src/knowledge_base/db.py:573-576, tests/test_embed_spaces.py:81-126\n- **Filter:** `label:area:db` + `label:severity:medium`\n\n<!-- super-qa-key: find:db/testing-bootstrap-legacy-path -->"
+    },
+    {
+      "key": "find:db/documentation-missing-element-type-column",
+      "kind": "finding",
+      "parent": "epic:area:db",
+      "severity": "medium",
+      "title": "[super-qa] medium: schema.md omits the embed_spaces.element_type column",
+      "labels": [
+        "super-qa",
+        "area:db",
+        "type:docs",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\ndb.py defines an element_type column on embed_spaces (lines 840-841: `element_type TEXT NOT NULL DEFAULT 'float32' CHECK(element_type IN ('float32', 'int8'))`), also added to existing DBs via _migrate_embed_spaces_element_type (lines 507-518) and consumed by the public function get_space_element_type (lines 407-418) and insert_chunk_vec (lines 421-446). The reference schema doc docs/reference/schema.md (embed_spaces table, lines 306-318) lists every other column but is missing element_type entirely. The schema reference is stale relative to the code: a reader of the docs would not know int8 vector storage exists.\n\n## Location\n`src/knowledge_base/db.py:840-841`\n\n## Suggested approach\nAdd an `element_type` row to the embed_spaces table in docs/reference/schema.md: TEXT, NOT NULL + CHECK, default `'float32'`, description 'Vector element storage type: float32 or int8 (quantized)'.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `db/documentation-missing-element-type-column` \u00b7 **fingerprint:** `35d0aef252f0`\n- **Category:** documentation \u00b7 **Area:** `area:db` \u00b7 **Type:** `type:docs` \u00b7 **Auto-fixable:** no\n- **Lens:** docs \u00b7 **References:** src/knowledge_base/db.py:840-841, src/knowledge_base/db.py:507-518, docs/reference/schema.md:306-318\n- **Filter:** `label:area:db` + `label:severity:medium`\n\n<!-- super-qa-key: find:db/documentation-missing-element-type-column -->"
+    },
+    {
+      "key": "find:extraction/performance-compare-papers-n-plus-1",
+      "kind": "finding",
+      "parent": "epic:area:extraction",
+      "severity": "medium",
+      "title": "[super-qa] medium: N+1 query pattern in compare_papers per shared dataset",
+      "labels": [
+        "super-qa",
+        "area:extraction",
+        "type:perf",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nAfter finding shared dataset names in one query, `compare_papers` loops over each shared dataset and runs a separate metrics JOIN query per dataset (lines 372-383). For D shared datasets this is D additional round-trips. Additionally `ds_placeholders` (line 372) recomputes the exact same placeholder string already bound to `placeholders` at line 355 on every iteration.\n\n## Location\n`src/knowledge_base/extraction.py:369-402`\n\n## Suggested approach\nRun a single metrics query for all shared datasets at once: `WHERE d.name IN (<shared-ds placeholders>) AND m.paper_id IN (<paper placeholders>) ORDER BY d.name, m.name, m.value DESC`, then group rows by dataset name in Python. Hoist the paper-id placeholder string out of the loop (reuse `placeholders`).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `extraction/performance-compare-papers-n-plus-1` \u00b7 **fingerprint:** `d55d49aea1cb`\n- **Category:** performance \u00b7 **Area:** `area:extraction` \u00b7 **Type:** `type:perf` \u00b7 **Auto-fixable:** no\n- **Lens:** specialist \u00b7 **References:** \u2014\n- **Filter:** `label:area:extraction` + `label:severity:medium`\n\n<!-- super-qa-key: find:extraction/performance-compare-papers-n-plus-1 -->"
+    },
+    {
+      "key": "find:extraction/performance-upsert-then-select",
+      "kind": "finding",
+      "parent": "epic:area:extraction",
+      "severity": "medium",
+      "title": "[super-qa] medium: UPSERT followed by separate SELECT round-trip in _record_entity",
+      "labels": [
+        "super-qa",
+        "area:extraction",
+        "type:perf",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\n`_record_entity` performs an INSERT ... ON CONFLICT DO UPDATE, then issues a second SELECT to retrieve the row id (lines 204-206). It is called once per method and once per dataset inside the per-entity loops of `_store_resolved` (lines 654-676) and `_extract_single_pass` (lines 781-835), doubling the statement count on the write path. The same INSERT-OR-IGNORE-then-fallback-SELECT shape recurs at lines 617-626, 793-805, and 822-835. SQLite supports `RETURNING` (since 3.35; CPython 3.12 bundles a newer SQLite), which collapses each pair into one statement.\n\n## Location\n`src/knowledge_base/extraction.py:195-209`\n\n## Suggested approach\nUse `INSERT ... ON CONFLICT(...) DO UPDATE SET ... RETURNING id` and read `.fetchone()` from the same cursor, eliminating the follow-up SELECT. For the `INSERT OR IGNORE` sites, `RETURNING id` returns the id on insert; keep a single fallback SELECT only for the conflict-skipped case. Confirm the minimum bundled SQLite version across target deployment platforms before adopting RETURNING unconditionally.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `extraction/performance-upsert-then-select` \u00b7 **fingerprint:** `c4734833e16d`\n- **Category:** performance \u00b7 **Area:** `area:extraction` \u00b7 **Type:** `type:perf` \u00b7 **Auto-fixable:** no\n- **Lens:** specialist \u00b7 **References:** \u2014\n- **Filter:** `label:area:extraction` + `label:severity:medium`\n\n<!-- super-qa-key: find:extraction/performance-upsert-then-select -->"
+    },
+    {
+      "key": "find:extraction/refactoring-map-reduce-split",
+      "kind": "finding",
+      "parent": "epic:area:extraction",
+      "severity": "medium",
+      "title": "[super-qa] medium: _extract_map_reduce mixes orchestration with logging/ETA bookkeeping",
+      "labels": [
+        "super-qa",
+        "area:extraction",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: `_extract_map_reduce` (874-1024, ~150 LOC) interleaves three phases (map submit+collect, resolve, store) with heavy inline logging and ETA arithmetic (932-974). The map phase's progress/ETA logging (~40 LOC) is orthogonal to the orchestration logic. Target state: extract `_run_map_phase(conn-free args...) -> tuple[list[dict], list[dict], float]` returning (ordered_results, errors, total_elapsed) and an internal progress/ETA reporter, leaving `_extract_map_reduce` as a 3-step orchestrator. Pattern: Extract Method, separate cross-cutting logging concern. Motivation: the map phase is the only concurrent section and the only one worth testing in isolation; ETA math (967-974) is hard to see under the orchestration. Estimated scope: 1-2 extracted helpers in-module. Prerequisites: none. Risk: medium \u2014 preserve the deterministic `map_results.sort(key=lambda x: x[0])` ordering and the on_progress callback cadence.\n\n## Location\n`src/knowledge_base/extraction.py:874-1024`\n\n## Suggested approach\nExtract the `with httpx.Client(...)/ThreadPoolExecutor(...)` block (906-980) into `_run_map_phase(chunks, cfg, effective_workers, on_progress)` returning `(ordered_results, errors, total_elapsed)`; keep resolve/store in the orchestrator.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `extraction/refactoring-map-reduce-split` \u00b7 **fingerprint:** `df86f9100ce2`\n- **Category:** refactoring \u00b7 **Area:** `area:extraction` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** Fowler, Refactoring: Extract Method\n- **Filter:** `label:area:extraction` + `label:severity:medium`\n\n<!-- super-qa-key: find:extraction/refactoring-map-reduce-split -->"
+    },
+    {
+      "key": "find:extraction/testing-paper-not-found",
+      "kind": "finding",
+      "parent": "epic:area:extraction",
+      "severity": "medium",
+      "title": "[super-qa] medium: extract_structure 'Paper not found' raise path untested",
+      "labels": [
+        "super-qa",
+        "area:extraction",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nextract_structure raises NotFoundError(f\"Paper {paper_id} not found\") when the SELECT id FROM papers returns no row (line 1069-1071). The existing test suite only exercises the sibling 'No chunks found' branch (tests/test_extraction.py:208-213, test_extract_structure_no_chunks). No test passes a paper_id that does not exist in the papers table, so the first NotFoundError branch and its message are unverified. The same untested 'Paper not found' branch exists in estimate_extraction_time (extraction.py:1033-1035).\n\n## Location\n`src/knowledge_base/extraction.py:1069-1071`\n\n## Suggested approach\nAdd a test that calls extract_structure(conn, 99999) on a fresh DB with no such paper and asserts pytest.raises(NotFoundError, match=\"Paper 99999 not found\"). Add the analogous test for estimate_extraction_time.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `extraction/testing-paper-not-found` \u00b7 **fingerprint:** `af5c435f2d01`\n- **Category:** testing \u00b7 **Area:** `area:extraction` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** \u2014\n- **Filter:** `label:area:extraction` + `label:severity:medium`\n\n<!-- super-qa-key: find:extraction/testing-paper-not-found -->"
+    },
+    {
+      "key": "find:extraction/testing-estimate-time-branches",
+      "kind": "finding",
+      "parent": "epic:area:extraction",
+      "severity": "medium",
+      "title": "[super-qa] medium: estimate_extraction_time short-doc and no-chunks branches untested",
+      "labels": [
+        "super-qa",
+        "area:extraction",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nestimate_extraction_time has three observable behaviors: NotFoundError on missing paper (1033-1035), NotFoundError on no chunks (1037-1039), and a return dict whose is_long flag is total_chars > SINGLE_PASS_CHAR_LIMIT (1047). The only test, test_estimate_extraction_time_long_doc (tests/test_extraction.py:448-463), asserts is_long is True for a large doc. The short-doc branch (is_long is False) and both NotFoundError raises are never asserted, and the returned total_chars / estimated_seconds / chunks values are not checked against expected arithmetic (estimated_seconds == chunk_count * AVG_SECONDS_PER_CHUNK).\n\n## Location\n`src/knowledge_base/extraction.py:1027-1049`\n\n## Suggested approach\nAdd test_estimate_extraction_time_short_doc asserting is_long is False and estimated_seconds == chunk_count * AVG_SECONDS_PER_CHUNK for a small document; add raises tests for the missing-paper and no-chunks paths.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `extraction/testing-estimate-time-branches` \u00b7 **fingerprint:** `54fa62b4bbaa`\n- **Category:** testing \u00b7 **Area:** `area:extraction` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** \u2014\n- **Filter:** `label:area:extraction` + `label:severity:medium`\n\n<!-- super-qa-key: find:extraction/testing-estimate-time-branches -->"
+    },
+    {
+      "key": "find:extraction/documentation-stale-return-doc",
+      "kind": "finding",
+      "parent": "epic:area:extraction",
+      "severity": "medium",
+      "title": "[super-qa] medium: estimate_extraction_time docstring contradicts actual error behavior and omits r",
+      "labels": [
+        "super-qa",
+        "area:extraction",
+        "type:docs",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nThe docstring states 'Returns {\"error\": ...} if paper or chunks not found' (line 1031), but the function does not return an error dict on those conditions \u2014 it raises NotFoundError (line 1035 for missing paper, line 1039 for missing chunks). The error-dict contract is stale and contradicts the code; a caller reading the docstring would write a branch checking for an 'error' key that never appears, while an uncaught NotFoundError propagates. Additionally, the docstring lists the return keys as 'total_chars, chunk_count, estimated_seconds, is_long' (line 1030) but the actual return dict (lines 1043-1049) also includes a 'chunks' key, which is undocumented.\n\n## Location\n`src/knowledge_base/extraction.py:1027-1049`\n\n## Suggested approach\nUpdate the docstring to document the Raises (NotFoundError when paper or chunks are absent) instead of the nonexistent error-dict return, and add the 'chunks' key to the documented return shape. E.g.: 'Returns dict with total_chars, chunk_count, estimated_seconds, is_long, chunks. Raises NotFoundError if the paper or its chunks do not exist.'\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `extraction/documentation-stale-return-doc` \u00b7 **fingerprint:** `dd5bdc71c53b`\n- **Category:** documentation \u00b7 **Area:** `area:extraction` \u00b7 **Type:** `type:docs` \u00b7 **Auto-fixable:** no\n- **Lens:** docs \u00b7 **References:** src/knowledge_base/exceptions.py, src/knowledge_base/routes/extraction.py:120\n- **Filter:** `label:area:extraction` + `label:severity:medium`\n\n<!-- super-qa-key: find:extraction/documentation-stale-return-doc -->"
+    },
+    {
+      "key": "find:web/performance-n+1-content-hash",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: N+1 per-chunk content_hash SELECT in ingest_url dedup loop",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:perf",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nFor every chunk of an ingested page, ingest_url issues a separate `SELECT id FROM chunks WHERE content_hash = ?` round-trip inside the for-loop. A long article can produce dozens-to-hundreds of chunks, so this is a classic N+1 query pattern: N synchronous SQLite calls where one batched query would suffice. content_hash is UNIQUE/indexed (db.py:189) so each query is cheap, but the per-call Python/SQLite overhead and round-trips dominate for large pages. The module already exposes `_batched_execute` (used elsewhere for IN-clause batching under the 999-var limit) \u2014 the existing-hash set could be fetched in one (or a few batched) `WHERE content_hash IN (...)` queries, then membership checked in-memory.\n\n## Location\n`src/knowledge_base/web.py:1218-1228`\n\n## Suggested approach\nCollect all chunk hashes first, fetch existing rows in batched `SELECT id, content_hash FROM chunks WHERE content_hash IN ({ph})` calls via `_batched_execute`, build a {hash: id} dict, then iterate chunks checking the dict in memory instead of one query per chunk.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/performance-n+1-content-hash` \u00b7 **fingerprint:** `516aa7364025`\n- **Category:** performance \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:perf` \u00b7 **Auto-fixable:** no\n- **Lens:** specialist \u00b7 **References:** src/knowledge_base/db.py:189, src/knowledge_base/db.py (_batched_execute)\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:web/performance-n+1-content-hash -->"
+    },
+    {
+      "key": "find:web/security-ssrf-redirect-chain",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: SSRF: redirect-following reaches internal hosts before post-redirect validation",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:security",
+        "severity:medium",
+        "super-qa:security-fallback"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\ningest_url validates the initial hostname against is_private_ip (web.py:1068-1078), but then calls httpx.get(url, follow_redirects=True, timeout=30.0) at web.py:1085. The post-redirect check at web.py:1091-1095 only blocks *processing* of the response; httpx has already followed every redirect hop and issued the actual HTTP request to whatever internal address a redirect pointed at. A public URL that 30x-redirects to http://169.254.169.254/ (cloud metadata) or http://127.0.0.1:port/ will have the request reach that internal endpoint, triggering any side effects (GET-as-action endpoints, SSRF-readable metadata) before the response host is rejected. The same pattern exists for inline image fetches at web.py:411-413 (httpx.stream with follow_redirects=True), with its post-redirect check at web.py:418. The code comment at web.py:1080-1083 explicitly acknowledges this gap and tracks the fix in issue #232. Being known-and-tracked does not remove it from an audit.\n\n## Location\n`web.py:1080-1095`\n\n## Suggested approach\nImplement per-hop SSRF validation. Disable automatic redirect following (follow_redirects=False) and manually walk redirects, running is_private_ip on each Location host before issuing the next request; or install a custom httpx transport that resolves the hostname, validates the resolved IP, and connects to that pinned IP. Apply the same per-hop guard to the image httpx.stream call at web.py:411-413.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/security-ssrf-redirect-chain` \u00b7 **fingerprint:** `e6b628098abd`\n- **Category:** security \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:security` \u00b7 **Auto-fixable:** no\n- **Lens:** security \u00b7 **References:** CWE-918\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:web/security-ssrf-redirect-chain -->"
+    },
+    {
+      "key": "find:web/design-inconsistent-delete-api",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: Stale-chunk deletion uses two different APIs across the three figure extractors",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\n`_extract_html_images` deletes stale chunks via `delete_chunks_cascade(conn, old_ids)` (line 515), while `_extract_web_figures` (lines 843-844) and `_extract_element_captures` (lines 984-985) instead call `delete_chunk_vecs(conn, ...)` followed by a manual `_batched_execute(conn, \"DELETE FROM chunks WHERE id IN ({ph})\", ...)`. All three claim to do the same thing (remove stale figure chunks + their vecs). Either `delete_chunks_cascade` is the correct single entry point and the other two are an incomplete reimplementation (risking missed cascade tables), or the manual form is intentional and the names are misleading. This is a latent maintainability/correctness hazard: a future cascade-table addition will be picked up by one path and silently missed by the other two.\n\n## Location\n`src/knowledge_base/web.py:513-515,841-844,982-985`\n\n## Suggested approach\nConfirm delete_chunks_cascade is the canonical helper; replace the two delete_chunk_vecs+manual-DELETE sites with it (or document why a vec-only delete differs). Verify the cascade covers the same FK tables _cleanup_figure_fk_refs handles.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/design-inconsistent-delete-api` \u00b7 **fingerprint:** `da4f9c20ce08`\n- **Category:** design \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** \u2014\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:web/design-inconsistent-delete-api -->"
+    },
+    {
+      "key": "find:web/design-primitive-obsession-dicts",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: Untyped dict returns used as informal structs where dataclasses belong",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\n`_get_browser_config` (560-582) returns `dict | None` with conventional keys `mode`/`venv`/`endpoint`; `_render_with_browser` (654-738) returns a `dict | None` with keys `html`/`screenshot_path`/`final_url`/`element_captures`/`tmpdir`; callers then index by string (`render_result[\"html\"]`, `.get(\"final_url\")`, `browser_config.get(\"mode\")`). These are stable, fixed-shape records \u2014 classic primitive obsession. A `@dataclass(frozen=True) BrowserConfig` and `RenderResult` would give the type checker the field set, prevent typo-keys, document the contract, and make the `tmpdir` ownership explicit (it could expose a context manager / `__enter__`/`__exit__`). The element-capture dicts (`{path,tag,width,height}`, lines 720-727) and vision-config dicts are the same pattern.\n\n## Location\n`src/knowledge_base/web.py:560-582,654-738`\n\n## Suggested approach\nIntroduce frozen dataclasses BrowserConfig(mode, venv, endpoint) and RenderResult(html, screenshot_path, final_url, element_captures, tmpdir); return those instead of bare dicts. Optionally make RenderResult a context manager owning tmpdir cleanup.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/design-primitive-obsession-dicts` \u00b7 **fingerprint:** `912b0c012052`\n- **Category:** design \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** https://refactoring.com/catalog/replaceDataValueWithObject.html\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:web/design-primitive-obsession-dicts -->"
+    },
+    {
+      "key": "find:web/design-resource-ownership-tmpdir",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: tmpdir lifecycle leaks across the function boundary instead of using a context m",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\n`_render_with_browser` creates `tmpdir = Path(tempfile.mkdtemp(...))` (line 665), cleans it on every internal failure path (672, 693, 701) but on success returns it inside the result dict and documents 'Caller owns tmpdir cleanup on success' (663-664). The caller `ingest_url` must remember to `shutil.rmtree(tmpdir, ignore_errors=True)` in a finally (1173-1176). Split ownership across a function boundary is the exact problem context managers solve. A leak occurs if any future caller forgets the finally. Pythonic fix: make rendering a `@contextlib.contextmanager` (`with _browser_render(url, cfg) as result:`) so cleanup is guaranteed by the `with` block regardless of caller discipline.\n\n## Location\n`src/knowledge_base/web.py:654-738,1173-1176`\n\n## Suggested approach\nConvert _render_with_browser into a contextmanager yielding a RenderResult and rmtree-ing the tmpdir on exit; callers use `with`. Removes the manual finally in ingest_url.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/design-resource-ownership-tmpdir` \u00b7 **fingerprint:** `7e73bb50b467`\n- **Category:** design \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** https://docs.python.org/3/library/contextlib.html#contextlib.contextmanager\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:web/design-resource-ownership-tmpdir -->"
+    },
+    {
+      "key": "find:web/design-circular-import-local-imports",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: Function-local imports of .vision in hot paths mask a circular dependency",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nThree functions perform module-level work via function-local imports: `_extract_html_images` does `import base64; import io; from PIL import Image; from .vision import _get_vision_config, _vision_call` inside the body (357-362); `_extract_web_figures` imports six names from `.vision` locally (763-770); `_extract_element_captures` likewise (902-904). This is a deliberate circular-import workaround \u2014 `vision.py:31` imports `from .web import _cleanup_figure_fk_refs` (confirmed), so web<->vision is a cycle. Local imports hide the contract and re-run import machinery on every call (cheap after first, but obscures dependencies from static analysis and tooling). The real fix is to break the cycle: `_cleanup_figure_fk_refs` is a DB-figure-cleanup helper that arguably belongs in db.py or a shared figures.py, letting both web.py and vision.py import it top-level.\n\n## Location\n`src/knowledge_base/web.py:357-362,761-770,902-904`\n\n## Suggested approach\nRelocate _cleanup_figure_fk_refs to a neutral module (db.py or a new figures.py) so web.py and vision.py both import it top-level, breaking the cycle; then hoist the .vision and PIL/base64/io imports to module scope.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/design-circular-import-local-imports` \u00b7 **fingerprint:** `29ba2e43c362`\n- **Category:** design \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** https://docs.python.org/3/faq/programming.html#how-can-i-have-modules-that-mutually-import-each-other\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:web/design-circular-import-local-imports -->"
+    },
+    {
+      "key": "find:web/testing-malformed-elements-json",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: _render_with_browser malformed elements.json branch untested",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nIn `_render_with_browser`, the elements.json parsing block (lines 716-730) has an except clause for `(json.JSONDecodeError, KeyError, TypeError)` that logs a warning and continues with empty element_captures. The happy path is covered by tests/test_ingest.py:3787 (`test_render_with_browser_produces_element_captures`), but the malformed-JSON / missing-key fallback is never exercised. No test writes an invalid or schema-incomplete elements.json. The result['element_captures'] == [] degradation path is unverified.\n\n## Location\n`src/knowledge_base/web.py:715-731`\n\n## Suggested approach\nAdd a test variant of test_render_with_browser_produces_element_captures whose `_fake_run` writes `elements.json` containing invalid JSON (e.g. '{not json') and another writing valid JSON missing the required 'file'/'tag' keys. Assert `_render_with_browser` still returns a dict with `element_captures == []` and does not raise.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/testing-malformed-elements-json` \u00b7 **fingerprint:** `92f5fc03a15c`\n- **Category:** testing \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** \u2014\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:web/testing-malformed-elements-json -->"
+    },
+    {
+      "key": "find:web/documentation-ingest-url-no-params",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: Public ingest_url docstring documents no params, return, or raises",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:docs",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\ningest_url is part of the module's public API (listed in __all__ at lines 37-40) yet its docstring (lines 1063-1067) is prose-only: it documents none of its three parameters (conn, url, session_id), no return value, and no exceptions. The signature takes session_id: str | None = None whose effect (co-occurrence/session-link tracking, used at lines 1224-1225, 1247, 1252) is entirely undocumented and non-obvious. The function returns a structured dict (lines 1197-1260 with keys url/source_uri/source_type/browser_rendered/figures_extracted/chunks_added/chunks_skipped and conditionally title) but the return shape is undocumented. It raises ValidationError in five places (lines 1070, 1074, 1076, 1088, 1093) with no Raises section. The MCP-tool reference docs/reference/mcp-tools.md:58-84 carry the parameter table and return shape, but the source docstring lags behind.\n\n## Location\n`src/knowledge_base/web.py:1058-1067`\n\n## Suggested approach\nAdd a Google-style Args/Returns/Raises block: document conn, url, session_id (noting session_id drives chunk_sessions co-occurrence tracking), describe the returned dict keys, and add Raises: ValidationError for unsupported scheme, missing hostname, private/internal address (pre-fetch and post-redirect), and fetch failure.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/documentation-ingest-url-no-params` \u00b7 **fingerprint:** `f47555db0401`\n- **Category:** documentation \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:docs` \u00b7 **Auto-fixable:** no\n- **Lens:** docs \u00b7 **References:** docs/reference/mcp-tools.md:58-84\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:web/documentation-ingest-url-no-params -->"
+    },
+    {
+      "key": "find:web/documentation-configure-browser-args",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: configure_browser Args block omits conn, has a malformed entry, and lacks Raises",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:docs",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nconfigure_browser (public, in __all__) uses a Google-style Args: section (lines 592-597) but it is incomplete and malformed. (1) The conn parameter is not documented. (2) The line 'Pass both as empty string to disable. Both None to query.' (line 597) is indented at the same level as the parameter names, so it parses as a malformed Args entry without a parameter name rather than a general note. (3) The function raises ValidationError in four distinct places (line 612 CDP-without-venv, line 620 non-absolute venv_path, line 623 missing Python executable, lines 629-631 bad CDP scheme) but there is no Raises: section. (4) The function returns a dict (lines 601, 608, 651) but there is no Returns: documentation.\n\n## Location\n`src/knowledge_base/web.py:585-597`\n\n## Suggested approach\nDocument conn in Args; move the 'Pass both as empty string / Both None' sentence out of the Args block into the summary or a Notes line at the correct indentation; add a Raises: ValidationError clause covering the four conditions; add a Returns: line describing the {'browser': ...} dict.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `web/documentation-configure-browser-args` \u00b7 **fingerprint:** `4d7e3a5a1124`\n- **Category:** documentation \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:docs` \u00b7 **Auto-fixable:** no\n- **Lens:** docs \u00b7 **References:** \u2014\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:web/documentation-configure-browser-args -->"
+    },
+    {
+      "key": "find:render-browser/documentation-stale-return-keys",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: _render_with_browser return docstring is stale (missing final_url and element_ca",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:docs",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nThe docstring states the success return is `{\"html\": str, \"screenshot_path\": Path, \"tmpdir\": Path}` (lines 661-662), but the actual returned dict (lines 732-738) contains five keys: html, screenshot_path, final_url, element_captures, and tmpdir. The two extra keys (final_url at line 736, element_captures at line 737) were added later (Phase 3 #132 element captures; final_url handling) and the docstring was not updated. Additionally the docstring types screenshot_path as Path, but line 734 returns `screenshot_path if screenshot_path.exists() else None`, so the value can be None.\n\n## Location\n`src/knowledge_base/web.py:659-664`\n\n## Suggested approach\nUpdate the docstring return description to list all five keys and correct the screenshot_path type to Path | None: e.g. `{\"html\": str, \"screenshot_path\": Path | None, \"final_url\": str | None, \"element_captures\": list[dict], \"tmpdir\": Path}`.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `render-browser/documentation-stale-return-keys` \u00b7 **fingerprint:** `e9374ea78d8e`\n- **Category:** documentation \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:docs` \u00b7 **Auto-fixable:** no\n- **Lens:** docs \u00b7 **References:** \u2014\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:render-browser/documentation-stale-return-keys -->"
+    },
+    {
+      "key": "find:ingest/design-long-produce-insert",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: _produce_and_insert_chunks is a ~130 LOC multi-responsibility function",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: a single ~130-line function performs text extraction (PDF/markdown dispatch), image-dir teardown, chunk production across three strategies (AST / semantic / mechanical), metadata assembly, content-hash deduplication, embedding, and row insertion. It has four exit points and three independent dispatch ladders on source_type. Target state: decompose into a small pipeline \u2014 _extract_text(source_type, path) -> (text, page_map, image_dir), _produce_chunk_items(source_type, text, page_map, image_dir, path) -> list[ChunkItem], _dedup_items(conn, items, ...) -> (new_items, skipped, deferred), and _embed_and_insert(conn, items, ...). The top function then reads as four named steps. Pattern name: Extract Method / Compose Method (pipeline). Motivation: the function violates SRP, exceeds the 50-LOC smell threshold by ~2.6x, and the source_type dispatch is duplicated (lines 291, 295, 307, 322) so behavior for a given type is scattered. Estimated scope: one module, ~4 new private helpers, no public API change, tests in tests/test_ingest.py should still pass unchanged. Prerequisites: introduce a ChunkItem type (see ingest/design-chunk-tuple-obsession) to make helper signatures clean. Risk: medium \u2014 the dedup/embed/insert ordering and the early-return-on-empty-chunks semantics (lines 335-336, 354-355, 377-378) must be preserved exactly; embedding cost and transaction (no-commit) boundary must not shift.\n\n## Location\n`src/knowledge_base/ingest.py:269-399`\n\n## Suggested approach\nSplit into _extract_text, _produce_chunk_items, _dedup_items, _embed_and_insert helpers; keep _produce_and_insert_chunks as the 4-step orchestrator preserving exit-point semantics.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `ingest/design-long-produce-insert` \u00b7 **fingerprint:** `b760c401efd6`\n- **Category:** design \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** docs/design/architecture-overview.md, docs/usage/ingesting-documents.md\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:ingest/design-long-produce-insert -->"
+    },
+    {
+      "key": "find:ingest/design-long-reingest",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: reingest_file is a ~150 LOC orchestrator mixing FK-cleanup, session preservation",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: reingest_file spans ~150 lines and inlines six numbered FK-cleanup blocks (papers, relationships, conclusions, methods/datasets/metrics, entity_mentions), historical-session capture, cascade delete, re-ingest, paper re-link, entity re-link by regex, and paper_paths hash update. Target state: extract _cleanup_fk_refs(conn, old_ids) -> ReingestCleanupState (capturing affected_paper_ids and affected_entities), _relink_papers(conn, source_uri, affected_paper_ids), and _relink_entities(conn, source_uri, affected_entities); reingest_file then orchestrates capture -> delete -> reingest -> relink. Pattern name: Extract Method + introduce a small state object (Parameter Object) for the captured cleanup state. Motivation: the function carries cross-cutting state (affected_paper_ids, affected_entities, historical_sessions) across ~150 lines, making the delete/reingest/relink invariant hard to verify; the numbered-comment structure is a code smell signalling latent sub-functions. Estimated scope: one module, ~3 helpers, public signature unchanged. Prerequisites: none, though a ReingestCleanupState dataclass clarifies the contract. Risk: medium \u2014 ordering is load-bearing: captures must happen before delete_chunks_cascade (line 576), re-link must happen after re-ingest; the chunk_strategy / session-union behavior must be preserved.\n\n## Location\n`src/knowledge_base/ingest.py:494-646`\n\n## Suggested approach\nExtract _cleanup_fk_refs, _relink_papers, _relink_entities; pass captured state via a small dataclass; keep delete->reingest->relink ordering intact.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `ingest/design-long-reingest` \u00b7 **fingerprint:** `8c548a07f976`\n- **Category:** design \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** docs/usage/relationships-conclusions.md\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:ingest/design-long-reingest -->"
+    },
+    {
+      "key": "find:ingest/design-chunk-tuple-obsession",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: Chunk items modeled as positional tuple[int,str,str,str] (primitive obsession)",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: chunk items are passed around as anonymous 4-tuples (chunk_index, text, content_hash, metadata_json) built at lines 311/321, 343-351, and 356, then later destructured positionally at line 384 (`for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(...)`) and indexed by magic position at line 364 (`item[2]` = content_hash) and line 381 (`item[1]` = text). Target state: a frozen dataclass `@dataclass(frozen=True, slots=True) class ChunkItem: index: int; text: str; content_hash: str; metadata: str`. Pattern name: Replace Tuple/Data Clump with Data Object. Motivation: positional indexing (`item[1]`, `item[2]`) is opaque and fragile \u2014 reordering or extending the tuple silently breaks the dedup lookup; the type annotation `tuple[int, str, str, str]` (lines 311, 361) does not document field meaning. Estimated scope: one module, replace tuple construction/destructuring sites; metadata stays a JSON string field (could later become a dict). Prerequisites: none. Risk: low-medium \u2014 purely structural; the embedded JSON-string-as-field is still primitive obsession but out of scope for this change.\n\n## Location\n`src/knowledge_base/ingest.py:311-356`\n\n## Suggested approach\nIntroduce a frozen ChunkItem dataclass with named fields (index, text, content_hash, metadata) and replace tuple positions item[1]/item[2] and the zip destructuring with attribute access.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `ingest/design-chunk-tuple-obsession` \u00b7 **fingerprint:** `daec633e317b`\n- **Category:** design \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** \u2014\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:ingest/design-chunk-tuple-obsession -->"
+    },
+    {
+      "key": "find:ingest/testing-detect-source-type",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: _detect_source_type extension mapping is untested",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\n_detect_source_type maps file extensions to source_type ('pdf' | 'markdown' | 'code') across three branches plus a fallback. No test in tests/test_ingest.py calls it directly or asserts its full mapping. The '.py' -> 'code' path is exercised indirectly by test_ingest_python_file_uses_ast, but the rest of the map is unverified: '.txt'/'.typ'/'.rst' -> 'markdown'; the entire code-extension set ('.rs', '.cpp', '.c', '.h', '.hpp', '.toml', '.yaml', '.yml', '.json') -> 'code'; '.pdf' -> 'pdf'; and the unknown-extension default -> 'markdown' (line 80). This is pure deterministic branching logic with no I/O \u2014 the highest-value, lowest-cost candidate for parametrization. A regression that, say, drops '.json' from the code list or changes the default would pass the current suite.\n\n## Location\n`src/knowledge_base/ingest.py:60-80`\n\n## Suggested approach\nAdd a parametrized unit test: @pytest.mark.parametrize('name,expected', [('a.pdf','pdf'), ('a.md','markdown'), ('a.txt','markdown'), ('a.typ','markdown'), ('a.rst','markdown'), ('a.py','code'), ('a.rs','code'), ('a.cpp','code'), ('a.c','code'), ('a.h','code'), ('a.hpp','code'), ('a.toml','code'), ('a.yaml','code'), ('a.yml','code'), ('a.json','code'), ('a.PDF','pdf'), ('a.unknown','markdown'), ('a','markdown')]) asserting _detect_source_type(Path(name)) == expected. Include an uppercase-extension case to lock in the suffix.lower() behavior.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `ingest/testing-detect-source-type` \u00b7 **fingerprint:** `97e3b4cb73eb`\n- **Category:** testing \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** src/knowledge_base/ingest.py:60-80\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:ingest/testing-detect-source-type -->"
+    },
+    {
+      "key": "find:ingest/testing-pdf-runtime-fallback",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: _extract_pdf_markdown RuntimeError/OSError fallback untested",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\n_extract_pdf_markdown has two fallback paths to _extract_pdf_text: ImportError (lines 236-238, covered by test_extract_pdf_markdown_fallback_on_import_error) and (RuntimeError, OSError) raised by pymupdf4llm.to_markdown (lines 260-262). The latter is not covered \u2014 no test makes a mocked to_markdown raise RuntimeError or OSError. This is a distinct error path with its own logging and fallback, and the second-most-likely real-world failure (a corrupt/locked PDF causing pymupdf4llm to throw at runtime rather than import time).\n\n## Location\n`src/knowledge_base/ingest.py:260-262`\n\n## Suggested approach\nAdd a test that injects a mock pymupdf4llm whose to_markdown.side_effect = RuntimeError('mupdf error') (and a parametrized variant with OSError), patches _extract_pdf_text to a sentinel, and asserts _extract_pdf_markdown returns (sentinel_text, {}) and that the warning is logged. Reuse the _make_mock_pymupdf4llm helper, overriding to_markdown.side_effect.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `ingest/testing-pdf-runtime-fallback` \u00b7 **fingerprint:** `61f9d1216566`\n- **Category:** testing \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** src/knowledge_base/ingest.py:234-262, tests/test_ingest.py:3214-3238\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:ingest/testing-pdf-runtime-fallback -->"
+    },
+    {
+      "key": "find:ingest/testing-semantic-pdf-chunking",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: Semantic PDF chunking branch (_chunk_by_section) never exercised end-to-end",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nIn _produce_and_insert_chunks, effective_strategy becomes 'semantic' only when source_type == 'pdf' AND config chunk_strategy == 'semantic' (lines 290-292), which then dispatches to _chunk_by_section (lines 323-328) instead of _chunk_markdown. The existing strategy tests cover only: mechanical default (test_ingest_file_mechanical_default), and semantic config with a NON-pdf file (test_ingest_file_semantic_nonpdf) which by design stays mechanical. The actual semantic-PDF path \u2014 the one combination where _chunk_by_section runs \u2014 is never tested. So the section-based chunker is never reached through the ingest pipeline, and the chunk_strategy='semantic' value written to the chunks row for PDFs is unverified.\n\n## Location\n`src/knowledge_base/ingest.py:289-336`\n\n## Suggested approach\nAdd a test that sets config chunk_strategy='semantic', mocks pymupdf4llm (via _make_mock_pymupdf4llm with _SIMPLE_PAGES), ingests a .pdf, and asserts: (a) chunks were produced, (b) chunks.chunk_strategy == 'semantic', and ideally (c) _chunk_by_section was invoked (patch knowledge_base.ingest._chunk_by_section and assert called, knowledge_base.ingest._chunk_markdown not called).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `ingest/testing-semantic-pdf-chunking` \u00b7 **fingerprint:** `3a8d17a3f0d4`\n- **Category:** testing \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** src/knowledge_base/ingest.py:289-336, tests/test_ingest.py:3713-3734\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:ingest/testing-semantic-pdf-chunking -->"
+    },
+    {
+      "key": "find:ingest/testing-directory-extension-filter",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: ingest_directory extension filter, custom extensions, and nesting untested",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\ningest_directory is tested only via test_ingest_directory_shares_session_id and test_ingest_directory_explicit_session_id, both using a flat directory of .md files with default extensions. Three behaviors are uncovered: (1) the default extension filter SKIPPING non-matching files (e.g. a .py or .docx file present in the directory must be ignored \u2014 line 664 condition f.suffix.lower() in extensions); (2) the custom extensions argument (passing extensions={'.py'} or similar) \u2014 the entire 'extensions is None' default-assignment branch vs caller-supplied branch (lines 657-658); (3) recursive rglob traversal into nested subdirectories and the affected_folders per-folder summary batching (lines 663-673). A regression that flattens rglob to glob, or that ignores the caller's extensions, would pass the current suite.\n\n## Location\n`src/knowledge_base/ingest.py:649-675`\n\n## Suggested approach\nAdd tests: (a) directory with mixed files (.md + .py + .json + a no-extension file) ingested with default extensions; assert only .md/.txt/.typ/.rst/.pdf-matching files produced chunks and the others were skipped. (b) same directory ingested with extensions={'.py'}; assert only the .py file was ingested. (c) nested layout (dir/sub1/a.md, dir/sub2/b.md); assert both ingested and that affected_folders / folder-summary update covers both parent dirs (patch _update_folder_summary_safe and assert called once per distinct folder).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `ingest/testing-directory-extension-filter` \u00b7 **fingerprint:** `c6b3cdbea89e`\n- **Category:** testing \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** src/knowledge_base/ingest.py:649-675, tests/test_ingest.py:3394-3429\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:ingest/testing-directory-extension-filter -->"
+    },
+    {
+      "key": "find:ingest/documentation-missing-ingest-file-docstring",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: Public ingest_file() has no docstring",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:docs",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\ningest_file is part of the module public API (listed in __all__ at line 53 and imported by routes/ingestion.py:12 and the CLI) yet has no docstring at all. The function has a non-trivial contract: it returns a dict whose keys vary ('file', 'chunks_added', 'chunks_skipped', and conditionally 'duplicate_of_paper_id' when added==0 and skipped>0, set at line 445), commits the transaction, and accepts a private-looking _skip_folder_summary flag (line 407) whose purpose (suppressing per-file folder-summary recomputation during directory batches) is non-obvious. None of this is documented. The return type annotation is the bare 'dict' (line 408), so callers have no signal about the dict's shape either.\n\n## Location\n`src/knowledge_base/ingest.py:402-450`\n\n## Suggested approach\nAdd a docstring describing the parameters (notably source_type auto-detection when None, and the _skip_folder_summary flag), the returned dict's keys including the conditional 'duplicate_of_paper_id', and the side effect that the transaction is committed before returning. Match the file's existing freeform-prose docstring style (e.g. a 'Returns ...' sentence as used in _produce_and_insert_chunks).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `ingest/documentation-missing-ingest-file-docstring` \u00b7 **fingerprint:** `76da3c3ff405`\n- **Category:** documentation \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:docs` \u00b7 **Auto-fixable:** no\n- **Lens:** docs \u00b7 **References:** src/knowledge_base/ingest.py:50-57, src/knowledge_base/routes/ingestion.py:12\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:ingest/documentation-missing-ingest-file-docstring -->"
+    },
+    {
+      "key": "find:ingest/documentation-missing-ingest-directory-docstring",
+      "kind": "finding",
+      "parent": "epic:area:ingest",
+      "severity": "medium",
+      "title": "[super-qa] medium: Public ingest_directory() has no docstring",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "type:docs",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\ningest_directory is part of the module public API (listed in __all__ at line 53, imported by routes/ingestion.py:12) but has no docstring. Undocumented behaviors a caller cannot infer from the signature: the default extension set defaults to {'.pdf', '.md', '.txt', '.typ', '.rst'} (line 658) when extensions is None; a fresh session_id (uuid4) is auto-generated when session_id is None (lines 659-660), so all ingested files in the call share one session; folder summaries are batched and recomputed once per affected folder at the end (lines 671-673) rather than per file. The return type 'list[dict]' (line 654) is documented only by annotation, with no description of element shape.\n\n## Location\n`src/knowledge_base/ingest.py:649-675`\n\n## Suggested approach\nAdd a docstring covering: recursive walk via rglob filtered by extensions; the default extension set; the auto-generated shared session_id when session_id is None; the batched folder-summary update; and the returned list of per-file result dicts (same shape as ingest_file's return).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `ingest/documentation-missing-ingest-directory-docstring` \u00b7 **fingerprint:** `ec38390f8c1c`\n- **Category:** documentation \u00b7 **Area:** `area:ingest` \u00b7 **Type:** `type:docs` \u00b7 **Auto-fixable:** no\n- **Lens:** docs \u00b7 **References:** src/knowledge_base/ingest.py:50-57, src/knowledge_base/ingest.py:657-660\n- **Filter:** `label:area:ingest` + `label:severity:medium`\n\n<!-- super-qa-key: find:ingest/documentation-missing-ingest-directory-docstring -->"
+    },
+    {
+      "key": "find:search/correctness-source-type-postfilter",
+      "kind": "finding",
+      "parent": "epic:area:search",
+      "severity": "medium",
+      "title": "[super-qa] medium: source_type filtered only at final SQL fetch \u2014 can return fewer than top_k resul",
+      "labels": [
+        "super-qa",
+        "area:search",
+        "type:bug",
+        "severity:medium"
+      ],
+      "body": "> Verified by multi-model debate (Gemini+Codex). See verdict below.\n\n## Problem\nUnlike chunk_strategy, which is pre-filtered against the candidate pool before RRF/boost/rerank (line 327), source_type is applied only at the terminal SQL fetch. chunk_ids = ranked[:top_k] (line 430) selects the top_k candidates WITHOUT regard to source_type; the SQL at lines 446-450 then drops any rows whose source_type does not match (\" AND source_type = ?\"). The build loop (lines 457-471) skips cids missing from chunk_map. Net effect: when source_type is supplied, the function can return fewer than top_k results even when enough matching candidates existed deeper in the merged/ranked list. The 3x over-fetch (line 254) and 2x boost window (line 363) only soften the shortfall; they do not eliminate it (e.g. a query where the relevant source_type is sparse among the top_k by score). The asymmetry with chunk_strategy (which IS pre-filtered) is the tell that this is an oversight, not a deliberate design choice.\n\n## Location\n`src/knowledge_base/search.py:430-450`\n\n## Suggested approach\nPre-filter the candidate pool by source_type the same way chunk_strategy is handled: either fold source_type into the pre-RRF filter block (lines 326-342) by adding it to the chunks JOIN/SELECT, or apply it when selecting chunk_ids so that ranked[:top_k] already contains only source_type-matching candidates. Then top_k matching results are returned whenever they exist in the over-fetched pool.\n\n## Debate verdict\n- original **high** \u00b7 gemini **medium** \u00b7 codex **medium** -> verdict **medium**\n- Both models MEDIUM: source_type applied only at final SQL fetch; 3x overfetch softens but architecturally inconsistent with chunk_strategy pre-filter.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `search/correctness-source-type-postfilter` \u00b7 **fingerprint:** `0f6af1c0489a`\n- **Category:** correctness \u00b7 **Area:** `area:search` \u00b7 **Type:** `type:bug` \u00b7 **Auto-fixable:** no\n- **Lens:** specialist \u00b7 **References:** src/knowledge_base/search.py:254, src/knowledge_base/search.py:326-342, src/knowledge_base/search.py:430-450\n- **Filter:** `label:area:search` + `label:severity:medium`\n\n<!-- super-qa-key: find:search/correctness-source-type-postfilter -->"
+    },
+    {
+      "key": "find:search/refactoring-god-function",
+      "kind": "finding",
+      "parent": "epic:area:search",
+      "severity": "medium",
+      "title": "[super-qa] medium: search() is a ~270-line god function mixing 8 distinct phases",
+      "labels": [
+        "super-qa",
+        "area:search",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: search() spans lines 202-473 (~200 LOC excluding docstring) and sequentially performs eight cohesive but distinct phases in one body: (1) input validation 239-252, (2) space-config resolution 256-277, (3) FTS leg 288-301, (4) vec leg 303-324, (5) pre-RRF chunk_strategy filtering 326-342, (6) merge/match-type selection 344-359, (7) folder boost windowing 361-375, (8) cross-encoder rerank 377-428, plus final fetch+build 430-473. Each phase has its own locals and abstraction level, so the reader must hold the whole pipeline in working memory. Target state: extract phases into private stage helpers (e.g. _resolve_space, _run_legs, _apply_strategy_filter, _select_merge, _apply_rerank) so search() reads as an orchestration of named steps. Pattern name: Extract Method / Compose Method (pipeline stages). Motivation: function length and mixed altitude are the module's dominant maintainability cost; the existing private helpers (_fts_search, _vec_search, _rrf_merge, _folder_boost) prove the module already favors this decomposition style \u2014 the orchestrator just stopped short. Estimated scope: single file, ~6 new private functions, no behavior change. Prerequisites: tests in tests/test_search.py covering each mode/flag combination must stay green. Risk: medium \u2014 shared mutable locals (score_map, ranked, match_type) thread across phases, so extraction must thread state explicitly to avoid subtle reordering bugs.\n\n## Location\n`src/knowledge_base/search.py:202-473`\n\n## Suggested approach\nExtract each numbered phase into a private helper that takes/returns explicit state; reduce search() to a linear sequence of helper calls. Keep the public signature unchanged.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `search/refactoring-god-function` \u00b7 **fingerprint:** `d0e9d61f3052`\n- **Category:** refactoring \u00b7 **Area:** `area:search` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** https://refactoring.com/catalog/extractFunction.html\n- **Filter:** `label:area:search` + `label:severity:medium`\n\n<!-- super-qa-key: find:search/refactoring-god-function -->"
+    },
+    {
+      "key": "find:search/testing-none-embedding-vec-skip",
+      "kind": "finding",
+      "parent": "epic:area:search",
+      "severity": "medium",
+      "title": "[super-qa] medium: embed_single returning None (vec leg skipped) is untested",
+      "labels": [
+        "super-qa",
+        "area:search",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nIn both the matryoshka and non-matryoshka branches, `search()` guards with `if query_embedding is not None` before running `_vec_search` and before folder boost (line 369). All existing tests mock `embed_single`/`_fake_embed_single` to return a real vector, so the None path \u2014 where the embedding provider fails and the vec leg must be silently skipped while hybrid still returns FTS results \u2014 is never exercised. A regression that passed None into `_vec_search` (a `serialize_f32(None)` crash) or into `_folder_boost` would not be caught.\n\n## Location\n`src/knowledge_base/search.py:312-324`\n\n## Suggested approach\nAdd a test patching `knowledge_base.search.embed_single` to return None, ingest a doc, and assert `search(conn, q, mode='hybrid')` returns FTS-only results without raising, and `search(conn, q, mode='vec')` returns [] gracefully.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `search/testing-none-embedding-vec-skip` \u00b7 **fingerprint:** `42e9550c4073`\n- **Category:** testing \u00b7 **Area:** `area:search` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** \u2014\n- **Filter:** `label:area:search` + `label:severity:medium`\n\n<!-- super-qa-key: find:search/testing-none-embedding-vec-skip -->"
+    },
+    {
+      "key": "find:search/testing-rerank-degradation-path",
+      "kind": "finding",
+      "parent": "epic:area:search",
+      "severity": "medium",
+      "title": "[super-qa] medium: Reranker graceful-degradation except clause is untested",
+      "labels": [
+        "super-qa",
+        "area:search",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nThe rerank block catches `(ImportError, RuntimeError, ValueError, OSError)` and falls back to RRF ordering with a logged warning. Existing reranker tests (test_reranker.py) only patch `knowledge_base.reranker.rerank` to succeed; grep shows no test forces it to raise. The fallback contract \u2014 results still returned in RRF order, match_type NOT 'reranked', warning logged \u2014 is unverified. If the except list ever narrowed or the fallback re-raised, no test would fail.\n\n## Location\n`src/knowledge_base/search.py:423-428`\n\n## Suggested approach\nAdd a test patching `knowledge_base.reranker.rerank` with `side_effect=RuntimeError('inference failed')`, call `search(..., rerank=True)`, and assert results are non-empty, `match_type != 'reranked'`, and a warning is emitted (caplog). Parametrize over ImportError/RuntimeError/ValueError/OSError to lock the catch set.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `search/testing-rerank-degradation-path` \u00b7 **fingerprint:** `4fb9d16be3cf`\n- **Category:** testing \u00b7 **Area:** `area:search` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** \u2014\n- **Filter:** `label:area:search` + `label:severity:medium`\n\n<!-- super-qa-key: find:search/testing-rerank-degradation-path -->"
+    },
+    {
+      "key": "find:search/testing-fts-operationalerror-skip",
+      "kind": "finding",
+      "parent": "epic:area:search",
+      "severity": "medium",
+      "title": "[super-qa] medium: FTS OperationalError (malformed MATCH query) skip path untested",
+      "labels": [
+        "super-qa",
+        "area:search",
+        "type:test",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\n`_fts_search` is wrapped in `try/except sqlite3.OperationalError` so that a malformed FTS5 MATCH expression (e.g. unbalanced quotes, bare boolean operators) skips the FTS leg instead of crashing. No test feeds a query that triggers an FTS5 syntax error; test_search_keyword_prefilter_stopword_only_query covers the empty-fts_query short-circuit (line 294) but not the OperationalError catch. A user-supplied query like `\"unterminated` would hit this in production unverified.\n\n## Location\n`src/knowledge_base/search.py:294-301`\n\n## Suggested approach\nAdd a test calling `search(conn, '\"unbalanced quote', mode='hybrid')` (a query that raises sqlite3.OperationalError in FTS5) and assert it does not raise and falls back to the vec leg. Optionally also test mode='fts' returns [] for such a query.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `search/testing-fts-operationalerror-skip` \u00b7 **fingerprint:** `0dd4e2767bb1`\n- **Category:** testing \u00b7 **Area:** `area:search` \u00b7 **Type:** `type:test` \u00b7 **Auto-fixable:** no\n- **Lens:** test \u00b7 **References:** \u2014\n- **Filter:** `label:area:search` + `label:severity:medium`\n\n<!-- super-qa-key: find:search/testing-fts-operationalerror-skip -->"
+    },
+    {
+      "key": "find:vision/design-module-singleton",
+      "kind": "finding",
+      "parent": "epic:area:vision",
+      "severity": "medium",
+      "title": "[super-qa] medium: Module-level mutable singleton for the OmniParser server process",
+      "labels": [
+        "super-qa",
+        "area:vision",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: the auto-started server is tracked in two module globals, _omniparser_process and _omniparser_lock (lines 341-342), mutated via 'global _omniparser_process' in _shutdown_omniparser_server (line 350) and _ensure_omniparser_server (lines 384, 459). This is global mutable process state with double-checked locking spread across free functions, plus an atexit handler registered at line 460. Target state: encapsulate the process handle, lock, readiness wait, and shutdown in an OmniParserServerManager class (one instance held module-level, or injected), so lifecycle invariants live in one object and the global/atexit wiring is contained. Pattern: encapsulate global state in a manager/singleton object. Motivation: scattered 'global' writes across functions obscure the lifecycle contract, complicate testing (tests must reach into and reset module globals), and make the double-checked-locking invariant hard to audit. Estimated scope: HEAVY \u2014 restructures three functions and the atexit registration. Prerequisites: none. Risk: medium \u2014 must preserve the existing double-checked-locking and atexit-cleanup semantics exactly.\n\n## Location\n`src/knowledge_base/vision.py:340-462`\n\n## Suggested approach\nIntroduce an OmniParserServerManager class owning the process handle, lock, readiness wait, and terminate/atexit logic; replace the module globals and 'global' statements with instance state.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `vision/design-module-singleton` \u00b7 **fingerprint:** `40db343ac21b`\n- **Category:** design \u00b7 **Area:** `area:vision` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** CLAUDE.md: 'module-level mutable singleton state; global mutable state'\n- **Filter:** `label:area:vision` + `label:severity:medium`\n\n<!-- super-qa-key: find:vision/design-module-singleton -->"
+    },
+    {
+      "key": "find:vision/refactoring-figure-dataclass",
+      "kind": "finding",
+      "parent": "epic:area:vision",
+      "severity": "medium",
+      "title": "[super-qa] medium: Primitive obsession: figure represented as a dict with underscore-prefixed senti",
+      "labels": [
+        "super-qa",
+        "area:vision",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: the figure object flows through the pipeline as a plain dict and accumulates side-channel keys by mutation: _source_image (1799), _vision_failed (1819), _region_idx (1830) in _dispatch_vision_calls; _ocr_text via {**fig, '_ocr_text': ...} in _enrich_with_omniparser (1876, 1893); _assembled_content and _caption in _persist_figures (1939-1940). The 'real' keys (figure_type, title, description, entities_mentioned) come from _validate_figure (lines 795-800) which already produces a dict. This is primitive obsession: a structured record modeled as an untyped dict where a dataclass belongs, with the public/transport keys and internal-pipeline keys intermixed and no type checking on the underscore fields. Target state: a frozen-ish Figure dataclass with typed fields (figure_type: str, description: str, title: str | None, entities_mentioned: list[str]) plus an internal-state companion (source_image, vision_failed, region_idx, ocr_text, assembled_content, caption) carried in a PipelineFigure wrapper or dataclasses.replace updates. Pattern: Replace Data Value With Object / Introduce Parameter Object. Motivation: typed fields catch key typos, document the contract, and stop the 'string key as schema' pattern; mypy/pyright can then verify the pipeline. Estimated scope: HEAVY \u2014 touches _validate_figure, _dispatch_vision_calls, _enrich_with_omniparser, _persist_figures, and the metadata-building block (2019-2037). Prerequisites: decide whether vision-LLM raw dict is converted at _validate_figure boundary. Risk: medium \u2014 the JSON unwrap path and the {**fig, ...} merges must be faithfully ported.\n\n## Location\n`src/knowledge_base/vision.py:1797-1832`\n\n## Suggested approach\nIntroduce a Figure dataclass (typed required fields) and carry pipeline-internal state in dataclass fields or a wrapper instead of underscore-prefixed dict keys; convert at the _validate_figure boundary.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `vision/refactoring-figure-dataclass` \u00b7 **fingerprint:** `a4bd0308981d`\n- **Category:** refactoring \u00b7 **Area:** `area:vision` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** CLAUDE.md: 'primitive obsession (dicts where dataclasses belong)', field(default_factory=...) over mutable defaults\n- **Filter:** `label:area:vision` + `label:severity:medium`\n\n<!-- super-qa-key: find:vision/refactoring-figure-dataclass -->"
+    },
+    {
+      "key": "find:vision/design-long-dispatch-vision",
+      "kind": "finding",
+      "parent": "epic:area:vision",
+      "severity": "medium",
+      "title": "[super-qa] medium: _dispatch_vision_calls is ~148 LOC spanning task-build, result-collect, and regi",
+      "labels": [
+        "super-qa",
+        "area:vision",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: _dispatch_vision_calls (1698-1845) does four things in one body: builds futures for extracted images (1723-1740), for vector-page renders/crops (1742-1771), for mixed-page regions (1773-1788), then collects results with fallback handling (1793-1823) and flattens region maps into per-page lists (1825-1832). ~148 LOC, three submission loops plus collection logic. Target state: split into _submit_extracted_image_tasks, _submit_vector_page_tasks, _submit_mixed_region_tasks (each returning future->key entries) and _collect_vision_results / _merge_region_figures. Pattern: Extract Method / Compose Method. Motivation: the function exceeds the 50-LOC guideline; the three submission shapes share only the executor and obscure each path's distinct key convention (note the _MIXED_REGION_OFFSET trick at 1786). Estimated scope: LIGHT-to-MEDIUM (mechanical extraction within one module). Prerequisites: none. Risk: low \u2014 pure decomposition, no behavior change, but care needed that all futures share one executor scope.\n\n## Location\n`src/knowledge_base/vision.py:1698-1845`\n\n## Suggested approach\nExtract the three task-submission loops and the collect/merge phase into helper functions; the executor block then reads as submit-x3 then collect+merge.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `vision/design-long-dispatch-vision` \u00b7 **fingerprint:** `57871c261a71`\n- **Category:** design \u00b7 **Area:** `area:vision` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** CLAUDE.md: 'functions > 50 LOC'\n- **Filter:** `label:area:vision` + `label:severity:medium`\n\n<!-- super-qa-key: find:vision/design-long-dispatch-vision -->"
+    },
+    {
+      "key": "find:vision/design-long-persist-figures",
+      "kind": "finding",
+      "parent": "epic:area:vision",
+      "severity": "medium",
+      "title": "[super-qa] medium: _persist_figures is ~159 LOC mixing content assembly, scoped-DELETE SQL, and chu",
+      "labels": [
+        "super-qa",
+        "area:vision",
+        "type:refactor",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nCurrent state: _persist_figures (1899-2057) interleaves: caption lookup + content assembly + text collection (1912-1943), batch embedding (1946-1948), construction of the scoped-DELETE subquery with manual OR-clause/param building (1950-1974), cascade cleanup/delete, and the per-figure insert loop including chunk_index encoding, content-hash dedup, enrichment-layer tracking, and metadata dict assembly (1988-2050). ~159 LOC. Target state: extract _build_figure_delete_scope(source_uri, pages) -> (subquery_sql, params), _build_figure_metadata(figure, page_num, model) -> str, and possibly _assemble_persistable_figures(...) for the content step; _persist_figures becomes an orchestrator. Pattern: Extract Method; the SQL builder is a Replace Inline-SQL-Assembly With Helper. Motivation: over 3x the LOC guideline, and the hand-rolled SQL clause building (1953-1974) is the riskiest part to read inside a 159-line function. Estimated scope: MEDIUM. Prerequisites: none. Risk: low-medium \u2014 the transaction (try/commit/rollback at 1978-2055) and the embeddings[i] index alignment with all_figures must be preserved.\n\n## Location\n`src/knowledge_base/vision.py:1899-2057`\n\n## Suggested approach\nExtract the DELETE-scope SQL builder and the per-figure metadata builder into helpers; reduce _persist_figures to assemble -> embed -> delete-scope -> insert-loop -> commit.\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `vision/design-long-persist-figures` \u00b7 **fingerprint:** `59f102428d4f`\n- **Category:** design \u00b7 **Area:** `area:vision` \u00b7 **Type:** `type:refactor` \u00b7 **Auto-fixable:** no\n- **Lens:** design \u00b7 **References:** CLAUDE.md: 'functions > 50 LOC'\n- **Filter:** `label:area:vision` + `label:severity:medium`\n\n<!-- super-qa-key: find:vision/design-long-persist-figures -->"
+    },
+    {
+      "key": "find:vision/documentation-stale-error-return",
+      "kind": "finding",
+      "parent": "epic:area:vision",
+      "severity": "medium",
+      "title": "[super-qa] medium: estimate_figures_time docstring claims an {\"error\": ...} return that the functio",
+      "labels": [
+        "super-qa",
+        "area:vision",
+        "type:docs",
+        "severity:medium"
+      ],
+      "body": "> Generated by `/super-qa`, agent analysis \u2014 review before action (not source-verified).\n\n## Problem\nThe docstring states 'Returns {\"error\": ...} on validation failure.' (line 2100). The function body has no try/except: validation is delegated to _resolve_paper_context (raises NotFoundError) and _validate_pages (raises ValidationError) at lines 2102-2103, and those exceptions propagate uncaught. On the success path the function returns a dict with keys extracted_images/vector_pages/mixed_vector_regions/estimated_seconds/has_omniparser/omniparser_server_healthy (lines 2128-2135) \u2014 never an 'error' key. The {\"error\": ...} dict is actually produced by the route wrapper in src/knowledge_base/routes/extraction.py:245-247, which catches KnowledgeBaseError. The docstring misattributes the wrapper's error-handling contract to this function; a caller relying on it (checking for an 'error' key instead of catching the exception) would crash on validation failure.\n\n## Location\n`src/knowledge_base/vision.py:2090-2135`\n\n## Suggested approach\nReplace the line 'Returns {\"error\": ...} on validation failure.' with an accurate Returns/Raises description: the function returns the ETA dict on success and raises NotFoundError / ValidationError on invalid paper_id or page bounds (which the MCP route wrapper converts to an error dict).\n\n## Acceptance criteria\n- [ ] Resolved at the cited location\n- [ ] Regression test added (`uv run pytest`)\n- [ ] `ruff check` + type check clean\n\n## Metadata\n- **Finding ID:** `vision/documentation-stale-error-return` \u00b7 **fingerprint:** `a8f8405d68c0`\n- **Category:** documentation \u00b7 **Area:** `area:vision` \u00b7 **Type:** `type:docs` \u00b7 **Auto-fixable:** no\n- **Lens:** docs \u00b7 **References:** src/knowledge_base/routes/extraction.py:240-247\n- **Filter:** `label:area:vision` + `label:severity:medium`\n\n<!-- super-qa-key: find:vision/documentation-stale-error-return -->"
+    },
+    {
+      "key": "group:li:db",
+      "kind": "li-group",
+      "parent": "epic:area:db",
+      "severity": "low",
+      "title": "[super-qa] low/info findings: db (10)",
+      "labels": [
+        "super-qa",
+        "area:db",
+        "severity:low"
+      ],
+      "body": "> Grouped non-autofixable **low/info** findings for `area:db` (10). Agent analysis \u2014 review before action.\n\n- **low** `src/knowledge_base/db.py:461-466` \u2014 delete_chunk_vecs runs a separate COUNT pass before DELETE instead of using cursor.rowcount (`db/performance-delete-double-pass-count`, fp `986b754fce84`)\n- **low** `src/knowledge_base/db.py:165-363` \u2014 Eleven _migrate_* functions duplicate the same 'introspect-then-alter/rebuild' preamble (`db/refactoring-migration-boilerplate`, fp `d361a8ff2850`)\n- **low** `src/knowledge_base/db.py:117-150,379-384` \u2014 co_occurrence_pairs and get_active_space return untyped dicts where a dataclass/TypedDict belongs (`db/design-dict-return-primitive-obsession`, fp `ab6b620c9069`)\n- **low** `src/knowledge_base/db.py:370` \u2014 _SPACE_NAME_RE is underscore-prefixed but imported cross-module by embed_swap.py (`db/style-leaky-private-regex`, fp `e48fea300ce1`)\n- **low** `src/knowledge_base/db.py:235,317,783` \u2014 CHECK constraint definitions are duplicated as literal strings between schema DDL and migrations (`db/style-duplicated-check-constraint`, fp `a62e96b99388`)\n- **low** `src/knowledge_base/db.py:117-150` \u2014 co_occurrence_pairs untested for min_sessions=0 boundary and alphabetical-ordering invariant (`db/testing-co-occurrence-boundaries`, fp `a8aade248a6a`)\n- **low** `src/knowledge_base/db.py:153-162` \u2014 Exported public function get_connection has no docstring (`db/documentation-get-connection-undocumented`, fp `ef854490c4b6`)\n- **low** `src/knowledge_base/db.py:595-596` \u2014 Exported public function init_schema has no docstring (`db/documentation-init-schema-undocumented`, fp `174de862ce9e`)\n- **low** `src/knowledge_base/db.py:826-842` \u2014 schema.md CHECK-constraint list for embed_spaces is incomplete (`db/documentation-incomplete-check-list`, fp `9add341046c5`)\n- **info** `src/knowledge_base/db.py:421-493` \u2014 Active-space table_name fallback (`tbl = table_name or get_vec_table_name(conn)`) repeated across three vec helpers (`db/refactoring-table-name-fallback-triplication`, fp `3de9d635ba0f`)\n\n<!-- super-qa-key: group:li:db -->"
+    },
+    {
+      "key": "group:li:extraction",
+      "kind": "li-group",
+      "parent": "epic:area:extraction",
+      "severity": "low",
+      "title": "[super-qa] low/info findings: extraction (11)",
+      "labels": [
+        "super-qa",
+        "area:extraction",
+        "severity:low"
+      ],
+      "body": "> Grouped non-autofixable **low/info** findings for `area:extraction` (11). Agent analysis \u2014 review before action.\n\n- **low** `src/knowledge_base/extraction.py:748-752` \u2014 Function-local import of papers.get_paper_chunks signals deferred-cycle coupling (`extraction/design-lazy-import-coupling`, fp `45e244995fde`)\n- **low** `src/knowledge_base/extraction.py:1052-1085` \u2014 Underscore kwarg _prefetched_chunks leaks an internal optimization into a public signature (`extraction/design-prefetched-chunks-leak`, fp `5f727dbddd8b`)\n- **low** `src/knowledge_base/extraction.py:181-281` \u2014 source provenance uses bare string literals instead of an Enum (`extraction/style-source-string-constant`, fp `46db97db322a`)\n- **low** `src/knowledge_base/extraction.py:405-437` \u2014 _EXTRACT_PROMPT and _MAP_PROMPT are near-identical templates (`extraction/refactoring-prompt-duplication`, fp `6d99ec900b6b`)\n- **low** `src/knowledge_base/extraction.py:193-194` \u2014 _record_entity invalid-table ValueError guard untested (`extraction/testing-record-entity-bad-table`, fp `6729a32c5576`)\n- **low** `src/knowledge_base/extraction.py:56-61` \u2014 _sanitize_str whitespace-retention behavior untested (`extraction/testing-sanitize-str-direct`, fp `f55fe4ffeb04`)\n- **low** `src/knowledge_base/extraction.py:617-619` \u2014 _store_resolved llm_extraction provenance not asserted (`extraction/testing-store-resolved-source`, fp `14188ef49c9d`)\n- **low** `src/knowledge_base/extraction.py:1088-1118` \u2014 get_entities empty-paper and confidence passthrough untested (`extraction/testing-get-entities-empty-and-confidence`, fp `a09c44702c78`)\n- **low** `src/knowledge_base/extraction.py:1052-1068` \u2014 extract_structure docstring does not document its parameters or unused 'confirmed' arg (`extraction/documentation-undocumented-params`, fp `5161763e0926`)\n- **low** `src/knowledge_base/extraction.py:582-648` \u2014 Loosely-typed defaultdict yields 11 mypy union-attr false positives (`extraction/typesafety-defaultdict-union`, fp `c347865e255f`)\n- **info** `src/knowledge_base/extraction.py:181-209` \u2014 Dynamic SQL table-name interpolation gated only by allowlist (currently safe) (`extraction/sqli-dynamic-table-name`, fp `1fe5c4fbc905`)\n\n<!-- super-qa-key: group:li:extraction -->"
+    },
+    {
+      "key": "group:li:infra",
+      "kind": "li-group",
+      "parent": "epic:area:infra",
+      "severity": "low",
+      "title": "[super-qa] low/info findings: infra (1)",
+      "labels": [
+        "super-qa",
+        "area:infra",
+        "severity:low"
+      ],
+      "body": "> Grouped non-autofixable **low/info** findings for `area:infra` (1). Agent analysis \u2014 review before action.\n\n- **low** `pyproject.toml` \u2014 Direct deps use >= without upper bounds (`infra/build-unpinned-upper-bounds`, fp `3f8e1553d1ae`)\n\n<!-- super-qa-key: group:li:infra -->"
+    },
+    {
+      "key": "group:li:ingest",
+      "kind": "li-group",
+      "parent": "epic:area:ingest",
+      "severity": "low",
+      "title": "[super-qa] low/info findings: ingest (25)",
+      "labels": [
+        "super-qa",
+        "area:ingest",
+        "severity:low"
+      ],
+      "body": "> Grouped non-autofixable **low/info** findings for `area:ingest` (25). Agent analysis \u2014 review before action.\n\n- **low** `src/knowledge_base/web.py:521-523,850-852,990-992` \u2014 Repeated per-item content_hash SELECT in figure-insert loops (`web/performance-n+1-figure-dedup`, fp `06ab2c4e7e6c`)\n- **low** `src/knowledge_base/browser/render_page.py:41-43` \u2014 Off-screen element filter only catches top-left overflow, not right/bottom (`render/correctness-viewport-filter`, fp `cf587ab96fa1`)\n- **low** `src/knowledge_base/web.py:519-538,848-876,988-1007` \u2014 Zero-norm (None) embeddings silently inserted as vector-less figure chunks (`web/correctness-none-embedding-figure`, fp `a72a236da599`)\n- **low** `src/knowledge_base/utils.py:33-55` \u2014 SSRF: DNS-rebinding TOCTOU between is_private_ip check and httpx fetch (`web/security-dns-rebinding-toctou`, fp `554926f4c695`)\n- **low** `web.py:714-728` \u2014 Path traversal: subprocess elements.json filename joined to tmpdir without containment check (`web/security-path-traversal-elements-json`, fp `0d452dd1c47c`)\n- **low** `src/knowledge_base/web.py:481-487,858-863,954-963` \u2014 figure_type / source_type / original_source_type are bare string literals, not an Enum (`web/style-string-constants-enum`, fp `7c7847b19e5c`)\n- **low** `src/knowledge_base/web.py:551-557` \u2014 _find_venv_python has no direct test; Windows branch uncovered (`web/testing-find-venv-python-direct`, fp `b333a21ec531`)\n- **low** `src/knowledge_base/web.py:220-253` \u2014 _cleanup_figure_fk_refs FK-nulling not directly asserted (`web/testing-cleanup-figure-fk-refs`, fp `2a2b274721a6`)\n- **low** `src/knowledge_base/web.py:560-564` \u2014 _get_browser_config docstring overstates the returned dict keys (`web/documentation-browser-config-keys`, fp `7ede13c69f6c`)\n- **low** `src/knowledge_base/ingest.py:358-397` \u2014 chunk_index carries pre-dedup positions, leaving gaps after filtering (`ingest/correctness-chunk-index-gaps`, fp `efd4bffc73f4`)\n- **low** `src/knowledge_base/ingest.py:60-80` \u2014 source_type and chunk_strategy are stringly-typed (enum candidates) (`ingest/design-stringly-typed-source-strategy`, fp `3716ffa3a3fb`)\n- **low** `src/knowledge_base/ingest.py:60-80` \u2014 _detect_source_type silently defaults unknown extensions to 'markdown' (`ingest/design-silent-source-type-default`, fp `fb22e49a3857`)\n- **low** `src/knowledge_base/ingest.py:295-298` \u2014 PDF image-dir pre-clean (rmtree) branch on re-ingest is untested (`ingest/testing-pdf-imagedir-cleanup`, fp `0c4dbf7224e7`)\n- **low** `src/knowledge_base/ingest.py:335-336` \u2014 Empty-chunk early-returns for PDF and fixed-size text are partially untested (`ingest/testing-empty-pdf-chunks-earlyreturn`, fp `4bbeda63bfd8`)\n- **low** `src/knowledge_base/ingest.py:432-446` \u2014 duplicate_of_paper_id OSError-on-hash and no-matching-paper branches untested (`ingest/testing-duplicate-paper-oserror`, fp `54bff223fb57`)\n- **low** `tests/test_ingest.py:75-78` \u2014 Repeated DB setup boilerplate; no shared conn fixture (no conftest.py) (`ingest/testing-no-conftest-fixtures`, fp `f120e11a72c7`)\n- **low** `src/knowledge_base/ingest.py:494-513` \u2014 reingest_file() docstring omits NotFoundError it raises (`ingest/documentation-undocumented-notfounderror`, fp `ae511c87b091`)\n- **low** `src/knowledge_base/ingest.py:302` \u2014 page_map redefined (mypy no-redef) \u2014 shadows line 299 (`ingest/typesafety-no-redef-page-map`, fp `cfd92a6f770a`)\n- **info** `src/knowledge_base/web.py:1110-1128` \u2014 text.strip() recomputed multiple times in browser-fallback comparison (`web/performance-repeated-strip`, fp `4479628da06b`)\n- **info** `web.py:716-728` \u2014 Type confusion: elements.json fields consumed without isinstance validation (`web/security-json-type-confusion`, fp `18711d002dc7`)\n- **info** `src/knowledge_base/browser/render_page.py:1-10` \u2014 SSRF via in-browser page JavaScript (documented accepted trade-off) (`render-page/security-browser-ssrf-tradeoff`, fp `502a69df38a2`)\n- **info** `tests/test_ingest.py:1966-2227` \u2014 Repeated @patch stacks and inline HTML duplicated across image tests; no shared fixtures (`web/testing-no-class-grouping-fixtures`, fp `db17bec3a62c`)\n- **info** `tests/test_ingest.py:1763-1819` \u2014 _parse_srcset cases are 10 separate functions instead of one parametrized table (`web/testing-parse-srcset-no-parametrize`, fp `eb3604e5253d`)\n- **info** `src/knowledge_base/browser/render_page.py:1-10` \u2014 Module docstring singles out CDP for ephemeral context, but both modes use it (`render-page/documentation-ephemeral-context-claim`, fp `bfcbb129db71`)\n- **info** `src/knowledge_base/ingest.py:1-676` \u2014 Module uses freeform-prose docstrings, no structured sections (`ingest/documentation-docstring-style-divergence`, fp `766cdbb477bd`)\n\n<!-- super-qa-key: group:li:ingest -->"
+    },
+    {
+      "key": "group:li:search",
+      "kind": "li-group",
+      "parent": "epic:area:search",
+      "severity": "low",
+      "title": "[super-qa] low/info findings: search (11)",
+      "labels": [
+        "super-qa",
+        "area:search",
+        "severity:low"
+      ],
+      "body": "> Grouped non-autofixable **low/info** findings for `area:search` (11). Agent analysis \u2014 review before action.\n\n- **low** `src/knowledge_base/search.py:389-450` \u2014 Up to three separate full-table reads of chunks per search on the rerank path (`search/performance-redundant-chunks-reads`, fp `cd6caafb5660`)\n- **low** `src/knowledge_base/search.py:165-170` \u2014 Folder-boost threshold collapses to near-zero when best folder distance is exactly 0 (`search/correctness-folder-boost-zero-threshold`, fp `cf5b802a433b`)\n- **low** `src/knowledge_base/search.py:106-108` \u2014 Dynamic table/expression identifier interpolated into SQL via f-string in _vec_search (`search/sql-injection-vec-table-identifier`, fp `5d64b4e92ce7`)\n- **low** `src/knowledge_base/search.py:33,62-64` \u2014 Closed string vocabularies use frozensets + comments instead of enum.StrEnum (`search/design-string-enums`, fp `da2ecb333faf`)\n- **low** `src/knowledge_base/search.py:261-265` \u2014 space_cfg is a free-form dict where a dataclass belongs (primitive obsession) (`search/design-spacecfg-dict`, fp `fce4372c381b`)\n- **low** `src/knowledge_base/search.py:202-213` \u2014 search() has 9 parameters including two boolean control flags (`search/design-param-flag-explosion`, fp `06d5362eb7fa`)\n- **low** `src/knowledge_base/search.py:192-199` \u2014 _fetch_chunk_contents and _vec_search default-table path lack direct tests (`search/testing-private-helpers-uncovered`, fp `6c808c8a8dc8`)\n- **low** `src/knowledge_base/search.py:430-471` \u2014 Post-fetch chunk-id mismatch skip (source_type/strategy filter dropping candidates) untested (`search/testing-chunk-content-mismatch-skip`, fp `3135b8de4e40`)\n- **low** `src/knowledge_base/search.py:395` \u2014 valid_ids redefined (mypy no-redef) \u2014 shadows line 340 (`search/typesafety-no-redef-valid-ids`, fp `d571a65c74aa`)\n- **info** `src/knowledge_base/search.py:454` \u2014 Redundant score_map rebuild from ranked before result construction (`search/style-redundant-scoremap-rebuild`, fp `2afe8627bf83`)\n- **info** `src/knowledge_base/search.py:434-450` \u2014 Final chunk fetch hand-builds IN-clause placeholders instead of using _batched_select (`search/style-manual-placeholders-final-fetch`, fp `d557ab2b236e`)\n\n<!-- super-qa-key: group:li:search -->"
+    },
+    {
+      "key": "group:li:vision",
+      "kind": "li-group",
+      "parent": "epic:area:vision",
+      "severity": "low",
+      "title": "[super-qa] low/info findings: vision (12)",
+      "labels": [
+        "super-qa",
+        "area:vision",
+        "severity:low"
+      ],
+      "body": "> Grouped non-autofixable **low/info** findings for `area:vision` (12). Agent analysis \u2014 review before action.\n\n- **low** `src/knowledge_base/vision.py:1396-1400` \u2014 Quadratic caption dedup via list membership inside per-page loop (`vision/performance-quadratic-caption-dedup`, fp `12d6e71e54be`)\n- **low** `src/knowledge_base/vision.py:1652-1690` \u2014 OmniParser pipeline issues blocking subprocess/HTTP calls strictly serially (`vision/performance-serial-omniparser-calls`, fp `271848442aaf`)\n- **low** `src/knowledge_base/vision.py:232-243` \u2014 OmniParser server_url stored without scheme/host validation, later used in httpx requests (`vision/ssrf-omniparser-url-no-scheme-validation`, fp `8f84863eed5b`)\n- **low** `src/knowledge_base/vision.py:1285-1294` \u2014 Image basename from chunk metadata joined to image_dir without path normalization (`vision/path-traversal-extracted-image-name`, fp `10ee2af3b04f`)\n- **low** `src/knowledge_base/vision.py:363-462` \u2014 _ensure_omniparser_server is ~100 LOC combining health-check, spawn, and readiness polling (`vision/design-long-ensure-server`, fp `04b733721332`)\n- **low** `src/knowledge_base/vision.py:2138-2278` \u2014 extract_figures orchestrator is ~141 LOC (`vision/design-long-extract-figures`, fp `76f68ccb5e02`)\n- **low** `src/knowledge_base/vision.py:777-800` \u2014 figure_type is a free string with an enumerated domain (diagram|chart|table|photo|equation) (`vision/style-figure-type-stringly`, fp `4c1f3d0398fa`)\n- **low** `src/knowledge_base/vision.py:961-963` \u2014 _FIGURE_VISION_PROMPT module constant is unused in production (only pinned by a test) (`vision/refactoring-dead-figure-prompt-alias`, fp `75fe3cd72315`)\n- **low** `src/knowledge_base/vision.py:2138-2153` \u2014 extract_figures (public API) docstring omits Args, Returns, and Raises (`vision/documentation-missing-public-api-docs`, fp `ae8bf54032c5`)\n- **low** `src/knowledge_base/vision.py:122-146` \u2014 configure_vision (public API) has a one-line docstring missing Args/Returns and the query-on-None behavior (`vision/documentation-configure-vision-terse`, fp `150ffb64ba77`)\n- **info** `src/knowledge_base/vision.py:1017-1024` \u2014 Dict-unwrap materializes all values to inspect a single-key case (`vision/performance-list-materialize-dict-unwrap`, fp `7a7e423a039d`)\n- **info** `src/knowledge_base/vision.py:64-87` \u2014 DualPathInputs/OmniParserResults are mutable dataclasses though used as immutable value carriers (`vision/style-frozen-dataclass-mutated`, fp `2261339ed2dd`)\n\n<!-- super-qa-key: group:li:vision -->"
+    },
+    {
+      "key": "autofix:medium",
+      "kind": "autofix",
+      "parent": "epic:autofix",
+      "severity": "medium",
+      "title": "[super-qa] auto-fix: medium findings (10)",
+      "labels": [
+        "super-qa",
+        "super-qa:auto-fix",
+        "severity:medium"
+      ],
+      "body": "> Mechanically auto-fixable **medium** findings (10). Apply via `/super-qa` Phase 3.\n\n| ID | Location | Title | Suggested fix |\n| --- | --- | --- | --- |\n| `vision/correctness-broad-except-in-tuple` | `src/knowledge_base/vision.py:302-303` | Exception in except-tuple makes httpx types redundant and swallows all | Drop the bare `Exception` and catch only what a health probe legitimately tolerates, e.g. `except (httpx.HTTPError, json.JSONDecodeError, Va |\n| `vision/style-broad-except-exception` | `src/knowledge_base/vision.py:302-303` | except clause lists specific exceptions then a blanket Exception, swal | Drop the redundant `Exception` (catch only the httpx errors and json.JSONDecodeError), or keep a final `except Exception as exc:` that logs  |\n| `vision/testing-geometry-helpers-untested` | `src/knowledge_base/vision.py:555-711` | Pure clustering/crop helpers have zero direct tests (_cluster_bboxes,  | Add direct parametrized unit tests: (a) _cluster_bboxes with 0/1 bbox -> [(0,0,1,1)], two vertically-separated bboxes (gap>=threshold) -> 2  |\n| `vision/testing-omniparser-global-leak` | `tests/test_vision.py:3805-3844` | test_auto_start_success leaks module-global _omniparser_process (Magic | Add an autouse fixture (function-scoped) that snapshots and restores knowledge_base.vision._omniparser_process around each auto-start test,  |\n| `vision/testing-configure-vision-scheme` | `src/knowledge_base/vision.py:133-144` | configure_vision invalid-URL-scheme rejection path is untested | Add a parametrized negative test: for scheme in [ftp://host, file:///etc/passwd, javascript:alert(1), '' ] assert configure_vision(conn, bas |\n| `ingest/performance-quadratic-entity-relink` | `src/knowledge_base/ingest.py:610-627` | Quadratic entity re-link loop with per-iteration regex compilation | Hoist compilation: inside `for entity in affected:` compute `pattern = re.compile(r'\\b' + re.escape(entity['name']) + r'\\b')` once, then cal |\n| `ingest/correctness-zip-no-strict` | `src/knowledge_base/ingest.py:381-397` | zip(items, embeddings) silently truncates on length mismatch | Use `zip(items, embeddings, strict=True)` so a length divergence raises ValueError instead of silently dropping chunks. Alternatively assert |\n| `extraction/testing-compare-papers-guard` | `src/knowledge_base/extraction.py:352-353` | compare_papers <2 paper_ids early-return untested | Parametrize a test over paper_ids in ([], [p1]) asserting compare_papers returns []. This documents the boundary and protects the guard. |\n| `infra/supply-chain-cves` | `pyproject.toml / uv.lock` | 6 dependencies with known CVEs (requests/urllib3/idna/pygments/pip) | Bump fixed versions: idna>=3.15, pygments>=2.20.0, requests>=2.33.0, urllib3>=2.7.0; upgrade pip>=26.1 in CI image. Then `uv lock` + verify. |\n| `infra/build-no-tool-config` | `pyproject.toml` | No [tool.ruff]/[tool.mypy]/[tool.pyright] config \u2014 lint runs default r | Add [tool.ruff.lint] with a real select (E,F,W,B,SIM,UP,C4,PTH,RUF,S) and [tool.mypy] (or pyright config) + a CI gate. Triage the surfaced f |\n\n<!-- super-qa-key: autofix:medium -->"
+    },
+    {
+      "key": "autofix:low",
+      "kind": "autofix",
+      "parent": "epic:autofix",
+      "severity": "low",
+      "title": "[super-qa] auto-fix: low findings (18)",
+      "labels": [
+        "super-qa",
+        "super-qa:auto-fix",
+        "severity:low"
+      ],
+      "body": "> Mechanically auto-fixable **low** findings (18). Apply via `/super-qa` Phase 3.\n\n| ID | Location | Title | Suggested fix |\n| --- | --- | --- | --- |\n| `render/style-magic-numbers` | `src/knowledge_base/browser/render_page.py:94-108` | Browser timeouts and screenshot clip dimensions are unnamed magic numb | Promote 30_000 / 2_000 / 1280 / 8000 to named module constants alongside the existing _MIN_ELEMENT_DIMENSION / _MAX_ELEMENT_CAPTURES. |\n| `render/style-untyped-page-param` | `src/knowledge_base/browser/render_page.py:24` | _capture_elements page param is untyped with a blanket no-untyped-def  | Add `if TYPE_CHECKING: from playwright.sync_api import Page` and annotate `page: Page`, dropping the `# type: ignore[no-untyped-def]`. |\n| `vision/correctness-unvalidated-entities-type` | `src/knowledge_base/vision.py:777-800` | _validate_figure passes through entities_mentioned and title without t | Coerce/validate: `entities = obj.get('entities_mentioned', []); entities = entities if isinstance(entities, list) else []` and `title = obj. |\n| `vision/style-threading-import` | `src/knowledge_base/vision.py:342` | _omniparser_lock uses __import__(\"threading\").Lock() instead of a top- | Add `import threading` at the top of the module and replace line 342 with `_omniparser_lock = threading.Lock()`. |\n| `vision/style-magic-eta-threshold` | `src/knowledge_base/vision.py:1556` | Magic numbers: 120s ETA-confirmation threshold, 120s startup deadline, | Add named constants for the 120s confirm threshold, the 120s startup deadline, and the 10s shutdown wait, and reference them at lines 1556,  |\n| `vision/style-local-imports` | `src/knowledge_base/vision.py:134` | Function-local imports for urllib, PIL.Image, and atexit | Hoist urllib.parse.urlparse, io, PIL.Image, and atexit to the module top; leave the .papers import local (circular-import guard). |\n| `vision/testing-malformed-metadata` | `src/knowledge_base/vision.py:1278-1281` | Malformed-metadata JSON-decode fallback paths untested in _collect_ext | Insert a chunk with metadata='not-json' (and one with metadata=NULL / non-string) for the source_uri, then assert _collect_extracted_images  |\n| `ingest/refactoring-magic-numbers-imagedir` | `src/knowledge_base/ingest.py:208-222` | Magic numbers in pdf_image_dir hashing/truncation lack named constants | Hoist 8192, 16, 64 to named module constants and derive the page-separator offset from a single '\\n\\n' constant shared with the join at line |\n| `ingest/refactoring-cubic-entity-relink` | `src/knowledge_base/ingest.py:610-627` | Entity re-link is a triple-nested loop recompiling regex per chunk | Precompile the word-boundary pattern per entity once before the chunk loop and reuse the compiled object inside; keep the first-match break. |\n| `ingest/documentation-missing-helper-docstring` | `src/knowledge_base/ingest.py:265-266` | _extract_markdown_text() has no docstring | Add a one-line docstring, e.g. \"Read a markdown/text file as UTF-8, replacing undecodable bytes.\" to match the surrounding helpers. |\n| `extraction/performance-repeated-dict-lookup` | `src/knowledge_base/extraction.py:597-612` | Repeated entity_data dict key lookup in hot loop | Bind the entry once: `entry = entity_data[(canonical, etype)]` (the defaultdict factory still runs on first access), then mutate `entry[\"typ |\n| `extraction/design-private-in-all` | `src/knowledge_base/extraction.py:26-43` | __all__ re-exports underscore-prefixed internal validators | Remove the `\"_validate_extraction\"` and `\"_validate_resolution\"` entries from `__all__`. Tests already import them by explicit name, so beha |\n| `extraction/testing-metric-int-and-stringnum-coercion` | `src/knowledge_base/extraction.py:117-122` | Metric value float-coercion of numeric strings/ints untested | Add a parametrized test over value in ('0.95', 88, 88.5) asserting _validate_extraction yields one metric whose value is a float and isinsta |\n| `extraction/documentation-missing-docstrings` | `src/knowledge_base/extraction.py:284-340` | Public exported functions get_methods/get_datasets/get_metrics lack do | Add a one-line summary docstring to each, matching the existing minimalist style, e.g. get_methods: '\"\"\"List recorded methods for a paper.\"\" |\n| `db/design-dead-public-fn` | `src/knowledge_base/db.py:397-404` | get_active_chunk_strategy is unused dead code (no external callers, ab | Delete get_active_chunk_strategy, or promote it to __all__ if a consumer is planned. Confirmed no callers in the package today. |\n| `search/style-magic-threshold-2` | `src/knowledge_base/search.py:166` | Magic number 2 for folder-boost distance threshold lacks a named const | Add FOLDER_BOOST_DISTANCE_THRESHOLD_MULTIPLIER = 2 and FOLDER_BOOST_MIN_DISTANCE = 1e-6 near the other folder-boost constants and reference  |\n| `search/documentation-searchresult-no-docstring` | `src/knowledge_base/search.py:25-33` | Public SearchResult dataclass has no docstring | Add a one-line class docstring, e.g. '\"\"\"A single hybrid-search hit: a chunk plus its fusion/rerank score and provenance.\"\"\"', and optionall |\n| `search/documentation-search-args-returns` | `src/knowledge_base/search.py:214-238` | search() docstring omits conn parameter and lacks a Returns section | Add an Args entry for `conn` (e.g. 'conn: Open SQLite connection to the knowledge-base DB.') and a Returns section (e.g. 'Returns: List of S |\n\n<!-- super-qa-key: autofix:low -->"
+    },
+    {
+      "key": "autofix:info",
+      "kind": "autofix",
+      "parent": "epic:autofix",
+      "severity": "info",
+      "title": "[super-qa] auto-fix: info findings (7)",
+      "labels": [
+        "super-qa",
+        "super-qa:auto-fix",
+        "severity:info"
+      ],
+      "body": "> Mechanically auto-fixable **info** findings (7). Apply via `/super-qa` Phase 3.\n\n| ID | Location | Title | Suggested fix |\n| --- | --- | --- | --- |\n| `web/style-noop-else-pass` | `src/knowledge_base/web.py:437-439` | for/else with a no-op `pass` body adds noise | Remove the `else: pass` clause; the subsequent `if total > _MAX_IMAGE_DOWNLOAD_BYTES: continue` already covers the over-size case. |\n| `render/style-broad-except` | `src/knowledge_base/browser/render_page.py:33-34,48-50` | Bare `except Exception: continue` swallows all errors during element c | Narrow to the expected Playwright error types or add a `print(f\"skip element: {exc}\", file=sys.stderr)` in the except blocks so failures are |\n| `vision/performance-repeated-pageresults-lookup` | `src/knowledge_base/vision.py:1863-1869` | Repeated page_results[page_num] subscript lookups in enrichment loop | Iterate `for page_num, figures_on_page in page_results.items():` and guard with `if not figures_on_page: continue`, reusing the bound list f |\n| `ingest/style-logger-defined-after-use` | `src/knowledge_base/ingest.py:38-48` | _update_folder_summary_safe references module logger defined 10 lines  | Move the `logger = logging.getLogger(__name__)` assignment from line 48 to just below the import block (before _update_folder_summary_safe). |\n| `extraction/style-magic-progress-interval` | `src/knowledge_base/extraction.py:967-974` | Magic number 5 for ETA logging cadence (and inline /60 seconds-to-minu | Add `_ETA_LOG_EVERY_N_CHUNKS = 5` near the other module constants and use it in the modulo check; optionally name the 60-second conversion. |\n| `db/style-magic-connection-timeout` | `src/knowledge_base/db.py:155` | get_connection uses an unnamed magic timeout of 30.0 seconds | Define `_CONNECTION_TIMEOUT_SECONDS = 30.0  # WAL busy-wait budget` near _SQL_BATCH_SIZE and reference it in sqlite3.connect. |\n| `search/style-lazy-getspace-import` | `src/knowledge_base/search.py:258` | Lazy in-function import of get_space despite embed_swap already import | Move `get_space` into the existing top-level `from .embed_swap import get_embed_config` import and delete the in-function import at line 258 |\n\n<!-- super-qa-key: autofix:info -->"
+    },
+    {
+      "key": "observer:high",
+      "kind": "observer",
+      "parent": "epic:master",
+      "severity": "high",
+      "title": "[super-qa] index: all high findings",
+      "labels": [
+        "super-qa",
+        "severity:high"
+      ],
+      "body": "> Index/listing of non-autofixable **high** findings. Populated with issue #refs at filing time.\n\n## Issues\n_(patched)_\n\n<!-- super-qa-key: observer:high -->"
+    },
+    {
+      "key": "observer:medium",
+      "kind": "observer",
+      "parent": "epic:master",
+      "severity": "medium",
+      "title": "[super-qa] index: all medium findings",
+      "labels": [
+        "super-qa",
+        "severity:medium"
+      ],
+      "body": "> Index/listing of non-autofixable **medium** findings. Populated with issue #refs at filing time.\n\n## Issues\n_(patched)_\n\n<!-- super-qa-key: observer:medium -->"
+    },
+    {
+      "key": "observer:low",
+      "kind": "observer",
+      "parent": "epic:master",
+      "severity": "low",
+      "title": "[super-qa] index: all low findings",
+      "labels": [
+        "super-qa",
+        "severity:low"
+      ],
+      "body": "> Index/listing of non-autofixable **low** findings. Populated with issue #refs at filing time.\n\n## Issues\n_(patched)_\n\n<!-- super-qa-key: observer:low -->"
+    },
+    {
+      "key": "observer:info",
+      "kind": "observer",
+      "parent": "epic:master",
+      "severity": "info",
+      "title": "[super-qa] index: all info findings",
+      "labels": [
+        "super-qa",
+        "severity:info"
+      ],
+      "body": "> Index/listing of non-autofixable **info** findings. Populated with issue #refs at filing time.\n\n## Issues\n_(patched)_\n\n<!-- super-qa-key: observer:info -->"
+    }
+  ],
+  "dupe_of": {
+    "ingest/performance-n1-dedup-query": 210,
+    "extraction/performance-collect-mentions-quadratic": 207,
+    "extraction/performance-get-entities-n-plus-1": 208,
+    "extraction/refactoring-write-path-duplication": 213,
+    "extraction/refactoring-collect-mentions-quadratic": 207,
+    "db/sql-injection-vec-table-identifier": 194
+  },
+  "links_existing": {
+    "210": "epic:area:ingest",
+    "207": "epic:area:extraction",
+    "208": "epic:area:extraction",
+    "213": "epic:area:extraction",
+    "194": "epic:area:db"
+  },
+  "all_areas": [
+    "db",
+    "extraction",
+    "infra",
+    "ingest",
+    "mcp",
+    "papers",
+    "search",
+    "vision"
+  ]
+}

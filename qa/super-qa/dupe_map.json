@@ -1,0 +1,27 @@
+{
+  "_comment": "Curated overlap map: MY-finding fingerprint -> prior-round GitHub issue. Carried forward across rounds (keyed by fingerprint, since location line-numbers drift). Round-2 (2026-06-03) user decision: link the old issue into the area epic, skip filing a new duplicate. Re-curate (don't auto-detect) each round; the heuristic finder under-matches.",
+  "9413610a1f60": {
+    "issue": 210,
+    "note": "ingest N+1 content_hash dedup loop (ingest.py:360) == #210"
+  },
+  "0204a91dbe02": {
+    "issue": 208,
+    "note": "extraction N+1 get_entities (extraction.py:1088) == #208"
+  },
+  "5bf0c1f067e7": {
+    "issue": 207,
+    "note": "extraction quadratic _collect_entity_mentions (specialist) == #207"
+  },
+  "8ad4f44d1f51": {
+    "issue": 207,
+    "note": "extraction O(n^2) mention rescan (design lens, same bug) == #207"
+  },
+  "e3a05b40e39f": {
+    "issue": 213,
+    "note": "extraction single-pass write-path duplication == #213"
+  },
+  "56a7cf7a24a7": {
+    "issue": 194,
+    "note": "db f-string SQL table-name interpolation (db.py:438) == #194"
+  }
+}

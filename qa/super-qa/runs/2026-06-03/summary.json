@@ -1,0 +1,53 @@
+{
+  "run": "2026-06-03",
+  "tool": "super-qa round 2 (full 5-lens, 30 agents + static + debate)",
+  "language": "python",
+  "reference_commit": "b336bc5bfbecf1e1feaa53564028df7dd87edb2a",
+  "units_audited": 6,
+  "agents": 30,
+  "findings_total": 167,
+  "by_severity": {
+    "critical": 0,
+    "high": 19,
+    "medium": 52,
+    "low": 76,
+    "info": 20
+  },
+  "by_category": {
+    "performance": 17,
+    "correctness": 9,
+    "security": 10,
+    "refactoring": 16,
+    "design": 23,
+    "style": 21,
+    "testing": 43,
+    "documentation": 22,
+    "supply-chain": 1,
+    "infra": 2,
+    "type-safety": 3
+  },
+  "by_area": {
+    "ingest": 61,
+    "vision": 30,
+    "extraction": 28,
+    "db": 22,
+    "search": 23,
+    "infra": 3
+  },
+  "by_type": {
+    "perf": 17,
+    "bug": 12,
+    "security": 11,
+    "refactor": 39,
+    "chore": 23,
+    "test": 43,
+    "docs": 22
+  },
+  "auto_fixable": 36,
+  "verified_or_debated": 8,
+  "security_fallback": 10,
+  "debated": 2,
+  "supply_chain": {
+    "pip_audit_cve_packages": 6
+  }
+}
