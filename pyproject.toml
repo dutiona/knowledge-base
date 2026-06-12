@@ -6,6 +6,8 @@ build-backend = "hatchling.build"
 name = "knowledge-base"
 version = "0.1.0"
 description = "Hybrid semantic search MCP server for research papers, code, and notes"
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=3.1.0",
