@@ -93,10 +93,76 @@ def test_build_parser_subcommands():
         "ingest-url": ["ingest-url", "https://example.com"],
         "re-embed": ["re-embed", "--model", "x", "--dim", "8"],
         "status": ["status"],
+        "migrate": ["migrate", "--check"],
+        "schema": ["schema"],
     }
     for subcmd, argv in test_args.items():
         args = parser.parse_args(argv)
         assert args.command == subcmd
+
+
+# ---------------------------------------------------------------------------
+# #450 — migrate / schema subcommands
+# ---------------------------------------------------------------------------
+
+
+def _bootstrap(db):
+    """Create a fresh DB stamped at the current schema version (offline)."""
+    main(["--db", str(db), "--quiet", "migrate"])
+
+
+def test_cli_migrate_bootstraps_fresh_db(tmp_path, capsys):
+    db = tmp_path / "k.db"
+    main(["--db", str(db), "migrate"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["bootstrapped"] is True
+    assert out["schema_version"] == 1
+    assert db.is_file()
+
+
+def test_cli_schema_reports_current(tmp_path, capsys):
+    db = tmp_path / "k.db"
+    _bootstrap(db)
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as exc:
+        main(["--db", str(db), "schema"])
+    assert exc.value.code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["matches"] is True
+    assert out["schema_version"] == 1
+
+
+def test_cli_schema_mismatch_exits_nonzero(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "k.db"
+    _bootstrap(db)
+    c = sqlite3.connect(db)
+    c.execute("UPDATE config SET value='0' WHERE key='schema_version'")
+    c.commit()
+    c.close()
+    with pytest.raises(SystemExit) as exc:
+        main(["--db", str(db), "--quiet", "schema"])
+    assert exc.value.code == 1
+
+
+def test_cli_migrate_check_up_to_date_exit_zero(tmp_path):
+    db = tmp_path / "k.db"
+    _bootstrap(db)
+    with pytest.raises(SystemExit) as exc:
+        main(["--db", str(db), "--quiet", "migrate", "--check"])
+    assert exc.value.code == 0
+    assert not (tmp_path / "backups").exists()  # --check never backs up
+
+
+def test_cli_migrate_check_pending_exit_nonzero(tmp_path, monkeypatch):
+    db = tmp_path / "k.db"
+    _bootstrap(db)
+    monkeypatch.setattr("knowledge_base.migrate.CURRENT_SCHEMA_VERSION", 2)
+    with pytest.raises(SystemExit) as exc:
+        main(["--db", str(db), "--quiet", "migrate", "--check"])
+    assert exc.value.code == 1
+    assert not (tmp_path / "backups").exists()  # dry run — no mutation
 
 
 def test_build_parser_re_embed_requires_model_and_dim():

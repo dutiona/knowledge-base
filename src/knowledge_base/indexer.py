@@ -15,6 +15,7 @@ import sys
 import time
 from pathlib import Path
 
+from . import migrate as _mig
 from .db import get_connection, init_schema, resolve_db_path
 from .exceptions import KnowledgeBaseError
 
@@ -194,6 +195,48 @@ def cmd_status(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_schema(args: argparse.Namespace) -> None:
+    """Report live-vs-current schema version. Exit non-zero on any mismatch
+    (release-gate verify, ME parity). Read-only — never creates/mutates the DB."""
+    report = _mig.schema_report(args.db)
+    _print(report, quiet=args.quiet)
+    sys.exit(0 if report["matches"] else 1)
+
+
+def cmd_migrate(args: argparse.Namespace) -> None:
+    """Apply pending schema migrations (backs up first). ``--check`` is a dry run
+    that exits non-zero unless the DB is already at the current version."""
+    current = _mig.CURRENT_SCHEMA_VERSION
+    if args.check:
+        live = _mig.peek_schema_version(args.db)
+        pending = list(range(live + 1, current + 1)) if live is not None else []
+        _print(
+            {
+                "schema_version": live,
+                "current_schema_version": current,
+                "pending": pending,
+                "newer": live is not None and live > current,
+            },
+            quiet=args.quiet,
+        )
+        sys.exit(0 if live == current else 1)
+
+    conn = get_connection(args.db)  # raw open — does NOT run init_schema/validation
+    # Fail fast (not a 30s stall) if a forgotten-running server holds the lock.
+    conn.execute("PRAGMA busy_timeout=5000")
+    if _mig.get_schema_version(conn) is None:
+        # Fresh / unversioned DB: bootstrap the baseline (builds + stamps v1).
+        init_schema(conn)
+        _print(
+            {"bootstrapped": True, "schema_version": current, "applied": []},
+            quiet=args.quiet,
+        )
+        return
+    # Existing stamped DB: run pending migrations under backup + restore-on-fail.
+    report = _mig.migrate(conn, backup_dir=args.backup_dir)
+    _print(report, quiet=args.quiet)
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -258,6 +301,30 @@ def build_parser() -> argparse.ArgumentParser:
     # -- status ---------------------------------------------------------------
     sub.add_parser("status", help="Show index statistics.")
 
+    # -- migrate --------------------------------------------------------------
+    p_migrate = sub.add_parser(
+        "migrate", help="Apply pending schema migrations (backs up the DB first)."
+    )
+    p_migrate.add_argument(
+        "--check",
+        action="store_true",
+        help="Dry run: report pending migrations without mutating "
+        "(exit non-zero unless already current).",
+    )
+    p_migrate.add_argument(
+        "--backup-dir",
+        dest="backup_dir",
+        type=Path,
+        default=None,
+        help="Directory for the pre-migration backup (default: <db dir>/backups).",
+    )
+
+    # -- schema ---------------------------------------------------------------
+    sub.add_parser(
+        "schema",
+        help="Report live vs current schema version (exit non-zero on mismatch).",
+    )
+
     return parser
 
 
@@ -290,6 +357,8 @@ def main(argv: list[str] | None = None) -> None:
         "ingest-url": cmd_ingest_url,
         "re-embed": cmd_re_embed,
         "status": cmd_status,
+        "migrate": cmd_migrate,
+        "schema": cmd_schema,
     }
 
     try:
