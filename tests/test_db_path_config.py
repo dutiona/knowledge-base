@@ -87,3 +87,25 @@ def test_get_connection_explicit_path_ignores_env(
         assert _main_db_file(conn) == explicit
     finally:
         conn.close()
+
+
+# --- MCP status() reports the resolved path, not the hardcoded default ----------
+
+
+def test_status_reports_env_db_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+    import threading
+
+    import knowledge_base._conn as conn_mod
+    from knowledge_base.routes.search import status
+
+    db_path = tmp_path / "configured.db"
+    monkeypatch.setenv(DB_PATH_ENV_VAR, str(db_path))
+    # Reset the thread-local connection cache so _get_conn opens the env DB fresh.
+    monkeypatch.setattr(conn_mod, "_local", threading.local())
+    monkeypatch.setattr(conn_mod, "_schema_ready", False)
+
+    result = json.loads(status())
+    assert result["db_path"] == str(db_path), "status must report the env-resolved DB"
