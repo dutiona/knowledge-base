@@ -46,15 +46,16 @@ def resolve_db_path(cli_path: Path | None = None) -> Path:
     """Resolve the database path by precedence: ``cli_path`` > ``$KNOWLEDGE_BASE_DB``
     > :data:`DEFAULT_DB_PATH`.
 
-    An explicit ``cli_path`` or a non-empty env var is honored verbatim — there is
-    no silent fallback to the default that would mask a configured (and possibly
-    not-yet-created) path. An empty/whitespace env var counts as unset.
+    An explicit ``cli_path`` or a non-empty env var is honored verbatim (with a
+    leading ``~`` expanded to the home directory) — there is no silent fallback to
+    the default that would mask a configured (and possibly not-yet-created) path.
+    An empty/whitespace env var counts as unset.
     """
     if cli_path is not None:
-        return cli_path
+        return cli_path.expanduser()
     env = os.environ.get(DB_PATH_ENV_VAR)
     if env and env.strip():
-        return Path(env)
+        return Path(env).expanduser()
     return DEFAULT_DB_PATH
 
 

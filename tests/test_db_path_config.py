@@ -59,6 +59,14 @@ def test_whitespace_env_treated_as_unset(
     assert resolve_db_path() == DEFAULT_DB_PATH
 
 
+def test_tilde_expanded(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A leading ~ (from a config file or quoted arg, where the shell did not
+    # expand it) must resolve to $HOME, not a literal "~" directory.
+    monkeypatch.setenv(DB_PATH_ENV_VAR, "~/kb_via_env.db")
+    assert resolve_db_path() == Path.home() / "kb_via_env.db"
+    assert resolve_db_path(Path("~/kb_via_cli.db")) == Path.home() / "kb_via_cli.db"
+
+
 # --- get_connection honors the resolved path (server path) ----------------------
 
 
