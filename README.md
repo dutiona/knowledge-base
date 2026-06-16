@@ -213,17 +213,46 @@ reads `KNOWLEDGE_BASE_DB`. Key tables:
 - `folder_summaries` / `folder_summaries_vec` — folder-level semantic embeddings
 - `prediction_errors` — stale result detection
 - `jobs` — background job tracking
-- `config` — key-value store (embedding model, LLM settings)
+- `config` — key-value store (embedding model, LLM settings, **schema version**)
+
+### Upgrading / migrating the database
+
+The database carries a `schema_version` (a `config` row). On open, the code
+**validates** the version and refuses to operate on a DB that is newer than the
+running build or behind it (telling you to migrate). Two operator commands —
+both offline, embedding-free, and safe to use in a CI/release gate:
+
+```bash
+# Report live vs current schema version. Exit code 0 = match, non-zero = mismatch.
+knowledge-base-ingest --db <path> schema
+
+# Dry run: list pending migrations without touching the DB (non-zero unless current).
+knowledge-base-ingest --db <path> migrate --check
+
+# Apply pending migrations. A fresh DB is initialized to the current version;
+# an existing DB is BACKED UP first (see below), then migrated.
+knowledge-base-ingest --db <path> migrate
+```
+
+- **Stop the MCP server before `migrate`.** The server caches its connection and
+  would keep serving the old schema (and may contend for the write lock) until
+  restarted. `schema` / `migrate --check` are read-only and safe against a
+  running server.
+- **Backups.** `migrate` writes a timestamped copy to `<db dir>/backups/` (or
+  `--backup-dir`) via `VACUUM INTO` before mutating. If a migration fails, the
+  backup is **restored automatically** and the command aborts non-zero. Backups
+  are not auto-pruned — clean them up yourself.
 
 ### Config keys
 
-| Key            | Default       | Description                                                                |
-| -------------- | ------------- | -------------------------------------------------------------------------- |
-| `embed_model`  | `bge-m3`      | Ollama embedding model name                                                |
-| `embed_dim`    | `1024`        | Embedding vector dimension                                                 |
-| `llm_provider` | `ollama`      | LLM provider: `ollama` (native API) or `openai_compat` (OpenAI-compatible) |
-| `llm_model`    | `qwen3.5:27b` | Model name passed to the provider                                          |
-| `llm_base_url` | _(unset)_     | Base URL for `openai_compat` provider (e.g. `http://192.168.1.41:1234`)    |
+| Key              | Default       | Description                                                                |
+| ---------------- | ------------- | -------------------------------------------------------------------------- |
+| `embed_model`    | `bge-m3`      | Ollama embedding model name                                                |
+| `embed_dim`      | `1024`        | Embedding vector dimension                                                 |
+| `llm_provider`   | `ollama`      | LLM provider: `ollama` (native API) or `openai_compat` (OpenAI-compatible) |
+| `llm_model`      | `qwen3.5:27b` | Model name passed to the provider                                          |
+| `llm_base_url`   | _(unset)_     | Base URL for `openai_compat` provider (e.g. `http://192.168.1.41:1234`)    |
+| `schema_version` | `1`           | Applied DB schema version (managed by `migrate`; see Upgrading above)      |
 
 ## Limitations
 
