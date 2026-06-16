@@ -149,6 +149,25 @@ def test_migrate_v1_is_noop(tmp_path):
     assert rep["applied"] == []
 
 
+def test_migrate_aborts_when_db_busy(tmp_path, monkeypatch):  # E (offline guard)
+    db = tmp_path / "k.db"
+    conn = get_connection(db)
+    init_schema(conn)
+    monkeypatch.setattr(m, "CURRENT_SCHEMA_VERSION", 2)
+    monkeypatch.setattr(m, "_MIGRATIONS", {2: (lambda c: None, False)})
+    conn.execute("PRAGMA busy_timeout=0")  # don't wait on the lock
+    holder = sqlite3.connect(db)  # a second "server" holds a write lock
+    holder.execute("BEGIN IMMEDIATE")
+    holder.execute("INSERT INTO config VALUES ('lockx', 'y')")
+    try:
+        with pytest.raises(KnowledgeBaseError, match="busy"):
+            m.migrate(conn)
+        assert not (tmp_path / "backups").exists()  # aborted before any backup
+    finally:
+        holder.rollback()
+        holder.close()
+
+
 def test_failed_migration_restores_backup(tmp_path, monkeypatch):  # AC-4 keystone
     db = tmp_path / "k.db"
     conn = get_connection(db)

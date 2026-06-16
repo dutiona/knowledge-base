@@ -165,6 +165,24 @@ def test_cli_migrate_check_pending_exit_nonzero(tmp_path, monkeypatch):
     assert not (tmp_path / "backups").exists()  # dry run — no mutation
 
 
+def test_cli_migrate_backs_up_legacy_unversioned(tmp_path):
+    # An existing DB with a `config` table but no schema_version row (legacy) is
+    # backed up before the convergent bootstrap build.
+    import sqlite3
+
+    import knowledge_base.migrate as mm
+
+    db = tmp_path / "k.db"
+    _bootstrap(db)
+    c = sqlite3.connect(db)
+    c.execute("DELETE FROM config WHERE key='schema_version'")
+    c.commit()
+    c.close()
+    main(["--db", str(db), "--quiet", "migrate"])  # legacy → backup + re-stamp
+    assert (tmp_path / "backups").exists(), "legacy bootstrap must take a backup"
+    assert mm.peek_schema_version(db) == 1  # re-stamped
+
+
 def test_build_parser_re_embed_requires_model_and_dim():
     parser = build_parser()
     with pytest.raises(SystemExit):

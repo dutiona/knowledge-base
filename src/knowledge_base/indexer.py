@@ -225,10 +225,25 @@ def cmd_migrate(args: argparse.Namespace) -> None:
     # Fail fast (not a 30s stall) if a forgotten-running server holds the lock.
     conn.execute("PRAGMA busy_timeout=5000")
     if _mig.get_schema_version(conn) is None:
-        # Fresh / unversioned DB: bootstrap the baseline (builds + stamps v1).
+        # Fresh / unversioned DB: bootstrap the baseline (builds + stamps). A
+        # brand-new empty DB (no `config` table) has nothing to lose; an existing
+        # unversioned/legacy DB (config present, data possible) is backed up first
+        # so a failed convergent build is recoverable.
+        backup_path = None
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='config'"
+        ).fetchone():
+            bp = _mig.resolve_backup_path(conn)
+            if bp is not None:
+                backup_path = _mig.backup_database(conn, bp)
         init_schema(conn)
         _print(
-            {"bootstrapped": True, "schema_version": current, "applied": []},
+            {
+                "bootstrapped": True,
+                "schema_version": current,
+                "backup_path": str(backup_path) if backup_path else None,
+                "applied": [],
+            },
             quiet=args.quiet,
         )
         return

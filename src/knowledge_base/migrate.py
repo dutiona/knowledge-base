@@ -71,9 +71,13 @@ def get_schema_version(conn: sqlite3.Connection) -> int | None:
         row = conn.execute(
             f"SELECT value FROM config WHERE key = '{SCHEMA_VERSION_KEY}'"
         ).fetchone()
-    except sqlite3.OperationalError:
-        # No `config` table yet — treat as unversioned.
-        return None
+    except sqlite3.OperationalError as exc:
+        # Only a MISSING config table means "unversioned". A locked/busy DB also
+        # raises OperationalError — misreading that as fresh would trigger a
+        # destructive bootstrap. Re-raise anything that isn't "no such table".
+        if "no such table" in str(exc):
+            return None
+        raise
     if row is None:
         return None
     raw = row[0]
@@ -151,8 +155,9 @@ def backup_database(conn: sqlite3.Connection, backup_path: Path) -> Path:
     backup_path.unlink(missing_ok=True)
     conn.execute(f"VACUUM INTO {_sqlite_str_literal(tmp)}")
 
-    # Verify the backup opens clean before we trust it.
-    check = sqlite3.connect(f"file:{tmp.as_posix()}?mode=ro", uri=True)
+    # Verify the backup opens clean before we trust it. Non-URI connect to a temp
+    # file we own — avoids a `?`/`#` in the path colliding with URI query syntax.
+    check = sqlite3.connect(str(tmp))
     try:
         ok = check.execute("PRAGMA integrity_check").fetchone()
         if not ok or ok[0] != "ok":
@@ -172,22 +177,35 @@ def restore_backup(db_path: Path, backup_path: Path) -> None:
     migration on next open), then copies the backup to a temp name and
     ``os.replace``-s it into place (never a delete-then-copy window).
     """
-    for sidecar in ("-wal", "-shm", "-journal"):
-        Path(str(db_path) + sidecar).unlink(missing_ok=True)
+    # Copy FIRST: a slow copy that fails (e.g. disk full) leaves the live DB and
+    # its sidecars untouched and fully recoverable. Only once the copy succeeds
+    # do we delete the stale sidecars and atomically swap the restored file in.
     tmp = db_path.with_name(db_path.name + ".restoring")
     shutil.copyfile(backup_path, tmp)
+    for sidecar in ("-wal", "-shm", "-journal"):
+        Path(str(db_path) + sidecar).unlink(missing_ok=True)
     os.replace(tmp, db_path)
 
 
 # --- the migrate orchestrator --------------------------------------------------
 
 
-def migrate(
-    conn: sqlite3.Connection,
-    *,
-    backup_dir: Path | None = None,
-    dry_run: bool = False,
-) -> dict:
+def _assert_exclusive(conn: sqlite3.Connection) -> None:
+    """Fail fast (rather than risk a split-brain restore) if another connection —
+    e.g. a running MCP server — holds the DB. `BEGIN EXCLUSIVE` cannot be acquired
+    while anyone else is reading/writing; we immediately release it (this is a
+    point-in-time guard, paired with the documented stop-the-server precondition,
+    not a held lock across the VACUUM-INTO backup)."""
+    try:
+        conn.execute("BEGIN EXCLUSIVE")
+        conn.execute("ROLLBACK")
+    except sqlite3.OperationalError as exc:
+        raise KnowledgeBaseError(
+            f"database is busy ({exc}); stop the MCP server before migrating"
+        ) from exc
+
+
+def migrate(conn: sqlite3.Connection, *, backup_dir: Path | None = None) -> dict:
     """Apply pending version-gated migrations with backup + restore-on-fail.
 
     Assumes a **stamped** DB (the CLI bootstraps a fresh DB via ``init_schema``
@@ -195,7 +213,8 @@ def migrate(
     entry in an explicit transaction (``isolation_level=None`` + ``BEGIN
     IMMEDIATE`` — Python's sqlite3 otherwise implicit-commits before DDL,
     defeating atomicity), stamping the version **inside** the same transaction.
-    On any failure: rollback → close → restore the backup → re-raise.
+    On any per-step failure: rollback → re-enable FK → re-raise → close → restore
+    the backup → re-raise.
     """
     current = CURRENT_SCHEMA_VERSION
     live = get_schema_version(conn)
@@ -216,17 +235,19 @@ def migrate(
         "backup_path": None,
         "applied": [],
     }
-    if dry_run or not pending:
+    if not pending:
         return report
+
+    db_path = _main_db_path(conn)
+    orig_iso = conn.isolation_level
+    conn.isolation_level = None  # autocommit; we manage transactions explicitly
+    _assert_exclusive(conn)  # offline-migrate guard (before any mutation)
 
     backup_path = resolve_backup_path(conn, backup_dir)
     if backup_path is not None:
         backup_database(conn, backup_path)
         report["backup_path"] = str(backup_path)
-    db_path = _main_db_path(conn)
 
-    orig_iso = conn.isolation_level
-    conn.isolation_level = None  # autocommit; we manage transactions explicitly
     try:
         for target in pending:
             fn, disable_fk = _MIGRATIONS[target]
@@ -243,16 +264,24 @@ def migrate(
                         )
                 set_schema_version(conn, target)
                 conn.execute("COMMIT")
-            finally:
+            except Exception:
+                # Roll back FIRST (so the FK re-enable below is not silently
+                # ignored mid-transaction), then re-enable FK, then propagate.
+                try:
+                    conn.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
                 if disable_fk:
                     conn.execute("PRAGMA foreign_keys=ON")
+                raise
+            if disable_fk:
+                conn.execute("PRAGMA foreign_keys=ON")
             report["applied"].append(target)
     except Exception:
         try:
-            conn.execute("ROLLBACK")
+            conn.close()  # guarded: a close error must not bypass the restore
         except sqlite3.Error:
             pass
-        conn.close()
         if backup_path is not None and db_path is not None:
             restore_backup(db_path, backup_path)
         raise
@@ -270,7 +299,9 @@ def peek_schema_version(db_path: Path) -> int | None:
     path = Path(db_path)
     if not path.is_file():
         return None
-    conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    # `as_uri()` percent-encodes the path, so a literal ? or # in it cannot
+    # collide with the URI query. Read-only: never creates or mutates the DB.
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     try:
         return get_schema_version(conn)
     finally:
