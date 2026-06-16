@@ -36,5 +36,6 @@ tmp/
 
 .claude
 .serena
-.worktreesscripts/.pm-ids.env
+.worktrees/
+scripts/.pm-ids.env
 scripts/mapping.tsv
