@@ -15,7 +15,9 @@ dependencies = [
     "numpy>=1.26",
     "pillow>=10.0",
     "pymupdf>=1.27.1",
-    "pymupdf4llm>=1.27.2,<2",
+    # 1.27.2.2+ drop ![](…) image refs from to_markdown(write_images), breaking
+    # vision figure extraction (#465); strategic unpin tracked in #466.
+    "pymupdf4llm>=1.27.2,<1.27.2.2",
     "sqlite-vec>=0.1.6",
     "trafilatura>=2.0.0",
 ]
