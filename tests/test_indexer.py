@@ -401,3 +401,40 @@ def test_main_integration(tmp_path, capsys):
     conn = get_connection(db_path)
     count = conn.execute("SELECT COUNT(*) AS n FROM chunks").fetchone()["n"]
     assert count >= 1
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_main_db_path_flag(tmp_path):
+    # #449: the canonical --db-path flag selects the database.
+    db_path = tmp_path / "via_flag.db"
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Test\n\nContent.\n")
+
+    main(["--db-path", str(db_path), "--quiet", "ingest", str(md_file)])
+
+    conn = get_connection(db_path)
+    try:
+        count = conn.execute("SELECT COUNT(*) AS n FROM chunks").fetchone()["n"]
+        assert count >= 1
+    finally:
+        conn.close()
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_main_env_var_resolves(tmp_path, monkeypatch):
+    # #449: with no flag, $KNOWLEDGE_BASE_DB selects the database.
+    db_path = tmp_path / "via_env.db"
+    monkeypatch.setenv("KNOWLEDGE_BASE_DB", str(db_path))
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Test\n\nContent.\n")
+
+    main(["--quiet", "ingest", str(md_file)])
+
+    conn = get_connection(db_path)  # explicit path ignores env, reads the file
+    try:
+        count = conn.execute("SELECT COUNT(*) AS n FROM chunks").fetchone()["n"]
+        assert count >= 1
+    finally:
+        conn.close()

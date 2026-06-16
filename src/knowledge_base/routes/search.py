@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastmcp import FastMCP
 
 from .._conn import _get_conn
-from ..db import DEFAULT_DB_PATH, co_occurrence_pairs
+from ..db import co_occurrence_pairs
 from ..embed_swap import get_embed_config
 from ..exceptions import KnowledgeBaseError
 from ..prediction_errors import detect_and_log, get_prediction_error_count
@@ -131,7 +132,13 @@ def status() -> str:
         " FROM chunks GROUP BY source_uri ORDER BY created_at DESC LIMIT 5"
     ).fetchall()
 
-    db_size_bytes = DEFAULT_DB_PATH.stat().st_size if DEFAULT_DB_PATH.exists() else 0
+    # Report the DB the connection actually opened (env/CLI-resolved, #449), not
+    # the hardcoded default — they differ when KNOWLEDGE_BASE_DB is set.
+    db_main = next(
+        (r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"), ""
+    )
+    db_path = Path(db_main) if db_main else None
+    db_size_bytes = db_path.stat().st_size if db_path and db_path.exists() else 0
 
     job_counts = {}
     for row in conn.execute(
@@ -175,6 +182,6 @@ def status() -> str:
                 for row in recent
             ],
             "db_size_mb": round(db_size_bytes / (1024 * 1024), 2),
-            "db_path": str(DEFAULT_DB_PATH),
+            "db_path": str(db_path) if db_path else "",
         }
     )
