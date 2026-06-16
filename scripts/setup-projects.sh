@@ -141,7 +141,7 @@ cat >&2 <<'REMIND'
   │ 1. KB — Main → Settings → Status field → + add option "In Review"          │
   │    (place between "In Progress" and "Done").                               │
   │ 2. Build the saved views/boards per the view-spec sheet in                 │
-  │    docs/plans/2026-06-01-github-project-management.md §5 (Phase 4).         │
+  │    docs/design/project-management.md (saved-views spec).                   │
   │ 3. Create classic PAT (scopes: repo, project) →                            │
   │    gh secret set KB_PROJECT_TOKEN -R OWNER/REPO                            │
   └────────────────────────────────────────────────────────────────────────────┘

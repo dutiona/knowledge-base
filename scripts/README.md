@@ -2,7 +2,6 @@
 
 Idempotent `gh`-CLI orchestration for the knowledge-base project-management
 system. Design: [../docs/design/project-management.md](../docs/design/project-management.md).
-Plan: [../docs/plans/2026-06-01-github-project-management.md](../docs/plans/2026-06-01-github-project-management.md).
 
 Every mutating script supports **`--dry-run`** (print intended `gh` calls,
 change nothing) and is safe to re-run.
@@ -39,7 +38,7 @@ not human-readable names.
 
 1. **In Review status** — KB — Main → Settings → Status → add option *In Review*
    (between *In Progress* and *Done*). `gh` has no `field-edit`.
-2. **Views/boards** — build per the view-spec sheet (plan §5). `gh` has no
+2. **Views/boards** — build per the saved-views spec in `../docs/design/project-management.md`. `gh` has no
    `view-create`.
 3. **PAT** — classic token, scopes `repo` + `project`:
    `gh secret set KB_PROJECT_TOKEN -R dutiona/knowledge-base`. The workflow
