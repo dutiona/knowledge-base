@@ -28,10 +28,9 @@ establishes priority, ordering, dependency chains, and parallelism opportunities
 >
 > **Notes 31-32 Integration (2026-04-13):** Six new roadmap gaps derived from
 > landscape review #32 (April week 2), filed as Phase 3I. Two P0 with proposed
-> ADRs: KB-P0-A LongTracer Phase 2 ingestion gate (#359,
-> [docs/adr/phase2-longtracer-gate.md](docs/adr/phase2-longtracer-gate.md)) and
-> KB-P0-B benchmark strategy pivot to MemArch-Bench-first (#360,
-> [docs/adr/phase2-benchmark-memarch-bench-first.md](docs/adr/phase2-benchmark-memarch-bench-first.md)).
+> ADRs (full text archived in their tracking issues): KB-P0-A LongTracer
+> Phase 2 ingestion gate (#359) and KB-P0-B benchmark strategy pivot to
+> MemArch-Bench-first (#360).
 > Four P1: KB-P1-C Embedding Adapters V2 (#361, research), KB-P1-D sem
 > structural-hash ingest (#362, research), KB-P1-E compile-upfront positioning
 > (#363, docs), KB-P1-F paragraph-level provenance (#364, depends on #325).
@@ -625,12 +624,12 @@ Two P0 items with proposed ADRs, four P1 items (two require research before
 an ADR is drafted).
 
 ```text
-P0 (critical, ADRs drafted)
+P0 (critical, ADRs archived in tracking issues)
   #359 KB-P0-A LongTracer Phase 2 ingestion quality gate
-       → docs/adr/phase2-longtracer-gate.md
+       → ADR archived in #359
        → independent, CPU-only, default-off
   #360 KB-P0-B pivot verification to MemArch-Bench-first
-       → docs/adr/phase2-benchmark-memarch-bench-first.md
+       → ADR archived in #360
        → gated on #250 for test_retrieval_quality.py
 
 P1 (research / docs)
@@ -718,7 +717,7 @@ connected.
 ## Verification
 
 > Added 2026-04-13 per KB-P0-B (notes 31-32 integration).
-> Full rationale: [docs/adr/phase2-benchmark-memarch-bench-first.md](docs/adr/phase2-benchmark-memarch-bench-first.md).
+> Full rationale: ADR archived in #360.
 
 **Primary instrument: MemArch-Bench (KB slice).** Knowledge-base's
 verification plan is property-test-first, not benchmark-score-first. The
