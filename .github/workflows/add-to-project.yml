@@ -19,7 +19,7 @@ jobs:
   add-to-main:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/add-to-project@v1
+      - uses: actions/add-to-project@v1.0.2
         with:
           project-url: https://github.com/users/dutiona/projects/7
           github-token: ${{ secrets.KB_PROJECT_TOKEN }}
@@ -36,7 +36,7 @@ jobs:
         (contains(github.event.pull_request.labels.*.name, 'type:bug') ||
          contains(github.event.pull_request.labels.*.name, 'type:security')))
     steps:
-      - uses: actions/add-to-project@v1
+      - uses: actions/add-to-project@v1.0.2
         with:
           project-url: https://github.com/users/dutiona/projects/9
           github-token: ${{ secrets.KB_PROJECT_TOKEN }}
@@ -51,7 +51,7 @@ jobs:
         (contains(github.event.pull_request.labels.*.name, 'type:research') ||
          contains(github.event.pull_request.labels.*.name, 'type:eval')))
     steps:
-      - uses: actions/add-to-project@v1
+      - uses: actions/add-to-project@v1.0.2
         with:
           project-url: https://github.com/users/dutiona/projects/10
           github-token: ${{ secrets.KB_PROJECT_TOKEN }}
