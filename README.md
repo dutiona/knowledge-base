@@ -195,7 +195,10 @@ uv run pytest tests/ -q
 
 ## Database
 
-The index is stored at `~/.local/share/knowledge-base/knowledge.db` by default. Key tables:
+The index is stored at `~/.local/share/knowledge-base/knowledge.db` by default. Override
+the location with (highest precedence first) the `--db-path` CLI flag, the
+`KNOWLEDGE_BASE_DB` environment variable, or fall back to the default — the MCP server
+reads `KNOWLEDGE_BASE_DB`. Key tables:
 
 - `chunks` — document content with content-hash deduplication
 - `chunks_fts` — FTS5 full-text index (auto-synced via triggers)

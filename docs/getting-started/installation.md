@@ -87,6 +87,15 @@ The SQLite database is created automatically at:
 
 No manual setup required. The schema is initialized on first connection.
 
+To use a different location, set it by precedence (highest first):
+
+1. `--db-path PATH` (the `knowledge-base-ingest` CLI; `--db` is a back-compat alias)
+2. `KNOWLEDGE_BASE_DB=PATH` environment variable (honored by both the CLI and the MCP server)
+3. otherwise the default above
+
+A configured path is used verbatim — its parent directory is created if needed, and
+there is no silent fallback to the default.
+
 ## Optional dependencies
 
 ### Vision model for figure extraction

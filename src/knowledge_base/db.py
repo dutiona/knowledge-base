@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -14,6 +15,7 @@ from .utils import (
 )  # shared vec serialization
 
 __all__ = [
+    "DB_PATH_ENV_VAR",
     "DEFAULT_DB_PATH",
     "DEFAULT_EMBED_DIM",
     "DEFAULT_EMBED_MODEL",
@@ -29,10 +31,33 @@ __all__ = [
     "get_vec_table_name",
     "init_schema",
     "insert_chunk_vec",
+    "resolve_db_path",
     "space_table_name",
 ]
 
 DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "knowledge-base" / "knowledge.db"
+
+#: Environment variable overriding the database path (lower precedence than an
+#: explicit ``--db-path``/argument, higher than :data:`DEFAULT_DB_PATH`).
+DB_PATH_ENV_VAR = "KNOWLEDGE_BASE_DB"
+
+
+def resolve_db_path(cli_path: Path | None = None) -> Path:
+    """Resolve the database path by precedence: ``cli_path`` > ``$KNOWLEDGE_BASE_DB``
+    > :data:`DEFAULT_DB_PATH`.
+
+    An explicit ``cli_path`` or a non-empty env var is honored verbatim — there is
+    no silent fallback to the default that would mask a configured (and possibly
+    not-yet-created) path. An empty/whitespace env var counts as unset.
+    """
+    if cli_path is not None:
+        return cli_path
+    env = os.environ.get(DB_PATH_ENV_VAR)
+    if env and env.strip():
+        return Path(env)
+    return DEFAULT_DB_PATH
+
+
 # Bootstrap defaults for fresh databases. Existing databases read from the
 # config table — these constants are only used during initial schema creation.
 DEFAULT_EMBED_MODEL = "bge-m3"
@@ -150,7 +175,12 @@ def co_occurrence_pairs(conn: sqlite3.Connection, min_sessions: int = 1) -> list
     ]
 
 
-def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
+def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
+    # ``None`` resolves via $KNOWLEDGE_BASE_DB / DEFAULT_DB_PATH (#449), so callers
+    # that don't pass an explicit path (e.g. the MCP server via _conn._get_conn)
+    # honor the configured path. Callers passing a path keep full control.
+    if db_path is None:
+        db_path = resolve_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.enable_load_extension(True)

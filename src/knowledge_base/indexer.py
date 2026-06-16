@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from .db import DEFAULT_DB_PATH, get_connection, init_schema
+from .db import get_connection, init_schema, resolve_db_path
 from .exceptions import KnowledgeBaseError
 
 logger = logging.getLogger(__name__)
@@ -205,10 +205,16 @@ def build_parser() -> argparse.ArgumentParser:
         description="Batch indexing CLI for the knowledge-base.",
     )
     parser.add_argument(
+        "--db-path",
         "--db",
+        dest="db",
         type=Path,
-        default=DEFAULT_DB_PATH,
-        help="Path to the SQLite database (default: %(default)s).",
+        default=None,
+        help=(
+            "Path to the SQLite database. Precedence: this flag > "
+            "$KNOWLEDGE_BASE_DB > the default "
+            "(~/.local/share/knowledge-base/knowledge.db)."
+        ),
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Enable debug logging."
@@ -263,6 +269,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Apply the #449 precedence: explicit --db-path/--db > $KNOWLEDGE_BASE_DB >
+    # default. From here on, args.db is a concrete resolved Path.
+    args.db = resolve_db_path(args.db)
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,
