@@ -4,6 +4,7 @@ import sqlite3
 import struct
 
 from knowledge_base.db import (
+    _migrate_normalize_source_uri,
     co_occurrence_pairs,
     get_connection,
     init_schema,
@@ -515,8 +516,10 @@ def test_migrate_normalize_source_uri(tmp_path):
     )
     conn.commit()
 
-    # Re-run init_schema to trigger migration
-    init_schema(conn)
+    # Run the migration directly (#450: init_schema no longer re-runs the
+    # idempotent builds on an already-versioned DB — it early-returns).
+    _migrate_normalize_source_uri(conn)
+    conn.commit()
 
     chunk_uri = conn.execute(
         "SELECT source_uri FROM chunks WHERE content_hash = 'h1'"

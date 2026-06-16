@@ -9,6 +9,8 @@ from pathlib import Path
 
 import sqlite_vec
 
+from . import migrate as _migrate  # schema-version framework (#450); read attrs live
+from .exceptions import KnowledgeBaseError
 from .utils import (
     ELEMENT_INSERT_EXPR,
     serialize_f32 as _serialize_f32,
@@ -624,6 +626,26 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
+    # --- Validate-then-converge (#450, read-validates split, ME schema.rs:96-114) ---
+    # `_migrate_*` attrs are read live off the module so tests can monkeypatch
+    # CURRENT_SCHEMA_VERSION. None = fresh or legacy-unversioned (build + stamp).
+    current = _migrate.CURRENT_SCHEMA_VERSION
+    version = _migrate.get_schema_version(conn)  # None tolerates a missing config table
+    if version is not None:
+        if version == current:
+            return  # already at the current schema — cheap no-op, no rebuild
+        if version > current:
+            raise KnowledgeBaseError(
+                f"database schema v{version} is newer than this build (v{current}); "
+                "upgrade the code"
+            )
+        # version < current: do NOT auto-migrate on this hot path (per-boot backup
+        # + v2+ chain belongs in the explicit `migrate` command).
+        raise KnowledgeBaseError(
+            f"database schema v{version} is behind v{current}; "
+            "run `knowledge-base-ingest migrate`"
+        )
+
     # --- Create config table first so we can read embed_dim before chunks_vec ---
     conn.execute("""
         CREATE TABLE IF NOT EXISTS config (
@@ -925,3 +947,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_embed_spaces_element_type(conn)
     _migrate_normalize_source_uri(conn)
     _migrate_extraction_source(conn)
+
+    # Stamp the baseline version (#450). Reached only for a fresh/legacy-unversioned
+    # DB (an already-current DB early-returns above); the idempotent builds have
+    # converged it to the v1 contract.
+    _migrate.set_schema_version(conn, _migrate.CURRENT_SCHEMA_VERSION)
+    conn.commit()
