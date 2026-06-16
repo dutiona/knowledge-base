@@ -28,9 +28,6 @@ docs/_build
 # Environment
 .env
 
-# Lock file
-uv.lock
-
 # Eval output
 tmp/
 
