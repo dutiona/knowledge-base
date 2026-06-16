@@ -34,7 +34,8 @@ uv.lock
 # Eval output
 tmp/
 
-.claude
+.claude/*
+!.claude/skills/
 .serena
 .worktrees/
 scripts/.pm-ids.env
