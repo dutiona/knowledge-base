@@ -33,11 +33,7 @@ from knowledge_base.vision import configure_omniparser, extract_figures
 # Constants
 # ---------------------------------------------------------------------------
 
-_OMNIPARSER_PATH = Path(
-    os.environ.get(
-        "OMNIPARSER_PATH", str(Path.home() / ".local" / "opt" / "omniparser")
-    )
-)
+_OMNIPARSER_PATH = Path(os.environ.get("OMNIPARSER_PATH", str(Path.home() / ".local" / "opt" / "omniparser")))
 
 
 def _omniparser_available() -> bool:
@@ -120,9 +116,7 @@ def _make_blank_png(path: Path) -> None:
     """Create a solid-color PNG with no text — OmniParser should find nothing."""
     doc = fitz.open()
     page = doc.new_page(width=200, height=200)
-    page.draw_rect(
-        fitz.Rect(0, 0, 200, 200), color=(0.9, 0.9, 0.9), fill=(0.9, 0.9, 0.9)
-    )
+    page.draw_rect(fitz.Rect(0, 0, 200, 200), color=(0.9, 0.9, 0.9), fill=(0.9, 0.9, 0.9))
     pix = page.get_pixmap(dpi=72)
     pix.save(str(path))
     doc.close()
@@ -162,23 +156,17 @@ def _setup_paper(tmp_path: Path, pdf_path: str) -> tuple:
         "VALUES ('abs_hash', 'abstract text', 'pdf', ?, 0)",
         (pdf_path,),
     )
-    chunk_id = conn.execute(
-        "SELECT id FROM chunks WHERE content_hash = 'abs_hash'"
-    ).fetchone()["id"]
+    chunk_id = conn.execute("SELECT id FROM chunks WHERE content_hash = 'abs_hash'").fetchone()["id"]
     conn.execute(
         "INSERT INTO papers (title, abstract_chunk_id) VALUES ('Test Paper', ?)",
         (chunk_id,),
     )
-    paper_id = conn.execute(
-        "SELECT id FROM papers WHERE title = 'Test Paper'"
-    ).fetchone()["id"]
+    paper_id = conn.execute("SELECT id FROM papers WHERE title = 'Test Paper'").fetchone()["id"]
     conn.commit()
     return conn, paper_id
 
 
-def _setup_extracted_image(
-    conn, source_uri: str, image_dir: Path, image_name: str, image_path: Path
-) -> None:
+def _setup_extracted_image(conn, source_uri: str, image_dir: Path, image_name: str, image_path: Path) -> None:
     """Register an extracted image in the DB (simulating pymupdf4llm ingest).
 
     Creates an ingest chunk referencing the image and a caption, then copies
@@ -216,9 +204,7 @@ def _setup_extracted_image(
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision.pdf_image_dir")
-def test_ocr_section_appears_with_caption_and_description(
-    mock_img_dir, mock_vision, mock_embed, tmp_path
-):
+def test_ocr_section_appears_with_caption_and_description(mock_img_dir, mock_vision, mock_embed, tmp_path):
     """AC-1: [OCR] section appears in figure chunk content alongside [Caption] and [Description]."""
     # Create chart PNG with baked-in text
     chart_png = tmp_path / "chart.png"
@@ -254,9 +240,7 @@ def test_ocr_section_appears_with_caption_and_description(
     assert result["chunks_created"] >= 1
     assert result["omniparser_enriched"] >= 1
 
-    fig_chunk = conn.execute(
-        "SELECT content, metadata FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    fig_chunk = conn.execute("SELECT content, metadata FROM chunks WHERE source_type = 'figure'").fetchone()
     assert fig_chunk is not None
 
     content = fig_chunk["content"]
@@ -270,9 +254,7 @@ def test_ocr_section_appears_with_caption_and_description(
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision.pdf_image_dir")
-def test_enrichment_layers_includes_omniparser(
-    mock_img_dir, mock_vision, mock_embed, tmp_path
-):
+def test_enrichment_layers_includes_omniparser(mock_img_dir, mock_vision, mock_embed, tmp_path):
     """AC-2: enrichment_layers metadata includes "omniparser"."""
     chart_png = tmp_path / "chart.png"
     _make_chart_png(chart_png)
@@ -296,9 +278,7 @@ def test_enrichment_layers_includes_omniparser(
 
     extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
 
-    fig_chunk = conn.execute(
-        "SELECT metadata FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    fig_chunk = conn.execute("SELECT metadata FROM chunks WHERE source_type = 'figure'").fetchone()
     meta = json.loads(fig_chunk["metadata"])
 
     assert "enrichment_layers" in meta
@@ -334,22 +314,16 @@ def test_ocr_source_metadata(mock_img_dir, mock_vision, mock_embed, tmp_path):
 
     extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
 
-    fig_chunk = conn.execute(
-        "SELECT metadata FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    fig_chunk = conn.execute("SELECT metadata FROM chunks WHERE source_type = 'figure'").fetchone()
     meta = json.loads(fig_chunk["metadata"])
 
-    assert meta.get("ocr_source") == "omniparser", (
-        f"Expected ocr_source='omniparser', got: {meta.get('ocr_source')!r}"
-    )
+    assert meta.get("ocr_source") == "omniparser", f"Expected ocr_source='omniparser', got: {meta.get('ocr_source')!r}"
 
 
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision.pdf_image_dir")
-def test_ocr_text_not_in_description_section(
-    mock_img_dir, mock_vision, mock_embed, tmp_path
-):
+def test_ocr_text_not_in_description_section(mock_img_dir, mock_vision, mock_embed, tmp_path):
     """AC-4: OCR text does NOT appear inside [Description] (duplication guard).
 
     The [Description] section should contain only the vision LLM output.
@@ -378,9 +352,7 @@ def test_ocr_text_not_in_description_section(
 
     extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
 
-    fig_chunk = conn.execute(
-        "SELECT content FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    fig_chunk = conn.execute("SELECT content FROM chunks WHERE source_type = 'figure'").fetchone()
     content = fig_chunk["content"]
 
     # Parse sections: extract the text after each marker
@@ -405,9 +377,7 @@ def test_ocr_text_not_in_description_section(
         sections[current_marker] = "\n".join(current_lines).strip()
 
     # [Description] must contain the vision LLM description, not OCR text
-    assert "[Description]" in sections, (
-        f"No [Description] section found in: {content!r}"
-    )
+    assert "[Description]" in sections, f"No [Description] section found in: {content!r}"
     desc_text = sections["[Description]"]
     assert vision_description in desc_text
 
@@ -416,28 +386,20 @@ def test_ocr_text_not_in_description_section(
     # against leaks regardless of formatter wording changes.
     if "[OCR]" in sections:
         ocr_text = sections["[OCR]"]
-        assert "Detected text:" not in desc_text, (
-            f"OCR formatter prefix leaked into [Description]: {desc_text!r}"
-        )
-        assert "Detected elements:" not in desc_text, (
-            f"OCR formatter prefix leaked into [Description]: {desc_text!r}"
-        )
+        assert "Detected text:" not in desc_text, f"OCR formatter prefix leaked into [Description]: {desc_text!r}"
+        assert "Detected elements:" not in desc_text, f"OCR formatter prefix leaked into [Description]: {desc_text!r}"
         # Also check that recognizable OCR tokens from the chart don't
         # appear in the description section (tests the actual invariant,
         # not just the formatter's prefix).
         ocr_tokens = {"Accuracy", "Epochs", "ResNet"}
         leaked = {t for t in ocr_tokens if t in desc_text and t in ocr_text}
-        assert not leaked, (
-            f"OCR tokens {leaked} leaked into [Description]: {desc_text!r}"
-        )
+        assert not leaked, f"OCR tokens {leaked} leaked into [Description]: {desc_text!r}"
 
 
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision.pdf_image_dir")
-def test_no_ocr_section_for_blank_image(
-    mock_img_dir, mock_vision, mock_embed, tmp_path
-):
+def test_no_ocr_section_for_blank_image(mock_img_dir, mock_vision, mock_embed, tmp_path):
     """AC-5: Figures with no baked-in text produce no [OCR] section (graceful empty)."""
     blank_png = tmp_path / "blank.png"
     _make_blank_png(blank_png)
@@ -474,16 +436,12 @@ def test_no_ocr_section_for_blank_image(
     # OmniParser should find nothing on a blank image
     assert result["omniparser_enriched"] == 0
 
-    fig_chunk = conn.execute(
-        "SELECT content, metadata FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    fig_chunk = conn.execute("SELECT content, metadata FROM chunks WHERE source_type = 'figure'").fetchone()
     content = fig_chunk["content"]
     meta = json.loads(fig_chunk["metadata"])
 
     # No [OCR] section should be present
-    assert "[OCR]" not in content, (
-        f"Unexpected [OCR] section for blank image: {content!r}"
-    )
+    assert "[OCR]" not in content, f"Unexpected [OCR] section for blank image: {content!r}"
     # omniparser should NOT be in enrichment_layers
     assert "omniparser" not in meta.get("enrichment_layers", [])
     assert "ocr_source" not in meta

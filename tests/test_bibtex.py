@@ -26,9 +26,7 @@ def test_bibtex_key():
 
 def test_export_bibtex_generated(tmp_path):
     conn = _setup(tmp_path)
-    register_paper(
-        conn, "Attention Is All You Need", ["Vaswani"], 2017, "NeurIPS", "10.1234/att"
-    )
+    register_paper(conn, "Attention Is All You Need", ["Vaswani"], 2017, "NeurIPS", "10.1234/att")
 
     bib = export_bibtex(conn)
     assert "@article{" in bib
@@ -184,14 +182,10 @@ def test_sync_bibtex_different_paper_same_base_key(tmp_path):
 
     bib_path = tmp_path / "refs.bib"
     # Sync first paper
-    p1 = conn.execute(
-        "SELECT id FROM papers WHERE title='First Smith Paper'"
-    ).fetchone()["id"]
+    p1 = conn.execute("SELECT id FROM papers WHERE title='First Smith Paper'").fetchone()["id"]
     sync_bibtex(conn, str(bib_path), paper_ids=[p1])
     # Now sync second paper
-    p2 = conn.execute(
-        "SELECT id FROM papers WHERE title='Second Smith Paper'"
-    ).fetchone()["id"]
+    p2 = conn.execute("SELECT id FROM papers WHERE title='Second Smith Paper'").fetchone()["id"]
     result = sync_bibtex(conn, str(bib_path), paper_ids=[p2])
     assert result["appended"] == 1  # not skipped
     content = bib_path.read_text()

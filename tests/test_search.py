@@ -96,9 +96,7 @@ def test_search_hybrid_uses_keyword_prefilter(tmp_path):
     init_schema(conn)
 
     md = tmp_path / "paper.md"
-    md.write_text(
-        "Rust error handling in async code uses Result types and the ? operator.\n"
-    )
+    md.write_text("Rust error handling in async code uses Result types and the ? operator.\n")
     ingest_file(conn, md)
 
     # With keyword prefilter, a verbose query should still find the doc
@@ -238,9 +236,7 @@ def test_search_explicit_strategy_filter_both_directions(tmp_path):
     assert sem_results[0].source_type == "pdf"
 
     # Explicit mechanical filter
-    mech_results = search(
-        conn, "deep learning", mode="fts", chunk_strategy="mechanical"
-    )
+    mech_results = search(conn, "deep learning", mode="fts", chunk_strategy="mechanical")
     assert len(mech_results) == 1
     assert mech_results[0].source_type == "markdown"
 

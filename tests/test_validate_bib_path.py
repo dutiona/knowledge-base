@@ -48,9 +48,7 @@ def test_export_bibtex_tool_uses_validated_path(tmp_path, monkeypatch):
     # _validate_bib_path returns a *different* resolved path than naive resolution
     # would produce.  If the code discards the return value, it won't write here.
     redirected = tmp_path / "redirected.bib"
-    with patch.object(
-        papers_routes, "_validate_bib_path", return_value=redirected
-    ) as mock:
+    with patch.object(papers_routes, "_validate_bib_path", return_value=redirected) as mock:
         raw_input = str(tmp_path / "original.bib")
         result = json.loads(papers_routes.export_bibtex_tool(output_path=raw_input))
         mock.assert_called_once_with(raw_input)
@@ -77,20 +75,15 @@ def test_sync_bibtex_tool_uses_validated_path(tmp_path, monkeypatch):
     monkeypatch.setattr(papers_routes, "_get_conn", lambda: conn)
 
     redirected = tmp_path / "redirected.bib"
-    with patch.object(
-        papers_routes, "_validate_bib_path", return_value=redirected
-    ) as mock:
+    with patch.object(papers_routes, "_validate_bib_path", return_value=redirected) as mock:
         raw_input = str(tmp_path / "original.bib")
 
         # Also patch sync_bibtex to capture what path it receives
-        with patch.object(
-            papers_routes, "sync_bibtex", return_value={"synced": 1, "skipped": 0}
-        ) as sync_mock:
+        with patch.object(papers_routes, "sync_bibtex", return_value={"synced": 1, "skipped": 0}) as sync_mock:
             papers_routes.sync_bibtex_tool(output_path=raw_input)
             mock.assert_called_once_with(raw_input)
             # sync_bibtex should receive the validated path as a string
             actual_path = sync_mock.call_args[0][1]  # second positional arg
             assert actual_path == str(redirected), (
-                f"sync_bibtex received raw input {actual_path!r} "
-                f"instead of validated path {str(redirected)!r}"
+                f"sync_bibtex received raw input {actual_path!r} instead of validated path {str(redirected)!r}"
             )

@@ -233,8 +233,7 @@ def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> N
     )
     _batched_execute(
         conn,
-        "UPDATE relationships SET evidence_chunk_id = NULL "
-        "WHERE evidence_chunk_id IN ({ph})",
+        "UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({ph})",
         chunk_ids,
     )
 
@@ -243,7 +242,7 @@ def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> N
     for table in ("methods", "datasets", "metrics"):
         _batched_execute(
             conn,
-            f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",
+            f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",  # noqa: S608  # trusted internal identifier, not user input
             chunk_ids,
         )
     _batched_execute(
@@ -313,9 +312,8 @@ def _parse_image_candidates(
             h = int(h_str) if h_str else None
         except ValueError:
             w, h = None, None
-        if w is not None and h is not None:
-            if w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION:
-                continue
+        if w is not None and h is not None and (w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION):
+            continue
 
         if resolved in seen_urls:
             continue
@@ -381,9 +379,7 @@ def _extract_html_images(
     if extra_html_sources:
         seen_urls: set[str] = {url for url, _alt in candidates}
         for extra_html, extra_base in extra_html_sources:
-            extra = _parse_image_candidates(
-                extra_html, extra_base, exclude_urls=seen_urls
-            )
+            extra = _parse_image_candidates(extra_html, extra_base, exclude_urls=seen_urls)
             if extra is None:
                 any_parse_failed = True
                 break
@@ -408,17 +404,13 @@ def _extract_html_images(
 
     for image_url, alt_text in candidates:
         try:
-            with httpx.stream(
-                "GET", image_url, timeout=15.0, follow_redirects=True
-            ) as resp:
+            with httpx.stream("GET", image_url, timeout=15.0, follow_redirects=True) as resp:
                 resp.raise_for_status()
 
                 # Post-redirect SSRF check
                 final_url = str(resp.url)
                 if not _validate_image_url(final_url):
-                    logger.warning(
-                        "SSRF: image redirected to private address %s", final_url
-                    )
+                    logger.warning("SSRF: image redirected to private address %s", final_url)
                     continue
 
                 # Stream with byte counter
@@ -434,9 +426,6 @@ def _extract_html_images(
                         )
                         break
                     chunks.append(chunk)
-                else:
-                    # Loop completed without break — download OK
-                    pass
 
                 if total > _MAX_IMAGE_DOWNLOAD_BYTES:
                     continue
@@ -516,11 +505,9 @@ def _extract_html_images(
 
     # --- Insert new figure chunks ---
     figures_added = 0
-    for idx, ((desc, meta), emb_vec) in enumerate(zip(collected, embeddings)):
+    for idx, ((desc, meta), emb_vec) in enumerate(zip(collected, embeddings, strict=True)):
         chunk_hash = _content_hash(desc)
-        existing = conn.execute(
-            "SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)
-        ).fetchone()
+        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)).fetchone()
         if existing:
             continue
 
@@ -563,8 +550,7 @@ def _get_browser_config(conn: sqlite3.Connection) -> dict | None:
     Returns a dict with mode/endpoint/venv keys, or None when unconfigured.
     """
     rows = conn.execute(
-        "SELECT key, value FROM config "
-        "WHERE key IN ('browser_mode', 'browser_venv', 'browser_endpoint')"
+        "SELECT key, value FROM config WHERE key IN ('browser_mode', 'browser_venv', 'browser_endpoint')"
     ).fetchall()
     config_map = {row["key"]: row["value"] for row in rows}
 
@@ -609,9 +595,7 @@ def configure_browser(
 
     # CDP without venv is an error
     if cdp_endpoint and not venv_path:
-        raise ValidationError(
-            "venv_path is required (playwright Python client must be installed)"
-        )
+        raise ValidationError("venv_path is required (playwright Python client must be installed)")
 
     # Validate venv
     if venv_path:
@@ -626,9 +610,7 @@ def configure_browser(
     if cdp_endpoint:
         parsed = urlparse(cdp_endpoint)
         if parsed.scheme not in ("ws", "wss"):
-            raise ValidationError(
-                f"CDP endpoint must use ws:// or wss://, got {parsed.scheme}://"
-            )
+            raise ValidationError(f"CDP endpoint must use ws:// or wss://, got {parsed.scheme}://")
         mode = "cdp"
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('browser_endpoint', ?)",
@@ -678,7 +660,7 @@ def _render_with_browser(
         cmd.extend(["--cdp", browser_config["endpoint"]])
 
     try:
-        subprocess.run(
+        subprocess.run(  # noqa: S603  # trusted argv, no shell; url passed as single argv element, scheme validated in render script
             cmd,
             timeout=timeout,
             capture_output=True,
@@ -704,11 +686,7 @@ def _render_with_browser(
     html = html_path.read_text(encoding="utf-8")
     # Final URL may differ from input after redirects or client-side navigation
     final_url_path = tmpdir / "final_url.txt"
-    final_url = (
-        final_url_path.read_text(encoding="utf-8").strip()
-        if final_url_path.exists()
-        else None
-    )
+    final_url = final_url_path.read_text(encoding="utf-8").strip() if final_url_path.exists() else None
     # Per-element captures (Phase 3, #132)
     element_captures: list[dict] = []
     elements_json_path = tmpdir / "elements.json"
@@ -790,9 +768,7 @@ def _extract_web_figures(
     try:
         figures = _vision_call(b64, prompt, base_url=base_url, model=model)
     except Exception:
-        logger.warning(
-            "Vision call failed for web screenshot %s", source_url, exc_info=True
-        )
+        logger.warning("Vision call failed for web screenshot %s", source_url, exc_info=True)
         return 0
 
     if not figures:
@@ -803,9 +779,7 @@ def _extract_web_figures(
     omni_elements: list[dict] | None = None
     if omniparser_path:
         server_url = _resolve_omniparser_server_url(conn, omniparser_path)
-        omni_result = _run_omniparser(
-            screenshot_path, omniparser_path, server_url=server_url
-        )
+        omni_result = _run_omniparser(screenshot_path, omniparser_path, server_url=server_url)
         if omni_result and omni_result.get("elements"):
             omni_elements = omni_result["elements"]
 
@@ -833,8 +807,7 @@ def _extract_web_figures(
     old_fig_ids = [
         r["id"]
         for r in conn.execute(
-            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' "
-            "AND chunk_index < ?",
+            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index < ?",
             (source_url, _WEB_IMAGE_CHUNK_INDEX_START),
         ).fetchall()
     ]
@@ -845,11 +818,9 @@ def _extract_web_figures(
 
     figures_added = 0
 
-    for idx, (fig, desc, emb_vec) in enumerate(zip(valid_figures, texts, embeddings)):
+    for idx, (fig, desc, emb_vec) in enumerate(zip(valid_figures, texts, embeddings, strict=True)):
         chunk_hash = _content_hash(desc)
-        existing = conn.execute(
-            "SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)
-        ).fetchone()
+        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)).fetchone()
         if existing:
             continue
 
@@ -974,8 +945,7 @@ def _extract_element_captures(
     old_ids = [
         r["id"]
         for r in conn.execute(
-            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' "
-            "AND chunk_index >= ?",
+            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index >= ?",
             (source_url, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START),
         ).fetchall()
     ]
@@ -985,11 +955,9 @@ def _extract_element_captures(
         _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
 
     figures_added = 0
-    for (desc, meta, cap_idx), emb_vec in zip(collected, embeddings):
+    for (desc, meta, cap_idx), emb_vec in zip(collected, embeddings, strict=True):
         chunk_hash = _content_hash(desc)
-        existing = conn.execute(
-            "SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)
-        ).fetchone()
+        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)).fetchone()
         if existing:
             continue
 
@@ -1067,15 +1035,11 @@ def ingest_url(
     """
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_URL_SCHEMES:
-        raise ValidationError(
-            f"URL scheme must be http or https, got: {parsed.scheme!r}"
-        )
+        raise ValidationError(f"URL scheme must be http or https, got: {parsed.scheme!r}")
     if not parsed.hostname:
         raise ValidationError("URL must include a hostname")
     if is_private_ip(parsed.hostname):
-        raise ValidationError(
-            f"URL points to a private/internal address: {parsed.hostname}"
-        )
+        raise ValidationError(f"URL points to a private/internal address: {parsed.hostname}")
 
     # SSRF defense: pre-fetch check blocks direct requests to private IPs.
     # Post-redirect check below prevents processing data from redirect-based SSRF.
@@ -1090,9 +1054,7 @@ def ingest_url(
     # Validate post-redirect URL — prevents processing data from internal hosts
     final_host = urlparse(str(response.url)).hostname
     if final_host and is_private_ip(final_host):
-        raise ValidationError(
-            f"URL redirected to a private/internal address: {final_host}"
-        )
+        raise ValidationError(f"URL redirected to a private/internal address: {final_host}")
 
     html = response.text
     text = trafilatura.extract(html, include_links=False, include_tables=True) or ""
@@ -1146,9 +1108,7 @@ def ingest_url(
                     screenshot = render_result.get("screenshot_path")
                     if screenshot and screenshot.exists():
                         try:
-                            figures_extracted = _extract_web_figures(
-                                conn, url, screenshot
-                            )
+                            figures_extracted = _extract_web_figures(conn, url, screenshot)
                         except Exception:
                             logger.warning(
                                 "Figure extraction failed for %s",
@@ -1161,9 +1121,7 @@ def ingest_url(
                     element_captures = render_result.get("element_captures")
                     if element_captures:
                         try:
-                            figures_extracted += _extract_element_captures(
-                                conn, url, element_captures
-                            )
+                            figures_extracted += _extract_element_captures(conn, url, element_captures)
                         except Exception:
                             logger.warning(
                                 "Element capture extraction failed for %s",
@@ -1217,9 +1175,7 @@ def ingest_url(
     meta_json = json.dumps({"title": extracted_title} if extracted_title else {})
     for i, chunk in enumerate(chunks):
         h = _content_hash(chunk)
-        existing = conn.execute(
-            "SELECT id FROM chunks WHERE content_hash = ?", (h,)
-        ).fetchone()
+        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
         if existing:
             if session_id is not None:
                 deferred_session_links.append(existing["id"])
@@ -1235,7 +1191,7 @@ def ingest_url(
     texts_to_embed = [c[1] for c in new_chunks]
     embeddings = _embed_with_config(conn, texts_to_embed)
 
-    for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings):
+    for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings, strict=True):
         _insert_chunk(
             conn,
             content_hash=chunk_hash,

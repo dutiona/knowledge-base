@@ -14,7 +14,7 @@ def _spearman_rho(ranks_a: list[int], ranks_b: list[int]) -> float:
     n = len(ranks_a)
     if n < 2:
         return 0.0
-    d_squared = sum((a - b) ** 2 for a, b in zip(ranks_a, ranks_b))
+    d_squared = sum((a - b) ** 2 for a, b in zip(ranks_a, ranks_b, strict=True))
     return 1 - (6 * d_squared) / (n * (n**2 - 1))
 
 
@@ -42,10 +42,8 @@ def compare_spaces(
 
     # Overlap@K — denominator avoids understating on small result sets
     denom = min(top_k, len(results_a), len(results_b))
-    if denom == 0:
-        overlap_at_k = 1.0 if len(results_a) == 0 and len(results_b) == 0 else 0.0
-    else:
-        overlap_at_k = len(common) / denom
+    both_empty = len(results_a) == 0 and len(results_b) == 0
+    overlap_at_k = (1.0 if both_empty else 0.0) if denom == 0 else len(common) / denom
 
     # Jaccard
     jaccard = len(common) / len(union) if union else 0.0

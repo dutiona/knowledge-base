@@ -45,8 +45,7 @@ def _drain_jobs(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         row = conn.execute(
-            f"SELECT COUNT(*) AS n FROM jobs "
-            f"WHERE id IN ({placeholders}) AND status IN ('pending', 'running')",
+            f"SELECT COUNT(*) AS n FROM jobs WHERE id IN ({placeholders}) AND status IN ('pending', 'running')",  # noqa: S608  # placeholders are only '?' marks; values bound via params
             job_ids,
         ).fetchone()
         if row["n"] == 0:
@@ -117,9 +116,7 @@ def cmd_reingest(args: argparse.Namespace) -> None:
     # Post-reingest: invalidate stale "similar" relationships and submit
     # auto_relate jobs for affected papers (mirrors routes/ingestion.py:83-99).
     source_uri = p.as_posix()
-    affected = conn.execute(
-        "SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)
-    ).fetchall()
+    affected = conn.execute("SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)).fetchall()
     submitted_job_ids: list[int] = []
     if affected:
         for row in affected:
@@ -171,14 +168,10 @@ def cmd_status(args: argparse.Namespace) -> None:
     conn = _get_conn(args.db)
 
     chunks = conn.execute("SELECT COUNT(*) AS n FROM chunks").fetchone()["n"]
-    sources = conn.execute(
-        "SELECT COUNT(DISTINCT source_uri) AS n FROM chunks"
-    ).fetchone()["n"]
+    sources = conn.execute("SELECT COUNT(DISTINCT source_uri) AS n FROM chunks").fetchone()["n"]
     papers = conn.execute("SELECT COUNT(*) AS n FROM papers").fetchone()["n"]
 
-    job_rows = conn.execute(
-        "SELECT status, COUNT(*) AS n FROM jobs GROUP BY status"
-    ).fetchall()
+    job_rows = conn.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status").fetchall()
     jobs = {row["status"]: row["n"] for row in job_rows}
 
     config = get_embed_config(conn)
@@ -232,9 +225,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:
             # existing unversioned/legacy DB (config present, data possible) is
             # backed up first so a failed convergent build is recoverable.
             backup_path = None
-            if conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='config'"
-            ).fetchone():
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='config'").fetchone():
                 bp = _mig.resolve_backup_path(conn)
                 if bp is not None:
                     backup_path = _mig.backup_database(conn, bp)
@@ -278,12 +269,8 @@ def build_parser() -> argparse.ArgumentParser:
             "(~/.local/share/knowledge-base/knowledge.db)."
         ),
     )
-    parser.add_argument(
-        "--verbose", "-v", action="store_true", help="Enable debug logging."
-    )
-    parser.add_argument(
-        "--quiet", "-q", action="store_true", help="Suppress stdout output."
-    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging.")
+    parser.add_argument("--quiet", "-q", action="store_true", help="Suppress stdout output.")
 
     sub = parser.add_subparsers(dest="command")
 
@@ -321,14 +308,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="Show index statistics.")
 
     # -- migrate --------------------------------------------------------------
-    p_migrate = sub.add_parser(
-        "migrate", help="Apply pending schema migrations (backs up the DB first)."
-    )
+    p_migrate = sub.add_parser("migrate", help="Apply pending schema migrations (backs up the DB first).")
     p_migrate.add_argument(
         "--check",
         action="store_true",
-        help="Dry run: report pending migrations without mutating "
-        "(exit non-zero unless already current).",
+        help="Dry run: report pending migrations without mutating (exit non-zero unless already current).",
     )
     p_migrate.add_argument(
         "--backup-dir",

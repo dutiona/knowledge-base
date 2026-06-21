@@ -204,9 +204,7 @@ def test_resolve(tmp_path):
 
     resolve_prediction_error(conn, row["id"])
 
-    row = conn.execute(
-        "SELECT resolved_at FROM prediction_errors WHERE id = ?", (row["id"],)
-    ).fetchone()
+    row = conn.execute("SELECT resolved_at FROM prediction_errors WHERE id = ?", (row["id"],)).fetchone()
     assert row["resolved_at"] is not None
 
 
@@ -300,9 +298,7 @@ def test_threshold_from_config(tmp_path):
     assert get_threshold(conn) == pytest.approx(0.025)
 
     # Override
-    conn.execute(
-        "UPDATE config SET value = '0.05' WHERE key = 'prediction_error_threshold'"
-    )
+    conn.execute("UPDATE config SET value = '0.05' WHERE key = 'prediction_error_threshold'")
     conn.commit()
     assert get_threshold(conn) == pytest.approx(0.05)
 

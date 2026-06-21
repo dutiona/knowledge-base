@@ -28,13 +28,9 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     """
     from .db import DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL, DEFAULT_EMBED_PROVIDER
 
-    model = conn.execute(
-        "SELECT value FROM config WHERE key = 'embed_model'"
-    ).fetchone()
+    model = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
     dim = conn.execute("SELECT value FROM config WHERE key = 'embed_dim'").fetchone()
-    provider = conn.execute(
-        "SELECT value FROM config WHERE key = 'embed_provider'"
-    ).fetchone()
+    provider = conn.execute("SELECT value FROM config WHERE key = 'embed_provider'").fetchone()
     return {
         "model": model["value"] if model else DEFAULT_EMBED_MODEL,
         "dim": int(dim["value"]) if dim else DEFAULT_EMBED_DIM,
@@ -68,25 +64,15 @@ def create_space(
     Creates the registry entry and the backing vec0 virtual table.
     """
     if not _SPACE_NAME_RE.match(name):
-        raise ValueError(
-            f"Space name must be alphanumeric/underscore only, got: {name!r}"
-        )
+        raise ValueError(f"Space name must be alphanumeric/underscore only, got: {name!r}")
     if chunk_strategy not in ("mechanical", "semantic"):
-        raise ValueError(
-            f"chunk_strategy must be 'mechanical' or 'semantic', got: {chunk_strategy!r}"
-        )
+        raise ValueError(f"chunk_strategy must be 'mechanical' or 'semantic', got: {chunk_strategy!r}")
     if matryoshka_base_dim is not None and matryoshka_base_dim <= dim:
-        raise ValueError(
-            f"matryoshka_base_dim ({matryoshka_base_dim}) must be greater than dim ({dim})"
-        )
+        raise ValueError(f"matryoshka_base_dim ({matryoshka_base_dim}) must be greater than dim ({dim})")
     if element_type not in VALID_ELEMENT_TYPES:
-        raise ValueError(
-            f"element_type must be one of {sorted(VALID_ELEMENT_TYPES)}, got: {element_type!r}"
-        )
+        raise ValueError(f"element_type must be one of {sorted(VALID_ELEMENT_TYPES)}, got: {element_type!r}")
 
-    existing = conn.execute(
-        "SELECT 1 FROM embed_spaces WHERE name = ?", (name,)
-    ).fetchone()
+    existing = conn.execute("SELECT 1 FROM embed_spaces WHERE name = ?", (name,)).fetchone()
     if existing:
         raise ValueError(f"Embedding space {name!r} already exists")
 
@@ -142,15 +128,11 @@ def backfill_space(
     batch_size: int = 32,
 ) -> dict:
     """Embed chunks into a populating space. Resumable via ID-cursor."""
-    space = conn.execute(
-        "SELECT * FROM embed_spaces WHERE name = ?", (space_name,)
-    ).fetchone()
+    space = conn.execute("SELECT * FROM embed_spaces WHERE name = ?", (space_name,)).fetchone()
     if space is None:
         raise ValueError(f"Embedding space {space_name!r} not found")
     if space["status"] not in ("populating",):
-        raise ValueError(
-            f"Can only backfill spaces in 'populating' status, got: {space['status']!r}"
-        )
+        raise ValueError(f"Can only backfill spaces in 'populating' status, got: {space['status']!r}")
 
     tbl = space["table_name"]
     model = space["model"]
@@ -186,7 +168,7 @@ def backfill_space(
     last_id = 0
 
     while True:
-        params = base_params_prefix + [last_id, batch_size]
+        params = [*base_params_prefix, last_id, batch_size]
         batch = conn.execute(base_query, params).fetchall()
         if not batch:
             break
@@ -198,17 +180,14 @@ def backfill_space(
         embeddings = embed_provider.embed(texts, model=model, expected_dim=embed_dim)
 
         if matryoshka_base_dim:
-            embeddings = [
-                truncate_embedding(e, dim) if e is not None else None
-                for e in embeddings
-            ]
+            embeddings = [truncate_embedding(e, dim) if e is not None else None for e in embeddings]
 
         insert_expr = ELEMENT_INSERT_EXPR[element_type]
-        for chunk_id, emb_vec in zip(ids, embeddings):
+        for chunk_id, emb_vec in zip(ids, embeddings, strict=True):
             if emb_vec is None:
                 continue
             conn.execute(
-                f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, {insert_expr}, ?)",
+                f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, {insert_expr}, ?)",  # noqa: S608  # trusted internal identifier, not user input
                 (chunk_id, _serialize_f32(emb_vec), chunk_id),
             )
         processed += len(batch)
@@ -233,16 +212,11 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
     Atomically updates status and syncs config table (embed_model,
     embed_dim, embed_provider, chunk_strategy).
     """
-    space = conn.execute(
-        "SELECT * FROM embed_spaces WHERE name = ?", (space_name,)
-    ).fetchone()
+    space = conn.execute("SELECT * FROM embed_spaces WHERE name = ?", (space_name,)).fetchone()
     if space is None:
         raise ValueError(f"Embedding space {space_name!r} not found")
     if space["status"] not in ("populating", "deprecated"):
-        raise ValueError(
-            f"Can only promote spaces in 'populating' or 'deprecated' status, "
-            f"got: {space['status']!r}"
-        )
+        raise ValueError(f"Can only promote spaces in 'populating' or 'deprecated' status, got: {space['status']!r}")
     # Block promotion of incompletely backfilled spaces.
     # Recount live corpus to catch chunks ingested after backfill.
     count = space["chunk_count"] or 0
@@ -338,9 +312,7 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
 
 def deprecate_space(conn: sqlite3.Connection, space_name: str) -> dict:
     """Mark a space as deprecated. Cannot deprecate the active space."""
-    space = conn.execute(
-        "SELECT status FROM embed_spaces WHERE name = ?", (space_name,)
-    ).fetchone()
+    space = conn.execute("SELECT status FROM embed_spaces WHERE name = ?", (space_name,)).fetchone()
     if space is None:
         raise ValueError(f"Embedding space {space_name!r} not found")
     if space["status"] == "active":
@@ -363,9 +335,7 @@ def cleanup_space(conn: sqlite3.Connection, space_name: str) -> dict:
     if space is None:
         raise ValueError(f"Embedding space {space_name!r} not found")
     if space["status"] != "deprecated":
-        raise ValueError(
-            f"Can only clean up deprecated spaces, got: {space['status']!r}"
-        )
+        raise ValueError(f"Can only clean up deprecated spaces, got: {space['status']!r}")
 
     tbl = space["table_name"]
     conn.execute(f"DROP TABLE IF EXISTS [{tbl}]")
@@ -407,10 +377,7 @@ def re_embed(
     summaries. The old space is left as 'deprecated' (not auto-cleaned).
     """
     if matryoshka_base_dim is not None and matryoshka_base_dim <= new_dim:
-        raise ValueError(
-            f"matryoshka_base_dim ({matryoshka_base_dim}) must be greater than "
-            f"new_dim ({new_dim})"
-        )
+        raise ValueError(f"matryoshka_base_dim ({matryoshka_base_dim}) must be greater than new_dim ({new_dim})")
 
     # Resolve provider
     cfg = get_embed_config(conn)
@@ -425,9 +392,7 @@ def re_embed(
     space_name = f"{sanitized}_{new_dim}"
 
     # Avoid collisions
-    existing = conn.execute(
-        "SELECT 1 FROM embed_spaces WHERE name = ?", (space_name,)
-    ).fetchone()
+    existing = conn.execute("SELECT 1 FROM embed_spaces WHERE name = ?", (space_name,)).fetchone()
     if existing:
         space_name = f"{space_name}_{int(time.time())}"
 
@@ -444,9 +409,7 @@ def re_embed(
     promote_space(conn, space_name)
 
     # Count folder summaries re-embedded (done inside promote_space)
-    folders_count = conn.execute(
-        "SELECT COUNT(*) FROM folder_summaries_vec"
-    ).fetchone()[0]
+    folders_count = conn.execute("SELECT COUNT(*) FROM folder_summaries_vec").fetchone()[0]
 
     return {
         "chunks_processed": result["chunks_processed"],
@@ -472,9 +435,7 @@ def _re_embed_folder_summaries(
             +folder_path TEXT
         )
     """)
-    folder_rows = conn.execute(
-        "SELECT folder_path, summary FROM folder_summaries"
-    ).fetchall()
+    folder_rows = conn.execute("SELECT folder_path, summary FROM folder_summaries").fetchall()
     if not folder_rows:
         conn.commit()
         return 0
@@ -486,11 +447,9 @@ def _re_embed_folder_summaries(
     if matryoshka_base_dim:
         from .embeddings import truncate_embedding
 
-        embeddings = [
-            truncate_embedding(e, dim) if e is not None else None for e in embeddings
-        ]
+        embeddings = [truncate_embedding(e, dim) if e is not None else None for e in embeddings]
 
-    for row, emb in zip(folder_rows, embeddings):
+    for row, emb in zip(folder_rows, embeddings, strict=True):
         if emb is None:
             continue
         conn.execute(

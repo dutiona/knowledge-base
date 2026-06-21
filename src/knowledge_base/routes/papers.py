@@ -39,15 +39,11 @@ def _validate_bib_path(output_path: str) -> Path:
     """
     p = Path(output_path).expanduser().resolve()
     if p.suffix.lower() not in _ALLOWED_BIB_EXTENSIONS:
-        raise ValueError(
-            f"output_path must have a .bib or .bibtex extension, got: {p.suffix!r}"
-        )
+        raise ValueError(f"output_path must have a .bib or .bibtex extension, got: {p.suffix!r}")
     home = Path.home().resolve()
     cwd = Path.cwd().resolve()
     if not (p.is_relative_to(home) or p.is_relative_to(cwd)):
-        raise ValueError(
-            f"output_path must be under home ({home}) or cwd ({cwd}), got: {p}"
-        )
+        raise ValueError(f"output_path must be under home ({home}) or cwd ({cwd}), got: {p}")
     return p
 
 
@@ -169,11 +165,7 @@ def record_conclusion_tool(
     """
     conn = _get_conn()
     try:
-        return json.dumps(
-            record_conclusion(
-                conn, claim, confidence, source_chunk_ids, session_context
-            )
-        )
+        return json.dumps(record_conclusion(conn, claim, confidence, source_chunk_ids, session_context))
     except KnowledgeBaseError as e:
         err = {"error": str(e), **e.details}
         return json.dumps(err)
@@ -193,9 +185,7 @@ def get_conclusions_tool(
         include_superseded: Include conclusions that have been superseded (default false).
     """
     conn = _get_conn()
-    return json.dumps(
-        get_conclusions(conn, keyword, min_confidence, include_superseded)
-    )
+    return json.dumps(get_conclusions(conn, keyword, min_confidence, include_superseded))
 
 
 @mcp.tool()

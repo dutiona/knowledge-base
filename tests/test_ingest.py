@@ -1,5 +1,6 @@
 """Tests for ingest pipeline (embeddings mocked)."""
 
+import contextlib
 import json
 import socket
 import subprocess
@@ -78,18 +79,14 @@ def test_ingest_markdown_file(tmp_path):
     init_schema(conn)
 
     md_file = tmp_path / "test.md"
-    md_file.write_text(
-        "# Test\n\nSome content about transformers and attention mechanisms.\n"
-    )
+    md_file.write_text("# Test\n\nSome content about transformers and attention mechanisms.\n")
 
     result = ingest_file(conn, md_file)
     assert result["chunks_added"] >= 1
     assert result["chunks_skipped"] == 0
 
     # Verify FTS works on ingested content
-    rows = conn.execute(
-        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'transformers'"
-    ).fetchall()
+    rows = conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'transformers'").fetchall()
     assert len(rows) >= 1
 
 
@@ -144,16 +141,16 @@ def test_reingest_updates_paper_paths_hash(tmp_path):
 
     register_paper(conn, "Test", source_uri=source_uri)
 
-    old_hash = conn.execute(
-        "SELECT content_hash FROM paper_paths WHERE path = ?", (source_uri,)
-    ).fetchone()["content_hash"]
+    old_hash = conn.execute("SELECT content_hash FROM paper_paths WHERE path = ?", (source_uri,)).fetchone()[
+        "content_hash"
+    ]
 
     md.write_text("Updated content.\n")
     reingest_file(conn, md)
 
-    new_hash = conn.execute(
-        "SELECT content_hash FROM paper_paths WHERE path = ?", (source_uri,)
-    ).fetchone()["content_hash"]
+    new_hash = conn.execute("SELECT content_hash FROM paper_paths WHERE path = ?", (source_uri,)).fetchone()[
+        "content_hash"
+    ]
 
     assert new_hash != old_hash
     assert new_hash is not None
@@ -182,7 +179,7 @@ def test_reingest_replaces_chunks(tmp_path):
 
     # Old content gone from chunks table
     remaining = conn.execute(
-        "SELECT id FROM chunks WHERE id IN ({})".format(",".join("?" * len(old_ids))),
+        "SELECT id FROM chunks WHERE id IN ({})".format(",".join("?" * len(old_ids))),  # noqa: S608  # placeholders are only '?' marks; values bound via params
         old_ids,
     ).fetchall()
     assert len(remaining) == 0
@@ -207,15 +204,11 @@ def test_reingest_updates_fts(tmp_path):
     reingest_file(conn, md)
 
     # Old term should not match
-    old_matches = conn.execute(
-        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'transformers'"
-    ).fetchall()
+    old_matches = conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'transformers'").fetchall()
     assert len(old_matches) == 0
 
     # New term should match
-    new_matches = conn.execute(
-        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'convolutional'"
-    ).fetchall()
+    new_matches = conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'convolutional'").fetchall()
     assert len(new_matches) >= 1
 
 
@@ -264,15 +257,11 @@ def test_reingest_relinks_paper_abstract_chunk(tmp_path):
     papers = get_paper(conn, paper_id=paper["paper_id"])
     assert len(papers) == 1
     new_chunk_id = papers[0]["abstract_chunk_id"]
-    assert new_chunk_id is not None, (
-        "abstract_chunk_id should not be None after reingest"
-    )
+    assert new_chunk_id is not None, "abstract_chunk_id should not be None after reingest"
     assert new_chunk_id != old_chunk_id, "Should point to new chunk, not old one"
 
     # Verify the new chunk actually exists and belongs to the same source_uri
-    chunk = conn.execute(
-        "SELECT * FROM chunks WHERE id = ?", (new_chunk_id,)
-    ).fetchone()
+    chunk = conn.execute("SELECT * FROM chunks WHERE id = ?", (new_chunk_id,)).fetchone()
     assert chunk is not None
     assert chunk["source_uri"] == str(md.resolve())
     assert chunk["chunk_index"] == 0
@@ -394,16 +383,12 @@ def test_reingest_keeps_conclusion_with_remaining_chunk_refs(tmp_path):
     md1 = tmp_path / "evidence1.md"
     md1.write_text("First piece of evidence.\n")
     ingest_file(conn, md1)
-    chunk_id_1 = conn.execute(
-        "SELECT id FROM chunks WHERE source_uri = ?", (str(md1.resolve()),)
-    ).fetchone()["id"]
+    chunk_id_1 = conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (str(md1.resolve()),)).fetchone()["id"]
 
     md2 = tmp_path / "evidence2.md"
     md2.write_text("Second piece of evidence.\n")
     ingest_file(conn, md2)
-    chunk_id_2 = conn.execute(
-        "SELECT id FROM chunks WHERE source_uri = ?", (str(md2.resolve()),)
-    ).fetchone()["id"]
+    chunk_id_2 = conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (str(md2.resolve()),)).fetchone()["id"]
 
     record_conclusion(conn, "Multi-evidence claim", 0.9, [chunk_id_1, chunk_id_2])
 
@@ -461,9 +446,7 @@ def test_cleanup_conclusion_refs_only_touches_affected_rows(tmp_path):
 
     _cleanup_conclusion_refs(conn, [10])
 
-    rows = conn.execute(
-        "SELECT claim, source_chunk_ids FROM conclusions ORDER BY claim"
-    ).fetchall()
+    rows = conn.execute("SELECT claim, source_chunk_ids FROM conclusions ORDER BY claim").fetchall()
     assert len(rows) == 2
     assert json.loads(rows[0]["source_chunk_ids"]) == [20]  # 10 removed
     assert json.loads(rows[1]["source_chunk_ids"]) == [30, 40]  # untouched
@@ -480,9 +463,7 @@ def test_reingest_relinks_method_by_name_search(tmp_path):
     # Create a multi-chunk document where "TransformerXL" appears in chunk 1 (not chunk 0)
     # Each chunk needs to be large enough to be its own chunk
     chunk0_text = "Introduction. " * 80  # ~1100 chars, no method name
-    chunk1_text = (
-        "We propose TransformerXL for sequence modeling. " * 30
-    )  # has the method name
+    chunk1_text = "We propose TransformerXL for sequence modeling. " * 30  # has the method name
     md = tmp_path / "paper.md"
     md.write_text(chunk0_text + chunk1_text)
     ingest_file(conn, md)
@@ -513,15 +494,11 @@ def test_reingest_relinks_method_by_name_search(tmp_path):
         "SELECT chunk_id FROM methods WHERE paper_id = ? AND name = 'TransformerXL'",
         (paper["paper_id"],),
     ).fetchone()
-    assert row["chunk_id"] is not None, (
-        "method chunk_id should not be None after reingest"
-    )
+    assert row["chunk_id"] is not None, "method chunk_id should not be None after reingest"
     assert row["chunk_id"] != old_chunk_id, "Should point to new chunk, not old one"
 
     # Verify the new chunk contains the method name
-    new_chunk = conn.execute(
-        "SELECT content FROM chunks WHERE id = ?", (row["chunk_id"],)
-    ).fetchone()
+    new_chunk = conn.execute("SELECT content FROM chunks WHERE id = ?", (row["chunk_id"],)).fetchone()
     assert "TransformerXL" in new_chunk["content"]
 
 
@@ -560,9 +537,7 @@ def test_reingest_relinks_dataset_by_name_search(tmp_path):
         "SELECT chunk_id FROM datasets WHERE paper_id = ? AND name = 'ImageNet-1K'",
         (paper["paper_id"],),
     ).fetchone()
-    assert row["chunk_id"] is not None, (
-        "dataset chunk_id should not be None after reingest"
-    )
+    assert row["chunk_id"] is not None, "dataset chunk_id should not be None after reingest"
     assert row["chunk_id"] != old_chunk_id
 
 
@@ -601,9 +576,7 @@ def test_reingest_relinks_metric_by_name_search(tmp_path):
         "SELECT chunk_id FROM metrics WHERE paper_id = ? AND name = 'accuracy'",
         (paper["paper_id"],),
     ).fetchone()
-    assert row["chunk_id"] is not None, (
-        "metric chunk_id should not be None after reingest"
-    )
+    assert row["chunk_id"] is not None, "metric chunk_id should not be None after reingest"
     assert row["chunk_id"] != old_chunk_id
 
 
@@ -635,9 +608,7 @@ def test_reingest_relinks_entity_at_chunk_index_zero(tmp_path):
         "SELECT chunk_id FROM methods WHERE paper_id = ? AND name = 'BERT'",
         (paper["paper_id"],),
     ).fetchone()
-    assert row["chunk_id"] is not None, (
-        "method chunk_id should not be None after reingest"
-    )
+    assert row["chunk_id"] is not None, "method chunk_id should not be None after reingest"
     assert row["chunk_id"] != old_chunk_id
 
 
@@ -669,9 +640,7 @@ def test_reingest_leaves_null_when_no_name_match(tmp_path):
         "SELECT chunk_id FROM methods WHERE paper_id = ? AND name = 'SpecialMethod'",
         (paper["paper_id"],),
     ).fetchone()
-    assert row["chunk_id"] is None, (
-        "Should remain NULL when name not found in new chunks"
-    )
+    assert row["chunk_id"] is None, "Should remain NULL when name not found in new chunks"
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
@@ -818,7 +787,7 @@ def test_reingest_batches_in_clauses(tmp_path):
 
     # All old chunks should be gone
     remaining = conn.execute(
-        "SELECT id FROM chunks WHERE id IN ({})".format(",".join("?" * len(old_ids))),
+        "SELECT id FROM chunks WHERE id IN ({})".format(",".join("?" * len(old_ids))),  # noqa: S608  # placeholders are only '?' marks; values bound via params
         old_ids,
     ).fetchall()
     assert len(remaining) == 0
@@ -826,9 +795,7 @@ def test_reingest_batches_in_clauses(tmp_path):
     # Paper should be re-linked to new first chunk
     papers = get_paper(conn, paper_id=paper["paper_id"])
     assert papers[0]["abstract_chunk_id"] is not None
-    new_chunk = conn.execute(
-        "SELECT * FROM chunks WHERE id = ?", (papers[0]["abstract_chunk_id"],)
-    ).fetchone()
+    new_chunk = conn.execute("SELECT * FROM chunks WHERE id = ?", (papers[0]["abstract_chunk_id"],)).fetchone()
     assert new_chunk["chunk_index"] == 0
     assert new_chunk["source_uri"] == source_uri
 
@@ -841,24 +808,9 @@ def test_reingest_batches_in_clauses(tmp_path):
     assert len(conclusions) == 0
 
     # Methods/datasets/metrics should be nullified
-    assert (
-        conn.execute(
-            "SELECT chunk_id FROM methods WHERE name='test_method'"
-        ).fetchone()["chunk_id"]
-        is None
-    )
-    assert (
-        conn.execute(
-            "SELECT chunk_id FROM datasets WHERE name='test_dataset'"
-        ).fetchone()["chunk_id"]
-        is None
-    )
-    assert (
-        conn.execute(
-            "SELECT chunk_id FROM metrics WHERE name='test_metric'"
-        ).fetchone()["chunk_id"]
-        is None
-    )
+    assert conn.execute("SELECT chunk_id FROM methods WHERE name='test_method'").fetchone()["chunk_id"] is None
+    assert conn.execute("SELECT chunk_id FROM datasets WHERE name='test_dataset'").fetchone()["chunk_id"] is None
+    assert conn.execute("SELECT chunk_id FROM metrics WHERE name='test_metric'").fetchone()["chunk_id"] is None
 
     # Vec table should only have new chunks
     vec_count = conn.execute("SELECT COUNT(*) as c FROM chunks_vec").fetchone()["c"]
@@ -949,9 +901,11 @@ def test_ingest_url_http_error(tmp_path):
 
         raise httpx.HTTPError("Connection refused")
 
-    with patch("knowledge_base.web.httpx.get", _mock_get_error):
-        with pytest.raises(ValidationError, match="Failed to fetch"):
-            ingest_url(conn, "https://example.com/down")
+    with (
+        patch("knowledge_base.web.httpx.get", _mock_get_error),
+        pytest.raises(ValidationError, match="Failed to fetch"),
+    ):
+        ingest_url(conn, "https://example.com/down")
 
 
 def test_ingest_url_rejects_non_http_schemes(tmp_path):
@@ -1068,9 +1022,7 @@ def test_ingest_python_file_uses_ast(tmp_path):
     assert result["chunks_added"] >= 3
 
     # Check metadata is stored
-    rows = conn.execute(
-        "SELECT metadata FROM chunks WHERE source_type = 'code'"
-    ).fetchall()
+    rows = conn.execute("SELECT metadata FROM chunks WHERE source_type = 'code'").fetchall()
     for row in rows:
         meta = json.loads(row["metadata"])
         assert "name" in meta
@@ -1120,9 +1072,7 @@ def test_reingest_deletes_entity_mentions(tmp_path):
     chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
 
     paper_id = register_paper(conn, "Test Paper")["paper_id"]
-    entity_id = _create_entity_with_mention(
-        conn, paper_id, "transformer", chunk_id, "Transformers"
-    )
+    entity_id = _create_entity_with_mention(conn, paper_id, "transformer", chunk_id, "Transformers")
     conn.commit()
 
     # Reingest — should NOT raise FK violation
@@ -1149,16 +1099,12 @@ def test_reingest_preserves_unrelated_entity_mentions(tmp_path):
     md1 = tmp_path / "file1.md"
     md1.write_text("Content about BERT.\n")
     ingest_file(conn, md1)
-    chunk_id_1 = conn.execute(
-        "SELECT id FROM chunks WHERE source_uri = ?", (str(md1),)
-    ).fetchone()["id"]
+    chunk_id_1 = conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (str(md1),)).fetchone()["id"]
 
     md2 = tmp_path / "file2.md"
     md2.write_text("Content about GPT.\n")
     ingest_file(conn, md2)
-    chunk_id_2 = conn.execute(
-        "SELECT id FROM chunks WHERE source_uri = ?", (str(md2),)
-    ).fetchone()["id"]
+    chunk_id_2 = conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (str(md2),)).fetchone()["id"]
 
     paper_id = register_paper(conn, "Test Paper")["paper_id"]
     _create_entity_with_mention(conn, paper_id, "bert", chunk_id_1, "BERT")
@@ -1198,9 +1144,7 @@ def test_configure_browser_cdp(tmp_path):
     (venv / "bin").mkdir(parents=True)
     (venv / "bin" / "python").write_text("#!/bin/sh\n")
 
-    result = configure_browser(
-        conn, cdp_endpoint="ws://localhost:3000", venv_path=str(venv)
-    )
+    result = configure_browser(conn, cdp_endpoint="ws://localhost:3000", venv_path=str(venv))
     cfg = result["browser"]
     assert cfg["mode"] == "cdp"
     assert cfg["endpoint"] == "ws://localhost:3000"
@@ -1233,9 +1177,7 @@ def test_configure_browser_invalid_cdp(tmp_path):
     (venv / "bin" / "python").write_text("#!/bin/sh\n")
 
     with pytest.raises(ValidationError, match="ws://"):
-        configure_browser(
-            conn, cdp_endpoint="http://localhost:3000", venv_path=str(venv)
-        )
+        configure_browser(conn, cdp_endpoint="http://localhost:3000", venv_path=str(venv))
 
 
 def test_configure_browser_invalid_venv(tmp_path):
@@ -1399,9 +1341,7 @@ def test_render_with_browser_invalid_venv(tmp_path):
 # ---------------------------------------------------------------------------
 
 # HTML that trafilatura will extract < 200 chars from (JS-only page)
-_JS_ONLY_HTML = (
-    "<html><head><title>App</title></head><body><div id='app'></div></body></html>"
-)
+_JS_ONLY_HTML = "<html><head><title>App</title></head><body><div id='app'></div></body></html>"
 
 # HTML with substantial content (> 200 chars) for rendered fallback
 _RENDERED_HTML = (
@@ -1739,6 +1679,7 @@ def test_parse_image_candidates_exclude_urls():
         "https://example.com/page",
         exclude_urls=frozenset({"https://example.com/already-seen.png"}),
     )
+    assert result is not None
     assert len(result) == 1
     assert result[0][0] == "https://example.com/new-image.png"
 
@@ -1751,9 +1692,7 @@ def test_parse_image_candidates_empty_vs_parse_failure():
 
     # Parse exception → None (caller must not trigger stale cleanup)
     with patch("knowledge_base.web._ImgTagParser.feed", side_effect=Exception("boom")):
-        result = _parse_image_candidates(
-            "<html><body></body></html>", "https://example.com/page"
-        )
+        result = _parse_image_candidates("<html><body></body></html>", "https://example.com/page")
         assert result is None
 
 
@@ -1824,9 +1763,7 @@ def test_parse_srcset_all_svg():
 
 def test_parse_image_candidates_img_srcset():
     """Standalone <img srcset> resolves to best candidate."""
-    html = (
-        '<img src="fallback.jpg" srcset="small.jpg 300w, large.jpg 1200w" alt="test">'
-    )
+    html = '<img src="fallback.jpg" srcset="small.jpg 300w, large.jpg 1200w" alt="test">'
     result = _parse_image_candidates(html, "https://example.com/page")
     assert result is not None
     assert len(result) == 1
@@ -1965,9 +1902,7 @@ def test_parse_image_candidates_img_srcset_without_src():
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_srcset_end_to_end(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_extract_html_images_srcset_end_to_end(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """Full pipeline: <picture> + srcset HTML -> vision -> figure chunks."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -1987,9 +1922,7 @@ def test_extract_html_images_srcset_end_to_end(
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 1
 
-    row = conn.execute(
-        "SELECT content, metadata FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    row = conn.execute("SELECT content, metadata FROM chunks WHERE source_type = 'figure'").fetchone()
     assert row is not None
     meta = json.loads(row["metadata"])
     assert meta["figure_type"] == "web_image"
@@ -2006,9 +1939,7 @@ def test_extract_html_images_srcset_end_to_end(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_basic(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_extract_html_images_basic(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """Extracts one qualifying <img> and stores as figure chunk."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2024,8 +1955,7 @@ def test_extract_html_images_basic(
     assert count == 1
 
     row = conn.execute(
-        "SELECT content, source_type, source_uri, chunk_index, metadata "
-        "FROM chunks WHERE source_type = 'figure'"
+        "SELECT content, source_type, source_uri, chunk_index, metadata FROM chunks WHERE source_type = 'figure'"
     ).fetchone()
     assert row is not None
     assert "neural network" in row["content"]
@@ -2042,9 +1972,7 @@ def test_extract_html_images_basic(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_multiple(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_extract_html_images_multiple(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """Extracts multiple qualifying images."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2084,9 +2012,7 @@ def test_extract_html_images_multiple(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_small_html_attrs(
-    mock_stream, _mock_ip, mock_vision_cfg, tmp_path
-):
+def test_extract_html_images_filters_small_html_attrs(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
     """Skips images with HTML width/height < 100px without downloading."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2102,9 +2028,7 @@ def test_extract_html_images_filters_small_html_attrs(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_small_pixels(
-    mock_stream, _mock_ip, mock_vision_cfg, tmp_path
-):
+def test_extract_html_images_filters_small_pixels(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
     """Skips images whose downloaded pixels are < 100px."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2122,9 +2046,7 @@ def test_extract_html_images_filters_small_pixels(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_decorative_url(
-    mock_stream, _mock_ip, mock_vision_cfg, tmp_path
-):
+def test_extract_html_images_filters_decorative_url(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
     """Skips images with decorative URL patterns (logo, icon, etc.)."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2140,9 +2062,7 @@ def test_extract_html_images_filters_decorative_url(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_decorative_alt(
-    mock_stream, _mock_ip, mock_vision_cfg, tmp_path
-):
+def test_extract_html_images_filters_decorative_alt(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
     """Skips images with decorative alt text (word boundary match)."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2158,9 +2078,7 @@ def test_extract_html_images_filters_decorative_alt(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_svg(
-    mock_stream, _mock_ip, mock_vision_cfg, tmp_path
-):
+def test_extract_html_images_filters_svg(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
     """Skips SVG images."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2176,9 +2094,7 @@ def test_extract_html_images_filters_svg(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_data_uri(
-    mock_stream, _mock_ip, mock_vision_cfg, tmp_path
-):
+def test_extract_html_images_filters_data_uri(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
     """Skips data URI images."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2198,9 +2114,7 @@ def test_extract_html_images_filters_data_uri(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_resolves_relative_urls(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_extract_html_images_resolves_relative_urls(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """Resolves relative <img> src against base URL."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2215,11 +2129,9 @@ def test_extract_html_images_resolves_relative_urls(
 
     # Verify the stream call used the resolved absolute URL
     call_args = mock_stream.call_args
-    assert (
-        call_args[1].get("url", call_args[0][1] if len(call_args[0]) > 1 else None)
-        == "https://example.com/images/fig1.png"
-        or "https://example.com/images/fig1.png" in str(call_args)
-    )
+    assert call_args[1].get(
+        "url", call_args[0][1] if len(call_args[0]) > 1 else None
+    ) == "https://example.com/images/fig1.png" or "https://example.com/images/fig1.png" in str(call_args)
 
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
@@ -2297,9 +2209,7 @@ def test_validate_image_url():
     side_effect=lambda h: h in ("169.254.169.254",),
 )
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_rejects_redirect_to_private(
-    mock_stream, _mock_ip, mock_vision_cfg, tmp_path
-):
+def test_extract_html_images_rejects_redirect_to_private(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
     """SSRF guard: rejects images that redirect to private IPs."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2328,9 +2238,7 @@ def test_extract_html_images_rejects_redirect_to_private(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_dedup_by_url(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_extract_html_images_dedup_by_url(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """Two <img> with same src → only one download."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2340,12 +2248,7 @@ def test_extract_html_images_dedup_by_url(
     png_bytes = _make_test_png()
     mock_stream.return_value = _mock_image_stream(png_bytes)
 
-    html = (
-        "<html><body>"
-        '<img src="https://example.com/same.png">'
-        '<img src="https://example.com/same.png">'
-        "</body></html>"
-    )
+    html = '<html><body><img src="https://example.com/same.png"><img src="https://example.com/same.png"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 1
     assert mock_stream.call_count == 1
@@ -2356,9 +2259,7 @@ def test_extract_html_images_dedup_by_url(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_dedup_by_content_hash(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_extract_html_images_dedup_by_content_hash(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """Two different images with identical vision description → one chunk."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2369,12 +2270,7 @@ def test_extract_html_images_dedup_by_content_hash(
     png_bytes = _make_test_png()
     mock_stream.return_value = _mock_image_stream(png_bytes)
 
-    html = (
-        "<html><body>"
-        '<img src="https://example.com/img1.png">'
-        '<img src="https://example.com/img2.png">'
-        "</body></html>"
-    )
+    html = '<html><body><img src="https://example.com/img1.png"><img src="https://example.com/img2.png"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
     # Second image should be skipped due to content hash collision
     assert count == 1
@@ -2416,9 +2312,7 @@ def test_extract_html_images_cross_page_content_hash(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_download_failure(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_extract_html_images_download_failure(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """Download failure on one image doesn't block others."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2435,10 +2329,7 @@ def test_extract_html_images_download_failure(
     mock_stream.side_effect = [fail_resp, ok_resp]
 
     html = (
-        "<html><body>"
-        '<img src="https://example.com/broken.png">'
-        '<img src="https://example.com/good.png">'
-        "</body></html>"
+        '<html><body><img src="https://example.com/broken.png"><img src="https://example.com/good.png"></body></html>'
     )
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 1
@@ -2449,9 +2340,7 @@ def test_extract_html_images_download_failure(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_non_png_conversion(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_extract_html_images_non_png_conversion(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """JPEG images are converted to PNG before vision call."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2477,9 +2366,7 @@ def test_extract_html_images_non_png_conversion(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_oversized_download(
-    mock_stream, _mock_ip, mock_vision_cfg, tmp_path
-):
+def test_extract_html_images_oversized_download(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
     """Skips images that exceed _MAX_IMAGE_DOWNLOAD_BYTES."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2509,9 +2396,7 @@ def test_extract_html_images_oversized_download(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_stale_cleanup(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_extract_html_images_stale_cleanup(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """Re-extraction replaces old inline image chunks."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2547,15 +2432,13 @@ def test_extract_html_images_stale_cleanup(
 
     # Only one chunk should remain (old one cleaned up)
     total = conn.execute(
-        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? "
-        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index >= 2000000",
         (source_url,),
     ).fetchone()["cnt"]
     assert total == 1
     # And it should be the new one
     row = conn.execute(
-        "SELECT content FROM chunks WHERE source_uri = ? "
-        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        "SELECT content FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index >= 2000000",
         (source_url,),
     ).fetchone()
     assert "New figure" in row["content"]
@@ -2589,8 +2472,7 @@ def test_extract_html_images_reingest_same_description(
     assert count2 == 1
 
     total = conn.execute(
-        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? "
-        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index >= 2000000",
         (source_url,),
     ).fetchone()["cnt"]
     assert total == 1
@@ -2629,15 +2511,12 @@ def test_extract_html_images_embed_failure_preserves_old(
                 "title": "X",
             }
         ]
-        try:
+        with contextlib.suppress(Exception):  # Expected to propagate
             _extract_html_images(conn, html, source_url)
-        except Exception:
-            pass  # Expected to propagate
 
     # Old chunk should still be there
     total = conn.execute(
-        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? "
-        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index >= 2000000",
         (source_url,),
     ).fetchone()["cnt"]
     assert total == 1
@@ -2648,9 +2527,7 @@ def test_extract_html_images_embed_failure_preserves_old(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_cleanup_stale_inline_images_on_zero_new(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_cleanup_stale_inline_images_on_zero_new(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """Stale inline image chunks are deleted when page loses all images (#152)."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2667,8 +2544,7 @@ def test_cleanup_stale_inline_images_on_zero_new(
     assert count == 1
 
     before = conn.execute(
-        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? "
-        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index >= 2000000",
         (source_url,),
     ).fetchone()["cnt"]
     assert before == 1
@@ -2678,8 +2554,7 @@ def test_cleanup_stale_inline_images_on_zero_new(
     assert deleted == 1
 
     after = conn.execute(
-        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? "
-        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index >= 2000000",
         (source_url,),
     ).fetchone()["cnt"]
     assert after == 0
@@ -2701,16 +2576,13 @@ def test_cleanup_stale_inline_images_noop_when_none(tmp_path):
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_rendered_dom_dedup(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_extract_html_images_rendered_dom_dedup(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """Rendered DOM adds JS-injected images but deduplicates shared ones."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
     mock_vision_cfg.return_value = _VISION_CFG
     mock_vision_call.side_effect = [
-        [{"description": f"Fig {i}.", "figure_type": "diagram", "title": f"F{i}"}]
-        for i in range(3)
+        [{"description": f"Fig {i}.", "figure_type": "diagram", "title": f"F{i}"}] for i in range(3)
     ]
     png_bytes = _make_test_png()
     mock_stream.side_effect = [_mock_image_stream(png_bytes) for _ in range(3)]
@@ -2737,9 +2609,7 @@ def test_extract_html_images_rendered_dom_dedup(
 
     urls = {
         json.loads(r["metadata"])["image_url"]
-        for r in conn.execute(
-            "SELECT metadata FROM chunks WHERE source_type = 'figure'"
-        ).fetchall()
+        for r in conn.execute("SELECT metadata FROM chunks WHERE source_type = 'figure'").fetchall()
     }
     assert urls == {
         "https://example.com/shared.png",
@@ -2869,8 +2739,7 @@ def test_ingest_url_preserves_figures_on_extraction_failure(
     assert result.get("figures_extracted", 0) >= 1
 
     before = conn.execute(
-        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? "
-        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index >= 2000000",
         (source_url,),
     ).fetchone()["cnt"]
     assert before >= 1
@@ -2884,8 +2753,7 @@ def test_ingest_url_preserves_figures_on_extraction_failure(
         ingest_url(conn, source_url)
 
     after = conn.execute(
-        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? "
-        "AND source_type = 'figure' AND chunk_index >= 2000000",
+        "SELECT COUNT(*) as cnt FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index >= 2000000",
         (source_url,),
     ).fetchone()["cnt"]
     assert after == before, "Figures deleted despite extraction failure — data loss!"
@@ -2921,9 +2789,7 @@ def _mock_httpx_get_with_images(url, **kwargs):
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 @patch("knowledge_base.web.httpx.stream")
 @patch("knowledge_base.web.httpx.get", _mock_httpx_get_with_images)
-def test_ingest_url_extracts_inline_images(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_ingest_url_extracts_inline_images(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
     """ingest_url with <img> tags extracts inline images when no browser fallback."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -3006,9 +2872,7 @@ def test_ingest_url_passes_rendered_html_to_extract_images(
     resp.raise_for_status = MagicMock()
     mock_get.return_value = resp
 
-    rendered_html = (
-        "<html><body>Rendered with lots of content for the page</body></html>"
-    )
+    rendered_html = "<html><body>Rendered with lots of content for the page</body></html>"
     mock_browser_cfg.return_value = {"mode": "local", "venv": "/tmp/venv"}
     mock_render.return_value = {
         "html": rendered_html,
@@ -3063,11 +2927,11 @@ def test_ingest_url_extracts_images_even_when_no_text(
     mock_stream.return_value = _mock_image_stream(png_bytes)
 
     # trafilatura returns empty for this HTML
-    with patch("knowledge_base.web.trafilatura.extract", return_value=""):
-        with patch(
-            "knowledge_base.web.trafilatura.extract_metadata", return_value=None
-        ):
-            result = ingest_url(conn, "https://example.com/page")
+    with (
+        patch("knowledge_base.web.trafilatura.extract", return_value=""),
+        patch("knowledge_base.web.trafilatura.extract_metadata", return_value=None),
+    ):
+        result = ingest_url(conn, "https://example.com/page")
 
     assert result.get("figures_extracted", 0) >= 1
 
@@ -3088,10 +2952,7 @@ def test_ingest_url_uses_response_url_for_base(
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
     html = (
-        "<html><head><title>Redirected</title></head><body>"
-        "<p>" + "x" * 300 + "</p>"
-        '<img src="/fig.png">'
-        "</body></html>"
+        "<html><head><title>Redirected</title></head><body><p>" + "x" * 300 + '</p><img src="/fig.png"></body></html>'
     )
     resp = MagicMock()
     resp.status_code = 200
@@ -3108,9 +2969,7 @@ def test_ingest_url_uses_response_url_for_base(
 
     # The stream should have been called with the resolved URL using response.url
     call_args = mock_stream.call_args
-    assert "example.com/fig.png" in str(call_args), (
-        f"Expected resolved URL with example.com/fig.png, got {call_args}"
-    )
+    assert "example.com/fig.png" in str(call_args), f"Expected resolved URL with example.com/fig.png, got {call_args}"
 
 
 # --- duplicate detection by content hash (issue #59, task 10) ---
@@ -3200,7 +3059,7 @@ def test_extract_pdf_markdown_with_images(tmp_path):
 
     mock_mod = _make_mock_pymupdf4llm(_SIMPLE_PAGES)
     with patch.dict(sys.modules, {"pymupdf4llm": mock_mod}):
-        text, page_map = _extract_pdf_markdown(pdf, image_dir=image_dir)
+        _text, _page_map = _extract_pdf_markdown(pdf, image_dir=image_dir)
 
     assert image_dir.exists()
     # Verify to_markdown was called with write_images=True
@@ -3257,9 +3116,7 @@ def test_ingest_pdf_uses_markdown_chunks(tmp_path):
 
     assert result["chunks_added"] >= 1
 
-    rows = conn.execute(
-        "SELECT content, metadata FROM chunks WHERE source_type = 'pdf'"
-    ).fetchall()
+    rows = conn.execute("SELECT content, metadata FROM chunks WHERE source_type = 'pdf'").fetchall()
     assert len(rows) >= 1
     # At least one chunk should start with a heading
     assert any(r["content"].startswith("##") for r in rows)
@@ -3291,9 +3148,7 @@ def test_reingest_pdf_uses_markdown(tmp_path):
     assert result["chunks_added"] >= 1
     assert result["chunks_deleted"] >= 1
 
-    rows = conn.execute(
-        "SELECT metadata FROM chunks WHERE source_type = 'pdf'"
-    ).fetchall()
+    rows = conn.execute("SELECT metadata FROM chunks WHERE source_type = 'pdf'").fetchall()
     for r in rows:
         meta = json.loads(r["metadata"])
         assert "extractor" in meta
@@ -3316,9 +3171,7 @@ def test_pdf_chunk_metadata_extractor(tmp_path):
     with patch.dict(sys.modules, {"pymupdf4llm": mock_mod}):
         ingest_file(conn, pdf, source_type="pdf")
 
-    rows = conn.execute(
-        "SELECT metadata FROM chunks WHERE source_type = 'pdf'"
-    ).fetchall()
+    rows = conn.execute("SELECT metadata FROM chunks WHERE source_type = 'pdf'").fetchall()
     assert len(rows) >= 1
     for r in rows:
         meta = json.loads(r["metadata"])
@@ -3366,9 +3219,7 @@ def test_ingest_file_with_session_id(tmp_path):
     result = ingest_file(conn, md, session_id="test-session-42")
     assert result["chunks_added"] >= 1
 
-    rows = conn.execute(
-        "SELECT session_id FROM chunks WHERE source_uri = ?", (str(md.resolve()),)
-    ).fetchall()
+    rows = conn.execute("SELECT session_id FROM chunks WHERE source_uri = ?", (str(md.resolve()),)).fetchall()
     assert all(r["session_id"] == "test-session-42" for r in rows)
 
 
@@ -3384,9 +3235,7 @@ def test_ingest_file_without_session_id(tmp_path):
 
     ingest_file(conn, md)
 
-    rows = conn.execute(
-        "SELECT session_id FROM chunks WHERE source_uri = ?", (str(md.resolve()),)
-    ).fetchall()
+    rows = conn.execute("SELECT session_id FROM chunks WHERE source_uri = ?", (str(md.resolve()),)).fetchall()
     assert all(r["session_id"] is None for r in rows)
 
 
@@ -3446,9 +3295,7 @@ def test_reingest_file_with_session_id(tmp_path):
     result = reingest_file(conn, md, session_id="new-session")
     assert result["chunks_added"] >= 1
 
-    rows = conn.execute(
-        "SELECT session_id FROM chunks WHERE source_uri = ?", (str(md.resolve()),)
-    ).fetchall()
+    rows = conn.execute("SELECT session_id FROM chunks WHERE source_uri = ?", (str(md.resolve()),)).fetchall()
     assert all(r["session_id"] == "new-session" for r in rows)
 
 
@@ -3476,9 +3323,7 @@ def test_ingest_file_dedup_records_session(tmp_path):
     assert r2["chunks_skipped"] > 0
 
     # Both sessions should be recorded in chunk_sessions
-    chunk_id = conn.execute(
-        "SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)
-    ).fetchone()["id"]
+    chunk_id = conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)).fetchone()["id"]
     sessions = conn.execute(
         "SELECT session_id FROM chunk_sessions WHERE chunk_id = ? ORDER BY session_id",
         (chunk_id,),
@@ -3505,9 +3350,7 @@ def test_ingest_url_dedup_records_session(tmp_path):
     assert r2["chunks_added"] == 0
     assert r2["chunks_skipped"] > 0
 
-    chunk_id = conn.execute(
-        "SELECT id FROM chunks WHERE source_uri = ?", (url,)
-    ).fetchone()["id"]
+    chunk_id = conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (url,)).fetchone()["id"]
     sessions = conn.execute(
         "SELECT session_id FROM chunk_sessions WHERE chunk_id = ? ORDER BY session_id",
         (chunk_id,),
@@ -3530,9 +3373,7 @@ def test_reingest_preserves_historical_sessions(tmp_path):
     ingest_file(conn, test_file, session_id="sess-1")
 
     # Simulate a second session via direct chunk_sessions insert
-    chunk_id = conn.execute(
-        "SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)
-    ).fetchone()["id"]
+    chunk_id = conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)).fetchone()["id"]
     conn.execute(
         "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, 'sess-2')",
         (chunk_id,),
@@ -3545,9 +3386,9 @@ def test_reingest_preserves_historical_sessions(tmp_path):
     assert result["chunks_added"] > 0
 
     # New chunks should have ALL three sessions: sess-1, sess-2, sess-3
-    new_chunk_id = conn.execute(
-        "SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)
-    ).fetchone()["id"]
+    new_chunk_id = conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (str(test_file.resolve()),)).fetchone()[
+        "id"
+    ]
     sessions = conn.execute(
         "SELECT session_id FROM chunk_sessions WHERE chunk_id = ? ORDER BY session_id",
         (new_chunk_id,),
@@ -3621,9 +3462,9 @@ def test_embed_failure_does_not_leave_orphan_session_rows(tmp_path):
     assert r1["chunks_added"] >= 2, f"Expected >=2 chunks, got {r1['chunks_added']}"
 
     # Verify session-1 rows exist
-    s1_rows = conn.execute(
-        "SELECT COUNT(*) as cnt FROM chunk_sessions WHERE session_id = 'session-1'"
-    ).fetchone()["cnt"]
+    s1_rows = conn.execute("SELECT COUNT(*) as cnt FROM chunk_sessions WHERE session_id = 'session-1'").fetchone()[
+        "cnt"
+    ]
     assert s1_rows >= 2
 
     # Modify file: keep chunk_a (will be deduped), replace chunk_b (new chunk)
@@ -3631,28 +3472,28 @@ def test_embed_failure_does_not_leave_orphan_session_rows(tmp_path):
     test_file.write_text(chunk_a + "\n\n" + chunk_c)
 
     # Patch _embed_with_config to raise after chunk_sessions writes happen
-    with patch(
-        "knowledge_base.ingest._embed_with_config",
-        side_effect=RuntimeError("Ollama down"),
+    with (
+        patch(
+            "knowledge_base.ingest._embed_with_config",
+            side_effect=RuntimeError("Ollama down"),
+        ),
+        contextlib.suppress(RuntimeError),  # Expected
     ):
-        try:
-            ingest_file(conn, test_file, session_id="session-2")
-        except RuntimeError:
-            pass  # Expected
+        ingest_file(conn, test_file, session_id="session-2")
 
     # The critical assertion: no session-2 rows should exist in chunk_sessions
-    s2_rows = conn.execute(
-        "SELECT COUNT(*) as cnt FROM chunk_sessions WHERE session_id = 'session-2'"
-    ).fetchone()["cnt"]
+    s2_rows = conn.execute("SELECT COUNT(*) as cnt FROM chunk_sessions WHERE session_id = 'session-2'").fetchone()[
+        "cnt"
+    ]
     assert s2_rows == 0, (
         f"Expected 0 chunk_sessions rows for failed session-2, got {s2_rows}. "
         "Orphan session rows leaked from a failed embed call."
     )
 
     # Session-1 rows must be unaffected
-    s1_after = conn.execute(
-        "SELECT COUNT(*) as cnt FROM chunk_sessions WHERE session_id = 'session-1'"
-    ).fetchone()["cnt"]
+    s1_after = conn.execute("SELECT COUNT(*) as cnt FROM chunk_sessions WHERE session_id = 'session-1'").fetchone()[
+        "cnt"
+    ]
     assert s1_after == s1_rows, "session-1 rows were corrupted by the failed session-2"
 
     # No new chunks should have been inserted
@@ -3669,9 +3510,7 @@ def test_get_chunk_strategy_default(tmp_path):
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-    )
+    conn.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     conn.commit()
     assert _get_chunk_strategy(conn) == "mechanical"
 
@@ -3683,9 +3522,7 @@ def test_get_chunk_strategy_reads_config(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')"
-    )
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')")
     conn.commit()
     assert _get_chunk_strategy(conn) == "semantic"
 
@@ -3716,9 +3553,7 @@ def test_ingest_file_semantic_nonpdf(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')"
-    )
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')")
     conn.commit()
 
     md = tmp_path / "doc.md"
@@ -3810,9 +3645,7 @@ class TestElementCapture:
                 side_effect=_fake_subprocess_run,
             ),
         ):
-            result = _render_with_browser(
-                "https://example.com", {"venv": "/fake", "mode": "local"}
-            )
+            result = _render_with_browser("https://example.com", {"venv": "/fake", "mode": "local"})
 
         assert result is not None
         assert result["element_captures"] == [
@@ -3828,9 +3661,7 @@ class TestElementCapture:
     @patch("knowledge_base.ingest.embed", _fake_embed)
     @patch("knowledge_base.vision._vision_call")
     @patch("knowledge_base.vision._get_vision_config")
-    def test_extract_element_captures_basic(
-        self, mock_vision_cfg, mock_vision_call, tmp_path
-    ):
+    def test_extract_element_captures_basic(self, mock_vision_cfg, mock_vision_call, tmp_path):
         """Per-element captures are sent to vision and stored as figure chunks."""
         mock_vision_cfg.return_value = {
             "base_url": "http://localhost:11434",
@@ -3851,20 +3682,14 @@ class TestElementCapture:
         capture_path = tmp_path / "element_0.png"
         capture_path.write_bytes(png_bytes)
 
-        captures = [
-            {"path": capture_path, "tag": "canvas", "width": 400, "height": 300}
-        ]
+        captures = [{"path": capture_path, "tag": "canvas", "width": 400, "height": 300}]
 
         from knowledge_base.web import _extract_element_captures
 
-        count = _extract_element_captures(
-            conn, "https://example.com/dashboard", captures
-        )
+        count = _extract_element_captures(conn, "https://example.com/dashboard", captures)
 
         assert count == 1
-        row = conn.execute(
-            "SELECT * FROM chunks WHERE source_type = 'figure' AND chunk_index >= 3000000"
-        ).fetchone()
+        row = conn.execute("SELECT * FROM chunks WHERE source_type = 'figure' AND chunk_index >= 3000000").fetchone()
         assert row is not None
         meta = json.loads(row["metadata"])
         assert meta["figure_type"] == "chart"
@@ -3935,10 +3760,7 @@ class TestElementCapture:
         result = ingest_url(conn, "https://example.com/viz")
 
         assert result["figures_extracted"] >= 1
-        row = conn.execute(
-            "SELECT * FROM chunks WHERE source_type = 'figure'"
-            " AND chunk_index >= 3000000"
-        ).fetchone()
+        row = conn.execute("SELECT * FROM chunks WHERE source_type = 'figure' AND chunk_index >= 3000000").fetchone()
         assert row is not None
         assert "scatter plot" in row["content"].lower()
 
@@ -3981,17 +3803,13 @@ class TestElementCapture:
     @patch("knowledge_base.ingest.embed", _fake_embed)
     @patch("knowledge_base.vision._vision_call")
     @patch("knowledge_base.vision._get_vision_config")
-    def test_extract_element_captures_stale_cleanup(
-        self, mock_vision_cfg, mock_vision_call, tmp_path
-    ):
+    def test_extract_element_captures_stale_cleanup(self, mock_vision_cfg, mock_vision_call, tmp_path):
         """Re-extraction deletes stale element-capture chunks."""
         mock_vision_cfg.return_value = {
             "base_url": "http://localhost:11434",
             "model": "gemma3:27b",
         }
-        mock_vision_call.return_value = [
-            {"description": "Old chart.", "figure_type": "chart", "title": "Old"}
-        ]
+        mock_vision_call.return_value = [{"description": "Old chart.", "figure_type": "chart", "title": "Old"}]
 
         db_path = tmp_path / "test.db"
         conn = get_connection(db_path)
@@ -4006,9 +3824,7 @@ class TestElementCapture:
             "https://x.com",
             [{"path": png, "tag": "canvas", "width": 200, "height": 200}],
         )
-        old_count = conn.execute(
-            "SELECT COUNT(*) as c FROM chunks WHERE chunk_index >= 3000000"
-        ).fetchone()["c"]
+        old_count = conn.execute("SELECT COUNT(*) as c FROM chunks WHERE chunk_index >= 3000000").fetchone()["c"]
         assert old_count == 1
 
         # Re-extract with new description
@@ -4024,9 +3840,7 @@ class TestElementCapture:
             "https://x.com",
             [{"path": png, "tag": "canvas", "width": 200, "height": 200}],
         )
-        rows = conn.execute(
-            "SELECT content FROM chunks WHERE chunk_index >= 3000000"
-        ).fetchall()
+        rows = conn.execute("SELECT content FROM chunks WHERE chunk_index >= 3000000").fetchall()
         assert len(rows) == 1
         assert "New chart" in rows[0]["content"]
 
@@ -4034,17 +3848,13 @@ class TestElementCapture:
     @patch("knowledge_base.ingest.embed", _fake_embed)
     @patch("knowledge_base.vision._vision_call")
     @patch("knowledge_base.vision._get_vision_config")
-    def test_extract_element_captures_svg(
-        self, mock_vision_cfg, mock_vision_call, tmp_path
-    ):
+    def test_extract_element_captures_svg(self, mock_vision_cfg, mock_vision_call, tmp_path):
         """SVG elements use svg_capture figure_type when vision returns empty type."""
         mock_vision_cfg.return_value = {
             "base_url": "http://localhost:11434",
             "model": "gemma3:27b",
         }
-        mock_vision_call.return_value = [
-            {"description": "An SVG flow diagram.", "figure_type": "", "title": "Flow"}
-        ]
+        mock_vision_call.return_value = [{"description": "An SVG flow diagram.", "figure_type": "", "title": "Flow"}]
 
         db_path = tmp_path / "test.db"
         conn = get_connection(db_path)
@@ -4060,9 +3870,7 @@ class TestElementCapture:
             [{"path": png, "tag": "svg", "width": 300, "height": 200}],
         )
         meta = json.loads(
-            conn.execute(
-                "SELECT metadata FROM chunks WHERE chunk_index >= 3000000"
-            ).fetchone()["metadata"]
+            conn.execute("SELECT metadata FROM chunks WHERE chunk_index >= 3000000").fetchone()["metadata"]
         )
         assert meta["figure_type"] == "svg_capture"
         assert meta["element_tag"] == "svg"

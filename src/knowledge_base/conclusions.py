@@ -34,7 +34,8 @@ def record_conclusion(
     if chunk_ids:
         placeholders = ",".join("?" * len(chunk_ids))
         existing = conn.execute(
-            f"SELECT id FROM chunks WHERE id IN ({placeholders})", chunk_ids
+            f"SELECT id FROM chunks WHERE id IN ({placeholders})",  # noqa: S608  # trusted internal identifier, not user input
+            chunk_ids,
         ).fetchall()
         existing_ids = {row["id"] for row in existing}
         missing = [cid for cid in chunk_ids if cid not in existing_ids]
@@ -42,8 +43,7 @@ def record_conclusion(
             raise NotFoundError(f"Chunk IDs not found: {missing}")
 
     cursor = conn.execute(
-        "INSERT INTO conclusions (claim, confidence, source_chunk_ids, session_context)"
-        " VALUES (?, ?, ?, ?)",
+        "INSERT INTO conclusions (claim, confidence, source_chunk_ids, session_context) VALUES (?, ?, ?, ?)",
         (claim, confidence, json.dumps(chunk_ids), session_context),
     )
     if _commit:
@@ -70,7 +70,7 @@ def get_conclusions(
 
     where = " AND ".join(conditions)
     rows = conn.execute(
-        f"SELECT * FROM conclusions WHERE {where} ORDER BY created_at DESC",
+        f"SELECT * FROM conclusions WHERE {where} ORDER BY created_at DESC",  # noqa: S608  # trusted internal identifier, not user input
         params,
     ).fetchall()
 
@@ -91,12 +91,11 @@ def get_conclusions(
         if chunk_ids:
             placeholders = ",".join("?" * len(chunk_ids))
             chunks = conn.execute(
-                f"SELECT id, content, source_uri FROM chunks WHERE id IN ({placeholders})",
+                f"SELECT id, content, source_uri FROM chunks WHERE id IN ({placeholders})",  # noqa: S608  # trusted internal identifier, not user input
                 chunk_ids,
             ).fetchall()
             entry["source_chunks"] = [
-                {"id": c["id"], "content": c["content"], "source_uri": c["source_uri"]}
-                for c in chunks
+                {"id": c["id"], "content": c["content"], "source_uri": c["source_uri"]} for c in chunks
             ]
         else:
             entry["source_chunks"] = []
@@ -114,16 +113,12 @@ def supersede_conclusion(
     session_context: str | None = None,
 ) -> dict:
     """Supersede an old conclusion with a new one. Atomic transaction."""
-    old = conn.execute(
-        "SELECT id, superseded_by FROM conclusions WHERE id = ?", (old_conclusion_id,)
-    ).fetchone()
+    old = conn.execute("SELECT id, superseded_by FROM conclusions WHERE id = ?", (old_conclusion_id,)).fetchone()
     if not old:
         raise NotFoundError(f"Conclusion {old_conclusion_id} not found")
 
     if old["superseded_by"] is not None:
-        raise ValidationError(
-            f"Conclusion {old_conclusion_id} is already superseded by {old['superseded_by']}"
-        )
+        raise ValidationError(f"Conclusion {old_conclusion_id} is already superseded by {old['superseded_by']}")
 
     # Atomic: insert new + update old in one transaction
     try:
@@ -161,9 +156,7 @@ def get_conclusion_chain(
     visited.add(current_id)
 
     while True:
-        prev = conn.execute(
-            "SELECT id FROM conclusions WHERE superseded_by = ?", (current_id,)
-        ).fetchone()
+        prev = conn.execute("SELECT id FROM conclusions WHERE superseded_by = ?", (current_id,)).fetchone()
         if not prev or prev["id"] in visited:
             break
         current_id = prev["id"]
@@ -173,9 +166,7 @@ def get_conclusion_chain(
     # Walk forward from conclusion_id
     current_id = conclusion_id
     while True:
-        row = conn.execute(
-            "SELECT superseded_by FROM conclusions WHERE id = ?", (current_id,)
-        ).fetchone()
+        row = conn.execute("SELECT superseded_by FROM conclusions WHERE id = ?", (current_id,)).fetchone()
         if not row or not row["superseded_by"] or row["superseded_by"] in visited:
             break
         current_id = row["superseded_by"]
@@ -185,7 +176,8 @@ def get_conclusion_chain(
     # Fetch all conclusions in the chain
     placeholders = ",".join("?" * len(chain_ids))
     rows = conn.execute(
-        f"SELECT * FROM conclusions WHERE id IN ({placeholders})", chain_ids
+        f"SELECT * FROM conclusions WHERE id IN ({placeholders})",  # noqa: S608  # trusted internal identifier, not user input
+        chain_ids,
     ).fetchall()
 
     # Maintain order

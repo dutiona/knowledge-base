@@ -156,7 +156,7 @@ def test_rerank_top_n_limits_candidates(tmp_path):
     # Insert 5 chunks
     for i in range(5):
         conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "  # noqa: S608  # trusted internal identifier, not user input
             f"VALUES ('h{i}', 'attention mechanism variant {i}', 'markdown', '/tmp/{i}.md', 0)"
         )
     conn.commit()
@@ -195,7 +195,7 @@ def test_rerank_score_monotonic(tmp_path):
     conn = _setup_db(tmp_path)
     for i in range(4):
         conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "  # noqa: S608  # trusted internal identifier, not user input
             f"VALUES ('m{i}', 'neural network layer {i}', 'markdown', '/tmp/{i}.md', 0)"
         )
     conn.commit()
@@ -250,9 +250,7 @@ def test_rerank_with_source_type_filter(tmp_path):
         return [0.9] * len(candidates)
 
     with patch("knowledge_base.reranker.rerank", _tracking_rerank):
-        results = search(
-            conn, "convolution", mode="fts", source_type="pdf", rerank=True
-        )
+        results = search(conn, "convolution", mode="fts", source_type="pdf", rerank=True)
 
     # Only the pdf chunk should reach the reranker
     assert len(calls) == 1

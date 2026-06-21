@@ -96,6 +96,11 @@ def _relationship_check_constraint() -> str:
 # We use 900 to leave headroom for other parameters in the same statement.
 _SQL_BATCH_SIZE = 900
 
+# Busy-wait budget for acquiring the SQLite write lock under WAL mode. WAL still
+# serializes writers, so a transient lock contended by another thread/process is
+# retried for up to this many seconds before raising ``sqlite3.OperationalError``.
+_CONNECTION_TIMEOUT_S = 30.0
+
 
 def _batched_execute(
     conn: sqlite3.Connection,
@@ -185,7 +190,7 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     if db_path is None:
         db_path = resolve_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), timeout=30.0)
+    conn = sqlite3.connect(str(db_path), timeout=_CONNECTION_TIMEOUT_S)
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)
@@ -196,9 +201,7 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
 
 
 def _migrate_source_type_figure(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'"
-    ).fetchone()
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'").fetchone()
     if not row or "'figure'" in row[0]:
         return
 
@@ -247,13 +250,11 @@ def _migrate_source_type_figure(conn: sqlite3.Connection) -> None:
 
     COMMIT;
     PRAGMA foreign_keys = ON;
-    """)
+    """)  # noqa: S608  # trusted internal identifiers (hardcoded column names), not user input
 
 
 def _migrate_relationship_types(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='relationships'"
-    ).fetchone()
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='relationships'").fetchone()
     if not row or "'similar'" in row[0]:
         return
 
@@ -278,14 +279,12 @@ def _migrate_relationship_types(conn: sqlite3.Connection) -> None:
 
     COMMIT;
     PRAGMA foreign_keys = ON;
-    """)
+    """)  # noqa: S608  # trusted internal identifier (RELATIONSHIP_TYPES check constraint), not user input
 
 
 def _migrate_papers_fts(conn: sqlite3.Connection) -> None:
     """Backfill papers_fts for databases created before this index existed."""
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='papers_fts'"
-    ).fetchone()
+    row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='papers_fts'").fetchone()
     if not row:
         return
     count = conn.execute("SELECT count(*) FROM papers_fts").fetchone()[0]
@@ -311,9 +310,7 @@ def _migrate_chunk_strategy(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
     if "chunk_strategy" in columns:
         return
-    conn.execute(
-        "ALTER TABLE chunks ADD COLUMN chunk_strategy TEXT NOT NULL DEFAULT 'mechanical'"
-    )
+    conn.execute("ALTER TABLE chunks ADD COLUMN chunk_strategy TEXT NOT NULL DEFAULT 'mechanical'")
     conn.commit()
 
 
@@ -335,9 +332,7 @@ def _migrate_paper_paths(conn: sqlite3.Connection) -> None:
 
 def _migrate_jobs_types(conn: sqlite3.Connection) -> None:
     """Add 'auto_relate' to jobs.job_type CHECK constraint for existing DBs."""
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'"
-    ).fetchone()
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone()
     if not row or "'auto_relate'" in row[0]:
         return
 
@@ -372,9 +367,7 @@ def _migrate_jobs_types(conn: sqlite3.Connection) -> None:
 
 def _migrate_chunk_sessions(conn: sqlite3.Connection) -> None:
     """Create chunk_sessions join table and backfill from chunks.session_id."""
-    exists = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_sessions'"
-    ).fetchone()
+    exists = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_sessions'").fetchone()
     if exists:
         return
     conn.execute("""
@@ -384,10 +377,7 @@ def _migrate_chunk_sessions(conn: sqlite3.Connection) -> None:
             UNIQUE(chunk_id, session_id)
         )
     """)
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_chunk_sessions_session "
-        "ON chunk_sessions(session_id)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_chunk_sessions_session ON chunk_sessions(session_id)")
     # Backfill from existing chunks.session_id
     conn.execute(
         "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id)"
@@ -419,9 +409,7 @@ def get_active_space(conn: sqlite3.Connection) -> dict | None:
 
 def get_vec_table_name(conn: sqlite3.Connection) -> str:
     """Return the active space's vec table name, falling back to 'chunks_vec'."""
-    row = conn.execute(
-        "SELECT table_name FROM embed_spaces WHERE status = 'active'"
-    ).fetchone()
+    row = conn.execute("SELECT table_name FROM embed_spaces WHERE status = 'active'").fetchone()
     if row is None:
         return "chunks_vec"
     return row["table_name"]
@@ -429,9 +417,7 @@ def get_vec_table_name(conn: sqlite3.Connection) -> str:
 
 def get_active_chunk_strategy(conn: sqlite3.Connection) -> str:
     """Return the active space's chunk_strategy, falling back to 'mechanical'."""
-    row = conn.execute(
-        "SELECT chunk_strategy FROM embed_spaces WHERE status = 'active'"
-    ).fetchone()
+    row = conn.execute("SELECT chunk_strategy FROM embed_spaces WHERE status = 'active'").fetchone()
     if row is None:
         return "mechanical"
     return row["chunk_strategy"]
@@ -443,9 +429,7 @@ def get_space_element_type(
 ) -> str:
     """Return the element_type for the given (or active) space, defaulting to 'float32'."""
     tbl = table_name or get_vec_table_name(conn)
-    row = conn.execute(
-        "SELECT element_type FROM embed_spaces WHERE table_name = ?", (tbl,)
-    ).fetchone()
+    row = conn.execute("SELECT element_type FROM embed_spaces WHERE table_name = ?", (tbl,)).fetchone()
     if row is None:
         return "float32"
     return row["element_type"] or "float32"
@@ -468,13 +452,12 @@ def insert_chunk_vec(
         element_type = get_space_element_type(conn, tbl)
     expr = ELEMENT_INSERT_EXPR[element_type]
     conn.execute(
-        f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, {expr}, ?)",
+        f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, {expr}, ?)",  # noqa: S608  # trusted internal identifier (vec table name + fixed expr), not user input
         (chunk_id, _serialize_f32(embedding), chunk_id),
     )
     # Keep embed_spaces.chunk_count in sync for the active space
     conn.execute(
-        "UPDATE embed_spaces SET chunk_count = chunk_count + 1 "
-        "WHERE table_name = ? AND status = 'active'",
+        "UPDATE embed_spaces SET chunk_count = chunk_count + 1 WHERE table_name = ? AND status = 'active'",
         (tbl,),
     )
 
@@ -492,16 +475,13 @@ def delete_chunk_vecs(
         return
     tbl = table_name or get_vec_table_name(conn)
     # Count actual rows before deletion — not all chunks may have embeddings
-    count_rows = _batched_select(
-        conn, f"SELECT COUNT(*) AS n FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids
-    )
+    count_rows = _batched_select(conn, f"SELECT COUNT(*) AS n FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids)  # noqa: S608  # trusted internal identifier (vec table name), not user input
     actual_deleted = sum(r["n"] for r in count_rows)
-    _batched_execute(conn, f"DELETE FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids)
+    _batched_execute(conn, f"DELETE FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids)  # noqa: S608  # trusted internal identifier (vec table name), not user input
     # Keep embed_spaces.chunk_count in sync
     if actual_deleted:
         conn.execute(
-            "UPDATE embed_spaces SET chunk_count = MAX(0, chunk_count - ?) "
-            "WHERE table_name = ?",
+            "UPDATE embed_spaces SET chunk_count = MAX(0, chunk_count - ?) WHERE table_name = ?",
             (actual_deleted, tbl),
         )
 
@@ -528,9 +508,7 @@ def delete_chunks_cascade(
 
 def _migrate_embed_spaces_matryoshka(conn: sqlite3.Connection) -> None:
     """Add matryoshka_base_dim column to embed_spaces if missing."""
-    columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()
-    }
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()}
     if "matryoshka_base_dim" in columns:
         return
     conn.execute("ALTER TABLE embed_spaces ADD COLUMN matryoshka_base_dim INTEGER")
@@ -539,9 +517,7 @@ def _migrate_embed_spaces_matryoshka(conn: sqlite3.Connection) -> None:
 
 def _migrate_embed_spaces_element_type(conn: sqlite3.Connection) -> None:
     """Add element_type column to embed_spaces if missing."""
-    columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()
-    }
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()}
     if "element_type" in columns:
         return
     conn.execute(
@@ -559,26 +535,17 @@ def _migrate_normalize_source_uri(conn: sqlite3.Connection) -> None:
     This migration normalises any legacy rows so lookups remain consistent.
     Idempotent — runs a no-op UPDATE when no backslashes are present.
     """
-    conn.execute(
-        "UPDATE chunks SET source_uri = REPLACE(source_uri, '\\', '/')"
-        " WHERE source_uri LIKE '%\\%'"
-    )
-    conn.execute(
-        "UPDATE paper_paths SET path = REPLACE(path, '\\', '/') WHERE path LIKE '%\\%'"
-    )
+    conn.execute("UPDATE chunks SET source_uri = REPLACE(source_uri, '\\', '/') WHERE source_uri LIKE '%\\%'")
+    conn.execute("UPDATE paper_paths SET path = REPLACE(path, '\\', '/') WHERE path LIKE '%\\%'")
     conn.commit()
 
 
 def _migrate_extraction_source(conn: sqlite3.Connection) -> None:
     """Add source column to methods, datasets, metrics, entities tables."""
     for table in ("methods", "datasets", "metrics", "entities"):
-        columns = {
-            row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-        }
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if "source" not in columns:
-            conn.execute(
-                f"ALTER TABLE {table} ADD COLUMN source TEXT NOT NULL DEFAULT 'user'"
-            )
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN source TEXT NOT NULL DEFAULT 'user'")
     conn.commit()
 
 
@@ -592,12 +559,8 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     if existing:
         return
 
-    model_row = conn.execute(
-        "SELECT value FROM config WHERE key = 'embed_model'"
-    ).fetchone()
-    provider_row = conn.execute(
-        "SELECT value FROM config WHERE key = 'embed_provider'"
-    ).fetchone()
+    model_row = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
+    provider_row = conn.execute("SELECT value FROM config WHERE key = 'embed_provider'").fetchone()
 
     model = model_row["value"] if model_row else DEFAULT_EMBED_MODEL
     provider = provider_row["value"] if provider_row else DEFAULT_EMBED_PROVIDER
@@ -636,14 +599,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
             return  # already at the current schema — cheap no-op, no rebuild
         if version > current:
             raise KnowledgeBaseError(
-                f"database schema v{version} is newer than this build (v{current}); "
-                "upgrade the code"
+                f"database schema v{version} is newer than this build (v{current}); upgrade the code"
             )
         # version < current: do NOT auto-migrate on this hot path (per-boot backup
         # + v2+ chain belongs in the explicit `migrate` command).
         raise KnowledgeBaseError(
-            f"database schema v{version} is behind v{current}; "
-            "run `knowledge-base-ingest migrate`"
+            f"database schema v{version} is behind v{current}; run `knowledge-base-ingest migrate`"
         )
 
     # --- Create config table first so we can read embed_dim before chunks_vec ---
@@ -653,9 +614,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             value TEXT NOT NULL
         )
     """)
-    existing = conn.execute(
-        "SELECT value FROM config WHERE key = 'embed_model'"
-    ).fetchone()
+    existing = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
     if not existing:
         conn.executemany(
             "INSERT INTO config (key, value) VALUES (?, ?)",
@@ -668,9 +627,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conn.commit()
 
     # Read the configured dimension (handles both fresh and existing DBs)
-    dim_row = conn.execute(
-        "SELECT value FROM config WHERE key = 'embed_dim'"
-    ).fetchone()
+    dim_row = conn.execute("SELECT value FROM config WHERE key = 'embed_dim'").fetchone()
     embed_dim = int(dim_row["value"]) if dim_row else DEFAULT_EMBED_DIM
 
     conn.executescript(f"""
@@ -893,40 +850,23 @@ def init_schema(conn: sqlite3.Connection) -> None:
         element_type TEXT NOT NULL DEFAULT 'float32'
             CHECK(element_type IN ('float32', 'int8'))
     );
-    """)
+    """)  # noqa: S608  # trusted internal identifiers (embed_dim int + RELATIONSHIP_TYPES check), not user input
 
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_paper_paths_paper_id ON paper_paths(paper_id, is_primary)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_paper_paths_hash ON paper_paths(content_hash)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_paths_paper_id ON paper_paths(paper_id, is_primary)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_paths_hash ON paper_paths(content_hash)")
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_paths_one_primary ON paper_paths(paper_id) WHERE is_primary = TRUE"
     )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_provider', 'ollama')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_model', 'qwen3.5:27b')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('prediction_error_threshold', '0.025')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_propose_threshold', '0.82')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_accept_threshold', '0.95')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('chunk_strategy', 'mechanical')"
-    )
+    conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('llm_provider', 'ollama')")
+    conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('llm_model', 'qwen3.5:27b')")
+    conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('prediction_error_threshold', '0.025')")
+    conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_propose_threshold', '0.82')")
+    conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_accept_threshold', '0.95')")
+    conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('chunk_strategy', 'mechanical')")
 
     # Enforce at most one active embedding space at the DB level
     conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_embed_spaces_one_active "
-        "ON embed_spaces(status) WHERE status = 'active'"
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_embed_spaces_one_active ON embed_spaces(status) WHERE status = 'active'"
     )
 
     conn.commit()
@@ -936,9 +876,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_papers_fts(conn)
     _migrate_session_id(conn)
     _migrate_chunk_strategy(conn)
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_chunks_session_id ON chunks(session_id)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_session_id ON chunks(session_id)")
     _migrate_paper_paths(conn)
     _migrate_jobs_types(conn)
     _migrate_chunk_sessions(conn)

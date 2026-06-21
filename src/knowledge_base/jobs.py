@@ -38,9 +38,7 @@ def submit_job(
     db_path = _get_db_path(conn)
 
     existing = conn.execute(
-        "SELECT id FROM jobs "
-        "WHERE paper_id = ? AND job_type = ? AND params = ? "
-        "AND status IN ('pending', 'running')",
+        "SELECT id FROM jobs WHERE paper_id = ? AND job_type = ? AND params = ? AND status IN ('pending', 'running')",
         (paper_id, job_type, params_json),
     ).fetchone()
     if existing:
@@ -53,6 +51,8 @@ def submit_job(
     )
     conn.commit()
     job_id = cursor.lastrowid
+    if job_id is None:
+        raise ExtractionError("INSERT did not produce a row id for the new job")
     _ensure_worker_running(db_path)
     return job_id
 
@@ -81,9 +81,8 @@ def list_jobs(
         params.append(paper_id)
 
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    rows = conn.execute(
-        f"SELECT * FROM jobs{where} ORDER BY created_at DESC", params
-    ).fetchall()
+    query = f"SELECT * FROM jobs{where} ORDER BY created_at DESC"  # noqa: S608  # trusted internal identifier, not user input
+    rows = conn.execute(query, params).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -110,9 +109,7 @@ class _JobWorker:
                 self._event.set()
                 return
             self._stop_flag = False
-            self._thread = threading.Thread(
-                target=self._run, daemon=True, name="job-worker"
-            )
+            self._thread = threading.Thread(target=self._run, daemon=True, name="job-worker")
             self._thread.start()
 
     def stop(self) -> None:
@@ -138,10 +135,7 @@ class _JobWorker:
         conn.execute("PRAGMA busy_timeout=5000")
 
         # Crash recovery: reset stale running jobs
-        conn.execute(
-            "UPDATE jobs SET status = 'pending', started_at = NULL "
-            "WHERE status = 'running'"
-        )
+        conn.execute("UPDATE jobs SET status = 'pending', started_at = NULL WHERE status = 'running'")
         conn.commit()
         logger.info("Job worker started (crash recovery applied)")
 
@@ -170,9 +164,7 @@ class _JobWorker:
 
         job = dict(row)
         job_id = job["id"]
-        logger.info(
-            "Job %d started: %s for paper %d", job_id, job["job_type"], job["paper_id"]
-        )
+        logger.info("Job %d started: %s for paper %d", job_id, job["job_type"], job["paper_id"])
 
         # Build throttled progress callback
         _progress_counter = 0
@@ -188,16 +180,13 @@ class _JobWorker:
 
         try:
             # Verify paper still exists
-            paper = conn.execute(
-                "SELECT id FROM papers WHERE id = ?", (job["paper_id"],)
-            ).fetchone()
+            paper = conn.execute("SELECT id FROM papers WHERE id = ?", (job["paper_id"],)).fetchone()
             if paper is None:
                 raise ValueError(f"Paper {job['paper_id']} no longer exists")
 
             result = self._dispatch(conn, job, on_progress)
             conn.execute(
-                "UPDATE jobs SET status = 'completed', result = ?, "
-                "completed_at = datetime('now') WHERE id = ?",
+                "UPDATE jobs SET status = 'completed', result = ?, completed_at = datetime('now') WHERE id = ?",
                 (json.dumps(result), job_id),
             )
             conn.commit()
@@ -210,16 +199,14 @@ class _JobWorker:
             if exc.raw:
                 result_data["raw"] = exc.raw
             conn.execute(
-                "UPDATE jobs SET status = 'failed', error = ?, result = ?, "
-                "completed_at = datetime('now') WHERE id = ?",
+                "UPDATE jobs SET status = 'failed', error = ?, result = ?, completed_at = datetime('now') WHERE id = ?",
                 (str(exc), json.dumps(result_data), job_id),
             )
             conn.commit()
             logger.error("Job %d failed: %s", job_id, exc)
         except Exception as exc:
             conn.execute(
-                "UPDATE jobs SET status = 'failed', error = ?, "
-                "completed_at = datetime('now') WHERE id = ?",
+                "UPDATE jobs SET status = 'failed', error = ?, completed_at = datetime('now') WHERE id = ?",
                 (str(exc), job_id),
             )
             conn.commit()

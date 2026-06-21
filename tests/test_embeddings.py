@@ -43,6 +43,7 @@ class TestOllamaProvider:
         provider = OllamaProvider()
         result = provider.embed(["hello"], model="bge-m3", expected_dim=3)
         assert len(result) == 1
+        assert result[0] is not None
         assert len(result[0]) == 3
 
     @patch("knowledge_base.embeddings.httpx.post")
@@ -55,6 +56,7 @@ class TestOllamaProvider:
         )
         provider = OllamaProvider()
         result = provider.embed(["hello"], model="bge-m3", expected_dim=3)
+        assert result[0] is not None
         norm = math.sqrt(sum(x * x for x in result[0]))
         assert abs(norm - 1.0) < 1e-6
 
@@ -105,9 +107,7 @@ class TestGetProvider:
     def test_env_var_override_disabled(self, monkeypatch):
         """allow_env_override=False ignores EMBED_PROVIDER."""
         monkeypatch.setenv("EMBED_PROVIDER", "ollama")
-        with pytest.raises(
-            ValueError, match="Unknown embedding provider 'nonexistent'"
-        ):
+        with pytest.raises(ValueError, match="Unknown embedding provider 'nonexistent'"):
             get_provider("nonexistent", allow_env_override=False)
 
     def test_provider_caching(self):
@@ -132,9 +132,7 @@ class TestEmbedDispatch:
         mock_provider.embed.return_value = [[0.1, 0.2, 0.3]]
         mock_get.return_value = mock_provider
 
-        result = embed(
-            ["hello"], model="bge-m3", expected_dim=3, _provider_name="openai"
-        )
+        result = embed(["hello"], model="bge-m3", expected_dim=3, _provider_name="openai")
 
         mock_get.assert_called_once_with("openai")
         mock_provider.embed.assert_called_once()
@@ -186,10 +184,9 @@ class TestOpenAIProvider:
 
         mock_api.return_value = [[1.0, 0.0, 0.0]]
         provider = OpenAIProvider()
-        result = provider.embed(
-            ["hello"], model="text-embedding-3-large", expected_dim=3
-        )
+        result = provider.embed(["hello"], model="text-embedding-3-large", expected_dim=3)
         assert len(result) == 1
+        assert result[0] is not None
         assert len(result[0]) == 3
 
     @patch("knowledge_base.embeddings.OpenAIProvider._call_api")
@@ -198,9 +195,8 @@ class TestOpenAIProvider:
 
         mock_api.return_value = [[3.0, 4.0, 0.0]]
         provider = OpenAIProvider()
-        result = provider.embed(
-            ["hello"], model="text-embedding-3-large", expected_dim=3
-        )
+        result = provider.embed(["hello"], model="text-embedding-3-large", expected_dim=3)
+        assert result[0] is not None
         norm = math.sqrt(sum(x * x for x in result[0]))
         assert abs(norm - 1.0) < 1e-6
 
@@ -246,6 +242,7 @@ class TestONNXProvider:
         provider = ONNXProvider()
         result = provider.embed(["hello"], model="bge-m3", expected_dim=3)
         assert len(result) == 1
+        assert result[0] is not None
         assert len(result[0]) == 3
 
     @patch("knowledge_base.embeddings.ONNXProvider._get_session")
@@ -258,6 +255,7 @@ class TestONNXProvider:
         mock_session_fn.return_value = mock_session
         provider = ONNXProvider()
         result = provider.embed(["hello"], model="bge-m3", expected_dim=3)
+        assert result[0] is not None
         norm = math.sqrt(sum(x * x for x in result[0]))
         assert abs(norm - 1.0) < 1e-6
 
@@ -312,15 +310,11 @@ class TestProviderZeroNormHandling:
     def test_ollama_zero_norm_returns_none(self, mock_post):
         """OllamaProvider returns None for zero-norm embeddings in a batch."""
         mock_post.return_value = MagicMock(
-            json=lambda: {
-                "embeddings": [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-            },
+            json=lambda: {"embeddings": [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]]},
             raise_for_status=lambda: None,
         )
         provider = OllamaProvider()
-        result = provider.embed(
-            ["good", "bad", "good2"], model="bge-m3", expected_dim=3
-        )
+        result = provider.embed(["good", "bad", "good2"], model="bge-m3", expected_dim=3)
         assert len(result) == 3
         assert result[0] is not None
         assert result[1] is None

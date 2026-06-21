@@ -32,16 +32,10 @@ logger = logging.getLogger(__name__)
 
 def _get_llm_config(conn: sqlite3.Connection) -> dict:
     """Read LLM configuration from config table."""
-    provider = conn.execute(
-        "SELECT value FROM config WHERE key = 'llm_provider'"
-    ).fetchone()
+    provider = conn.execute("SELECT value FROM config WHERE key = 'llm_provider'").fetchone()
     model = conn.execute("SELECT value FROM config WHERE key = 'llm_model'").fetchone()
-    base_url_row = conn.execute(
-        "SELECT value FROM config WHERE key = 'llm_base_url'"
-    ).fetchone()
-    api_key_row = conn.execute(
-        "SELECT value FROM config WHERE key = 'llm_api_key'"
-    ).fetchone()
+    base_url_row = conn.execute("SELECT value FROM config WHERE key = 'llm_base_url'").fetchone()
+    api_key_row = conn.execute("SELECT value FROM config WHERE key = 'llm_api_key'").fetchone()
 
     prov = provider["value"] if provider else "ollama"
 
@@ -50,16 +44,12 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
     elif prov == "ollama":
         base_url = _get_ollama_url()
     else:
-        raise ValueError(
-            "llm_base_url is required when llm_provider is 'openai_compat'"
-        )
+        raise ValueError("llm_base_url is required when llm_provider is 'openai_compat'")
 
     return {
         "provider": prov,
         "model": model["value"] if model else "qwen3.5:27b",
-        "base_url": base_url.rstrip("/").removesuffix("/v1")
-        if prov == "openai_compat"
-        else base_url.rstrip("/"),
+        "base_url": base_url.rstrip("/").removesuffix("/v1") if prov == "openai_compat" else base_url.rstrip("/"),
         "api_key": api_key_row["value"] if api_key_row else None,
     }
 
@@ -260,9 +250,7 @@ def _sanitize_url(url: str) -> str:
 _CONNECTIVITY_TIMEOUT = 3
 
 
-def _test_llm_connectivity(
-    provider: str, base_url: str, api_key: str | None = None
-) -> dict:
+def _test_llm_connectivity(provider: str, base_url: str, api_key: str | None = None) -> dict:
     """Probe LLM endpoint reachability. Returns advisory status, never raises."""
     safe_url = _sanitize_url(base_url)
     try:
@@ -295,7 +283,7 @@ def _test_llm_connectivity(
                             f"HTTP {fallback.status_code}",
                             request=fallback.request,
                             response=fallback,
-                        )
+                        ) from exc
                 else:
                     raise
         return {"reachable": True}
@@ -310,9 +298,7 @@ def _test_llm_connectivity(
             warning = f"Server returned HTTP {exc.response.status_code}"
     except Exception as exc:
         warning = f"Connectivity test failed: {type(exc).__name__}"
-    logger.warning(
-        "LLM connectivity test failed for %s at %s: %s", provider, safe_url, warning
-    )
+    logger.warning("LLM connectivity test failed for %s at %s: %s", provider, safe_url, warning)
     return {"reachable": False, "warning": warning}
 
 
@@ -330,9 +316,7 @@ def configure_llm(
     (e.g. ``keyring`` library) before exposing this tool over a network.
     """
     if provider not in ("ollama", "openai_compat"):
-        raise ValidationError(
-            f"Unknown provider: {provider}. Use 'ollama' or 'openai_compat'."
-        )
+        raise ValidationError(f"Unknown provider: {provider}. Use 'ollama' or 'openai_compat'.")
     if provider == "openai_compat" and not base_url:
         raise ValidationError("base_url is required for openai_compat provider")
     if base_url:
@@ -340,17 +324,13 @@ def configure_llm(
 
         parsed = urlparse(base_url)
         if parsed.scheme not in ("http", "https"):
-            raise ValidationError(
-                f"Invalid URL scheme: {parsed.scheme!r}. Use http or https."
-            )
+            raise ValidationError(f"Invalid URL scheme: {parsed.scheme!r}. Use http or https.")
 
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_provider', ?)",
         (provider,),
     )
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_model', ?)", (model,)
-    )
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_model', ?)", (model,))
     if base_url:
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', ?)",
@@ -369,9 +349,7 @@ def configure_llm(
         conn.execute("DELETE FROM config WHERE key = 'llm_api_key'")
     conn.commit()
     cfg = _get_llm_config(conn)
-    connectivity = _test_llm_connectivity(
-        cfg["provider"], cfg["base_url"], cfg.get("api_key")
-    )
+    connectivity = _test_llm_connectivity(cfg["provider"], cfg["base_url"], cfg.get("api_key"))
     # Redact sensitive fields from response
     cfg.pop("api_key", None)
     cfg.update(connectivity)

@@ -33,9 +33,7 @@ def test_schema_creates_all_tables(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    tables = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    ).fetchall()
+    tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
     table_names = {row["name"] for row in tables}
 
     assert "chunks" in table_names
@@ -56,9 +54,7 @@ def test_fts_trigger(tmp_path):
     )
     conn.commit()
 
-    rows = conn.execute(
-        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'attention'"
-    ).fetchall()
+    rows = conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'attention'").fetchall()
     assert len(rows) == 1
 
 
@@ -131,9 +127,7 @@ def test_session_id_column_exists(tmp_path):
     )
     conn.commit()
 
-    rows = conn.execute(
-        "SELECT content_hash, session_id FROM chunks ORDER BY content_hash"
-    ).fetchall()
+    rows = conn.execute("SELECT content_hash, session_id FROM chunks ORDER BY content_hash").fetchall()
     assert rows[0]["session_id"] is None
     assert rows[1]["session_id"] == "sess-001"
 
@@ -202,7 +196,7 @@ def test_co_occurrence_pairs_min_sessions(tmp_path):
     # a.md and b.md share TWO sessions
     for sess in ("s1", "s2"):
         conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "  # noqa: S608  # trusted test literal (loop over fixed tuple), not user input
             f"VALUES ('a_{sess}', 'ca', 'note', '/tmp/a.md', 0, ?)",
             (sess,),
         )
@@ -212,7 +206,7 @@ def test_co_occurrence_pairs_min_sessions(tmp_path):
             (cid, sess),
         )
         conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "  # noqa: S608  # trusted test literal (loop over fixed tuple), not user input
             f"VALUES ('b_{sess}', 'cb', 'note', '/tmp/b.md', 0, ?)",
             (sess,),
         )
@@ -227,9 +221,7 @@ def test_co_occurrence_pairs_min_sessions(tmp_path):
         "VALUES ('c_s1', 'cc', 'note', '/tmp/c.md', 0, 's1')"
     )
     cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.execute(
-        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)", (cid, "s1")
-    )
+    conn.execute("INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)", (cid, "s1"))
     conn.commit()
 
     # min_sessions=2 should only return a.md/b.md
@@ -274,9 +266,7 @@ def test_chunk_strategy_column_exists(tmp_path):
     )
     conn.commit()
 
-    row = conn.execute(
-        "SELECT chunk_strategy FROM chunks WHERE content_hash = 'cs_test'"
-    ).fetchone()
+    row = conn.execute("SELECT chunk_strategy FROM chunks WHERE content_hash = 'cs_test'").fetchone()
     assert row["chunk_strategy"] == "mechanical"
 
 
@@ -286,9 +276,7 @@ def test_chunk_strategy_config_default(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    row = conn.execute(
-        "SELECT value FROM config WHERE key = 'chunk_strategy'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
     assert row is not None
     assert row["value"] == "mechanical"
 
@@ -327,15 +315,11 @@ def test_chunk_strategy_migration(tmp_path):
     init_schema(conn)
 
     # Verify chunk_strategy column exists with default
-    row = conn.execute(
-        "SELECT chunk_strategy FROM chunks WHERE content_hash = 'old'"
-    ).fetchone()
+    row = conn.execute("SELECT chunk_strategy FROM chunks WHERE content_hash = 'old'").fetchone()
     assert row["chunk_strategy"] == "mechanical"
 
     # Config key also set
-    cfg = conn.execute(
-        "SELECT value FROM config WHERE key = 'chunk_strategy'"
-    ).fetchone()
+    cfg = conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
     assert cfg["value"] == "mechanical"
 
 
@@ -371,9 +355,7 @@ def test_migrate_session_id_on_existing_db(tmp_path):
     init_schema(conn)
 
     # Verify session_id column exists and old data preserved
-    row = conn.execute(
-        "SELECT session_id FROM chunks WHERE content_hash = 'old'"
-    ).fetchone()
+    row = conn.execute("SELECT session_id FROM chunks WHERE content_hash = 'old'").fetchone()
     assert row["session_id"] is None
 
     # Can now insert with session_id
@@ -391,9 +373,7 @@ def test_chunk_sessions_table_exists(tmp_path):
     init_schema(conn)
 
     # Table exists
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_sessions'"
-    ).fetchone()
+    row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_sessions'").fetchone()
     assert row is not None
 
     # Has correct columns
@@ -415,9 +395,7 @@ def test_chunk_sessions_table_exists(tmp_path):
         "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, 'sess-1')",
         (chunk_id,),
     )
-    count = conn.execute(
-        "SELECT COUNT(*) FROM chunk_sessions WHERE chunk_id = ?", (chunk_id,)
-    ).fetchone()[0]
+    count = conn.execute("SELECT COUNT(*) FROM chunk_sessions WHERE chunk_id = ?", (chunk_id,)).fetchone()[0]
     assert count == 1
 
 
@@ -463,17 +441,13 @@ def test_migrate_chunk_sessions_backfill(tmp_path):
     init_schema(conn)
 
     # Verify backfill: chunks with session_id should have entries
-    rows = conn.execute(
-        "SELECT chunk_id, session_id FROM chunk_sessions ORDER BY chunk_id"
-    ).fetchall()
+    rows = conn.execute("SELECT chunk_id, session_id FROM chunk_sessions ORDER BY chunk_id").fetchall()
     assert len(rows) == 2
     assert rows[0]["session_id"] == "sess-A"
     assert rows[1]["session_id"] == "sess-A"
 
     # Verify NULL session_id chunk was NOT backfilled
-    null_rows = conn.execute(
-        "SELECT * FROM chunk_sessions WHERE chunk_id = 3"
-    ).fetchall()
+    null_rows = conn.execute("SELECT * FROM chunk_sessions WHERE chunk_id = 3").fetchall()
     assert len(null_rows) == 0
 
 
@@ -495,12 +469,8 @@ def test_co_occurrence_pairs_uses_join_table(tmp_path):
     conn.commit()
 
     # Manually populate chunk_sessions (simulating the new write path)
-    conn.execute(
-        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (1, 'sess-X')"
-    )
-    conn.execute(
-        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (2, 'sess-X')"
-    )
+    conn.execute("INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (1, 'sess-X')")
+    conn.execute("INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (2, 'sess-X')")
     conn.commit()
 
     pairs = co_occurrence_pairs(conn)
@@ -533,9 +503,7 @@ def test_migrate_normalize_source_uri(tmp_path):
     _migrate_normalize_source_uri(conn)
     conn.commit()
 
-    chunk_uri = conn.execute(
-        "SELECT source_uri FROM chunks WHERE content_hash = 'h1'"
-    ).fetchone()
+    chunk_uri = conn.execute("SELECT source_uri FROM chunks WHERE content_hash = 'h1'").fetchone()
     assert chunk_uri["source_uri"] == "C:/Users/foo/papers/a.md"
 
     pp = conn.execute("SELECT path FROM paper_paths WHERE paper_id = 1").fetchone()

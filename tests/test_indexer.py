@@ -226,17 +226,13 @@ def test_cmd_ingest_directory(tmp_path, capsys):
     cmd_ingest(args)
 
     conn = get_connection(db_path)
-    sources = conn.execute(
-        "SELECT COUNT(DISTINCT source_uri) AS n FROM chunks"
-    ).fetchone()["n"]
+    sources = conn.execute("SELECT COUNT(DISTINCT source_uri) AS n FROM chunks").fetchone()["n"]
     assert sources == 2
 
 
 def test_cmd_ingest_nonexistent(tmp_path):
     _setup(tmp_path)
-    args = _make_args(
-        tmp_path, path=str(tmp_path / "nope.md"), source_type=None, session_id=None
-    )
+    args = _make_args(tmp_path, path=str(tmp_path / "nope.md"), source_type=None, session_id=None)
     with pytest.raises(SystemExit, match="1"):
         cmd_ingest(args)
 
@@ -360,10 +356,7 @@ def test_cmd_re_embed(mock_provider, tmp_path):
 
     # Add a "similar" relationship to verify it gets deleted
     conn.execute("INSERT INTO papers (id, title) VALUES (1, 'P1'), (2, 'P2')")
-    conn.execute(
-        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) "
-        "VALUES (1, 2, 'similar')"
-    )
+    conn.execute("INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) VALUES (1, 2, 'similar')")
     conn.commit()
     conn.close()
 
@@ -378,9 +371,7 @@ def test_cmd_re_embed(mock_provider, tmp_path):
     cmd_re_embed(args)
 
     conn = get_connection(db_path)
-    rels = conn.execute(
-        "SELECT COUNT(*) AS n FROM relationships WHERE relation_type = 'similar'"
-    ).fetchone()["n"]
+    rels = conn.execute("SELECT COUNT(*) AS n FROM relationships WHERE relation_type = 'similar'").fetchone()["n"]
     assert rels == 0
 
 
@@ -392,7 +383,7 @@ def test_cmd_re_embed(mock_provider, tmp_path):
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
 def test_cmd_status(tmp_path, capsys):
-    conn, db_path = _setup(tmp_path)
+    conn, _db_path = _setup(tmp_path)
 
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Hello\n\nContent.\n")
@@ -431,10 +422,7 @@ def test_drain_jobs_times_out(tmp_path):
     conn, _ = _setup(tmp_path)
     # Need a paper for FK constraint
     conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Test')")
-    conn.execute(
-        "INSERT INTO jobs (id, paper_id, job_type, params) "
-        "VALUES (42, 1, 'extract_structure', '{}')"
-    )
+    conn.execute("INSERT INTO jobs (id, paper_id, job_type, params) VALUES (42, 1, 'extract_structure', '{}')")
     conn.commit()
     _drain_jobs(conn, job_ids=[42], timeout=1.0)  # should not hang
 
@@ -456,9 +444,7 @@ def test_db_override(tmp_path):
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Test\n\nContent.\n")
 
-    args = _make_args(
-        tmp_path, db=custom_db, path=str(md_file), source_type=None, session_id=None
-    )
+    args = _make_args(tmp_path, db=custom_db, path=str(md_file), source_type=None, session_id=None)
     cmd_ingest(args)
 
     conn = get_connection(custom_db)

@@ -82,9 +82,7 @@ def reingest(
 
     # Invalidate stale "similar" relationships for all papers linked to this file
     source_uri = p.as_posix()
-    affected = conn.execute(
-        "SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)
-    ).fetchall()
+    affected = conn.execute("SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)).fetchall()
     if affected:
         from ..jobs import submit_job
 
@@ -135,16 +133,10 @@ def configure_chunking(strategy: str | None = None) -> str:
     """
     conn = _get_conn()
     if strategy is None:
-        row = conn.execute(
-            "SELECT value FROM config WHERE key = 'chunk_strategy'"
-        ).fetchone()
+        row = conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
         return json.dumps({"chunk_strategy": row["value"] if row else "mechanical"})
     if strategy not in ("mechanical", "semantic"):
-        return json.dumps(
-            {
-                "error": f"Invalid strategy: {strategy!r}. Must be 'mechanical' or 'semantic'."
-            }
-        )
+        return json.dumps({"error": f"Invalid strategy: {strategy!r}. Must be 'mechanical' or 'semantic'."})
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', ?)",
         (strategy,),
@@ -192,9 +184,7 @@ def configure_browser_tool(
     """
     conn = _get_conn()
     try:
-        return json.dumps(
-            configure_browser(conn, cdp_endpoint=cdp_endpoint, venv_path=venv_path)
-        )
+        return json.dumps(configure_browser(conn, cdp_endpoint=cdp_endpoint, venv_path=venv_path))
     except KnowledgeBaseError as e:
         err = {"error": str(e), **e.details}
         return json.dumps(err)

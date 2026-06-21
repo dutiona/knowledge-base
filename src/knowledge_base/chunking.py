@@ -86,9 +86,7 @@ def sanitize_image_refs(text: str, image_dir: Path | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def chunk_text(
-    text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
-) -> list[str]:
+def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
     if size <= 0:
         size = CHUNK_SIZE
     if overlap >= size:
@@ -182,6 +180,43 @@ def _paragraph_split(
     return result
 
 
+def _split_prose_table_segments(body_lines: list[str]) -> list[tuple[str, str]]:
+    """Walk lines in order, grouping them into prose/table segments.
+
+    Returns a list of ``(segment_type, segment_text)`` tuples where
+    ``segment_type`` is ``"prose"`` or ``"table"``, preserving document order.
+    """
+    segments: list[tuple[str, str]] = []
+    prose_buf: list[str] = []
+    table_buf: list[str] = []
+    in_table = False
+
+    def flush_prose() -> None:
+        if prose_buf:
+            segments.append(("prose", "\n".join(prose_buf)))
+            prose_buf.clear()
+
+    def flush_table() -> None:
+        if table_buf:
+            segments.append(("table", "\n".join(table_buf)))
+            table_buf.clear()
+
+    for line in body_lines:
+        if _TABLE_LINE_RE.match(line):
+            if not in_table:
+                flush_prose()
+                in_table = True
+            table_buf.append(line)
+        else:
+            if in_table:
+                flush_table()
+                in_table = False
+            prose_buf.append(line)
+    flush_prose()
+    flush_table()
+    return segments
+
+
 def chunk_markdown(
     text: str,
     max_chunk_size: int = CHUNK_SIZE,
@@ -208,11 +243,7 @@ def chunk_markdown(
 
         # Each heading runs from its match.start() to the next heading's start()
         for i, m in enumerate(heading_matches):
-            end = (
-                heading_matches[i + 1].start()
-                if i + 1 < len(heading_matches)
-                else len(text)
-            )
+            end = heading_matches[i + 1].start() if i + 1 < len(heading_matches) else len(text)
             sections.append((text[m.start() : end], m.start()))
     else:
         # No headings — treat entire text as one section
@@ -223,10 +254,7 @@ def chunk_markdown(
         # No headings at all — fall back to chunk_text
         chunks = chunk_text(text, max_chunk_size, overlap)
         pm = page_map or {}
-        return [
-            (sanitize_image_refs(c, image_dir), pages_for_range(0, len(text), pm))
-            for c in chunks
-        ]
+        return [(sanitize_image_refs(c, image_dir), pages_for_range(0, len(text), pm)) for c in chunks]
 
     # Process sections: handle tables, oversized, and merging
     result: list[tuple[str, list[int]]] = []
@@ -282,43 +310,12 @@ def chunk_markdown(
         sec_pages = pages_for_range(sec_offset, sec_offset + len(section_text), pm)
 
         # Walk lines in order, alternating between prose and table segments
-        segments: list[tuple[str, str]] = []  # (type, text)
-        prose_buf: list[str] = []
-        table_buf: list[str] = []
-        in_table = False
-
-        def _flush_prose() -> None:
-            if prose_buf:
-                segments.append(("prose", "\n".join(prose_buf)))
-                prose_buf.clear()
-
-        def _flush_table() -> None:
-            if table_buf:
-                segments.append(("table", "\n".join(table_buf)))
-                table_buf.clear()
-
-        for line in body_lines:
-            if _TABLE_LINE_RE.match(line):
-                if not in_table:
-                    _flush_prose()
-                    in_table = True
-                table_buf.append(line)
-            else:
-                if in_table:
-                    _flush_table()
-                    in_table = False
-                prose_buf.append(line)
-        _flush_prose()
-        _flush_table()
+        segments = _split_prose_table_segments(body_lines)
 
         heading_emitted = False
         for seg_type, seg_text in segments:
             if seg_type == "table":
-                table_text = (
-                    f"{heading_line}\n{seg_text}"
-                    if heading_line and not heading_emitted
-                    else seg_text
-                )
+                table_text = f"{heading_line}\n{seg_text}" if heading_line and not heading_emitted else seg_text
                 heading_emitted = True
                 sanitized = sanitize_image_refs(table_text.strip(), image_dir)
                 result.append((sanitized, sec_pages))
@@ -394,11 +391,7 @@ def chunk_by_section(
 
         if len(subsections) <= 1:
             # No H3 sub-headings — paragraph fallback
-            result.extend(
-                _paragraph_split(
-                    section_text, max_section_size, sec_offset, pm, image_dir
-                )
-            )
+            result.extend(_paragraph_split(section_text, max_section_size, sec_offset, pm, image_dir))
             continue
 
         # Process H3 sub-sections
@@ -419,11 +412,7 @@ def chunk_by_section(
                 result.append((sanitized, pages))
             else:
                 # Still too large — paragraph fallback
-                result.extend(
-                    _paragraph_split(
-                        sub_text, max_section_size, sub_offset, pm, image_dir
-                    )
-                )
+                result.extend(_paragraph_split(sub_text, max_section_size, sub_offset, pm, image_dir))
 
     return result
 

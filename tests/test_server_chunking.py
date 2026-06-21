@@ -11,9 +11,7 @@ def test_configure_chunking_query(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    row = conn.execute(
-        "SELECT value FROM config WHERE key = 'chunk_strategy'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
     assert row["value"] == "mechanical"
 
 
@@ -23,14 +21,10 @@ def test_configure_chunking_set_valid(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')"
-    )
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')")
     conn.commit()
 
-    row = conn.execute(
-        "SELECT value FROM config WHERE key = 'chunk_strategy'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
     assert row["value"] == "semantic"
 
 
@@ -52,9 +46,7 @@ def test_status_includes_chunk_strategy(tmp_path):
     init_schema(conn)
 
     # Verify the config key exists and can be read
-    row = conn.execute(
-        "SELECT value FROM config WHERE key = 'chunk_strategy'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
     assert row is not None
     assert row["value"] in ("mechanical", "semantic")
 
@@ -95,8 +87,6 @@ def test_search_index_chunk_strategy_passthrough(tmp_path):
         assert len(all_results) == 2
 
         # Explicit filter to semantic only
-        sem_results = search(
-            conn, "graph neural", mode="fts", chunk_strategy="semantic"
-        )
+        sem_results = search(conn, "graph neural", mode="fts", chunk_strategy="semantic")
         assert len(sem_results) == 1
         assert sem_results[0].content.startswith("semantic")

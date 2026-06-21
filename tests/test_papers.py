@@ -39,9 +39,7 @@ def _setup(tmp_path):
 
 def test_register_and_get_paper(tmp_path):
     conn = _setup(tmp_path)
-    result = register_paper(
-        conn, "Attention Is All You Need", ["Vaswani, A."], 2017, "NeurIPS"
-    )
+    result = register_paper(conn, "Attention Is All You Need", ["Vaswani, A."], 2017, "NeurIPS")
     assert "paper_id" in result
 
     papers = get_paper(conn, paper_id=result["paper_id"])
@@ -217,9 +215,7 @@ def test_suggest_relationships_by_title(tmp_path):
     md.write_text("We extend Attention Is All You Need with sparse patterns.\n")
     ingest_file(conn, md)
 
-    p1 = register_paper(conn, "Sparse Attention", source_uri=str(md.resolve()))[
-        "paper_id"
-    ]
+    p1 = register_paper(conn, "Sparse Attention", source_uri=str(md.resolve()))["paper_id"]
     register_paper(conn, "Attention Is All You Need")
 
     result = suggest_relationships(conn, p1)
@@ -279,23 +275,16 @@ def test_suggest_title_fts5_fuzzy_match(tmp_path):
 
     md = tmp_path / "citing.md"
     # Text mentions the title words but not as an exact substring
-    md.write_text(
-        "We build on residual learning techniques for deep image recognition tasks.\n"
-    )
+    md.write_text("We build on residual learning techniques for deep image recognition tasks.\n")
     ingest_file(conn, md)
 
     p1 = register_paper(conn, "Our Method", source_uri=str(md.resolve()))["paper_id"]
     register_paper(conn, "Deep Residual Learning for Image Recognition")
 
     result = suggest_relationships(conn, p1)
-    title_matches = [
-        s for s in result["suggestions"] if s["match_method"] == "title_words"
-    ]
+    title_matches = [s for s in result["suggestions"] if s["match_method"] == "title_words"]
     assert len(title_matches) >= 1
-    assert (
-        title_matches[0]["target_title"]
-        == "Deep Residual Learning for Image Recognition"
-    )
+    assert title_matches[0]["target_title"] == "Deep Residual Learning for Image Recognition"
     assert 0.3 <= title_matches[0]["confidence"] <= 0.7
 
 
@@ -313,9 +302,7 @@ def test_suggest_title_fts5_short_title_skipped(tmp_path):
     register_paper(conn, "Deep Learning")  # 2-word title
 
     result = suggest_relationships(conn, p1)
-    title_matches = [
-        s for s in result["suggestions"] if s["match_method"] == "title_words"
-    ]
+    title_matches = [s for s in result["suggestions"] if s["match_method"] == "title_words"]
     assert len(title_matches) == 0
 
 
@@ -326,20 +313,14 @@ def test_suggest_author_year_parenthetical(tmp_path):
     conn = _setup(tmp_path)
 
     md = tmp_path / "citing.md"
-    md.write_text(
-        "The transformer architecture (Vaswani et al., 2017) revolutionized NLP.\n"
-    )
+    md.write_text("The transformer architecture (Vaswani et al., 2017) revolutionized NLP.\n")
     ingest_file(conn, md)
 
     p1 = register_paper(conn, "Our NLP Paper", source_uri=str(md.resolve()))["paper_id"]
-    register_paper(
-        conn, "Attention Is All You Need", ["Vaswani, A.", "Shazeer, N."], 2017
-    )
+    register_paper(conn, "Attention Is All You Need", ["Vaswani, A.", "Shazeer, N."], 2017)
 
     result = suggest_relationships(conn, p1)
-    author_matches = [
-        s for s in result["suggestions"] if s["match_method"] == "author_year"
-    ]
+    author_matches = [s for s in result["suggestions"] if s["match_method"] == "author_year"]
     assert len(author_matches) >= 1
     assert author_matches[0]["target_title"] == "Attention Is All You Need"
     assert 0.3 <= author_matches[0]["confidence"] <= 0.6
@@ -355,15 +336,11 @@ def test_suggest_author_year_narrative(tmp_path):
     md.write_text("Vaswani et al. (2017) introduced the transformer architecture.\n")
     ingest_file(conn, md)
 
-    p1 = register_paper(conn, "Follow-up Paper", source_uri=str(md.resolve()))[
-        "paper_id"
-    ]
+    p1 = register_paper(conn, "Follow-up Paper", source_uri=str(md.resolve()))["paper_id"]
     register_paper(conn, "Attention Is All You Need", ["Vaswani, A."], 2017)
 
     result = suggest_relationships(conn, p1)
-    author_matches = [
-        s for s in result["suggestions"] if s["match_method"] == "author_year"
-    ]
+    author_matches = [s for s in result["suggestions"] if s["match_method"] == "author_year"]
     assert len(author_matches) >= 1
 
 
@@ -410,9 +387,7 @@ def test_suggest_author_year_compound_surname(tmp_path):
     conn = _setup(tmp_path)
 
     md = tmp_path / "citing.md"
-    md.write_text(
-        "Prior work by O'Malley et al. (2020) and (MacDonald, 2019) is relevant.\n"
-    )
+    md.write_text("Prior work by O'Malley et al. (2020) and (MacDonald, 2019) is relevant.\n")
     ingest_file(conn, md)
 
     p1 = register_paper(conn, "Our Paper", source_uri=str(md.resolve()))["paper_id"]
@@ -420,9 +395,7 @@ def test_suggest_author_year_compound_surname(tmp_path):
     register_paper(conn, "MacDonald Analysis", ["MacDonald, Ian"], 2019)
 
     result = suggest_relationships(conn, p1)
-    author_matches = [
-        s for s in result["suggestions"] if s["match_method"] == "author_year"
-    ]
+    author_matches = [s for s in result["suggestions"] if s["match_method"] == "author_year"]
     matched_titles = {s["target_title"] for s in author_matches}
     assert "O'Malley Study" in matched_titles
     assert "MacDonald Analysis" in matched_titles
@@ -438,16 +411,12 @@ def test_suggest_title_no_substring_false_positive(tmp_path):
     md.write_text("We studied internet protocols and network architecture.\n")
     ingest_file(conn, md)
 
-    p1 = register_paper(conn, "Internet Paper", source_uri=str(md.resolve()))[
-        "paper_id"
-    ]
+    p1 = register_paper(conn, "Internet Paper", source_uri=str(md.resolve()))["paper_id"]
     # "net" should NOT match via substring of "internet"
     register_paper(conn, "The Net Effect on Random Systems")
 
     result = suggest_relationships(conn, p1)
-    title_matches = [
-        s for s in result["suggestions"] if s["match_method"] == "title_words"
-    ]
+    title_matches = [s for s in result["suggestions"] if s["match_method"] == "title_words"]
     # "net", "effect", "random", "systems" — only "systems" is absent,
     # but "net" should not match as a word in "internet"
     false_positives = [s for s in title_matches if "Net Effect" in s["target_title"]]
@@ -459,9 +428,7 @@ def test_suggest_title_no_substring_false_positive(tmp_path):
 
 def test_paper_paths_table_exists(tmp_path):
     conn = _setup(tmp_path)
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='paper_paths'"
-    ).fetchone()
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='paper_paths'").fetchone()
     assert row is not None
     assert "paper_id" in row[0]
     assert "content_hash" in row[0]
@@ -479,7 +446,8 @@ def test_migrate_paper_paths_from_existing(tmp_path):
     source_uri = str(md.resolve())
 
     conn.execute(
-        "INSERT INTO papers (title, abstract_chunk_id) VALUES (?, (SELECT id FROM chunks WHERE source_uri = ? LIMIT 1))",
+        "INSERT INTO papers (title, abstract_chunk_id) "
+        "VALUES (?, (SELECT id FROM chunks WHERE source_uri = ? LIMIT 1))",
         ("Old Paper", source_uri),
     )
     conn.commit()
@@ -671,9 +639,7 @@ def test_relocate_paper(tmp_path):
     assert paths[0]["content_hash"] is not None
 
     # chunks.source_uri updated
-    chunks = conn.execute(
-        "SELECT id FROM chunks WHERE source_uri = ?", (str(new_path.resolve()),)
-    ).fetchall()
+    chunks = conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (str(new_path.resolve()),)).fetchall()
     assert len(chunks) >= 1
 
     # Old path has no chunks
@@ -734,6 +700,4 @@ def test_relocate_paper_rolls_back_on_partial_failure(tmp_path):
 
     # paper_paths must be unchanged — the first UPDATE was rolled back
     paths = get_paper_paths(conn, paper_id)
-    assert paths[0]["path"] == old_path, (
-        "paper_paths was not rolled back after partial failure"
-    )
+    assert paths[0]["path"] == old_path, "paper_paths was not rolled back after partial failure"

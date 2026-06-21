@@ -28,8 +28,6 @@ __all__ = [
     "MAX_ENTITIES_PER_EXTRACTION",
     "MAX_METRICS_PER_EXTRACTION",
     "SINGLE_PASS_CHAR_LIMIT",
-    "_validate_extraction",
-    "_validate_resolution",
     "compare_papers",
     "estimate_extraction_time",
     "extract_structure",
@@ -69,25 +67,21 @@ def _validate_extraction(data: object) -> dict:
     truncates overlong strings.
     """
     if not isinstance(data, dict):
-        raise ValueError(
-            f"LLM extraction output: expected dict, got {type(data).__name__}"
-        )
+        raise ValueError(f"LLM extraction output: expected dict, got {type(data).__name__}")
 
     cleaned: dict[str, list] = {"methods": [], "datasets": [], "metrics": []}
 
     for key in ("methods", "datasets"):
         items = data.get(key) or []
         if not isinstance(items, list):
-            raise ValueError(
-                f"LLM extraction output['{key}']: expected list, got {type(items).__name__}"
-            )
+            raise ValueError(f"LLM extraction output['{key}']: expected list, got {type(items).__name__}")
         for item in items[:MAX_ENTITIES_PER_EXTRACTION]:
             if not isinstance(item, dict):
                 continue
             name = item.get("name")
             if not isinstance(name, str) or not name.strip():
                 continue
-            clean_item = {"name": _sanitize_str(name.strip(), MAX_ENTITY_NAME_LEN)}
+            clean_item: dict = {"name": _sanitize_str(name.strip(), MAX_ENTITY_NAME_LEN)}
             desc = item.get("description")
             if isinstance(desc, str):
                 clean_item["description"] = _sanitize_str(desc, MAX_DESCRIPTION_LEN)
@@ -104,15 +98,15 @@ def _validate_extraction(data: object) -> dict:
 
     metrics = data.get("metrics") or []
     if not isinstance(metrics, list):
-        raise ValueError(
-            f"LLM extraction output['metrics']: expected list, got {type(metrics).__name__}"
-        )
+        raise ValueError(f"LLM extraction output['metrics']: expected list, got {type(metrics).__name__}")
     for met in metrics[:MAX_METRICS_PER_EXTRACTION]:
         if not isinstance(met, dict):
             continue
         metric_name = met.get("metric")
         value = met.get("value")
         if not isinstance(metric_name, str) or not metric_name.strip():
+            continue
+        if value is None:
             continue
         try:
             value = float(value)
@@ -140,9 +134,7 @@ def _validate_extraction(data: object) -> dict:
 def _validate_resolution(data: object) -> dict:
     """Validate and sanitize LLM entity resolution output."""
     if not isinstance(data, dict):
-        raise ValueError(
-            f"LLM resolution output: expected dict, got {type(data).__name__}"
-        )
+        raise ValueError(f"LLM resolution output: expected dict, got {type(data).__name__}")
 
     groups_raw = data.get("groups") or []
     if not isinstance(groups_raw, list):
@@ -166,9 +158,7 @@ def _validate_resolution(data: object) -> dict:
         members = group.get("members") or []
         if isinstance(members, list):
             clean_group["members"] = [
-                _sanitize_str(m, MAX_ENTITY_NAME_LEN)
-                for m in members[:MAX_MEMBERS_PER_GROUP]
-                if isinstance(m, str)
+                _sanitize_str(m, MAX_ENTITY_NAME_LEN) for m in members[:MAX_MEMBERS_PER_GROUP] if isinstance(m, str)
             ]
         clean_groups.append(clean_group)
 
@@ -193,7 +183,7 @@ def _record_entity(
     if table not in _ENTITY_TABLES:
         raise ValueError(f"Invalid entity table: {table!r}")
     conn.execute(
-        f"INSERT INTO {table} (name, paper_id, description, chunk_id, source)"
+        f"INSERT INTO {table} (name, paper_id, description, chunk_id, source)"  # noqa: S608  # trusted internal identifier, not user input
         " VALUES (?, ?, ?, ?, ?)"
         " ON CONFLICT(name, paper_id)"
         " DO UPDATE SET description = excluded.description, chunk_id = excluded.chunk_id, source = excluded.source",
@@ -202,7 +192,8 @@ def _record_entity(
     if commit:
         conn.commit()
     row = conn.execute(
-        f"SELECT id FROM {table} WHERE name = ? AND paper_id = ?", (name, paper_id)
+        f"SELECT id FROM {table} WHERE name = ? AND paper_id = ?",  # noqa: S608  # trusted internal identifier, not user input
+        (name, paper_id),
     ).fetchone()
     if row is None:
         raise RuntimeError(f"Failed to retrieve {table} entity after upsert")
@@ -282,6 +273,7 @@ def record_metric(
 
 
 def get_methods(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
+    """List recorded methods for a paper."""
     rows = conn.execute(
         "SELECT id, name, description, chunk_id, source FROM methods WHERE paper_id = ?",
         (paper_id,),
@@ -299,6 +291,7 @@ def get_methods(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
 
 
 def get_datasets(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
+    """List recorded datasets for a paper."""
     rows = conn.execute(
         "SELECT id, name, description, chunk_id, source FROM datasets WHERE paper_id = ?",
         (paper_id,),
@@ -316,6 +309,7 @@ def get_datasets(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
 
 
 def get_metrics(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
+    """List recorded metrics for a paper."""
     rows = conn.execute(
         "SELECT m.id, m.name, m.value, m.unit, m.chunk_id, m.source,"
         " mt.name as method_name, d.name as dataset_name"
@@ -356,7 +350,7 @@ def compare_papers(
 
     # Find shared dataset names
     rows = conn.execute(
-        f"SELECT name, COUNT(DISTINCT paper_id) as paper_count"
+        "SELECT name, COUNT(DISTINCT paper_id) as paper_count"  # noqa: S608  # only `?` placeholders interpolated, values bound via params
         f" FROM datasets WHERE paper_id IN ({placeholders})"
         " GROUP BY name HAVING paper_count >= 2",
         paper_ids,
@@ -371,7 +365,7 @@ def compare_papers(
         # Get all metrics for this dataset across the given papers
         ds_placeholders = ",".join("?" * len(paper_ids))
         metrics = conn.execute(
-            f"SELECT m.name as metric_name, m.value, m.unit,"
+            "SELECT m.name as metric_name, m.value, m.unit,"  # noqa: S608  # only `?` placeholders interpolated, values bound via params
             " mt.name as method_name, p.title as paper_title, m.paper_id"
             " FROM metrics m"
             " JOIN datasets d ON m.dataset_id = d.id"
@@ -379,7 +373,7 @@ def compare_papers(
             " JOIN papers p ON m.paper_id = p.id"
             f" WHERE d.name = ? AND m.paper_id IN ({ds_placeholders})"
             " ORDER BY m.name, m.value DESC",
-            [ds_name] + paper_ids,
+            [ds_name, *paper_ids],
         ).fetchall()
 
         results.append(
@@ -415,7 +409,7 @@ For metrics, only include numeric values that are clearly reported results.
 Text:
 {text}
 
-JSON:"""
+JSON:"""  # noqa: E501  # JSON-schema example lines in LLM prompt; wrapping would alter the prompt sent to the model
 
 
 _MAP_PROMPT = """Extract structured information from this text chunk ({chunk_index}/{total_chunks}).
@@ -434,7 +428,7 @@ For metrics, only include numeric values that are clearly reported results.
 Text:
 {text}
 
-JSON:"""
+JSON:"""  # noqa: E501  # JSON-schema example lines in LLM prompt; wrapping would alter the prompt sent to the model
 
 
 def _map_extract(
@@ -494,9 +488,7 @@ def _collect_entity_mentions(all_extractions: list[dict]) -> list[dict]:
                     )
                 else:
                     for m in mentions:
-                        if m["name"].lower() == name.lower() and m[
-                            "type"
-                        ] == entity_type.rstrip("s"):
+                        if m["name"].lower() == name.lower() and m["type"] == entity_type.rstrip("s"):
                             for sf in item.get("surface_forms") or []:
                                 if sf not in m["surface_forms"]:
                                     m["surface_forms"].append(sf)
@@ -570,9 +562,7 @@ def _store_resolved(
         for group in resolution.get("groups") or []:
             canon = group.get("canonical")
             if not canon:
-                logger.warning(
-                    "Skipping resolution group missing 'canonical' key: %s", group
-                )
+                logger.warning("Skipping resolution group missing 'canonical' key: %s", group)
                 continue
             etype = group.get("type", "method")
             for member in group.get("members") or []:
@@ -595,16 +585,13 @@ def _store_resolved(
                     if not name:
                         continue
                     canonical = surface_to_canonical.get((name.lower(), etype), name)
-                    entity_data[(canonical, etype)]["type"] = etype
+                    entry = entity_data[(canonical, etype)]
+                    entry["type"] = etype
                     if item.get("description"):
-                        entity_data[(canonical, etype)]["description"] = item[
-                            "description"
-                        ]
-                        entity_data[(canonical, etype)]["description_chunk_id"] = (
-                            item.get("chunk_id")
-                        )
+                        entry["description"] = item["description"]
+                        entry["description_chunk_id"] = item.get("chunk_id")
                     for sf in item.get("surface_forms") or [name]:
-                        entity_data[(canonical, etype)]["mentions"].append(
+                        entry["mentions"].append(
                             {
                                 "surface_form": sf,
                                 "chunk_id": item.get("chunk_id"),
@@ -615,7 +602,8 @@ def _store_resolved(
         entity_id_map = {}
         for (canonical, etype), data in entity_data.items():
             cursor = conn.execute(
-                "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description, source) VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description, source)"
+                " VALUES (?, ?, ?, ?, ?)",
                 (canonical, etype, paper_id, data["description"], "llm_extraction"),
             )
             eid = cursor.lastrowid
@@ -644,9 +632,7 @@ def _store_resolved(
         datasets_added = 0
 
         for (canonical, etype), data in entity_data.items():
-            first_chunk_id = next(
-                (m["chunk_id"] for m in data["mentions"] if m.get("chunk_id")), None
-            )
+            first_chunk_id = next((m["chunk_id"] for m in data["mentions"] if m.get("chunk_id")), None)
             # Prefer the chunk that provided the description for provenance
             # consistency (#39); fall back to first-mention chunk.
             chunk_id = data.get("description_chunk_id") or first_chunk_id
@@ -704,12 +690,8 @@ def _store_resolved(
                 method_name = met.get("method") or ""
                 dataset_name = met.get("dataset") or ""
                 # Try both method and dataset lookups for canonical resolution
-                canonical_method = surface_to_canonical.get(
-                    (method_name.lower(), "method"), method_name
-                )
-                canonical_dataset = surface_to_canonical.get(
-                    (dataset_name.lower(), "dataset"), dataset_name
-                )
+                canonical_method = surface_to_canonical.get((method_name.lower(), "method"), method_name)
+                canonical_dataset = surface_to_canonical.get((dataset_name.lower(), "dataset"), dataset_name)
                 method_id = method_map.get(canonical_method)
                 dataset_id = dataset_map.get(canonical_dataset)
                 record_metric(
@@ -741,6 +723,11 @@ def _store_resolved(
 AVG_SECONDS_PER_CHUNK = 4
 _MAX_WORKERS_LIMIT = 32
 
+# Log a revised ETA every N completed chunks during the map phase.
+_ETA_LOG_EVERY_N_CHUNKS = 5
+# Seconds per minute, for ETA reporting.
+_SECONDS_PER_MINUTE = 60
+
 # Character threshold: docs below this use single-pass extraction
 SINGLE_PASS_CHAR_LIMIT = 8000
 
@@ -752,9 +739,7 @@ def _get_paper_chunks(conn: sqlite3.Connection, paper_id: int) -> list[dict]:
     return _papers_get_paper_chunks(conn, paper_id, include_figures=True)
 
 
-def _extract_single_pass(
-    conn: sqlite3.Connection, paper_id: int, chunks: list[dict]
-) -> dict:
+def _extract_single_pass(conn: sqlite3.Connection, paper_id: int, chunks: list[dict]) -> dict:
     """Fast path: single LLM call for short documents."""
     full_text = "\n\n".join(c["content"] for c in chunks)
     prompt = _EXTRACT_PROMPT.format(text=full_text)
@@ -791,7 +776,8 @@ def _extract_single_pass(
                 methods_added += 1
                 # Populate entities table for get_entities_tool consistency
                 conn.execute(
-                    "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description, source) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description, source)"
+                    " VALUES (?, ?, ?, ?, ?)",
                     (name, "method", paper_id, m.get("description"), "llm_extraction"),
                 )
                 if first_chunk_id:
@@ -821,7 +807,8 @@ def _extract_single_pass(
                 dataset_map[name] = result["dataset_id"]
                 datasets_added += 1
                 conn.execute(
-                    "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description, source) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO entities (canonical_name, entity_type, paper_id, description, source)"
+                    " VALUES (?, ?, ?, ?, ?)",
                     (name, "dataset", paper_id, d.get("description"), "llm_extraction"),
                 )
                 if first_chunk_id:
@@ -949,9 +936,7 @@ def _extract_map_reduce(
                     mt,
                 )
             except Exception as e:
-                errors.append(
-                    {"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)}
-                )
+                errors.append({"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)})
                 logger.info(
                     "Chunk %3d/%d (%.1f%%) - %.1fs - FAILED: %s",
                     i + 1,
@@ -964,13 +949,13 @@ def _extract_map_reduce(
             if on_progress:
                 on_progress(f"chunk {completed_count}/{len(chunks)}")
 
-            if completed_count % 5 == 0 or completed_count == len(chunks):
+            if completed_count % _ETA_LOG_EVERY_N_CHUNKS == 0 or completed_count == len(chunks):
                 avg = wall_elapsed / completed_count
                 remaining = avg * (len(chunks) - completed_count)
                 logger.info(
                     "  avg %.1fs/chunk (wall) - revised ETA: %.0fmin remaining",
                     avg,
-                    remaining / 60,
+                    remaining / _SECONDS_PER_MINUTE,
                 )
 
     total_elapsed = time.monotonic() - phase_start
@@ -983,9 +968,7 @@ def _extract_map_reduce(
         raise ExtractionError("All chunks failed extraction", errors=errors)
 
     # Phase 2: Resolve
-    total_raw = sum(
-        len(r.get("methods", [])) + len(r.get("datasets", [])) for r in ordered_results
-    )
+    total_raw = sum(len(r.get("methods", [])) + len(r.get("datasets", [])) for r in ordered_results)
     logger.info(
         "Map phase complete: %d raw entities from %d chunks (%.1fs, %d workers)",
         total_raw,
@@ -1080,9 +1063,7 @@ def extract_structure(
     if total_chars <= SINGLE_PASS_CHAR_LIMIT:
         return _extract_single_pass(conn, paper_id, chunks)
 
-    return _extract_map_reduce(
-        conn, paper_id, chunks, on_progress=on_progress, max_workers=max_workers
-    )
+    return _extract_map_reduce(conn, paper_id, chunks, on_progress=on_progress, max_workers=max_workers)
 
 
 def get_entities(conn: sqlite3.Connection, paper_id: int) -> list[dict]:

@@ -21,10 +21,7 @@ from knowledge_base.vision import (
 
 def _make_elements(bboxes: list[tuple[float, float, float, float]]) -> list[dict]:
     """Build minimal OmniParser element dicts from bboxes."""
-    return [
-        {"type": "text", "bbox": list(b), "content": f"el{i}"}
-        for i, b in enumerate(bboxes)
-    ]
+    return [{"type": "text", "bbox": list(b), "content": f"el{i}"} for i, b in enumerate(bboxes)]
 
 
 def _make_png(width: int = 200, height: int = 200, color: str = "white") -> bytes:
@@ -169,9 +166,7 @@ class TestElementsInRegion:
 class TestCropRegions:
     def test_single_fullpage_crop(self):
         png = _make_png(400, 600)
-        crops = _crop_regions(
-            png, [(0.0, 0.0, 1.0, 1.0)], {"width": 400, "height": 600}, padding=0.0
-        )
+        crops = _crop_regions(png, [(0.0, 0.0, 1.0, 1.0)], {"width": 400, "height": 600}, padding=0.0)
         assert len(crops) == 1
         img = Image.open(io.BytesIO(crops[0]))
         assert img.size == (400, 600)
@@ -264,7 +259,7 @@ class TestMultiFigureIntegration:
         """When OmniParser detects 2 regions, vision is called twice (once per crop)."""
         from knowledge_base import vision
 
-        conn, pdf_path = _db_and_pdf
+        conn, _pdf_path = _db_and_pdf
 
         # Mock OmniParser to return elements in two vertical clusters
         omni_result = {
@@ -293,12 +288,8 @@ class TestMultiFigureIntegration:
             "image_size": {"width": 1224, "height": 1584},
         }
 
-        monkeypatch.setattr(
-            vision, "_get_omniparser_config", lambda conn: "/fake/omniparser"
-        )
-        monkeypatch.setattr(
-            vision, "_run_omniparser", lambda path, omni_path, **kw: omni_result
-        )
+        monkeypatch.setattr(vision, "_get_omniparser_config", lambda conn: "/fake/omniparser")
+        monkeypatch.setattr(vision, "_run_omniparser", lambda path, omni_path, **kw: omni_result)
 
         # Track vision calls
         vision_calls = []
@@ -324,17 +315,13 @@ class TestMultiFigureIntegration:
         result = vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
 
         assert result["figures_found"] == 4, f"Expected 4 figures, got {result}"
-        assert len(vision_calls) == 4, (
-            f"Expected 4 vision calls (one per crop), got {len(vision_calls)}"
-        )
+        assert len(vision_calls) == 4, f"Expected 4 vision calls (one per crop), got {len(vision_calls)}"
 
         # Verify per-region element filtering: each figure should only have
         # elements from its own region, not all 4 elements
         import json
 
-        rows = conn.execute(
-            "SELECT metadata FROM chunks WHERE source_type = 'figure'"
-        ).fetchall()
+        rows = conn.execute("SELECT metadata FROM chunks WHERE source_type = 'figure'").fetchall()
         assert len(rows) == 4
         for row in rows:
             meta = json.loads(row[0])
@@ -347,7 +334,7 @@ class TestMultiFigureIntegration:
         """Without OmniParser, pipeline sends full page (original behavior)."""
         from knowledge_base import vision
 
-        conn, pdf_path = _db_and_pdf
+        conn, _pdf_path = _db_and_pdf
 
         monkeypatch.setattr(vision, "_get_omniparser_config", lambda conn: None)
 
@@ -380,7 +367,7 @@ class TestMultiFigureIntegration:
         """When OmniParser finds elements but they form a single cluster, send full page."""
         from knowledge_base import vision
 
-        conn, pdf_path = _db_and_pdf
+        conn, _pdf_path = _db_and_pdf
 
         omni_result = {
             "elements": [
@@ -390,12 +377,8 @@ class TestMultiFigureIntegration:
             "image_size": {"width": 1224, "height": 1584},
         }
 
-        monkeypatch.setattr(
-            vision, "_get_omniparser_config", lambda conn: "/fake/omniparser"
-        )
-        monkeypatch.setattr(
-            vision, "_run_omniparser", lambda path, omni_path, **kw: omni_result
-        )
+        monkeypatch.setattr(vision, "_get_omniparser_config", lambda conn: "/fake/omniparser")
+        monkeypatch.setattr(vision, "_run_omniparser", lambda path, omni_path, **kw: omni_result)
 
         vision_calls = []
 
@@ -425,14 +408,10 @@ class TestMultiFigureIntegration:
         """When OmniParser fails (returns None), pipeline falls back to full page."""
         from knowledge_base import vision
 
-        conn, pdf_path = _db_and_pdf
+        conn, _pdf_path = _db_and_pdf
 
-        monkeypatch.setattr(
-            vision, "_get_omniparser_config", lambda conn: "/fake/omniparser"
-        )
-        monkeypatch.setattr(
-            vision, "_run_omniparser", lambda path, omni_path, **kw: None
-        )
+        monkeypatch.setattr(vision, "_get_omniparser_config", lambda conn: "/fake/omniparser")
+        monkeypatch.setattr(vision, "_run_omniparser", lambda path, omni_path, **kw: None)
 
         vision_calls = []
 
@@ -456,7 +435,5 @@ class TestMultiFigureIntegration:
 
         result = vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
 
-        assert len(vision_calls) == 1, (
-            "OmniParser failure should fall back to full page"
-        )
+        assert len(vision_calls) == 1, "OmniParser failure should fall back to full page"
         assert result["figures_found"] == 1

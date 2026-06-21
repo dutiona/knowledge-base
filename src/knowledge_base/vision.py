@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import atexit
 import base64
 import dataclasses
+import io
+import itertools
 import json
 import logging
 import os
@@ -11,13 +14,17 @@ import re
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import cast
+from urllib.parse import urlparse
 
 import fitz
 import httpx
+from PIL import Image
 
 from .embeddings import _get_ollama_url
 from .db import delete_chunks_cascade, get_vec_table_name
@@ -104,12 +111,8 @@ class VisionResults:
 
 def _get_vision_config(conn: sqlite3.Connection) -> dict:
     """Read vision configuration from config table."""
-    model_row = conn.execute(
-        "SELECT value FROM config WHERE key = 'vision_model'"
-    ).fetchone()
-    base_url_row = conn.execute(
-        "SELECT value FROM config WHERE key = 'vision_base_url'"
-    ).fetchone()
+    model_row = conn.execute("SELECT value FROM config WHERE key = 'vision_model'").fetchone()
+    base_url_row = conn.execute("SELECT value FROM config WHERE key = 'vision_base_url'").fetchone()
 
     base_url = base_url_row["value"] if base_url_row else _get_ollama_url()
 
@@ -131,13 +134,9 @@ def configure_vision(
             (model,),
         )
     if base_url:
-        from urllib.parse import urlparse
-
         parsed = urlparse(base_url)
         if parsed.scheme not in ("http", "https"):
-            raise ValidationError(
-                f"Invalid URL scheme: {parsed.scheme!r}. Use http or https."
-            )
+            raise ValidationError(f"Invalid URL scheme: {parsed.scheme!r}. Use http or https.")
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('vision_base_url', ?)",
             (base_url,),
@@ -148,9 +147,7 @@ def configure_vision(
 
 def _get_omniparser_config(conn: sqlite3.Connection) -> str | None:
     """Read omniparser_path from config table. Returns None when unset."""
-    row = conn.execute(
-        "SELECT value FROM config WHERE key = 'omniparser_path'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM config WHERE key = 'omniparser_path'").fetchone()
     return row["value"] if row else None
 
 
@@ -264,6 +261,9 @@ _OMNIPARSER_SERVER_TIMEOUT = 30
 _OMNIPARSER_HEALTH_TIMEOUT = 3
 _OMNIPARSER_DEFAULT_PORT = 7862
 _TIMING_DRIFT_FACTOR = 2.0
+# Estimated runtime (seconds) above which extract_figures requires explicit
+# confirmation before proceeding (guards against surprise long jobs).
+_ETA_CONFIRM_THRESHOLD = 120
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +273,7 @@ _TIMING_DRIFT_FACTOR = 2.0
 
 def _get_omniparser_server_url(conn: sqlite3.Connection) -> str | None:
     """Read omniparser_server_url from config table. Returns None when unset."""
-    row = conn.execute(
-        "SELECT value FROM config WHERE key = 'omniparser_server_url'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM config WHERE key = 'omniparser_server_url'").fetchone()
     return row["value"] if row else None
 
 
@@ -296,16 +294,12 @@ def _check_omniparser_server(base_url: str, *, require_models: bool = False) -> 
         data = resp.json()
         if data.get("status") != "omniparser":
             return False
-        if require_models and not data.get("models_loaded"):
-            return False
-        return True
-    except (httpx.ConnectError, httpx.TimeoutException, Exception):
+        return not (require_models and not data.get("models_loaded"))
+    except (httpx.HTTPError, json.JSONDecodeError, ValueError):
         return False
 
 
-def _run_omniparser_http(
-    png_path: Path, base_url: str, timeout: int = _OMNIPARSER_SERVER_TIMEOUT
-) -> dict | None:
+def _run_omniparser_http(png_path: Path, base_url: str, timeout: int = _OMNIPARSER_SERVER_TIMEOUT) -> dict | None:
     """Send a PNG to the OmniParser HTTP server and return parsed JSON.
 
     Returns None on any failure (timeout, connection error, server error).
@@ -337,9 +331,15 @@ def _run_omniparser_http(
 # Sentinel printed by _omniparser_server.py when models are loaded.
 _READY_SENTINEL = "OMNIPARSER_READY"
 
+# Max time (seconds) to wait for the auto-started server to print the readiness
+# sentinel before giving up and falling back to subprocess mode.
+_OMNIPARSER_STARTUP_DEADLINE = 120
+# Max time (seconds) to wait for a graceful shutdown before sending SIGKILL.
+_OMNIPARSER_SHUTDOWN_WAIT = 10
+
 # Module-level state for the auto-started server process.
 _omniparser_process: subprocess.Popen | None = None
-_omniparser_lock = __import__("threading").Lock()
+_omniparser_lock = threading.Lock()
 
 
 def _shutdown_omniparser_server() -> None:
@@ -347,13 +347,13 @@ def _shutdown_omniparser_server() -> None:
 
     Registered via ``atexit`` when the server is auto-started.
     """
-    global _omniparser_process  # noqa: PLW0603
+    global _omniparser_process
     proc = _omniparser_process
     if proc is not None and proc.poll() is None:
         logger.info("Shutting down OmniParser server (PID %d)", proc.pid)
         proc.terminate()
         try:
-            proc.wait(timeout=10)
+            proc.wait(timeout=_OMNIPARSER_SHUTDOWN_WAIT)
         except subprocess.TimeoutExpired:
             logger.warning("OmniParser server did not exit, sending SIGKILL")
             proc.kill()
@@ -372,8 +372,6 @@ def _ensure_omniparser_server(omniparser_path: str, port: int) -> str | None:
     Returns the server URL on success, or ``None`` on failure (caller
     should fall back to subprocess mode).
     """
-    import atexit
-
     base_url = f"http://127.0.0.1:{port}"
 
     # Fast path: server already running
@@ -381,7 +379,7 @@ def _ensure_omniparser_server(omniparser_path: str, port: int) -> str | None:
         return base_url
 
     with _omniparser_lock:
-        global _omniparser_process  # noqa: PLW0603
+        global _omniparser_process
 
         # Double-checked locking: another thread may have started it
         if _check_omniparser_server(base_url):
@@ -391,8 +389,7 @@ def _ensure_omniparser_server(omniparser_path: str, port: int) -> str | None:
         server_script = Path(__file__).parent / "_omniparser_server.py"
         if not server_script.is_file():
             logger.warning(
-                "OmniParser server script not found at %s — "
-                "auto-start unavailable (wheel install?)",
+                "OmniParser server script not found at %s — auto-start unavailable (wheel install?)",
                 server_script,
             )
             return None
@@ -406,7 +403,7 @@ def _ensure_omniparser_server(omniparser_path: str, port: int) -> str | None:
 
         logger.info("Auto-starting OmniParser server on port %d ...", port)
         try:
-            proc = subprocess.Popen(
+            proc = subprocess.Popen(  # noqa: S603  # trusted argv, no shell
                 [
                     str(venv_python),
                     str(server_script),
@@ -424,9 +421,9 @@ def _ensure_omniparser_server(omniparser_path: str, port: int) -> str | None:
             return None
 
         # Wait for readiness sentinel, polling for early exit
-        deadline = time.monotonic() + 120
+        deadline = time.monotonic() + _OMNIPARSER_STARTUP_DEADLINE
         ready = False
-        assert proc.stdout is not None
+        assert proc.stdout is not None  # noqa: S101  # internal invariant: Popen(stdout=PIPE) guarantees non-None
         while time.monotonic() < deadline:
             # Check if process died
             if proc.poll() is not None:
@@ -449,7 +446,10 @@ def _ensure_omniparser_server(omniparser_path: str, port: int) -> str | None:
                 time.sleep(0.5)
 
         if not ready:
-            logger.warning("OmniParser server did not become ready within 120s")
+            logger.warning(
+                "OmniParser server did not become ready within %ds",
+                _OMNIPARSER_STARTUP_DEADLINE,
+            )
             proc.terminate()
             return None
 
@@ -480,9 +480,7 @@ def _run_omniparser(
     """
     # --- Try HTTP server first ---
     if server_url is not None:
-        result = _run_omniparser_http(
-            png_path, server_url, timeout=_OMNIPARSER_SERVER_TIMEOUT
-        )
+        result = _run_omniparser_http(png_path, server_url, timeout=_OMNIPARSER_SERVER_TIMEOUT)
         if result is not None:
             return result
         logger.info(
@@ -496,9 +494,7 @@ def _run_omniparser(
     parse_script = omni / "parse.py"
 
     if not venv_python.is_file() or not os.access(venv_python, os.X_OK):
-        logger.warning(
-            "OmniParser python binary missing or not executable: %s", venv_python
-        )
+        logger.warning("OmniParser python binary missing or not executable: %s", venv_python)
         return None
     if not parse_script.is_file():
         logger.warning("OmniParser parse.py missing: %s", parse_script)
@@ -509,13 +505,13 @@ def _run_omniparser(
     try:
         # Close the fd so the subprocess can write to it
         os.close(json_fd)
-        subprocess.run(
+        subprocess.run(  # noqa: S603  # trusted argv, no shell
             [venv_python, parse_script, str(png_path), "-j", json_out],
             timeout=timeout,
             capture_output=True,
             check=True,
         )
-        with open(json_out) as f:
+        with Path(json_out).open() as f:
             result = json.load(f)
         elapsed = time.monotonic() - t0
         logger.info("OmniParser completed for %s in %.1fs", png_path.name, elapsed)
@@ -535,9 +531,7 @@ def _run_omniparser(
         OSError,
     ) as exc:
         elapsed = time.monotonic() - t0
-        logger.warning(
-            "OmniParser failed for %s after %.1fs: %s", png_path, elapsed, exc
-        )
+        logger.warning("OmniParser failed for %s after %.1fs: %s", png_path, elapsed, exc)
         return None
     finally:
         Path(json_out).unlink(missing_ok=True)
@@ -589,7 +583,7 @@ def _cluster_bboxes(
 
     # 1-D gap splitting on y-axis
     clusters: list[list[tuple[float, float, float, float]]] = [[bboxes[0]]]
-    for prev, cur in zip(bboxes, bboxes[1:]):
+    for prev, cur in itertools.pairwise(bboxes):
         prev_bottom = prev[3]
         cur_top = cur[1]
         gap = cur_top - prev_bottom
@@ -630,7 +624,7 @@ def _split_cluster_x(
 
     cluster_x = sorted(cluster, key=lambda b: (b[0] + b[2]) / 2)
     sub_clusters: list[list[tuple[float, float, float, float]]] = [[cluster_x[0]]]
-    for prev, cur in zip(cluster_x, cluster_x[1:]):
+    for prev, cur in itertools.pairwise(cluster_x):
         prev_right = prev[2]
         cur_left = cur[0]
         gap = cur_left - prev_right
@@ -660,9 +654,6 @@ def _crop_regions(
     Returns:
         List of PNG bytes, one per region.
     """
-    import io
-    from PIL import Image
-
     with Image.open(io.BytesIO(png_bytes)) as img:
         w, h = img.size
 
@@ -792,11 +783,19 @@ def _validate_figure(obj: dict) -> dict | None:
         logger.warning("Invalid figure: missing or empty description")
         return None
 
+    entities = obj.get("entities_mentioned", [])
+    if not isinstance(entities, list):
+        entities = []
+
+    title = obj.get("title")
+    if title is not None and not isinstance(title, str):
+        title = str(title)
+
     return {
         "figure_type": figure_type,
         "description": description,
-        "title": obj.get("title"),
-        "entities_mentioned": obj.get("entities_mentioned", []),
+        "title": title,
+        "entities_mentioned": entities,
     }
 
 
@@ -820,9 +819,7 @@ def _render_page(pdf_path: str, page_num: int) -> bytes:
     """
     with fitz.open(pdf_path) as doc:
         if page_num < 0 or page_num >= len(doc):
-            raise IndexError(
-                f"Page {page_num} out of range for document with {len(doc)} pages"
-            )
+            raise IndexError(f"Page {page_num} out of range for document with {len(doc)} pages")
         page = doc[page_num]
         pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
         return pix.tobytes("png")
@@ -850,9 +847,9 @@ def _heuristic_filter(pdf_path: str) -> list[int]:
             return []
 
         # Collect page texts and lengths for density calculation
-        page_texts: list[str] = []
-        for page in doc:
-            page_texts.append(page.get_text())
+        # (doc.pages() is the typed iterator; bare iteration over Document is
+        # untyped in the fitz stubs. get_text() with no args returns str.)
+        page_texts: list[str] = [str(page.get_text()) for page in doc.pages()]
         text_lengths = [len(t) for t in page_texts]
 
         avg_text_len = sum(text_lengths) / n if n > 0 else 0
@@ -860,7 +857,7 @@ def _heuristic_filter(pdf_path: str) -> list[int]:
 
         candidates: list[int] = []
 
-        for i, page in enumerate(doc):
+        for i, page in enumerate(doc.pages()):
             # Signal 1: embedded images
             if len(page.get_images()) > 0:
                 candidates.append(i)
@@ -907,9 +904,16 @@ def _build_page_vision_prompt(captions: list[str] | None = None) -> str:
             "Do NOT repeat these captions. Focus on describing visual content.\n"
         )
 
-    return f"""Analyze this PDF page image. Identify all figures, diagrams, charts, tables, or significant visual elements.
+    intro = (
+        "Analyze this PDF page image. Identify all figures, diagrams, charts, tables, or significant visual elements."
+    )
+    subfig = (
+        "Return a JSON array. One object per distinct figure. For sub-figures "
+        "(a), (b), (c), create separate objects if they represent different concepts."
+    )
+    return f"""{intro}
 {caption_block}
-Return a JSON array. One object per distinct figure. For sub-figures (a), (b), (c), create separate objects if they represent different concepts.
+{subfig}
 
 Each object:
 {{
@@ -963,9 +967,7 @@ _VISION_PROMPT = _build_page_vision_prompt()
 _FIGURE_VISION_PROMPT = _build_figure_vision_prompt()
 
 
-def _vision_call(
-    image_b64: str, prompt: str, *, base_url: str, model: str
-) -> list[dict]:
+def _vision_call(image_b64: str, prompt: str, *, base_url: str, model: str) -> list[dict]:
     """Send an image to a vision model and return validated figure dicts.
 
     Takes base_url and model as plain strings (not conn) for thread safety
@@ -995,8 +997,7 @@ def _vision_call(
     logger.info("Vision call completed in %.1fs", elapsed)
     if elapsed > _ETA_SECS_PER_PAGE_BASE * _TIMING_DRIFT_FACTOR:
         logger.warning(
-            "Vision call took %.1fs (expected ~%ds) — "
-            "consider raising _ETA_SECS_PER_PAGE_BASE or _VISION_CALL_TIMEOUT",
+            "Vision call took %.1fs (expected ~%ds) — consider raising _ETA_SECS_PER_PAGE_BASE or _VISION_CALL_TIMEOUT",
             elapsed,
             _ETA_SECS_PER_PAGE_BASE,
         )
@@ -1019,20 +1020,12 @@ def _vision_call(
         if len(values) == 1 and isinstance(values[0], list):
             parsed = values[0]
         else:
-            raise ValueError(
-                f"Vision model returned a dict that cannot be unwrapped: {list(parsed.keys())}"
-            )
+            raise ValueError(f"Vision model returned a dict that cannot be unwrapped: {list(parsed.keys())}")
 
     if not isinstance(parsed, list):
-        raise ValueError(
-            f"Vision model returned {type(parsed).__name__}, expected list"
-        )
+        raise ValueError(f"Vision model returned {type(parsed).__name__}, expected list")
 
-    return [
-        v
-        for obj in parsed
-        if isinstance(obj, dict) and (v := _validate_figure(obj)) is not None
-    ]
+    return [v for obj in parsed if isinstance(obj, dict) and (v := _validate_figure(obj)) is not None]
 
 
 # ---------------------------------------------------------------------------
@@ -1074,7 +1067,7 @@ def _detect_vector_pages(
     """
     with fitz.open(pdf_path) as doc:
         result = []
-        for i, page in enumerate(doc):
+        for i, page in enumerate(doc.pages()):
             if i in pages_with_extracted_images:
                 continue
             if len(page.get_drawings()) > _VECTOR_DRAWING_THRESHOLD:
@@ -1116,7 +1109,7 @@ def _cluster_drawing_rects(
 
     # Y-axis splitting
     y_clusters: list[list[fitz.Rect]] = [[sorted_rects[0]]]
-    for prev, cur in zip(sorted_rects, sorted_rects[1:]):
+    for prev, cur in itertools.pairwise(sorted_rects):
         if cur.y0 - prev.y1 >= y_gap:
             y_clusters.append([cur])
         else:
@@ -1130,7 +1123,7 @@ def _cluster_drawing_rects(
             continue
         x_sorted = sorted(cluster, key=lambda r: (r.x0 + r.x1) / 2)
         sub: list[list[fitz.Rect]] = [[x_sorted[0]]]
-        for prev, cur in zip(x_sorted, x_sorted[1:]):
+        for prev, cur in itertools.pairwise(x_sorted):
             if cur.x0 - prev.x1 >= x_gap:
                 sub.append([cur])
             else:
@@ -1189,7 +1182,9 @@ def _detect_mixed_page_vector_regions(
             exclusion_zones: list[fitz.Rect] = []
             for item in page.get_images(full=True):
                 try:
-                    bbox = page.get_image_bbox(item)
+                    # transform defaults to False, so the runtime return is a
+                    # Rect (the fitz stub conservatively unions in a Matrix).
+                    bbox = cast("fitz.Rect", page.get_image_bbox(item))
                 except Exception as exc:
                     logger.debug(
                         "Page %d: get_image_bbox failed for xref %s: %s",
@@ -1223,10 +1218,7 @@ def _detect_mixed_page_vector_regions(
                 if d_rect.is_infinite or (d_rect.width == 0 and d_rect.height == 0):
                     continue
                 inside = any(
-                    d_rect.x0 <= zone.x1
-                    and d_rect.x1 >= zone.x0
-                    and d_rect.y0 <= zone.y1
-                    and d_rect.y1 >= zone.y0
+                    d_rect.x0 <= zone.x1 and d_rect.x1 >= zone.x0 and d_rect.y0 <= zone.y1 and d_rect.y1 >= zone.y0
                     for zone in exclusion_zones
                 )
                 if not inside:
@@ -1344,8 +1336,7 @@ def _extract_captions(
         CaptionMap with both image-keyed and page-keyed lookups.
     """
     rows = conn.execute(
-        "SELECT content, metadata FROM chunks "
-        "WHERE source_uri = ? AND source_type = 'pdf'",
+        "SELECT content, metadata FROM chunks WHERE source_uri = ? AND source_type = 'pdf'",
         (source_uri,),
     ).fetchall()
 
@@ -1444,9 +1435,7 @@ def _assemble_figure_content(
 
 def _resolve_paper_context(conn: sqlite3.Connection, paper_id: int) -> PaperContext:
     """Validate paper exists and resolve its PDF path."""
-    paper_row = conn.execute(
-        "SELECT id, title FROM papers WHERE id = ?", (paper_id,)
-    ).fetchone()
+    paper_row = conn.execute("SELECT id, title FROM papers WHERE id = ?", (paper_id,)).fetchone()
     if paper_row is None:
         raise NotFoundError(f"Paper {paper_id} not found")
 
@@ -1476,9 +1465,7 @@ def _validate_pages(pdf_path: Path, pages: list[int] | None) -> None:
         total_pages = len(doc)
     for p in pages:
         if p < 0 or p >= total_pages:
-            raise ValidationError(
-                f"Page {p} out of range (document has {total_pages} pages)"
-            )
+            raise ValidationError(f"Page {p} out of range (document has {total_pages} pages)")
 
 
 def _collect_dual_path_inputs(
@@ -1499,9 +1486,7 @@ def _collect_dual_path_inputs(
 
     if pages is not None:
         pages_set = set(pages)
-        extracted_images = [
-            (p, pn) for p, pn in extracted_images if (pn - 1) in pages_set
-        ]
+        extracted_images = [(p, pn) for p, pn in extracted_images if (pn - 1) in pages_set]
 
     if pages is not None:
         vector_pages = [p for p in pages if p not in pages_with_images]
@@ -1511,12 +1496,8 @@ def _collect_dual_path_inputs(
         vector_pages = _detect_vector_pages(str(pdf_path), pages_with_images)
 
     # Detect vector regions on mixed pages (#155)
-    candidate_mixed = (
-        (pages_with_images & set(pages)) if pages is not None else pages_with_images
-    )
-    mixed_page_regions = _detect_mixed_page_vector_regions(
-        str(pdf_path), candidate_mixed
-    )
+    candidate_mixed = (pages_with_images & set(pages)) if pages is not None else pages_with_images
+    mixed_page_regions = _detect_mixed_page_vector_regions(str(pdf_path), candidate_mixed)
 
     return DualPathInputs(
         extracted_images=extracted_images,
@@ -1544,16 +1525,12 @@ def _check_eta_gate(
     Returns (gate_dict_or_None, estimated_seconds).
     """
     if omniparser_path:
-        omni_per_page = (
-            _ETA_SECS_PER_PAGE_OMNIPARSER_SERVER
-            if server_healthy
-            else _ETA_SECS_PER_PAGE_OMNIPARSER
-        )
+        omni_per_page = _ETA_SECS_PER_PAGE_OMNIPARSER_SERVER if server_healthy else _ETA_SECS_PER_PAGE_OMNIPARSER
     else:
         omni_per_page = 0
     per_page = _ETA_SECS_PER_PAGE_BASE + omni_per_page
     estimated = n_items * per_page + n_mixed_regions * _ETA_SECS_PER_PAGE_BASE
-    if estimated > 120 and not confirmed:
+    if estimated > _ETA_CONFIRM_THRESHOLD and not confirmed:
         return {
             "confirm_required": True,
             "estimated_seconds": estimated,
@@ -1592,16 +1569,12 @@ def _render_vector_pages(
             page = doc[page_num]
             for region_rect in regions:
                 pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=region_rect)
-                mixed_rendered.setdefault(page_num, []).append(
-                    (region_rect, pix.tobytes("png"))
-                )
+                mixed_rendered.setdefault(page_num, []).append((region_rect, pix.tobytes("png")))
 
     return rendered, mixed_rendered
 
 
-def _resolve_omniparser_server_url(
-    conn: sqlite3.Connection, omniparser_path: str
-) -> str | None:
+def _resolve_omniparser_server_url(conn: sqlite3.Connection, omniparser_path: str) -> str | None:
     """Resolve the OmniParser server URL to use.
 
     Priority:
@@ -1613,9 +1586,7 @@ def _resolve_omniparser_server_url(
         # User configured an explicit URL — use it directly, no auto-start
         if _check_omniparser_server(configured):
             return configured
-        logger.warning(
-            "Configured OmniParser server at %s is not reachable", configured
-        )
+        logger.warning("Configured OmniParser server at %s is not reachable", configured)
         return None
     # No explicit URL — try auto-start on localhost
     return _ensure_omniparser_server(omniparser_path, _OMNIPARSER_DEFAULT_PORT)
@@ -1641,9 +1612,7 @@ def _run_omniparser_pipeline(
     elapsed = 0.0
 
     if not omniparser_path:
-        return OmniParserResults(
-            page_data=page_data, image_data=image_data, elapsed=0.0
-        )
+        return OmniParserResults(page_data=page_data, image_data=image_data, elapsed=0.0)
 
     if on_progress:
         on_progress("omniparser processing...")
@@ -1664,9 +1633,7 @@ def _run_omniparser_pipeline(
         try:
             os.close(png_fd)
             Path(png_tmp).write_bytes(png_bytes)
-            omni_result = _run_omniparser(
-                Path(png_tmp), omniparser_path, server_url=server_url
-            )
+            omni_result = _run_omniparser(Path(png_tmp), omniparser_path, server_url=server_url)
         finally:
             Path(png_tmp).unlink(missing_ok=True)
 
@@ -1690,9 +1657,7 @@ def _run_omniparser_pipeline(
         page_data[page_num] = (omni_result, regions, crops)
 
     elapsed = time.monotonic() - t_start
-    return OmniParserResults(
-        page_data=page_data, image_data=image_data, elapsed=elapsed
-    )
+    return OmniParserResults(page_data=page_data, image_data=image_data, elapsed=elapsed)
 
 
 def _dispatch_vision_calls(
@@ -1741,9 +1706,7 @@ def _dispatch_vision_calls(
 
         # 7b. Vector page fallback — use caption-aware page prompt.
         for page_num, png_bytes in rendered.items():
-            _, regions, crops = omni_page_data.get(
-                page_num, (None, [(0.0, 0.0, 1.0, 1.0)], [])
-            )
+            _, _regions, crops = omni_page_data.get(page_num, (None, [(0.0, 0.0, 1.0, 1.0)], []))
             # Use page-indexed captions (works for vector pages without images)
             page_captions = caption_map.for_page(page_num)
             page_prompt = _build_page_vision_prompt(captions=page_captions or None)
@@ -1772,7 +1735,7 @@ def _dispatch_vision_calls(
 
         # Mixed-page vector regions — use _VISION_PROMPT (#155)
         for page_num, region_renders in mixed_rendered.items():
-            for region_idx, (region_rect, png_bytes) in enumerate(region_renders):
+            for region_idx, (_region_rect, png_bytes) in enumerate(region_renders):
                 b64 = base64.b64encode(png_bytes).decode("ascii")
                 future = executor.submit(
                     _vision_call,
@@ -1818,9 +1781,7 @@ def _dispatch_vision_calls(
                         "_source_image": source_image_name,
                         "_vision_failed": True,
                     }
-                    page_figures_by_region.setdefault(page_num, {})[region_idx] = [
-                        fallback_fig
-                    ]
+                    page_figures_by_region.setdefault(page_num, {})[region_idx] = [fallback_fig]
 
         # Flatten: merge all regions for each page into a single list
         for page_num, region_map in page_figures_by_region.items():
@@ -1860,11 +1821,9 @@ def _enrich_with_omniparser(
     """
     omniparser_enriched = 0
 
-    for page_num in page_results:
-        if not page_results[page_num]:
+    for page_num, figures_on_page in page_results.items():
+        if not figures_on_page:
             continue
-
-        figures_on_page = page_results[page_num]
 
         for i, fig in enumerate(figures_on_page):
             source_image_name = fig.get("_source_image")
@@ -1877,15 +1836,11 @@ def _enrich_with_omniparser(
                         omniparser_enriched += 1
             elif not source_image_name:
                 # Vector page — use page-level OmniParser data
-                omni_result_page, regions_page, _ = omni.page_data.get(
-                    page_num, (None, [(0.0, 0.0, 1.0, 1.0)], [])
-                )
+                omni_result_page, regions_page, _ = omni.page_data.get(page_num, (None, [(0.0, 0.0, 1.0, 1.0)], []))
                 if omni_result_page and omni_result_page.get("elements"):
                     region_idx = fig.get("_region_idx")
                     if region_idx is not None and region_idx < len(regions_page):
-                        els = _elements_in_region(
-                            omni_result_page["elements"], regions_page[region_idx]
-                        )
+                        els = _elements_in_region(omni_result_page["elements"], regions_page[region_idx])
                     else:
                         els = omni_result_page["elements"]
                     ocr = _format_omniparser_ocr(els)
@@ -1917,18 +1872,14 @@ def _persist_figures(
             # for vector-page figures. Only pymupdf4llm-sourced captions
             # count — vision LLM titles are already in the description.
             source_image_name = figure.get("_source_image")
-            caption = (
-                caption_map.for_image(source_image_name) if source_image_name else None
-            )
+            caption = caption_map.for_image(source_image_name) if source_image_name else None
             if caption is None and not source_image_name:
                 # Vector-page fallback: use first page caption from text layer
                 page_caps = caption_map.for_page(page_num)
                 if page_caps:
                     caption = page_caps[0]
 
-            description = (
-                figure["description"] if not figure.get("_vision_failed") else None
-            )
+            description = figure["description"] if not figure.get("_vision_failed") else None
             content = _assemble_figure_content(
                 caption=caption,
                 description=description,
@@ -1942,8 +1893,9 @@ def _persist_figures(
             all_figures.append((page_num, fig_idx, figure))
             texts.append(content)
 
-    # Compute embeddings in one batch
-    embeddings: list[list[float]] = []
+    # Compute embeddings in one batch. _embed_with_config may yield None for
+    # items that fail to embed; _insert_chunk accepts embedding=None.
+    embeddings: list[list[float] | None] = []
     if texts:
         embeddings = _embed_with_config(conn, texts)
 
@@ -1962,26 +1914,19 @@ def _persist_figures(
                 ]
             )
         page_filter = f" AND ({' OR '.join(page_clauses)})"
-        fig_chunk_subquery = (
-            f"(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'"
-            f"{page_filter})"
-        )
+        # page_filter is built from fixed internal SQL fragments
+        # ("(chunk_index >= ? AND chunk_index < ?)" joined by " OR "); all values
+        # flow through ? placeholders, never string interpolation.
+        fig_chunk_subquery = f"(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'{page_filter})"  # noqa: S608  # trusted internal identifier, not user input
         fig_delete_params: tuple = (source_uri, *page_params)
     else:
-        fig_chunk_subquery = (
-            "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')"
-        )
+        fig_chunk_subquery = "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')"
         fig_delete_params = (source_uri,)
 
     vec_table = get_vec_table_name(conn)
     chunks_created = 0
     try:
-        fig_chunk_ids = [
-            r["id"]
-            for r in conn.execute(
-                fig_chunk_subquery[1:-1], fig_delete_params
-            ).fetchall()
-        ]
+        fig_chunk_ids = [r["id"] for r in conn.execute(fig_chunk_subquery[1:-1], fig_delete_params).fetchall()]
         _cleanup_figure_fk_refs(conn, fig_chunk_ids)
         delete_chunks_cascade(conn, fig_chunk_ids, table_name=vec_table)
 
@@ -1990,9 +1935,7 @@ def _persist_figures(
                 content = figure.get("_assembled_content", figure["description"])
                 content_hash = _content_hash(content)
 
-                existing = conn.execute(
-                    "SELECT id FROM chunks WHERE content_hash = ?", (content_hash,)
-                ).fetchone()
+                existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (content_hash,)).fetchone()
                 if existing:
                     continue
 
@@ -2065,9 +2008,7 @@ def _save_rendered_pngs(
     """Save rendered vector-page PNGs and mixed-page region crops to disk."""
     if not rendered and not mixed_rendered:
         return
-    figures_dir = (
-        Path.home() / ".local" / "share" / "knowledge-base" / "figures" / str(paper_id)
-    )
+    figures_dir = Path.home() / ".local" / "share" / "knowledge-base" / "figures" / str(paper_id)
     try:
         figures_dir.mkdir(parents=True, exist_ok=True)
         for page_num, png_bytes in rendered.items():
@@ -2075,9 +2016,7 @@ def _save_rendered_pngs(
         if mixed_rendered:
             for page_num, region_renders in mixed_rendered.items():
                 for i, (_, png_bytes) in enumerate(region_renders):
-                    (figures_dir / f"page_{page_num}_vector_{i}.png").write_bytes(
-                        png_bytes
-                    )
+                    (figures_dir / f"page_{page_num}_vector_{i}.png").write_bytes(png_bytes)
     except OSError as exc:
         logger.warning("Failed to save figure PNGs: %s", exc)
 
@@ -2115,11 +2054,7 @@ def estimate_figures_time(
         check_url = configured_url or f"http://127.0.0.1:{_OMNIPARSER_DEFAULT_PORT}"
         server_healthy = _check_omniparser_server(check_url, require_models=True)
     if omniparser_path:
-        omni_per_page = (
-            _ETA_SECS_PER_PAGE_OMNIPARSER_SERVER
-            if server_healthy
-            else _ETA_SECS_PER_PAGE_OMNIPARSER
-        )
+        omni_per_page = _ETA_SECS_PER_PAGE_OMNIPARSER_SERVER if server_healthy else _ETA_SECS_PER_PAGE_OMNIPARSER
     else:
         omni_per_page = 0
     per_page = _ETA_SECS_PER_PAGE_BASE + omni_per_page
@@ -2268,8 +2203,7 @@ def extract_figures(
 
     if total_elapsed > estimated * _TIMING_DRIFT_FACTOR:
         logger.warning(
-            "Total extraction took %.1fs vs %.0fs estimated (%.1fx) — "
-            "ETA constants may need recalibration",
+            "Total extraction took %.1fs vs %.0fs estimated (%.1fx) — ETA constants may need recalibration",
             total_elapsed,
             estimated,
             total_elapsed / estimated if estimated else 0,

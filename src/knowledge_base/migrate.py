@@ -21,7 +21,7 @@ entry + one function.
 
 from __future__ import annotations
 
-import os
+import contextlib
 import shutil
 import sqlite3
 from collections.abc import Callable
@@ -68,9 +68,7 @@ def get_schema_version(conn: sqlite3.Connection) -> int | None:
     :class:`KnowledgeBaseError` if the stored value is not an integer.
     """
     try:
-        row = conn.execute(
-            f"SELECT value FROM config WHERE key = '{SCHEMA_VERSION_KEY}'"
-        ).fetchone()
+        row = conn.execute("SELECT value FROM config WHERE key = ?", (SCHEMA_VERSION_KEY,)).fetchone()
     except sqlite3.OperationalError as exc:
         # Only a MISSING config table means "unversioned". A locked/busy DB also
         # raises OperationalError — misreading that as fresh would trigger a
@@ -90,8 +88,7 @@ def get_schema_version(conn: sqlite3.Connection) -> int | None:
 def set_schema_version(conn: sqlite3.Connection, version: int) -> None:
     """Upsert the schema version. Stored as TEXT (config.value is ``TEXT NOT NULL``)."""
     conn.execute(
-        "INSERT INTO config (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (SCHEMA_VERSION_KEY, str(version)),
     )
 
@@ -108,9 +105,7 @@ def _main_db_path(conn: sqlite3.Connection) -> Path | None:
     return None
 
 
-def resolve_backup_path(
-    conn: sqlite3.Connection, backup_dir: Path | None = None
-) -> Path | None:
+def resolve_backup_path(conn: sqlite3.Connection, backup_dir: Path | None = None) -> Path | None:
     """Where to write the pre-migration backup, or ``None`` if the DB is in-memory.
 
     Defaults beside the live DB (``<db_parent>/backups/``), NOT a CWD-relative
@@ -165,7 +160,7 @@ def backup_database(conn: sqlite3.Connection, backup_path: Path) -> Path:
     finally:
         check.close()
 
-    os.replace(tmp, backup_path)
+    tmp.replace(backup_path)
     return backup_path
 
 
@@ -184,7 +179,7 @@ def restore_backup(db_path: Path, backup_path: Path) -> None:
     shutil.copyfile(backup_path, tmp)
     for sidecar in ("-wal", "-shm", "-journal"):
         Path(str(db_path) + sidecar).unlink(missing_ok=True)
-    os.replace(tmp, db_path)
+    tmp.replace(db_path)
 
 
 # --- the migrate orchestrator --------------------------------------------------
@@ -200,9 +195,7 @@ def _assert_exclusive(conn: sqlite3.Connection) -> None:
         conn.execute("BEGIN EXCLUSIVE")
         conn.execute("ROLLBACK")
     except sqlite3.OperationalError as exc:
-        raise KnowledgeBaseError(
-            f"database is busy ({exc}); stop the MCP server before migrating"
-        ) from exc
+        raise KnowledgeBaseError(f"database is busy ({exc}); stop the MCP server before migrating") from exc
 
 
 def migrate(conn: sqlite3.Connection, *, backup_dir: Path | None = None) -> dict:
@@ -219,14 +212,9 @@ def migrate(conn: sqlite3.Connection, *, backup_dir: Path | None = None) -> dict
     current = CURRENT_SCHEMA_VERSION
     live = get_schema_version(conn)
     if live is None:
-        raise KnowledgeBaseError(
-            "database is unversioned; initialize it first (init_schema)"
-        )
+        raise KnowledgeBaseError("database is unversioned; initialize it first (init_schema)")
     if live > current:
-        raise KnowledgeBaseError(
-            f"database schema v{live} is newer than this build (v{current}); "
-            "upgrade the code"
-        )
+        raise KnowledgeBaseError(f"database schema v{live} is newer than this build (v{current}); upgrade the code")
     pending = list(range(live + 1, current + 1))
     report: dict = {
         "from_version": live,
@@ -259,18 +247,14 @@ def migrate(conn: sqlite3.Connection, *, backup_dir: Path | None = None) -> dict
                 if disable_fk:
                     bad = conn.execute("PRAGMA foreign_key_check").fetchall()
                     if bad:
-                        raise KnowledgeBaseError(
-                            f"foreign_key_check failed migrating to v{target}: {bad}"
-                        )
+                        raise KnowledgeBaseError(f"foreign_key_check failed migrating to v{target}: {bad}")
                 set_schema_version(conn, target)
                 conn.execute("COMMIT")
             except Exception:
                 # Roll back FIRST (so the FK re-enable below is not silently
                 # ignored mid-transaction), then re-enable FK, then propagate.
-                try:
+                with contextlib.suppress(sqlite3.Error):
                     conn.execute("ROLLBACK")
-                except sqlite3.Error:
-                    pass
                 if disable_fk:
                     conn.execute("PRAGMA foreign_keys=ON")
                 raise
@@ -278,10 +262,8 @@ def migrate(conn: sqlite3.Connection, *, backup_dir: Path | None = None) -> dict
                 conn.execute("PRAGMA foreign_keys=ON")
             report["applied"].append(target)
     except Exception:
-        try:
+        with contextlib.suppress(sqlite3.Error):
             conn.close()  # guarded: a close error must not bypass the restore
-        except sqlite3.Error:
-            pass
         if backup_path is not None and db_path is not None:
             restore_backup(db_path, backup_path)
         raise

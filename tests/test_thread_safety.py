@@ -46,9 +46,7 @@ def test_get_conn_returns_separate_connections_per_thread(tmp_path, monkeypatch)
 
     assert not errors, f"Thread errors: {errors}"
     conn_ids = list(results.values())
-    assert len(set(conn_ids)) == 4, (
-        f"Expected 4 distinct connections, got {len(set(conn_ids))}: {conn_ids}"
-    )
+    assert len(set(conn_ids)) == 4, f"Expected 4 distinct connections, got {len(set(conn_ids))}: {conn_ids}"
 
 
 def test_get_conn_reuses_connection_within_same_thread(tmp_path, monkeypatch):

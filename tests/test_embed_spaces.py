@@ -44,9 +44,7 @@ def _setup(tmp_path: Path, dim: int = 4) -> sqlite3.Connection:
     conn = get_connection(tmp_path / "test.db")
     # Pre-seed all config keys so init_schema sees embed_model and skips its
     # own INSERT, letting us control embed_dim for small test vectors.
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-    )
+    conn.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     conn.executemany(
         "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
         [
@@ -68,6 +66,7 @@ def _add_chunk(conn: sqlite3.Connection, content: str, index: int = 0) -> int:
         (h, content, index),
     )
     conn.commit()
+    assert cursor.lastrowid is not None
     return cursor.lastrowid
 
 
@@ -189,9 +188,7 @@ def test_backfill_space(mock_prov, tmp_path):
     assert count == 2
 
     # chunk_count updated in registry
-    space = conn.execute(
-        "SELECT chunk_count FROM embed_spaces WHERE name = 'test_bf'"
-    ).fetchone()
+    space = conn.execute("SELECT chunk_count FROM embed_spaces WHERE name = 'test_bf'").fetchone()
     assert space["chunk_count"] == 2
 
 
@@ -246,13 +243,12 @@ def test_promote_space(mock_prov, tmp_path):
 
     # New space is active
     active = get_active_space(conn)
+    assert active is not None
     assert active["name"] == "promoted"
     assert active["status"] == "active"
 
     # Old space is deprecated
-    old = conn.execute(
-        "SELECT status FROM embed_spaces WHERE name = 'default'"
-    ).fetchone()
+    old = conn.execute("SELECT status FROM embed_spaces WHERE name = 'default'").fetchone()
     assert old["status"] == "deprecated"
 
 
@@ -363,9 +359,7 @@ def test_insert_chunk_vec_helper(tmp_path):
     insert_chunk_vec(conn, cid, [0.1] * 4)
     conn.commit()
 
-    row = conn.execute(
-        "SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (cid,)
-    ).fetchone()
+    row = conn.execute("SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (cid,)).fetchone()
     assert row["chunk_id"] == cid
 
 
@@ -377,9 +371,7 @@ def test_insert_chunk_vec_explicit_table(tmp_path):
     insert_chunk_vec(conn, cid, [0.2] * 4, table_name="chunks_vec_explicit")
     conn.commit()
 
-    row = conn.execute(
-        "SELECT chunk_id FROM [chunks_vec_explicit] WHERE chunk_id = ?", (cid,)
-    ).fetchone()
+    row = conn.execute("SELECT chunk_id FROM [chunks_vec_explicit] WHERE chunk_id = ?", (cid,)).fetchone()
     assert row["chunk_id"] == cid
 
 
@@ -409,16 +401,14 @@ def test_create_matryoshka_space(mock_prov, tmp_path):
     conn = _setup(tmp_path)
     result = create_space(conn, "mat_test", "qwen3", 4, "ollama", matryoshka_base_dim=8)
     assert result["space"] == "mat_test"
-    space = conn.execute(
-        "SELECT * FROM embed_spaces WHERE name = 'mat_test'"
-    ).fetchone()
+    space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'mat_test'").fetchone()
     assert space["matryoshka_base_dim"] == 8
     assert space["dim"] == 4
 
 
 def test_create_matryoshka_invalid_dim(tmp_path):
     conn = _setup(tmp_path)
-    with pytest.raises(ValueError, match="matryoshka_base_dim.*must be greater"):
+    with pytest.raises(ValueError, match=r"matryoshka_base_dim.*must be greater"):
         create_space(conn, "bad", "model", 8, "ollama", matryoshka_base_dim=4)
 
 
@@ -456,14 +446,10 @@ def test_backfill_matryoshka_space(mock_get_prov, tmp_path):
 
 def test_create_space_with_int8_element_type(tmp_path):
     conn = _setup(tmp_path)
-    result = create_space(
-        conn, "int8_space", "bge-m3", 4, "ollama", element_type="int8"
-    )
+    result = create_space(conn, "int8_space", "bge-m3", 4, "ollama", element_type="int8")
     assert result["space"] == "int8_space"
 
-    row = conn.execute(
-        "SELECT element_type FROM embed_spaces WHERE name = 'int8_space'"
-    ).fetchone()
+    row = conn.execute("SELECT element_type FROM embed_spaces WHERE name = 'int8_space'").fetchone()
     assert row["element_type"] == "int8"
 
     # The vec0 table must exist and be queryable
@@ -474,9 +460,7 @@ def test_create_space_default_element_type(tmp_path):
     conn = _setup(tmp_path)
     create_space(conn, "f32_space", "bge-m3", 4, "ollama")
 
-    row = conn.execute(
-        "SELECT element_type FROM embed_spaces WHERE name = 'f32_space'"
-    ).fetchone()
+    row = conn.execute("SELECT element_type FROM embed_spaces WHERE name = 'f32_space'").fetchone()
     assert row["element_type"] == "float32"
 
 
@@ -532,19 +516,14 @@ def test_promote_int8_space_syncs_config(mock_prov, tmp_path):
     backfill_space(conn, "cfg_int8", batch_size=10)
     promote_space(conn, "cfg_int8")
 
-    row = conn.execute(
-        "SELECT value FROM config WHERE key = 'embed_element_type'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM config WHERE key = 'embed_element_type'").fetchone()
     assert row is not None
     assert row["value"] == "int8"
 
 
 def test_migration_adds_element_type(tmp_path):
     conn = _setup(tmp_path)
-    columns = {
-        row["name"]
-        for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()
-    }
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()}
     assert "element_type" in columns
 
 
@@ -577,8 +556,6 @@ def test_insert_chunk_vec_auto_resolves_element_type(mock_prov, tmp_path):
     insert_chunk_vec(conn, cid, [0.1] * 4)
     conn.commit()
 
-    row = conn.execute(
-        "SELECT chunk_id FROM [chunks_vec_auto_int8] WHERE chunk_id = ?", (cid,)
-    ).fetchone()
+    row = conn.execute("SELECT chunk_id FROM [chunks_vec_auto_int8] WHERE chunk_id = ?", (cid,)).fetchone()
     assert row is not None
     assert row["chunk_id"] == cid

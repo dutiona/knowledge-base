@@ -99,33 +99,17 @@ def status() -> str:
     """Get index statistics: chunk counts by type, recent ingestions, DB size."""
     conn = _get_conn()
 
-    type_counts = conn.execute(
-        "SELECT source_type, COUNT(*) as count FROM chunks GROUP BY source_type"
-    ).fetchall()
+    type_counts = conn.execute("SELECT source_type, COUNT(*) as count FROM chunks GROUP BY source_type").fetchall()
 
     total = conn.execute("SELECT COUNT(*) as count FROM chunks").fetchone()["count"]
 
-    paper_count = conn.execute("SELECT COUNT(*) as count FROM papers").fetchone()[
-        "count"
-    ]
-    conclusion_count = conn.execute(
-        "SELECT COUNT(*) as count FROM conclusions"
-    ).fetchone()["count"]
-    relationship_count = conn.execute(
-        "SELECT COUNT(*) as count FROM relationships"
-    ).fetchone()["count"]
-    folder_summary_count = conn.execute(
-        "SELECT COUNT(*) as count FROM folder_summaries"
-    ).fetchone()["count"]
-    method_count = conn.execute("SELECT COUNT(*) as count FROM methods").fetchone()[
-        "count"
-    ]
-    dataset_count = conn.execute("SELECT COUNT(*) as count FROM datasets").fetchone()[
-        "count"
-    ]
-    metric_count = conn.execute("SELECT COUNT(*) as count FROM metrics").fetchone()[
-        "count"
-    ]
+    paper_count = conn.execute("SELECT COUNT(*) as count FROM papers").fetchone()["count"]
+    conclusion_count = conn.execute("SELECT COUNT(*) as count FROM conclusions").fetchone()["count"]
+    relationship_count = conn.execute("SELECT COUNT(*) as count FROM relationships").fetchone()["count"]
+    folder_summary_count = conn.execute("SELECT COUNT(*) as count FROM folder_summaries").fetchone()["count"]
+    method_count = conn.execute("SELECT COUNT(*) as count FROM methods").fetchone()["count"]
+    dataset_count = conn.execute("SELECT COUNT(*) as count FROM datasets").fetchone()["count"]
+    metric_count = conn.execute("SELECT COUNT(*) as count FROM metrics").fetchone()["count"]
 
     recent = conn.execute(
         "SELECT source_uri, source_type, COUNT(*) as chunks, created_at"
@@ -134,22 +118,16 @@ def status() -> str:
 
     # Report the DB the connection actually opened (env/CLI-resolved, #449), not
     # the hardcoded default — they differ when KNOWLEDGE_BASE_DB is set.
-    db_main = next(
-        (r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"), ""
-    )
+    db_main = next((r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"), "")
     db_path = Path(db_main) if db_main else None
     db_size_bytes = db_path.stat().st_size if db_path and db_path.exists() else 0
 
     job_counts = {}
-    for row in conn.execute(
-        "SELECT status, COUNT(*) as count FROM jobs GROUP BY status"
-    ).fetchall():
+    for row in conn.execute("SELECT status, COUNT(*) as count FROM jobs GROUP BY status").fetchall():
         job_counts[row["status"]] = row["count"]
 
     space_counts = {}
-    for row in conn.execute(
-        "SELECT status, COUNT(*) as count FROM embed_spaces GROUP BY status"
-    ).fetchall():
+    for row in conn.execute("SELECT status, COUNT(*) as count FROM embed_spaces GROUP BY status").fetchall():
         space_counts[row["status"]] = row["count"]
 
     return json.dumps(
@@ -168,9 +146,7 @@ def status() -> str:
             "embed_spaces": space_counts,
             "embed_config": get_embed_config(conn),
             "chunk_strategy": (lambda r: r["value"] if r else "mechanical")(
-                conn.execute(
-                    "SELECT value FROM config WHERE key = 'chunk_strategy'"
-                ).fetchone()
+                conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
             ),
             "recent_ingestions": [
                 {

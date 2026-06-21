@@ -15,7 +15,7 @@ def test_chunk_markdown_no_headings():
     result = _chunk_markdown(text, max_chunk_size=1000)
     flat = _chunk_text(text, size=1000)
     assert len(result) == len(flat)
-    for (chunk_text, pages), flat_chunk in zip(result, flat):
+    for (chunk_text, pages), flat_chunk in zip(result, flat, strict=True):
         # _chunk_markdown strips chunks; _chunk_text doesn't
         assert chunk_text == flat_chunk.strip()
         assert pages == []
@@ -35,9 +35,7 @@ def test_chunk_markdown_heading_preserved():
     text = "## Intro\nSome intro text.\n\n### Details\nDetailed content here.\n"
     result = _chunk_markdown(text, max_chunk_size=1000)
     for chunk_text, _ in result:
-        assert chunk_text.startswith("#"), (
-            f"Chunk does not start with heading: {chunk_text[:50]}"
-        )
+        assert chunk_text.startswith("#"), f"Chunk does not start with heading: {chunk_text[:50]}"
 
 
 def test_chunk_markdown_oversized_section():
@@ -60,9 +58,7 @@ def test_chunk_markdown_table_intact():
     result = _chunk_markdown(text, max_chunk_size=200)
     # Find the chunk(s) containing table rows
     table_chunks = [ct for ct, _ in result if "| col1_" in ct]
-    assert len(table_chunks) == 1, (
-        f"Table should be in exactly 1 chunk, got {len(table_chunks)}"
-    )
+    assert len(table_chunks) == 1, f"Table should be in exactly 1 chunk, got {len(table_chunks)}"
     # Verify all rows are present
     for i in range(30):
         assert f"col1_{i}" in table_chunks[0]
@@ -100,9 +96,7 @@ def test_chunk_markdown_image_refs_sanitized():
 
 def test_chunk_markdown_page_provenance():
     """Page numbers are correctly assigned to chunks via page_map."""
-    text = (
-        "## Page 0 Content\nFirst page text.\n\n## Page 1 Content\nSecond page text.\n"
-    )
+    text = "## Page 0 Content\nFirst page text.\n\n## Page 1 Content\nSecond page text.\n"
     page0_len = len("## Page 0 Content\nFirst page text.\n\n")
     page_map = {0: 0, page0_len: 1}
     result = _chunk_markdown(text, max_chunk_size=1000, page_map=page_map)
@@ -123,9 +117,7 @@ def test_chunk_markdown_oversized_preserves_order():
     intro_idx = next(i for i, (c, _) in enumerate(result) if "Intro text" in c)
     table_idx = next(i for i, (c, _) in enumerate(result) if "| A | B |" in c)
     outro_idx = next(i for i, (c, _) in enumerate(result) if "Outro text" in c)
-    assert intro_idx < table_idx < outro_idx, (
-        f"Expected intro({intro_idx}) < table({table_idx}) < outro({outro_idx})"
-    )
+    assert intro_idx < table_idx < outro_idx, f"Expected intro({intro_idx}) < table({table_idx}) < outro({outro_idx})"
 
 
 def test_chunk_markdown_empty_input():

@@ -15,7 +15,7 @@ def _make_handler(method: str, path: str, body: bytes = b"") -> OmniParserHandle
     handler = OmniParserHandler.__new__(OmniParserHandler)
     handler.rfile = BytesIO(body)
     handler.wfile = BytesIO()
-    handler.headers = {
+    handler.headers = {  # type: ignore[reportAttributeAccessIssue]  # test stub: dict duck-types the .get() the handler uses
         "Content-Length": str(len(body)),
         "Content-Type": "application/json",
     }
@@ -57,19 +57,15 @@ class TestParseEndpoint:
         handler = _make_handler("POST", "/parse")
 
         image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-        body = json.dumps(
-            {"image_base64": base64.b64encode(image_bytes).decode()}
-        ).encode()
+        body = json.dumps({"image_base64": base64.b64encode(image_bytes).decode()}).encode()
         handler.rfile = BytesIO(body)
-        handler.headers = {"Content-Length": str(len(body))}
+        handler.headers = {"Content-Length": str(len(body))}  # type: ignore[reportAttributeAccessIssue]  # test stub
 
         mock_result = {
             "elements": [{"text": "test"}],
             "image_size": {"w": 100, "h": 100},
         }
-        with patch(
-            "knowledge_base._omniparser_server._parse_image", return_value=mock_result
-        ):
+        with patch("knowledge_base._omniparser_server._parse_image", return_value=mock_result):
             handler.do_POST()
 
         handler.wfile.seek(0)
@@ -82,7 +78,7 @@ class TestParseEndpoint:
 
         body = b"not json at all"
         handler.rfile = BytesIO(body)
-        handler.headers = {"Content-Length": str(len(body))}
+        handler.headers = {"Content-Length": str(len(body))}  # type: ignore[reportAttributeAccessIssue]  # test stub
 
         handler.do_POST()
 
@@ -95,7 +91,7 @@ class TestParseEndpoint:
 
         body = json.dumps({"wrong_field": "value"}).encode()
         handler.rfile = BytesIO(body)
-        handler.headers = {"Content-Length": str(len(body))}
+        handler.headers = {"Content-Length": str(len(body))}  # type: ignore[reportAttributeAccessIssue]  # test stub
 
         handler.do_POST()
 
@@ -107,7 +103,7 @@ class TestParseEndpoint:
     def test_oversized_body_returns_413(self):
         handler = _make_handler("POST", "/parse")
 
-        handler.headers = {"Content-Length": str(_MAX_BODY_BYTES + 1)}
+        handler.headers = {"Content-Length": str(_MAX_BODY_BYTES + 1)}  # type: ignore[reportAttributeAccessIssue]  # test stub
 
         handler.do_POST()
 
@@ -119,11 +115,9 @@ class TestParseEndpoint:
         handler = _make_handler("POST", "/parse")
 
         image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-        body = json.dumps(
-            {"image_base64": base64.b64encode(image_bytes).decode()}
-        ).encode()
+        body = json.dumps({"image_base64": base64.b64encode(image_bytes).decode()}).encode()
         handler.rfile = BytesIO(body)
-        handler.headers = {"Content-Length": str(len(body))}
+        handler.headers = {"Content-Length": str(len(body))}  # type: ignore[reportAttributeAccessIssue]  # test stub
 
         with patch(
             "knowledge_base._omniparser_server._parse_image",
@@ -137,7 +131,7 @@ class TestParseEndpoint:
 
     def test_unknown_path_returns_404(self):
         handler = _make_handler("POST", "/unknown")
-        handler.headers = {"Content-Length": "0"}
+        handler.headers = {"Content-Length": "0"}  # type: ignore[reportAttributeAccessIssue]  # test stub
 
         handler.do_POST()
 

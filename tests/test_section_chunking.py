@@ -25,10 +25,7 @@ def test_h1_heading_split():
 
 def test_abstract_standalone():
     """Abstract section always gets its own chunk, never merged."""
-    text = (
-        "## Abstract\nShort abstract.\n\n"
-        "## Introduction\nIntro text that is also short.\n"
-    )
+    text = "## Abstract\nShort abstract.\n\n## Introduction\nIntro text that is also short.\n"
     result = _chunk_by_section(text)
     assert len(result) == 2
     assert "Abstract" in result[0][0]
@@ -37,10 +34,7 @@ def test_abstract_standalone():
 
 def test_references_own_chunk():
     """References section always gets its own chunk, never merged."""
-    text = (
-        "## Results\nSome results.\n\n"
-        "## References\n[1] Author et al. Paper title.\n[2] Another paper.\n"
-    )
+    text = "## Results\nSome results.\n\n## References\n[1] Author et al. Paper title.\n[2] Another paper.\n"
     result = _chunk_by_section(text)
     assert len(result) == 2
     refs_chunk = [c for c in result if "References" in c[0]]
@@ -66,16 +60,12 @@ def test_paragraph_fallback():
     paragraphs = "\n\n".join(["Paragraph " + "word " * 200 for _ in range(5)])
     text = f"## Big Section\n### Only Sub\n{paragraphs}"
     result = _chunk_by_section(text, max_section_size=1500)
-    assert len(result) >= 2, (
-        f"Expected >=2 chunks from paragraph fallback, got {len(result)}"
-    )
+    assert len(result) >= 2, f"Expected >=2 chunks from paragraph fallback, got {len(result)}"
 
 
 def test_deep_headings_no_split():
     """H4 and deeper do NOT trigger splits — treated as body text."""
-    text = (
-        "## Section\n#### Deep heading 1\nContent 1.\n#### Deep heading 2\nContent 2.\n"
-    )
+    text = "## Section\n#### Deep heading 1\nContent 1.\n#### Deep heading 2\nContent 2.\n"
     result = _chunk_by_section(text)
     assert len(result) == 1
     assert "Deep heading 1" in result[0][0]
@@ -100,11 +90,7 @@ def test_table_integrity():
 
 def test_no_overlap():
     """Chunks produced by _chunk_by_section do not overlap."""
-    text = (
-        "## Alpha\nUnique_alpha text here.\n\n"
-        "## Beta\nUnique_beta text here.\n\n"
-        "## Gamma\nUnique_gamma text here.\n"
-    )
+    text = "## Alpha\nUnique_alpha text here.\n\n## Beta\nUnique_beta text here.\n\n## Gamma\nUnique_gamma text here.\n"
     result = _chunk_by_section(text)
     assert len(result) == 3
     # Each unique marker should appear in exactly one chunk

@@ -65,7 +65,7 @@ def test_element_type_constants():
         VALID_ELEMENT_TYPES,
     )
 
-    assert VALID_ELEMENT_TYPES == {"float32", "int8"}
+    assert {"float32", "int8"} == VALID_ELEMENT_TYPES
     assert set(ELEMENT_INSERT_EXPR.keys()) == set(ELEMENT_QUERY_EXPR.keys())
     assert ELEMENT_INSERT_EXPR["float32"] == "?"
     assert ELEMENT_QUERY_EXPR["float32"] == "?"

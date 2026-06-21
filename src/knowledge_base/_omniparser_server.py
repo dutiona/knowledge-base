@@ -52,7 +52,7 @@ def _load_models(omniparser_path: str) -> bool:
     caller should fall back to subprocess-based parsing which still
     amortises model load because the server process stays alive.
     """
-    global _omniparser_instance  # noqa: PLW0603
+    global _omniparser_instance
     sys.path.insert(0, omniparser_path)
     try:
         from util.omniparser import Omniparser  # type: ignore[import-untyped]
@@ -71,8 +71,8 @@ def _load_models(omniparser_path: str) -> bool:
 
 def _parse_image_direct(png_path: Path) -> dict:
     """Parse an image using the in-process OmniParser instance."""
-    assert _omniparser_instance is not None
-    with open(png_path, "rb") as f:
+    assert _omniparser_instance is not None  # noqa: S101  # internal invariant: only reached after _parse_image checks it is not None
+    with png_path.open("rb") as f:
         image_b64 = base64.b64encode(f.read()).decode()
     return _omniparser_instance.parse(image_b64)
 
@@ -87,20 +87,20 @@ def _parse_image_subprocess(png_path: Path) -> dict:
     """
     import subprocess
 
-    assert _omniparser_path is not None
+    assert _omniparser_path is not None  # noqa: S101  # internal invariant: set by main() before the server starts serving
     parse_script = Path(_omniparser_path) / "parse.py"
     venv_python = Path(_omniparser_path) / ".venv" / "bin" / "python"
 
     json_fd, json_out = tempfile.mkstemp(suffix=".json")
     try:
         os.close(json_fd)
-        subprocess.run(
+        subprocess.run(  # noqa: S603  # trusted argv, no shell: venv_python/parse_script derived from internal _omniparser_path
             [str(venv_python), str(parse_script), str(png_path), "-j", json_out],
             timeout=300,
             capture_output=True,
             check=True,
         )
-        with open(json_out) as f:
+        with Path(json_out).open() as f:
             return json.load(f)
     finally:
         Path(json_out).unlink(missing_ok=True)
@@ -121,7 +121,7 @@ def _parse_image(png_path: Path) -> dict:
 class OmniParserHandler(BaseHTTPRequestHandler):
     """HTTP request handler for OmniParser."""
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if self.path == "/health":
             self._send_json(
                 200,
@@ -133,7 +133,7 @@ class OmniParserHandler(BaseHTTPRequestHandler):
         else:
             self._send_json(404, {"error": "not found"})
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         if self.path != "/parse":
             self._send_json(404, {"error": "not found"})
             return
@@ -176,7 +176,7 @@ class OmniParserHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: object) -> None:
         """Route HTTP access logs through the module logger."""
         logger.debug(format, *args)
 
@@ -197,7 +197,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=7862, help="Bind port")
     args = parser.parse_args(argv)
 
-    global _omniparser_path  # noqa: PLW0603
+    global _omniparser_path
     _omniparser_path = args.omniparser_path
 
     logging.basicConfig(
