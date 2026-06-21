@@ -737,6 +737,9 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
         )
         conn.commit()
 
+    # These keys are seeded ahead of the base-schema DDL and the migration chain,
+    # but none are read during DDL or by any migration (only embed_dim is read,
+    # above) — so their position here carries no ordering dependency.
     conn.execute(
         "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_provider', 'ollama')"
     )
