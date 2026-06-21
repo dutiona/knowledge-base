@@ -75,12 +75,7 @@ _OPERATIONS_TOOLS = {
 }
 
 _ALL_EXPECTED_TOOLS = (
-    _INGESTION_TOOLS
-    | _SEARCH_TOOLS
-    | _EMBEDDING_TOOLS
-    | _PAPER_TOOLS
-    | _EXTRACTION_TOOLS
-    | _OPERATIONS_TOOLS
+    _INGESTION_TOOLS | _SEARCH_TOOLS | _EMBEDDING_TOOLS | _PAPER_TOOLS | _EXTRACTION_TOOLS | _OPERATIONS_TOOLS
 )
 
 
@@ -124,12 +119,12 @@ def test_tool_count_matches_route_inventory():
 def test_each_route_block_is_fully_mounted():
     """Per-route assertion: pinpoints which route dropped if one fails to mount."""
     registered = _registered_tool_names()
-    assert _INGESTION_TOOLS <= registered
-    assert _SEARCH_TOOLS <= registered
-    assert _EMBEDDING_TOOLS <= registered
-    assert _PAPER_TOOLS <= registered
-    assert _EXTRACTION_TOOLS <= registered
-    assert _OPERATIONS_TOOLS <= registered
+    assert registered >= _INGESTION_TOOLS
+    assert registered >= _SEARCH_TOOLS
+    assert registered >= _EMBEDDING_TOOLS
+    assert registered >= _PAPER_TOOLS
+    assert registered >= _EXTRACTION_TOOLS
+    assert registered >= _OPERATIONS_TOOLS
 
 
 def test_main_runs_stdio_transport():

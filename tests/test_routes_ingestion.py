@@ -135,9 +135,7 @@ def test_reingest_maps_knowledgebase_error_to_json(kb_conn, tmp_path):
     """reingest_file raising a KnowledgeBaseError → {"error": str(e), **e.details}."""
     f = tmp_path / "doc.md"
     f.write_text("")
-    exc = NotFoundError(
-        "No chunks found for source_uri: x", details={"source_uri": "x"}
-    )
+    exc = NotFoundError("No chunks found for source_uri: x", details={"source_uri": "x"})
 
     with (
         patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
@@ -169,28 +167,23 @@ def test_reingest_invalidates_similar_relationships_and_submits_jobs(kb_conn, tm
     pid3 = cur.lastrowid
     cur = kb_conn.execute("INSERT INTO papers (title) VALUES ('Paper Four')")
     pid4 = cur.lastrowid
-    kb_conn.execute(
-        "INSERT INTO paper_paths (paper_id, path) VALUES (?, ?)", (pid1, source_uri)
-    )
+    kb_conn.execute("INSERT INTO paper_paths (paper_id, path) VALUES (?, ?)", (pid1, source_uri))
     # 'similar' edge touching the affected paper — must be purged.
     kb_conn.execute(
-        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) "
-        "VALUES (?, ?, 'similar')",
+        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) VALUES (?, ?, 'similar')",
         (pid1, pid2),
     )
     # 'similar' edge between two UNAFFECTED papers — must survive. Guards against
     # dropping the `(source_paper_id = ? OR target_paper_id = ?)` clause (which
     # would wipe every 'similar' row regardless of which paper was reingested).
     kb_conn.execute(
-        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) "
-        "VALUES (?, ?, 'similar')",
+        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) VALUES (?, ?, 'similar')",
         (pid3, pid4),
     )
     # A non-'similar' relationship on the affected paper that must survive.
     # Guards against dropping the `relation_type = 'similar'` clause.
     kb_conn.execute(
-        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) "
-        "VALUES (?, ?, 'cites')",
+        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) VALUES (?, ?, 'cites')",
         (pid1, pid2),
     )
     kb_conn.commit()
@@ -216,12 +209,9 @@ def test_reingest_invalidates_similar_relationships_and_submits_jobs(kb_conn, tm
     # 'similar' edge survives — exactly one 'similar' row remains, and it is the
     # pid3↔pid4 one (proves the DELETE was scoped to the reingested paper).
     similar_rows = kb_conn.execute(
-        "SELECT source_paper_id, target_paper_id FROM relationships "
-        "WHERE relation_type = 'similar'"
+        "SELECT source_paper_id, target_paper_id FROM relationships WHERE relation_type = 'similar'"
     ).fetchall()
-    assert [(r["source_paper_id"], r["target_paper_id"]) for r in similar_rows] == [
-        (pid3, pid4)
-    ]
+    assert [(r["source_paper_id"], r["target_paper_id"]) for r in similar_rows] == [(pid3, pid4)]
     # ...and the unrelated 'cites' relationship survives (relation_type scoping).
     remaining_cites = kb_conn.execute(
         "SELECT COUNT(*) AS n FROM relationships WHERE relation_type = 'cites'"
@@ -329,9 +319,7 @@ def test_configure_browser_tool_maps_validation_error(kb_conn):
     """An invalid (non-absolute / missing) venv path surfaces as an error dict via
     the KnowledgeBaseError mapping — exercised against the real configure_browser."""
     with patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn):
-        result = json.loads(
-            configure_browser_tool(venv_path="/nonexistent/venv/does/not/exist")
-        )
+        result = json.loads(configure_browser_tool(venv_path="/nonexistent/venv/does/not/exist"))
     assert "error" in result
     # configure_browser raises "Python executable not found in venv at ..."
     assert "Python executable not found" in result["error"]

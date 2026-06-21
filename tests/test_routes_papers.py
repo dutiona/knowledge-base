@@ -73,24 +73,16 @@ def test_register_paper_tool_source_uri_queues_auto_relate(kb_conn):
     no background worker / embedding network call is triggered.
     """
     with _patch_conn(kb_conn), patch("knowledge_base.jobs.submit_job") as mock_submit:
-        result = json.loads(
-            papers_routes.register_paper_tool(
-                "Linked Paper", source_uri="/tmp/linked.pdf"
-            )
-        )
+        result = json.loads(papers_routes.register_paper_tool("Linked Paper", source_uri="/tmp/linked.pdf"))
 
     paper_id = result["paper_id"]
-    mock_submit.assert_called_once_with(
-        kb_conn, paper_id, "auto_relate", {"paper_id": paper_id}
-    )
+    mock_submit.assert_called_once_with(kb_conn, paper_id, "auto_relate", {"paper_id": paper_id})
 
 
 def test_register_paper_tool_skip_auto_relate_queues_no_job(kb_conn):
     """source_uri but skip_auto_relate=True must not submit a job."""
     with _patch_conn(kb_conn), patch("knowledge_base.jobs.submit_job") as mock_submit:
-        papers_routes.register_paper_tool(
-            "Bulk Import", source_uri="/tmp/bulk.pdf", skip_auto_relate=True
-        )
+        papers_routes.register_paper_tool("Bulk Import", source_uri="/tmp/bulk.pdf", skip_auto_relate=True)
 
     mock_submit.assert_not_called()
 
@@ -137,9 +129,7 @@ def test_add_relationship_tool_success(kb_conn):
     tgt = _register(kb_conn, "Target Paper")
 
     with _patch_conn(kb_conn):
-        result = json.loads(
-            papers_routes.add_relationship_tool(src, tgt, "cites", confidence=0.8)
-        )
+        result = json.loads(papers_routes.add_relationship_tool(src, tgt, "cites", confidence=0.8))
 
     assert result == {
         "source_paper_id": src,
@@ -154,9 +144,7 @@ def test_add_relationship_tool_invalid_type_maps_to_error(kb_conn):
     tgt = _register(kb_conn, "T")
 
     with _patch_conn(kb_conn):
-        result = json.loads(
-            papers_routes.add_relationship_tool(src, tgt, "bogus_relation")
-        )
+        result = json.loads(papers_routes.add_relationship_tool(src, tgt, "bogus_relation"))
 
     # ValidationError carries no details -> error dict is just {"error": ...}.
     assert set(result.keys()) == {"error"}
@@ -173,9 +161,7 @@ def test_get_relationships_tool(kb_conn):
     tgt = _register(kb_conn, "Cited Paper")
     with _patch_conn(kb_conn):
         papers_routes.add_relationship_tool(src, tgt, "cites")
-        rels = json.loads(
-            papers_routes.get_relationships_tool(src, direction="outgoing")
-        )
+        rels = json.loads(papers_routes.get_relationships_tool(src, direction="outgoing"))
 
     assert len(rels) == 1
     rel = rels[0]
@@ -193,18 +179,14 @@ def test_get_relationships_tool(kb_conn):
 
 def test_record_conclusion_tool_success(kb_conn):
     with _patch_conn(kb_conn):
-        result = json.loads(
-            papers_routes.record_conclusion_tool("Transformers scale well", 0.9)
-        )
+        result = json.loads(papers_routes.record_conclusion_tool("Transformers scale well", 0.9))
 
     assert result["conclusion_id"] >= 1
 
 
 def test_record_conclusion_tool_invalid_confidence_maps_to_error(kb_conn):
     with _patch_conn(kb_conn):
-        result = json.loads(
-            papers_routes.record_conclusion_tool("Bad confidence", confidence=1.5)
-        )
+        result = json.loads(papers_routes.record_conclusion_tool("Bad confidence", confidence=1.5))
 
     assert set(result.keys()) == {"error"}
     assert "confidence must be between" in result["error"]
@@ -242,12 +224,8 @@ def test_get_conclusions_tool_filters(kb_conn):
 
 def test_supersede_conclusion_tool_success(kb_conn):
     with _patch_conn(kb_conn):
-        old = json.loads(papers_routes.record_conclusion_tool("Old claim", 0.7))[
-            "conclusion_id"
-        ]
-        result = json.loads(
-            papers_routes.supersede_conclusion_tool(old, "New claim", 0.95)
-        )
+        old = json.loads(papers_routes.record_conclusion_tool("Old claim", 0.7))["conclusion_id"]
+        result = json.loads(papers_routes.supersede_conclusion_tool(old, "New claim", 0.95))
 
     assert result["old_conclusion_id"] == old
     assert result["new_conclusion_id"] != old
@@ -255,9 +233,7 @@ def test_supersede_conclusion_tool_success(kb_conn):
 
 def test_supersede_conclusion_tool_missing_id_maps_to_error(kb_conn):
     with _patch_conn(kb_conn):
-        result = json.loads(
-            papers_routes.supersede_conclusion_tool(9999, "Replacement claim")
-        )
+        result = json.loads(papers_routes.supersede_conclusion_tool(9999, "Replacement claim"))
 
     assert set(result.keys()) == {"error"}
     assert "9999 not found" in result["error"]
@@ -270,9 +246,7 @@ def test_supersede_conclusion_tool_missing_id_maps_to_error(kb_conn):
 
 def test_get_conclusion_chain_tool_ordering(kb_conn):
     with _patch_conn(kb_conn):
-        first = json.loads(papers_routes.record_conclusion_tool("v1", 0.5))[
-            "conclusion_id"
-        ]
+        first = json.loads(papers_routes.record_conclusion_tool("v1", 0.5))["conclusion_id"]
         sup = json.loads(papers_routes.supersede_conclusion_tool(first, "v2", 0.6))
         second = sup["new_conclusion_id"]
 
@@ -309,9 +283,7 @@ def test_export_bibtex_tool_write_error_maps_to_error(kb_conn, tmp_path, monkeyp
 
     with _patch_conn(kb_conn):
         # Bad extension -> _validate_bib_path raises ValueError, caught -> error.
-        result = json.loads(
-            papers_routes.export_bibtex_tool(output_path=str(tmp_path / "bad.txt"))
-        )
+        result = json.loads(papers_routes.export_bibtex_tool(output_path=str(tmp_path / "bad.txt")))
 
     assert set(result.keys()) == {"error"}
     assert "extension" in result["error"]
@@ -326,9 +298,7 @@ def test_sync_bibtex_tool_bad_extension_maps_to_error(kb_conn, tmp_path, monkeyp
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
 
     with _patch_conn(kb_conn):
-        result = json.loads(
-            papers_routes.sync_bibtex_tool(output_path=str(tmp_path / "refs.txt"))
-        )
+        result = json.loads(papers_routes.sync_bibtex_tool(output_path=str(tmp_path / "refs.txt")))
 
     assert set(result.keys()) == {"error"}
     assert "extension" in result["error"]

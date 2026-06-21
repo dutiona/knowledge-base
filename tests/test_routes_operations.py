@@ -37,9 +37,7 @@ def _no_worker(monkeypatch):
     running singleton at the test boundary is handled centrally by the
     ``_reset_job_worker`` fixture in conftest.py.)
     """
-    monkeypatch.setattr(
-        "knowledge_base.jobs._ensure_worker_running", lambda *a, **k: None
-    )
+    monkeypatch.setattr("knowledge_base.jobs._ensure_worker_running", lambda *a, **k: None)
     yield
 
 
@@ -148,8 +146,11 @@ def _insert_prediction_error(
         cols += ", detected_at"
         vals.append(detected_at)
         placeholders += ", ?"
+    # S608 false positive: `cols`/`placeholders` are code-constant column names
+    # and `?` markers; every value is bound via the parameterized `vals` list.
     cursor = conn.execute(
-        f"INSERT INTO prediction_errors ({cols}) VALUES ({placeholders})", vals
+        f"INSERT INTO prediction_errors ({cols}) VALUES ({placeholders})",  # noqa: S608
+        vals,
     )
     conn.commit()
     return cursor.lastrowid
@@ -167,9 +168,7 @@ def test_list_prediction_errors_tool_lists_unresolved(kb_conn, monkeypatch):
     assert result[0]["resolved_at"] is None
 
 
-def test_list_prediction_errors_tool_unresolved_only_excludes_resolved(
-    kb_conn, monkeypatch
-):
+def test_list_prediction_errors_tool_unresolved_only_excludes_resolved(kb_conn, monkeypatch):
     monkeypatch.setattr(ops, "_get_conn", lambda: kb_conn)
     open_id = _insert_prediction_error(kb_conn, query="open gap")
     resolved_id = _insert_prediction_error(kb_conn, query="closed gap", resolved=True)
@@ -185,12 +184,8 @@ def test_list_prediction_errors_tool_unresolved_only_excludes_resolved(
 
 def test_list_prediction_errors_tool_since_filter(kb_conn, monkeypatch):
     monkeypatch.setattr(ops, "_get_conn", lambda: kb_conn)
-    old_id = _insert_prediction_error(
-        kb_conn, query="old", detected_at="2020-01-01 00:00:00"
-    )
-    new_id = _insert_prediction_error(
-        kb_conn, query="new", detected_at="2024-06-01 00:00:00"
-    )
+    old_id = _insert_prediction_error(kb_conn, query="old", detected_at="2020-01-01 00:00:00")
+    new_id = _insert_prediction_error(kb_conn, query="new", detected_at="2024-06-01 00:00:00")
 
     result = json.loads(ops.list_prediction_errors_tool(since="2023-01-01"))
 
@@ -212,9 +207,7 @@ def test_resolve_prediction_error_tool_success(kb_conn, monkeypatch):
 
     assert result == {"resolved": eid}
     # The underlying row is actually marked resolved.
-    row = kb_conn.execute(
-        "SELECT resolved_at FROM prediction_errors WHERE id = ?", (eid,)
-    ).fetchone()
+    row = kb_conn.execute("SELECT resolved_at FROM prediction_errors WHERE id = ?", (eid,)).fetchone()
     assert row["resolved_at"] is not None
 
 

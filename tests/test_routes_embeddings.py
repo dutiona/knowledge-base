@@ -41,17 +41,14 @@ def _insert_similar_relationship(conn: sqlite3.Connection) -> None:
     src = _insert_paper(conn, "src")
     tgt = _insert_paper(conn, "tgt")
     conn.execute(
-        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type)"
-        " VALUES (?, ?, 'similar')",
+        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) VALUES (?, ?, 'similar')",
         (src, tgt),
     )
     conn.commit()
 
 
 def _count_similar(conn: sqlite3.Connection) -> int:
-    return conn.execute(
-        "SELECT COUNT(*) FROM relationships WHERE relation_type = 'similar'"
-    ).fetchone()[0]
+    return conn.execute("SELECT COUNT(*) FROM relationships WHERE relation_type = 'similar'").fetchone()[0]
 
 
 def _drop_default_active(conn: sqlite3.Connection) -> None:
@@ -187,9 +184,7 @@ def test_re_embed_tool_deletes_similar_and_adds_note(kb_conn):
 
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
-        patch.object(
-            emb, "re_embed", return_value={"chunks_processed": 3, "space": "m_512"}
-        ) as mock_re_embed,
+        patch.object(emb, "re_embed", return_value={"chunks_processed": 3, "space": "m_512"}) as mock_re_embed,
     ):
         result = json.loads(emb.re_embed_tool("m", 512, matryoshka_base_dim=1024))
 
@@ -234,18 +229,12 @@ def test_list_embed_spaces_passthrough(kb_conn):
 def test_create_embed_space_success(kb_conn):
     """Valid new space → success JSON with the documented shape."""
     with patch.object(emb, "_get_conn", return_value=kb_conn):
-        result = json.loads(
-            emb.create_embed_space_tool(
-                name="new_sp", model="m", dim=128, provider="ollama"
-            )
-        )
+        result = json.loads(emb.create_embed_space_tool(name="new_sp", model="m", dim=128, provider="ollama"))
     assert result["space"] == "new_sp"
     assert result["status"] == "populating"
     assert result["element_type"] == "float32"
     # Registry row really created.
-    row = kb_conn.execute(
-        "SELECT status FROM embed_spaces WHERE name = 'new_sp'"
-    ).fetchone()
+    row = kb_conn.execute("SELECT status FROM embed_spaces WHERE name = 'new_sp'").fetchone()
     assert row["status"] == "populating"
 
 
@@ -253,11 +242,7 @@ def test_create_embed_space_duplicate_name_error(kb_conn):
     """Duplicate name → create_space raises ValueError → error mapping."""
     with patch.object(emb, "_get_conn", return_value=kb_conn):
         emb.create_embed_space_tool(name="dup", model="m", dim=128, provider="ollama")
-        result = json.loads(
-            emb.create_embed_space_tool(
-                name="dup", model="m", dim=128, provider="ollama"
-            )
-        )
+        result = json.loads(emb.create_embed_space_tool(name="dup", model="m", dim=128, provider="ollama"))
     assert "error" in result
     assert "already exists" in result["error"]
 
@@ -265,11 +250,7 @@ def test_create_embed_space_duplicate_name_error(kb_conn):
 def test_create_embed_space_invalid_name_error(kb_conn):
     """Non-alphanumeric name → ValueError → error mapping."""
     with patch.object(emb, "_get_conn", return_value=kb_conn):
-        result = json.loads(
-            emb.create_embed_space_tool(
-                name="bad name!", model="m", dim=128, provider="ollama"
-            )
-        )
+        result = json.loads(emb.create_embed_space_tool(name="bad name!", model="m", dim=128, provider="ollama"))
     assert "error" in result
     assert "alphanumeric" in result["error"]
 
@@ -354,9 +335,7 @@ def test_deprecate_embed_space_success(kb_conn):
     with patch.object(emb, "_get_conn", return_value=kb_conn):
         result = json.loads(emb.deprecate_embed_space_tool("pop_sp"))
     assert result == {"deprecated": "pop_sp"}
-    row = kb_conn.execute(
-        "SELECT status FROM embed_spaces WHERE name = 'pop_sp'"
-    ).fetchone()
+    row = kb_conn.execute("SELECT status FROM embed_spaces WHERE name = 'pop_sp'").fetchone()
     assert row["status"] == "deprecated"
 
 
@@ -405,9 +384,7 @@ def test_compare_spaces_value_error_mapping(kb_conn):
     """compare_spaces raising ValueError → error mapping."""
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
-        patch.object(
-            emb, "compare_spaces", side_effect=ValueError("space x not found")
-        ),
+        patch.object(emb, "compare_spaces", side_effect=ValueError("space x not found")),
     ):
         result = json.loads(emb.compare_spaces_tool("q", "a", "b"))
     assert result == {"error": "space x not found"}
@@ -425,9 +402,7 @@ def test_batch_compare_spaces_happy_passthrough(kb_conn):
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(emb, "batch_compare_spaces", return_value=payload) as mock_bcs,
     ):
-        result = json.loads(
-            emb.batch_compare_spaces_tool("a", "b", ["q1", "q2"], top_k=5)
-        )
+        result = json.loads(emb.batch_compare_spaces_tool("a", "b", ["q1", "q2"], top_k=5))
     mock_bcs.assert_called_once_with(kb_conn, "a", "b", ["q1", "q2"], 5, "vec")
     assert result == payload
 
@@ -459,9 +434,7 @@ def test_benchmark_no_spaces(kb_conn):
 
 def test_benchmark_no_active_no_baseline(kb_conn):
     """baseline_space=None and no active space → error."""
-    spaces = [
-        {"name": "sp", "dim": 256, "status": "populating", "element_type": "float32"}
-    ]
+    spaces = [{"name": "sp", "dim": 256, "status": "populating", "element_type": "float32"}]
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(emb, "list_spaces", return_value=spaces),
@@ -473,9 +446,7 @@ def test_benchmark_no_active_no_baseline(kb_conn):
 
 def test_benchmark_explicit_baseline_not_found(kb_conn):
     """Explicit baseline not among spaces → 'Baseline space ... not found'."""
-    spaces = [
-        {"name": "sp", "dim": 256, "status": "populating", "element_type": "float32"}
-    ]
+    spaces = [{"name": "sp", "dim": 256, "status": "populating", "element_type": "float32"}]
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(emb, "list_spaces", return_value=spaces),
@@ -488,9 +459,7 @@ def test_benchmark_explicit_baseline_not_found(kb_conn):
 
 def test_benchmark_no_chunks(kb_conn):
     """Baseline resolves but DB has no chunks → 'No chunks ...' error."""
-    spaces = [
-        {"name": "base", "dim": 256, "status": "active", "element_type": "float32"}
-    ]
+    spaces = [{"name": "base", "dim": 256, "status": "active", "element_type": "float32"}]
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(emb, "list_spaces", return_value=spaces),

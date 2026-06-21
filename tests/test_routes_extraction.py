@@ -55,16 +55,12 @@ def test_record_method_tool_returns_method_id(kb_conn):
     paper_id = register_paper(kb_conn, "A Paper")["paper_id"]
 
     with _patch_conn(kb_conn):
-        result = json.loads(
-            record_method_tool("Transformer", paper_id, description="attn")
-        )
+        result = json.loads(record_method_tool("Transformer", paper_id, description="attn"))
 
     assert "method_id" in result
     assert isinstance(result["method_id"], int)
     # Persisted under the right paper.
-    row = kb_conn.execute(
-        "SELECT name, description FROM methods WHERE id = ?", (result["method_id"],)
-    ).fetchone()
+    row = kb_conn.execute("SELECT name, description FROM methods WHERE id = ?", (result["method_id"],)).fetchone()
     assert row["name"] == "Transformer"
     assert row["description"] == "attn"
 
@@ -77,9 +73,7 @@ def test_record_dataset_tool_returns_dataset_id(kb_conn):
 
     assert "dataset_id" in result
     assert isinstance(result["dataset_id"], int)
-    row = kb_conn.execute(
-        "SELECT name FROM datasets WHERE id = ?", (result["dataset_id"],)
-    ).fetchone()
+    row = kb_conn.execute("SELECT name FROM datasets WHERE id = ?", (result["dataset_id"],)).fetchone()
     assert row["name"] == "ImageNet"
 
 
@@ -221,16 +215,12 @@ def test_configure_llm_tool_openai_compat_missing_base_url(kb_conn):
 
 def test_configure_vision_tool_writes_config(kb_conn):
     with _patch_conn(kb_conn):
-        result = json.loads(
-            configure_vision_tool(model="llava:13b", base_url="http://localhost:11434")
-        )
+        result = json.loads(configure_vision_tool(model="llava:13b", base_url="http://localhost:11434"))
 
     assert result["model"] == "llava:13b"
     assert result["base_url"] == "http://localhost:11434"
     # Persisted.
-    row = kb_conn.execute(
-        "SELECT value FROM config WHERE key = 'vision_model'"
-    ).fetchone()
+    row = kb_conn.execute("SELECT value FROM config WHERE key = 'vision_model'").fetchone()
     assert row["value"] == "llava:13b"
 
 
@@ -316,9 +306,7 @@ def test_extract_structure_tool_short_doc_passthrough(kb_conn):
         patch(f"{ROUTE}.estimate_extraction_time", return_value=est),
         patch(f"{ROUTE}.extract_structure", return_value=extracted) as mock_extract,
     ):
-        result = json.loads(
-            extract_structure_tool(paper_id=7, confirmed=False, max_workers=3)
-        )
+        result = json.loads(extract_structure_tool(paper_id=7, confirmed=False, max_workers=3))
 
     assert result == extracted
     # Short-doc path always runs inline with confirmed=True and prefetched chunks.
@@ -373,9 +361,7 @@ def test_extract_structure_tool_long_doc_warns_with_worker_clamp(kb_conn):
         patch(f"{ROUTE}.extract_structure") as mock_extract,
         patch(f"{ROUTE}.submit_job") as mock_submit,
     ):
-        result = json.loads(
-            extract_structure_tool(paper_id=7, confirmed=False, max_workers=10)
-        )
+        result = json.loads(extract_structure_tool(paper_id=7, confirmed=False, max_workers=10))
 
     assert result["confirm_required"] is True
     assert result["chunk_count"] == 3
@@ -400,9 +386,7 @@ def test_extract_structure_tool_long_doc_clamps_to_max_workers_limit(kb_conn):
         _patch_conn(kb_conn),
         patch(f"{ROUTE}.estimate_extraction_time", return_value=est),
     ):
-        result = json.loads(
-            extract_structure_tool(paper_id=7, confirmed=False, max_workers=chunk_count)
-        )
+        result = json.loads(extract_structure_tool(paper_id=7, confirmed=False, max_workers=chunk_count))
 
     assert result["max_workers"] == _MAX_WORKERS_LIMIT
     assert result["estimated_seconds"] == 100_000 // _MAX_WORKERS_LIMIT
@@ -422,9 +406,7 @@ def test_extract_structure_tool_long_doc_confirmed_submits_job_with_params(kb_co
         patch(f"{ROUTE}.estimate_extraction_time", return_value=est),
         patch(f"{ROUTE}.submit_job", return_value=123) as mock_submit,
     ):
-        result = json.loads(
-            extract_structure_tool(paper_id=7, confirmed=True, max_workers=10)
-        )
+        result = json.loads(extract_structure_tool(paper_id=7, confirmed=True, max_workers=10))
 
     assert result == {
         "deferred": True,
@@ -454,9 +436,7 @@ def test_extract_structure_tool_long_doc_confirmed_single_worker_params_none(kb_
         patch(f"{ROUTE}.estimate_extraction_time", return_value=est),
         patch(f"{ROUTE}.submit_job", return_value=456) as mock_submit,
     ):
-        result = json.loads(
-            extract_structure_tool(paper_id=7, confirmed=True, max_workers=1)
-        )
+        result = json.loads(extract_structure_tool(paper_id=7, confirmed=True, max_workers=1))
 
     assert result["deferred"] is True
     assert result["job_id"] == 456

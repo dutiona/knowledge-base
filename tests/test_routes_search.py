@@ -71,9 +71,7 @@ def test_co_occurrence_returns_pair_for_shared_session(kb_conn):
     with patch("knowledge_base.routes.search._get_conn", return_value=kb_conn):
         result = json.loads(co_occurrence(min_sessions=1))
 
-    assert result == [
-        {"source_uri_a": "doc_a.md", "source_uri_b": "doc_b.md", "co_sessions": 1}
-    ]
+    assert result == [{"source_uri_a": "doc_a.md", "source_uri_b": "doc_b.md", "co_sessions": 1}]
 
 
 def test_co_occurrence_counts_multiple_shared_sessions(kb_conn):
@@ -111,9 +109,7 @@ def test_co_occurrence_counts_multiple_shared_sessions(kb_conn):
     with patch("knowledge_base.routes.search._get_conn", return_value=kb_conn):
         result = json.loads(co_occurrence(min_sessions=1))
 
-    assert result == [
-        {"source_uri_a": "doc_a.md", "source_uri_b": "doc_b.md", "co_sessions": 2}
-    ]
+    assert result == [{"source_uri_a": "doc_a.md", "source_uri_b": "doc_b.md", "co_sessions": 2}]
 
 
 def test_co_occurrence_min_sessions_threshold_filters(kb_conn):
@@ -140,9 +136,7 @@ def test_co_occurrence_min_sessions_threshold_filters(kb_conn):
         # min_sessions=2 excludes it (shares only 1 session).
         excluded = json.loads(co_occurrence(min_sessions=2))
 
-    assert included == [
-        {"source_uri_a": "doc_a.md", "source_uri_b": "doc_b.md", "co_sessions": 1}
-    ]
+    assert included == [{"source_uri_a": "doc_a.md", "source_uri_b": "doc_b.md", "co_sessions": 1}]
     assert excluded == []
 
 
