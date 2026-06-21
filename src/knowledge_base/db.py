@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
+from typing import TypedDict, cast
 
 import sqlite_vec
 
@@ -23,6 +24,9 @@ __all__ = [
     "DEFAULT_EMBED_MODEL",
     "DEFAULT_EMBED_PROVIDER",
     "RELATIONSHIP_TYPES",
+    "SPACE_NAME_RE",
+    "CoOccurrencePair",
+    "EmbedSpace",
     "co_occurrence_pairs",
     "delete_chunk_vecs",
     "delete_chunks_cascade",
@@ -87,9 +91,54 @@ def escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _table_sql(conn: sqlite3.Connection, name: str) -> str | None:
+    """Return the ``CREATE TABLE`` SQL for *name*, or ``None`` if it doesn't exist.
+
+    Shared introspection primitive for the table-rebuild migrations, which guard
+    on whether a CHECK-constraint marker is already present in this DDL text.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _table_columns(conn: sqlite3.Connection, name: str) -> set[str]:
+    """Return the set of column names on table *name* via ``PRAGMA table_info``.
+
+    Shared introspection primitive for the ADD-COLUMN migrations, which guard on
+    whether their target column already exists.
+    """
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({name})").fetchall()}
+
+
 def _relationship_check_constraint() -> str:
     values = ", ".join(f"'{t}'" for t in RELATIONSHIP_TYPES)
     return f"CHECK(relation_type IN ({values}))"
+
+
+# ---------------------------------------------------------------------------
+# Shared CHECK-constraint fragments (#433).
+#
+# These allowed-value lists are byte-identical between the base-schema DDL in
+# ``_create_base_schema`` and the table-rebuild migrations that widen them.
+# Keeping a single source of truth prevents the two copies from drifting apart
+# (a drift would silently change which values a rebuilt table accepts). Each
+# constant is the exact ``CHECK(...)`` fragment embedded verbatim in both places.
+# ---------------------------------------------------------------------------
+
+#: Allowed ``chunks.source_type`` values (the rebuild that added 'figure').
+SOURCE_TYPE_CHECK = (
+    "CHECK(source_type IN ('pdf', 'markdown', 'code', 'web', 'note', 'figure'))"
+)
+#: Allowed ``jobs.job_type`` values (the rebuild that added 'auto_relate').
+JOB_TYPE_CHECK = (
+    "CHECK(job_type IN ('extract_structure', 'extract_figures', 'auto_relate'))"
+)
+#: Allowed ``jobs.status`` values (carried unchanged through the jobs rebuild).
+JOB_STATUS_CHECK = "CHECK(status IN ('pending', 'running', 'completed', 'failed'))"
+#: Allowed ``embed_spaces.element_type`` values (base DDL + the ADD COLUMN migration).
+ELEMENT_TYPE_CHECK = "CHECK(element_type IN ('float32', 'int8'))"
 
 
 # SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999.
@@ -142,7 +191,20 @@ def _batched_select(
     return results
 
 
-def co_occurrence_pairs(conn: sqlite3.Connection, min_sessions: int = 1) -> list[dict]:
+class CoOccurrencePair(TypedDict):
+    """A pair of documents sharing one or more ingestion sessions (#433).
+
+    ``source_uri_a`` is always alphabetically less than ``source_uri_b``.
+    """
+
+    source_uri_a: str
+    source_uri_b: str
+    co_sessions: int
+
+
+def co_occurrence_pairs(
+    conn: sqlite3.Connection, min_sessions: int = 1
+) -> list[CoOccurrencePair]:
     """Return document pairs that share at least *min_sessions* ingestion sessions.
 
     Each row contains source_uri_a, source_uri_b (alphabetically ordered)
@@ -196,14 +258,12 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
 
 
 def _migrate_source_type_figure(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'"
-    ).fetchone()
-    if not row or "'figure'" in row[0]:
+    table_sql = _table_sql(conn, "chunks")
+    if not table_sql or "'figure'" in table_sql:
         return
 
     # Determine columns in the old table to handle INSERT INTO ... SELECT
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+    columns = _table_columns(conn, "chunks")
     old_cols = "id, content_hash, content, source_type, source_uri, chunk_index, created_at, metadata"
     # session_id and chunk_strategy may not exist in very old schemas
     new_cols = old_cols
@@ -221,7 +281,7 @@ def _migrate_source_type_figure(conn: sqlite3.Connection) -> None:
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         content_hash TEXT NOT NULL UNIQUE,
         content TEXT NOT NULL,
-        source_type TEXT NOT NULL CHECK(source_type IN ('pdf', 'markdown', 'code', 'web', 'note', 'figure')),
+        source_type TEXT NOT NULL {SOURCE_TYPE_CHECK},
         source_uri TEXT NOT NULL,
         chunk_index INTEGER NOT NULL,
         session_id TEXT,
@@ -251,10 +311,8 @@ def _migrate_source_type_figure(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_relationship_types(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='relationships'"
-    ).fetchone()
-    if not row or "'similar'" in row[0]:
+    table_sql = _table_sql(conn, "relationships")
+    if not table_sql or "'similar'" in table_sql:
         return
 
     check = _relationship_check_constraint()
@@ -299,8 +357,7 @@ def _migrate_papers_fts(conn: sqlite3.Connection) -> None:
 
 def _migrate_session_id(conn: sqlite3.Connection) -> None:
     """Add session_id column to chunks for co-occurrence tracking."""
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
-    if "session_id" in columns:
+    if "session_id" in _table_columns(conn, "chunks"):
         return
     conn.execute("ALTER TABLE chunks ADD COLUMN session_id TEXT")
     conn.commit()
@@ -308,8 +365,7 @@ def _migrate_session_id(conn: sqlite3.Connection) -> None:
 
 def _migrate_chunk_strategy(conn: sqlite3.Connection) -> None:
     """Add chunk_strategy column to chunks for dual chunking support."""
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
-    if "chunk_strategy" in columns:
+    if "chunk_strategy" in _table_columns(conn, "chunks"):
         return
     conn.execute(
         "ALTER TABLE chunks ADD COLUMN chunk_strategy TEXT NOT NULL DEFAULT 'mechanical'"
@@ -335,22 +391,20 @@ def _migrate_paper_paths(conn: sqlite3.Connection) -> None:
 
 def _migrate_jobs_types(conn: sqlite3.Connection) -> None:
     """Add 'auto_relate' to jobs.job_type CHECK constraint for existing DBs."""
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'"
-    ).fetchone()
-    if not row or "'auto_relate'" in row[0]:
+    table_sql = _table_sql(conn, "jobs")
+    if not table_sql or "'auto_relate'" in table_sql:
         return
 
-    conn.executescript("""
+    conn.executescript(f"""
     PRAGMA foreign_keys = OFF;
     BEGIN;
     CREATE TABLE jobs_new (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
-        job_type TEXT NOT NULL CHECK(job_type IN ('extract_structure', 'extract_figures', 'auto_relate')),
-        params TEXT NOT NULL DEFAULT '{}',
+        job_type TEXT NOT NULL {JOB_TYPE_CHECK},
+        params TEXT NOT NULL DEFAULT '{{}}',
         status TEXT NOT NULL DEFAULT 'pending'
-            CHECK(status IN ('pending', 'running', 'completed', 'failed')),
+            {JOB_STATUS_CHECK},
         progress TEXT,
         result TEXT,
         error TEXT,
@@ -400,7 +454,9 @@ def _migrate_chunk_sessions(conn: sqlite3.Connection) -> None:
 # Embedding space helpers (#99)
 # ---------------------------------------------------------------------------
 
-_SPACE_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+#: Validates an embedding-space name (alphanumeric/underscore only). Public so
+#: ``embed_swap`` and other modules can reuse the same canonical pattern.
+SPACE_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 
 
 def space_table_name(name: str) -> str:
@@ -409,12 +465,35 @@ def space_table_name(name: str) -> str:
     return f"chunks_vec_{sanitized}"
 
 
-def get_active_space(conn: sqlite3.Connection) -> dict | None:
+class EmbedSpace(TypedDict):
+    """A row of the ``embed_spaces`` registry (#433).
+
+    Mirrors the table columns; ``get_active_space`` returns ``dict(row)`` over a
+    ``SELECT *``, so every column is present at runtime.
+    """
+
+    name: str
+    model: str
+    provider: str
+    dim: int
+    chunk_strategy: str
+    status: str
+    table_name: str
+    created_at: str
+    chunk_count: int
+    total_chunks: int | None
+    matryoshka_base_dim: int | None
+    element_type: str
+
+
+def get_active_space(conn: sqlite3.Connection) -> EmbedSpace | None:
     """Return the active embedding space row as a dict, or None."""
     row = conn.execute("SELECT * FROM embed_spaces WHERE status = 'active'").fetchone()
     if row is None:
         return None
-    return dict(row)
+    # Runtime value is a plain dict (identical to the previous ``dict(row)``); the
+    # cast asserts it conforms to the EmbedSpace schema (SELECT * over the table).
+    return cast("EmbedSpace", dict(row))
 
 
 def get_vec_table_name(conn: sqlite3.Connection) -> str:
@@ -425,6 +504,15 @@ def get_vec_table_name(conn: sqlite3.Connection) -> str:
     if row is None:
         return "chunks_vec"
     return row["table_name"]
+
+
+def _resolve_vec_table(conn: sqlite3.Connection, table_name: str | None) -> str:
+    """Return *table_name* if given, else the active space's vec table (#433).
+
+    Shared active-space fallback for the vec helpers — keeps the
+    ``table_name or get_vec_table_name(conn)`` resolution in one place.
+    """
+    return table_name or get_vec_table_name(conn)
 
 
 def get_active_chunk_strategy(conn: sqlite3.Connection) -> str:
@@ -442,7 +530,7 @@ def get_space_element_type(
     table_name: str | None = None,
 ) -> str:
     """Return the element_type for the given (or active) space, defaulting to 'float32'."""
-    tbl = table_name or get_vec_table_name(conn)
+    tbl = _resolve_vec_table(conn, table_name)
     row = conn.execute(
         "SELECT element_type FROM embed_spaces WHERE table_name = ?", (tbl,)
     ).fetchone()
@@ -463,7 +551,7 @@ def insert_chunk_vec(
     If *element_type* is ``None`` (the default), it is auto-resolved from the
     space registry so callers never need to look it up themselves.
     """
-    tbl = table_name or get_vec_table_name(conn)
+    tbl = _resolve_vec_table(conn, table_name)
     if element_type is None:
         element_type = get_space_element_type(conn, tbl)
     expr = ELEMENT_INSERT_EXPR[element_type]
@@ -490,7 +578,7 @@ def delete_chunk_vecs(
     """
     if not chunk_ids:
         return
-    tbl = table_name or get_vec_table_name(conn)
+    tbl = _resolve_vec_table(conn, table_name)
     # Count actual rows before deletion — not all chunks may have embeddings
     count_rows = _batched_select(
         conn, f"SELECT COUNT(*) AS n FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids
@@ -528,10 +616,7 @@ def delete_chunks_cascade(
 
 def _migrate_embed_spaces_matryoshka(conn: sqlite3.Connection) -> None:
     """Add matryoshka_base_dim column to embed_spaces if missing."""
-    columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()
-    }
-    if "matryoshka_base_dim" in columns:
+    if "matryoshka_base_dim" in _table_columns(conn, "embed_spaces"):
         return
     conn.execute("ALTER TABLE embed_spaces ADD COLUMN matryoshka_base_dim INTEGER")
     conn.commit()
@@ -539,14 +624,11 @@ def _migrate_embed_spaces_matryoshka(conn: sqlite3.Connection) -> None:
 
 def _migrate_embed_spaces_element_type(conn: sqlite3.Connection) -> None:
     """Add element_type column to embed_spaces if missing."""
-    columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()
-    }
-    if "element_type" in columns:
+    if "element_type" in _table_columns(conn, "embed_spaces"):
         return
     conn.execute(
         "ALTER TABLE embed_spaces ADD COLUMN element_type TEXT NOT NULL DEFAULT 'float32'"
-        " CHECK(element_type IN ('float32', 'int8'))"
+        f" {ELEMENT_TYPE_CHECK}"
     )
     conn.commit()
 
@@ -572,10 +654,7 @@ def _migrate_normalize_source_uri(conn: sqlite3.Connection) -> None:
 def _migrate_extraction_source(conn: sqlite3.Connection) -> None:
     """Add source column to methods, datasets, metrics, entities tables."""
     for table in ("methods", "datasets", "metrics", "entities"):
-        columns = {
-            row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-        }
-        if "source" not in columns:
+        if "source" not in _table_columns(conn, table):
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN source TEXT NOT NULL DEFAULT 'user'"
             )
@@ -625,28 +704,19 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     conn.commit()
 
 
-def init_schema(conn: sqlite3.Connection) -> None:
-    # --- Validate-then-converge (#450, read-validates split, ME schema.rs:96-114) ---
-    # `_migrate_*` attrs are read live off the module so tests can monkeypatch
-    # CURRENT_SCHEMA_VERSION. None = fresh or legacy-unversioned (build + stamp).
-    current = _migrate.CURRENT_SCHEMA_VERSION
-    version = _migrate.get_schema_version(conn)  # None tolerates a missing config table
-    if version is not None:
-        if version == current:
-            return  # already at the current schema — cheap no-op, no rebuild
-        if version > current:
-            raise KnowledgeBaseError(
-                f"database schema v{version} is newer than this build (v{current}); "
-                "upgrade the code"
-            )
-        # version < current: do NOT auto-migrate on this hot path (per-boot backup
-        # + v2+ chain belongs in the explicit `migrate` command).
-        raise KnowledgeBaseError(
-            f"database schema v{version} is behind v{current}; "
-            "run `knowledge-base-ingest migrate`"
-        )
+def _seed_default_config(conn: sqlite3.Connection) -> int:
+    """Create the config table and seed all default key/value rows.
 
-    # --- Create config table first so we can read embed_dim before chunks_vec ---
+    Consolidates the two historically-split config-seeding spots: the embed_*
+    defaults (seeded only on a fresh DB, guarded by the absence of ``embed_model``)
+    and the llm_*/threshold/chunk_strategy defaults (``INSERT OR IGNORE``). The
+    config table is created first so the schema's configured dimension can be read
+    before the vec tables (which embed it) are built.
+
+    Returns the resolved ``embed_dim`` (configured value, or
+    :data:`DEFAULT_EMBED_DIM` when absent) for the caller to thread into the base
+    schema DDL.
+    """
     conn.execute("""
         CREATE TABLE IF NOT EXISTS config (
             key TEXT PRIMARY KEY,
@@ -667,18 +737,45 @@ def init_schema(conn: sqlite3.Connection) -> None:
         )
         conn.commit()
 
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_provider', 'ollama')"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_model', 'qwen3.5:27b')"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('prediction_error_threshold', '0.025')"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_propose_threshold', '0.82')"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_accept_threshold', '0.95')"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('chunk_strategy', 'mechanical')"
+    )
+
     # Read the configured dimension (handles both fresh and existing DBs)
     dim_row = conn.execute(
         "SELECT value FROM config WHERE key = 'embed_dim'"
     ).fetchone()
-    embed_dim = int(dim_row["value"]) if dim_row else DEFAULT_EMBED_DIM
+    return int(dim_row["value"]) if dim_row else DEFAULT_EMBED_DIM
 
+
+def _create_base_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
+    """Create the full v1 base schema: tables, virtual tables, triggers, indexes.
+
+    Every statement is idempotent (``IF NOT EXISTS``), so this converges both a
+    fresh DB and a legacy-unversioned DB onto the current contract. *embed_dim* is
+    interpolated into the vec0 virtual tables' fixed dimension.
+    """
     conn.executescript(f"""
     CREATE TABLE IF NOT EXISTS chunks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         content_hash TEXT NOT NULL UNIQUE,
         content TEXT NOT NULL,
-        source_type TEXT NOT NULL CHECK(source_type IN ('pdf', 'markdown', 'code', 'web', 'note', 'figure')),
+        source_type TEXT NOT NULL {SOURCE_TYPE_CHECK},
         source_uri TEXT NOT NULL,
         chunk_index INTEGER NOT NULL,
         session_id TEXT,
@@ -833,10 +930,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
     CREATE TABLE IF NOT EXISTS jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
-        job_type TEXT NOT NULL CHECK(job_type IN ('extract_structure', 'extract_figures', 'auto_relate')),
+        job_type TEXT NOT NULL {JOB_TYPE_CHECK},
         params TEXT NOT NULL DEFAULT '{{}}',
         status TEXT NOT NULL DEFAULT 'pending'
-            CHECK(status IN ('pending', 'running', 'completed', 'failed')),
+            {JOB_STATUS_CHECK},
         progress TEXT,
         result TEXT,
         error TEXT,
@@ -891,7 +988,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         matryoshka_base_dim INTEGER
             CHECK(matryoshka_base_dim IS NULL OR matryoshka_base_dim > dim),
         element_type TEXT NOT NULL DEFAULT 'float32'
-            CHECK(element_type IN ('float32', 'int8'))
+            {ELEMENT_TYPE_CHECK}
     );
     """)
 
@@ -904,49 +1001,77 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_paths_one_primary ON paper_paths(paper_id) WHERE is_primary = TRUE"
     )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_provider', 'ollama')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('llm_model', 'qwen3.5:27b')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('prediction_error_threshold', '0.025')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_propose_threshold', '0.82')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_accept_threshold', '0.95')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO config (key, value) VALUES ('chunk_strategy', 'mechanical')"
-    )
-
     # Enforce at most one active embedding space at the DB level
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_embed_spaces_one_active "
         "ON embed_spaces(status) WHERE status = 'active'"
     )
 
-    conn.commit()
 
-    _migrate_source_type_figure(conn)
-    _migrate_relationship_types(conn)
-    _migrate_papers_fts(conn)
-    _migrate_session_id(conn)
-    _migrate_chunk_strategy(conn)
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_chunks_session_id ON chunks(session_id)"
+def _run_migrations(conn: sqlite3.Connection, embed_dim: int) -> None:
+    """Drive the ordered legacy-migration chain over the just-built base schema.
+
+    The order is **load-bearing** and must be preserved exactly: e.g.
+    ``_migrate_session_id`` must add the column before ``_migrate_chunk_sessions``
+    backfills from it, and ``_bootstrap_embed_spaces`` sits after the chunk-table
+    migrations but before the embed_spaces ALTER migrations. The
+    ``idx_chunks_session_id`` index creation is interleaved at its original
+    position (after ``_migrate_chunk_strategy``, before ``_migrate_paper_paths``).
+    Each entry is a no-arg callable invoked in sequence.
+    """
+    migrations = (
+        _migrate_source_type_figure,
+        _migrate_relationship_types,
+        _migrate_papers_fts,
+        _migrate_session_id,
+        _migrate_chunk_strategy,
+        lambda c: c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chunks_session_id ON chunks(session_id)"
+        ),
+        _migrate_paper_paths,
+        _migrate_jobs_types,
+        _migrate_chunk_sessions,
+        lambda c: _bootstrap_embed_spaces(c, embed_dim),
+        _migrate_embed_spaces_matryoshka,
+        _migrate_embed_spaces_element_type,
+        _migrate_normalize_source_uri,
+        _migrate_extraction_source,
     )
-    _migrate_paper_paths(conn)
-    _migrate_jobs_types(conn)
-    _migrate_chunk_sessions(conn)
-    _bootstrap_embed_spaces(conn, embed_dim)
-    _migrate_embed_spaces_matryoshka(conn)
-    _migrate_embed_spaces_element_type(conn)
-    _migrate_normalize_source_uri(conn)
-    _migrate_extraction_source(conn)
+    for migration in migrations:
+        migration(conn)
+
+
+def init_schema(conn: sqlite3.Connection) -> None:
+    """Bring *conn*'s database to the current schema (idempotent orchestrator).
+
+    Validate-then-converge (#450, read-validates split, ME schema.rs:96-114): a
+    stamped DB at the current version early-returns; a future or behind version
+    raises. A fresh or legacy-unversioned DB seeds config, builds the base schema,
+    runs the ordered migration chain, then stamps the baseline version.
+    ``_migrate.CURRENT_SCHEMA_VERSION`` is read live off the module so tests can
+    monkeypatch it.
+    """
+    current = _migrate.CURRENT_SCHEMA_VERSION
+    version = _migrate.get_schema_version(conn)  # None tolerates a missing config table
+    if version is not None:
+        if version == current:
+            return  # already at the current schema — cheap no-op, no rebuild
+        if version > current:
+            raise KnowledgeBaseError(
+                f"database schema v{version} is newer than this build (v{current}); "
+                "upgrade the code"
+            )
+        # version < current: do NOT auto-migrate on this hot path (per-boot backup
+        # + v2+ chain belongs in the explicit `migrate` command).
+        raise KnowledgeBaseError(
+            f"database schema v{version} is behind v{current}; "
+            "run `knowledge-base-ingest migrate`"
+        )
+
+    embed_dim = _seed_default_config(conn)
+    _create_base_schema(conn, embed_dim)
+    conn.commit()
+    _run_migrations(conn, embed_dim)
 
     # Stamp the baseline version (#450). Reached only for a fresh/legacy-unversioned
     # DB (an already-current DB early-returns above); the idempotent builds have

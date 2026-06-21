@@ -11,7 +11,7 @@ import sqlite3
 import time
 
 from .db import (
-    _SPACE_NAME_RE,
+    SPACE_NAME_RE,
     _serialize_f32,
     get_active_space,
     space_table_name,
@@ -67,7 +67,7 @@ def create_space(
 
     Creates the registry entry and the backing vec0 virtual table.
     """
-    if not _SPACE_NAME_RE.match(name):
+    if not SPACE_NAME_RE.match(name):
         raise ValueError(
             f"Space name must be alphanumeric/underscore only, got: {name!r}"
         )
