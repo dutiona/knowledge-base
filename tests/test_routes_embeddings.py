@@ -101,7 +101,14 @@ def _insert_space(
 
 
 def _insert_chunk(conn: sqlite3.Connection, content: str = "hello world") -> None:
-    """Insert a minimal chunk row so benchmark query-sampling finds rows."""
+    """Insert a minimal chunk row so benchmark query-sampling finds rows.
+
+    ``benchmark_spaces_tool`` samples queries via ``ORDER BY RANDOM() LIMIT ?``.
+    The benchmark tests insert exactly ONE chunk, so that ordering is
+    deterministic by construction (a single-element set) — keep it that way:
+    adding a second chunk would make any assertion on the sampled query
+    order/content flaky.
+    """
     n = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     conn.execute(
         "INSERT INTO chunks"

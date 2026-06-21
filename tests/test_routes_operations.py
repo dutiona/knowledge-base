@@ -19,28 +19,28 @@ import json
 
 import pytest
 
-from knowledge_base.jobs import get_worker, submit_job
+from knowledge_base.jobs import submit_job
 from knowledge_base.papers import register_paper
 from knowledge_base.routes import operations as ops
 
 
 @pytest.fixture(autouse=True)
 def _no_worker(monkeypatch):
-    """Neutralize the singleton job worker for every test in this module.
+    """Neutralize worker *startup* for every test in this module.
 
-    ``submit_job`` calls ``_ensure_worker_running``, which starts the singleton
-    daemon thread. Against a temp DB that thread would race to claim the very
-    jobs we insert (flipping ``pending``→``running``) and could even dispatch
-    real extraction. Patching it to a no-op lets ``submit_job`` exercise its real
-    INSERT/dedup path while the wrappers' read-only behavior stays deterministic.
-    Any worker leaked by a prior test is stopped first and last.
+    This module calls the real ``submit_job``, which calls
+    ``_ensure_worker_running`` and would start the singleton daemon. Against a
+    temp DB that thread would race to claim the very jobs we insert (flipping
+    ``pending``→``running``) and could even dispatch real extraction. Patching it
+    to a no-op lets ``submit_job`` exercise its real INSERT/dedup path while the
+    wrappers' read-only behavior stays deterministic. (Stopping any *already*
+    running singleton at the test boundary is handled centrally by the
+    ``_reset_job_worker`` fixture in conftest.py.)
     """
-    get_worker().stop()
     monkeypatch.setattr(
         "knowledge_base.jobs._ensure_worker_running", lambda *a, **k: None
     )
     yield
-    get_worker().stop()
 
 
 # --------------------------------------------------------------------------- #
@@ -81,7 +81,6 @@ def test_list_jobs_tool_no_filter_returns_all(kb_conn, monkeypatch):
     p2 = register_paper(kb_conn, "Paper B", ["Y"], 2024)["paper_id"]
     j1 = submit_job(kb_conn, p1, "extract_structure", {})
     j2 = submit_job(kb_conn, p2, "extract_figures", {})
-    get_worker().stop()
 
     result = json.loads(ops.list_jobs_tool())
 
@@ -95,7 +94,6 @@ def test_list_jobs_tool_status_filter_narrows(kb_conn, monkeypatch):
     p2 = register_paper(kb_conn, "Paper B", ["Y"], 2024)["paper_id"]
     j_pending = submit_job(kb_conn, p1, "extract_structure", {})
     j_done = submit_job(kb_conn, p2, "extract_figures", {})
-    get_worker().stop()
     # Move one job to 'completed' so the status filter has something to exclude.
     kb_conn.execute("UPDATE jobs SET status = 'completed' WHERE id = ?", (j_done,))
     kb_conn.commit()
@@ -113,7 +111,6 @@ def test_list_jobs_tool_paper_id_filter_narrows(kb_conn, monkeypatch):
     p2 = register_paper(kb_conn, "Paper B", ["Y"], 2024)["paper_id"]
     j1 = submit_job(kb_conn, p1, "extract_structure", {})
     submit_job(kb_conn, p2, "extract_figures", {})
-    get_worker().stop()
 
     result = json.loads(ops.list_jobs_tool(paper_id=p1))
 

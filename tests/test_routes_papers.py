@@ -32,7 +32,17 @@ def _patch_conn(kb_conn):
 
 
 def _register(kb_conn, title: str, **kwargs) -> int:
-    """Register a paper through the wrapper, return its paper_id."""
+    """Register a paper through the wrapper, return its paper_id.
+
+    Defaults ``skip_auto_relate=True``: this helper only sets up papers (often
+    with a ``source_uri`` so a ``paper_paths`` row exists) for OTHER wrappers'
+    tests. Without it, ``register_paper_tool(source_uri=...)`` would submit a
+    real ``auto_relate`` job and start the singleton background worker mid-test
+    (a non-hermetic worker that could reach embeddings). The auto_relate
+    orchestration itself is covered directly in the register_paper_tool tests
+    above, which call the wrapper without this helper. Callers may override.
+    """
+    kwargs.setdefault("skip_auto_relate", True)
     with _patch_conn(kb_conn):
         result = json.loads(papers_routes.register_paper_tool(title, **kwargs))
     return result["paper_id"]

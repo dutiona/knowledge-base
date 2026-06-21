@@ -18,8 +18,6 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-import pytest
-
 from knowledge_base.exceptions import NotFoundError, ValidationError
 from knowledge_base.routes.ingestion import (
     configure_browser_tool,
@@ -160,20 +158,36 @@ def test_reingest_invalidates_similar_relationships_and_submits_jobs(kb_conn, tm
     f.write_text("")
     source_uri = f.resolve().as_posix()  # wrapper uses p.as_posix() on resolved path
 
-    # Two papers: paper 1 is linked to the file; paper 2 is the 'similar' target.
+    # Four papers. paper 1 is linked to the file (affected); paper 2 is its
+    # 'similar' target. papers 3 & 4 are UNAFFECTED — their 'similar' edge must
+    # survive, which pins the paper-id scoping of the DELETE.
     cur = kb_conn.execute("INSERT INTO papers (title) VALUES ('Paper One')")
     pid1 = cur.lastrowid
     cur = kb_conn.execute("INSERT INTO papers (title) VALUES ('Paper Two')")
     pid2 = cur.lastrowid
+    cur = kb_conn.execute("INSERT INTO papers (title) VALUES ('Paper Three')")
+    pid3 = cur.lastrowid
+    cur = kb_conn.execute("INSERT INTO papers (title) VALUES ('Paper Four')")
+    pid4 = cur.lastrowid
     kb_conn.execute(
         "INSERT INTO paper_paths (paper_id, path) VALUES (?, ?)", (pid1, source_uri)
     )
+    # 'similar' edge touching the affected paper — must be purged.
     kb_conn.execute(
         "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) "
         "VALUES (?, ?, 'similar')",
         (pid1, pid2),
     )
-    # A non-'similar' relationship that must survive.
+    # 'similar' edge between two UNAFFECTED papers — must survive. Guards against
+    # dropping the `(source_paper_id = ? OR target_paper_id = ?)` clause (which
+    # would wipe every 'similar' row regardless of which paper was reingested).
+    kb_conn.execute(
+        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) "
+        "VALUES (?, ?, 'similar')",
+        (pid3, pid4),
+    )
+    # A non-'similar' relationship on the affected paper that must survive.
+    # Guards against dropping the `relation_type = 'similar'` clause.
     kb_conn.execute(
         "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) "
         "VALUES (?, ?, 'cites')",
@@ -189,18 +203,26 @@ def test_reingest_invalidates_similar_relationships_and_submits_jobs(kb_conn, tm
             "knowledge_base.routes.ingestion.reingest_file",
             return_value=domain_result,
         ),
+        # reingest() imports submit_job lazily (`from ..jobs import submit_job`
+        # inside the function), so patch it at its definition module — patching
+        # knowledge_base.routes.ingestion.submit_job would NOT intercept it.
         patch("knowledge_base.jobs.submit_job", return_value=99) as mock_submit,
     ):
         result = json.loads(reingest(str(f)))
 
     assert result == domain_result
 
-    # 'similar' relationships for the affected paper are gone...
-    remaining_similar = kb_conn.execute(
-        "SELECT COUNT(*) AS n FROM relationships WHERE relation_type = 'similar'"
-    ).fetchone()["n"]
-    assert remaining_similar == 0
-    # ...but the unrelated 'cites' relationship survives.
+    # The affected paper's 'similar' edge is gone, but the unaffected papers'
+    # 'similar' edge survives — exactly one 'similar' row remains, and it is the
+    # pid3↔pid4 one (proves the DELETE was scoped to the reingested paper).
+    similar_rows = kb_conn.execute(
+        "SELECT source_paper_id, target_paper_id FROM relationships "
+        "WHERE relation_type = 'similar'"
+    ).fetchall()
+    assert [(r["source_paper_id"], r["target_paper_id"]) for r in similar_rows] == [
+        (pid3, pid4)
+    ]
+    # ...and the unrelated 'cites' relationship survives (relation_type scoping).
     remaining_cites = kb_conn.execute(
         "SELECT COUNT(*) AS n FROM relationships WHERE relation_type = 'cites'"
     ).fetchone()["n"]
@@ -325,7 +347,3 @@ def test_configure_browser_tool_error_mapping_includes_details(kb_conn):
     ):
         result = json.loads(configure_browser_tool(venv_path="/some/path"))
     assert result == {"error": "boom", "field": "venv_path"}
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(pytest.main([__file__, "-v"]))
