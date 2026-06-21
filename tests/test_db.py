@@ -547,44 +547,44 @@ def test_migrate_normalize_source_uri(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_charb1_escape_like_identity_no_special_chars():
+def test_char_escape_like_identity_no_special_chars():
     """Strings without \\, %, _ pass through unchanged."""
     assert escape_like("hello world") == "hello world"
     assert escape_like("") == ""
     assert escape_like("abc.def-123") == "abc.def-123"
 
 
-def test_charb1_escape_like_percent():
+def test_char_escape_like_percent():
     """'%' is escaped to '\\%'."""
     assert escape_like("%") == "\\%"
     assert escape_like("50%") == "50\\%"
 
 
-def test_charb1_escape_like_underscore():
+def test_char_escape_like_underscore():
     """'_' is escaped to '\\_'."""
     assert escape_like("_") == "\\_"
     assert escape_like("a_b") == "a\\_b"
 
 
-def test_charb1_escape_like_backslash():
+def test_char_escape_like_backslash():
     """A literal backslash is doubled to '\\\\'."""
     assert escape_like("\\") == "\\\\"
     assert escape_like("a\\b") == "a\\\\b"
 
 
-def test_charb1_escape_like_combined_backslash_first_ordering():
+def test_char_escape_like_combined_backslash_first_ordering():
     """'a_b%c\\d' locks backslash-first ordering: the escapes added for % and _
     are NOT themselves re-escaped."""
     assert escape_like("a_b%c\\d") == "a\\_b\\%c\\\\d"
 
 
-def test_charb1_escape_like_already_escaped_sequence_doubles_backslash():
+def test_char_escape_like_already_escaped_sequence_doubles_backslash():
     """A literal '\\%' becomes '\\\\\\%' (backslash doubled FIRST, then % escaped),
     proving the existing backslash is treated as data, not as an escape char."""
     assert escape_like("\\%") == "\\\\\\%"
 
 
-def test_charb1_escape_like_roundtrip_no_wildcard_injection():
+def test_char_escape_like_roundtrip_no_wildcard_injection():
     """WHERE col LIKE escape_like(s) ESCAPE '\\' matches s literally; % and _ in s
     are NOT treated as wildcards (no LIKE-injection)."""
     conn = sqlite3.connect(":memory:")
@@ -622,7 +622,7 @@ def test_charb1_escape_like_roundtrip_no_wildcard_injection():
 # ---------------------------------------------------------------------------
 
 
-def _charb1_insert_doc_session(conn, content_hash, source_uri, session_id):
+def _char_insert_doc_session(conn, content_hash, source_uri, session_id):
     conn.execute(
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
         "VALUES (?, 'c', 'note', ?, 0, ?)",
@@ -636,7 +636,7 @@ def _charb1_insert_doc_session(conn, content_hash, source_uri, session_id):
     return cid
 
 
-def test_charb1_co_occurrence_min_sessions_zero_includes_single_session(tmp_path):
+def test_char_co_occurrence_min_sessions_zero_includes_single_session(tmp_path):
     """min_sessions=0 -> HAVING co_sessions >= 0 includes a pair sharing a single
     session (same set as min_sessions=1, since every co-occurring pair already
     has co_sessions >= 1). The 0 floor does NOT manufacture pairs from
@@ -644,8 +644,8 @@ def test_charb1_co_occurrence_min_sessions_zero_includes_single_session(tmp_path
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
-    _charb1_insert_doc_session(conn, "h1", "/tmp/a.md", "s1")
-    _charb1_insert_doc_session(conn, "h2", "/tmp/b.md", "s1")
+    _char_insert_doc_session(conn, "h1", "/tmp/a.md", "s1")
+    _char_insert_doc_session(conn, "h2", "/tmp/b.md", "s1")
     conn.commit()
 
     pairs = co_occurrence_pairs(conn, min_sessions=0)
@@ -655,21 +655,27 @@ def test_charb1_co_occurrence_min_sessions_zero_includes_single_session(tmp_path
     assert pairs[0]["source_uri_b"] == "/tmp/b.md"
 
     # A doc in a disjoint session forms no pair: count stays at 1.
-    _charb1_insert_doc_session(conn, "h3", "/tmp/z.md", "s2")
+    _char_insert_doc_session(conn, "h3", "/tmp/z.md", "s2")
     conn.commit()
     pairs = co_occurrence_pairs(conn, min_sessions=0)
     assert len(pairs) == 1
 
+    # The HAVING filter is REAL, not a no-op: a threshold ABOVE the pair's
+    # shared-session count (co_sessions == 1) excludes it. This distinguishes
+    # the filter from a pass-through — min_sessions=0 and =1 only coincide
+    # because co_sessions is always >= 1 for any pair the self-join can form.
+    assert co_occurrence_pairs(conn, min_sessions=2) == []
 
-def test_charb1_co_occurrence_pairs_alphabetically_ordered(tmp_path):
+
+def test_char_co_occurrence_pairs_alphabetically_ordered(tmp_path):
     """Each returned pair has source_uri_a < source_uri_b regardless of insertion
     order (the self-join enforces a.source_uri < b.source_uri)."""
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
     # Insert the alphabetically LATER uri FIRST to prove ordering != insertion order.
-    _charb1_insert_doc_session(conn, "hz", "/tmp/zebra.md", "s1")
-    _charb1_insert_doc_session(conn, "ha", "/tmp/alpha.md", "s1")
+    _char_insert_doc_session(conn, "hz", "/tmp/zebra.md", "s1")
+    _char_insert_doc_session(conn, "ha", "/tmp/alpha.md", "s1")
     conn.commit()
 
     pairs = co_occurrence_pairs(conn)
@@ -679,17 +685,17 @@ def test_charb1_co_occurrence_pairs_alphabetically_ordered(tmp_path):
     assert pairs[0]["source_uri_a"] < pairs[0]["source_uri_b"]
 
 
-def test_charb1_co_occurrence_result_ordered_by_co_sessions_desc(tmp_path):
+def test_char_co_occurrence_result_ordered_by_co_sessions_desc(tmp_path):
     """Result list is ordered by co_sessions DESC; every pair is internally
     alphabetical. Pair (a,b) shares 2 sessions, (a,c) shares 1 -> (a,b) first."""
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
-    _charb1_insert_doc_session(conn, "a1", "/tmp/a.md", "s1")
-    _charb1_insert_doc_session(conn, "b1", "/tmp/b.md", "s1")
-    _charb1_insert_doc_session(conn, "a2", "/tmp/a.md", "s2")
-    _charb1_insert_doc_session(conn, "b2", "/tmp/b.md", "s2")
-    _charb1_insert_doc_session(conn, "c1", "/tmp/c.md", "s1")
+    _char_insert_doc_session(conn, "a1", "/tmp/a.md", "s1")
+    _char_insert_doc_session(conn, "b1", "/tmp/b.md", "s1")
+    _char_insert_doc_session(conn, "a2", "/tmp/a.md", "s2")
+    _char_insert_doc_session(conn, "b2", "/tmp/b.md", "s2")
+    _char_insert_doc_session(conn, "c1", "/tmp/c.md", "s1")
     conn.commit()
 
     pairs = co_occurrence_pairs(conn, min_sessions=1)
@@ -712,7 +718,7 @@ def test_charb1_co_occurrence_result_ordered_by_co_sessions_desc(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _b2_add_chunk(conn, content, index=0) -> int:
+def _char_add_chunk(conn, content, index=0) -> int:
     h = hashlib.sha256(content.encode()).hexdigest()[:16]
     cursor = conn.execute(
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
@@ -725,13 +731,13 @@ def _b2_add_chunk(conn, content, index=0) -> int:
     return rowid
 
 
-def _b2_active_count(conn):
+def _char_active_count(conn):
     space = get_active_space(conn)
     assert space is not None  # tests always run with a bootstrapped active space
     return space["chunk_count"]
 
 
-def _b2_space_count(conn, name):
+def _char_space_count(conn, name):
     return conn.execute(
         "SELECT chunk_count FROM embed_spaces WHERE name = ?", (name,)
     ).fetchone()["chunk_count"]
@@ -740,68 +746,74 @@ def _b2_space_count(conn, name):
 # --- #394 insert_chunk_vec chunk_count side-effect ---
 
 
-def test_b2_insert_chunk_vec_increments_active_chunk_count(tmp_path):
+def test_char_insert_chunk_vec_increments_active_chunk_count(tmp_path):
+    # WAVE 1 / #392: this pins the CURRENT per-row chunk_count increment inside
+    # insert_chunk_vec. PR C batches that bookkeeping out of the per-row path —
+    # when it lands, this assertion (and the round-trip test below) must move to
+    # the new bulk-bump API. Expected to change, not a regression.
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
-    start = _b2_active_count(conn)
+    start = _char_active_count(conn)
 
-    cid = _b2_add_chunk(conn, "vec a", 0)
+    cid = _char_add_chunk(conn, "vec a", 0)
     insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
     conn.commit()
 
-    assert _b2_active_count(conn) == start + 1
+    assert _char_active_count(conn) == start + 1
 
 
-def test_b2_insert_chunk_vec_nonactive_table_leaves_active_unchanged(tmp_path):
+def test_char_insert_chunk_vec_nonactive_table_leaves_active_unchanged(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
-    start = _b2_active_count(conn)
+    start = _char_active_count(conn)
 
     create_space(conn, "other", "model", DEFAULT_EMBED_DIM, "ollama")
-    cid = _b2_add_chunk(conn, "non-active vec", 0)
+    cid = _char_add_chunk(conn, "non-active vec", 0)
     insert_chunk_vec(
         conn, cid, [0.2] * DEFAULT_EMBED_DIM, table_name="chunks_vec_other"
     )
     conn.commit()
 
     # Active space (default) chunk_count is untouched: status='active' gate.
-    assert _b2_active_count(conn) == start
+    assert _char_active_count(conn) == start
     # And the non-active space's own chunk_count also stays 0 — the increment
     # only fires for the active space, never for a 'populating' one.
-    assert _b2_space_count(conn, "other") == 0
+    assert _char_space_count(conn, "other") == 0
 
 
-def test_b2_insert_then_delete_round_trips_chunk_count(tmp_path):
+def test_char_insert_then_delete_round_trips_chunk_count(tmp_path):
+    # WAVE 1 / #392: also pins the current per-row insert increment (see note on
+    # test_char_insert_chunk_vec_increments_active_chunk_count) — update with PR C.
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
-    start = _b2_active_count(conn)
+    start = _char_active_count(conn)
 
-    cid = _b2_add_chunk(conn, "round trip", 0)
+    cid = _char_add_chunk(conn, "round trip", 0)
     insert_chunk_vec(conn, cid, [0.3] * DEFAULT_EMBED_DIM)
     conn.commit()
-    assert _b2_active_count(conn) == start + 1
+    assert _char_active_count(conn) == start + 1
 
     delete_chunk_vecs(conn, [cid])
     conn.commit()
-    assert _b2_active_count(conn) == start
+    assert _char_active_count(conn) == start
 
 
 # --- #378 delete_chunk_vecs ---
 
 
-def test_b2_delete_chunk_vecs_empty_is_noop(tmp_path):
+def test_char_delete_chunk_vecs_empty_is_noop(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
-    cid = _b2_add_chunk(conn, "present", 0)
+    cid = _char_add_chunk(conn, "present", 0)
     insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
     conn.commit()
-    before = _b2_active_count(conn)
+    before = _char_active_count(conn)
 
     delete_chunk_vecs(conn, [])
     conn.commit()
 
-    assert _b2_active_count(conn) == before
+    assert _char_active_count(conn) == before
     # Row still present
     row = conn.execute(
         "SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (cid,)
@@ -809,20 +821,20 @@ def test_b2_delete_chunk_vecs_empty_is_noop(tmp_path):
     assert row is not None
 
 
-def test_b2_delete_chunk_vecs_counts_actual_rows_not_input_length(tmp_path):
+def test_char_delete_chunk_vecs_counts_actual_rows_not_input_length(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
     # Three chunks WITH embeddings + two chunks WITHOUT embeddings.
     with_vec = []
     for i in range(3):
-        cid = _b2_add_chunk(conn, f"has vec {i}", i)
+        cid = _char_add_chunk(conn, f"has vec {i}", i)
         insert_chunk_vec(conn, cid, [0.1 * (i + 1)] * DEFAULT_EMBED_DIM)
         with_vec.append(cid)
-    no_vec = [_b2_add_chunk(conn, f"no vec {j}", 10 + j) for j in range(2)]
+    no_vec = [_char_add_chunk(conn, f"no vec {j}", 10 + j) for j in range(2)]
     conn.commit()
 
-    start = _b2_active_count(conn)
+    start = _char_active_count(conn)
     assert start == 3  # only the embedded chunks were counted on insert
 
     # Delete a mix: 2 that have embeddings + 2 that have none. Input length is
@@ -831,7 +843,7 @@ def test_b2_delete_chunk_vecs_counts_actual_rows_not_input_length(tmp_path):
     conn.commit()
 
     # Decremented by 2 (rows that actually existed), NOT by 4 (input length).
-    assert _b2_active_count(conn) == start - 2
+    assert _char_active_count(conn) == start - 2
     # The remaining embedded chunk is still present.
     remaining = conn.execute(
         "SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (with_vec[2],)
@@ -839,17 +851,17 @@ def test_b2_delete_chunk_vecs_counts_actual_rows_not_input_length(tmp_path):
     assert remaining is not None
 
 
-def test_b2_delete_chunk_vecs_clamps_chunk_count_at_zero(tmp_path):
+def test_char_delete_chunk_vecs_clamps_chunk_count_at_zero(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
     cids = []
     for i in range(3):
-        cid = _b2_add_chunk(conn, f"clamp {i}", i)
+        cid = _char_add_chunk(conn, f"clamp {i}", i)
         insert_chunk_vec(conn, cid, [0.2] * DEFAULT_EMBED_DIM)
         cids.append(cid)
     conn.commit()
-    assert _b2_active_count(conn) == 3
+    assert _char_active_count(conn) == 3
 
     # Manually corrupt the registry so chunk_count (1) < actual rows (3).
     conn.execute(
@@ -861,21 +873,30 @@ def test_b2_delete_chunk_vecs_clamps_chunk_count_at_zero(tmp_path):
     conn.commit()
 
     # MAX(0, 1 - 3) floors at 0 rather than going negative.
-    assert _b2_active_count(conn) == 0
+    assert _char_active_count(conn) == 0
 
 
-def test_b2_delete_chunk_vecs_explicit_nonactive_table(tmp_path):
+def test_char_delete_chunk_vecs_explicit_nonactive_table(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
-    active_start = _b2_active_count(conn)
+    active_start = _char_active_count(conn)
 
     create_space(conn, "expl", "model", DEFAULT_EMBED_DIM, "ollama")
-    cid = _b2_add_chunk(conn, "explicit del", 0)
+    cid = _char_add_chunk(conn, "explicit del", 0)
     insert_chunk_vec(conn, cid, [0.4] * DEFAULT_EMBED_DIM, table_name="chunks_vec_expl")
     conn.commit()
     # Insert into a non-active table does NOT touch any chunk_count.
-    assert _b2_space_count(conn, "expl") == 0
-    assert _b2_active_count(conn) == active_start
+    assert _char_space_count(conn, "expl") == 0
+    assert _char_active_count(conn) == active_start
+
+    # Seed a POSITIVE count on the populating space so the two candidate
+    # behaviors diverge: a table_name-only decrement (current) yields
+    # MAX(0, 5-1) == 4, whereas a status='active'-gated decrement would skip
+    # this populating space entirely and leave it at 5. With chunk_count==0
+    # both behaviors collapse to 0, which is why the bare 0-check below would
+    # NOT actually pin the no-status-filter asymmetry.
+    conn.execute("UPDATE embed_spaces SET chunk_count = 5 WHERE name = 'expl'")
+    conn.commit()
 
     delete_chunk_vecs(conn, [cid], table_name="chunks_vec_expl")
     conn.commit()
@@ -885,14 +906,16 @@ def test_b2_delete_chunk_vecs_explicit_nonactive_table(tmp_path):
         "SELECT chunk_id FROM [chunks_vec_expl] WHERE chunk_id = ?", (cid,)
     ).fetchone()
     assert row is None
-    # The decrement UPDATE matches by table_name only (no status filter), so it
-    # targets the 'expl' (populating) space here; clamped at MAX(0, 0-1) == 0.
-    assert _b2_space_count(conn, "expl") == 0
+    # expl.chunk_count went 5 -> 4: the decrement matched by table_name with NO
+    # status='active' filter (a status-gated delete would have left it at 5).
+    # This is the delete side of the insert/delete asymmetry — insert gates on
+    # status='active' (pinned above), delete does not.
+    assert _char_space_count(conn, "expl") == 4
     # Active default space untouched throughout.
-    assert _b2_active_count(conn) == active_start
+    assert _char_active_count(conn) == active_start
 
 
-def test_b2_delete_chunk_vecs_int8_space(tmp_path):
+def test_char_delete_chunk_vecs_int8_space(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
@@ -900,7 +923,7 @@ def test_b2_delete_chunk_vecs_int8_space(tmp_path):
     create_space(conn, "i8", "model", DEFAULT_EMBED_DIM, "ollama", element_type="int8")
     cids = []
     for i in range(2):
-        cid = _b2_add_chunk(conn, f"int8 {i}", i)
+        cid = _char_add_chunk(conn, f"int8 {i}", i)
         insert_chunk_vec(
             conn,
             cid,
@@ -914,37 +937,45 @@ def test_b2_delete_chunk_vecs_int8_space(tmp_path):
     n = conn.execute("SELECT COUNT(*) FROM [chunks_vec_i8]").fetchone()[0]
     assert n == 2
 
+    # Seed a positive chunk_count so the decrement is observable (insert's
+    # status='active' gate left it at 0). #378 asked to parametrize the
+    # chunk_count contract across element types: the decrement is element-type
+    # agnostic, so deleting the 2 int8 rows takes 5 -> MAX(0, 5-2) == 3.
+    conn.execute("UPDATE embed_spaces SET chunk_count = 5 WHERE name = 'i8'")
+    conn.commit()
+
     delete_chunk_vecs(conn, cids, table_name="chunks_vec_i8")
     conn.commit()
     n = conn.execute("SELECT COUNT(*) FROM [chunks_vec_i8]").fetchone()[0]
     assert n == 0
+    assert _char_space_count(conn, "i8") == 3
 
 
 # --- #379 delete_chunks_cascade ---
 
 
-def test_b2_delete_chunks_cascade_empty_returns_zero(tmp_path):
+def test_char_delete_chunks_cascade_empty_returns_zero(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
-    cid = _b2_add_chunk(conn, "stay put", 0)
+    cid = _char_add_chunk(conn, "stay put", 0)
     insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
     conn.commit()
-    before = _b2_active_count(conn)
+    before = _char_active_count(conn)
 
     assert delete_chunks_cascade(conn, []) == 0
 
     # Nothing mutated.
-    assert _b2_active_count(conn) == before
+    assert _char_active_count(conn) == before
     assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0] == 1
 
 
-def test_b2_delete_chunks_cascade_removes_chunk_vec_and_fts(tmp_path):
+def test_char_delete_chunks_cascade_removes_chunk_vec_and_fts(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
-    cid = _b2_add_chunk(conn, "transformers attention mechanism cascade", 0)
+    cid = _char_add_chunk(conn, "transformers attention mechanism cascade", 0)
     insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
     conn.commit()
 
@@ -972,11 +1003,11 @@ def test_b2_delete_chunks_cascade_removes_chunk_vec_and_fts(tmp_path):
     assert len(post) == 0
 
 
-def test_b2_delete_chunks_cascade_return_counts_input_not_actual(tmp_path):
+def test_char_delete_chunks_cascade_return_counts_input_not_actual(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
-    real = _b2_add_chunk(conn, "real chunk to delete", 0)
+    real = _char_add_chunk(conn, "real chunk to delete", 0)
     insert_chunk_vec(conn, real, [0.1] * DEFAULT_EMBED_DIM)
     conn.commit()
 
@@ -1004,7 +1035,24 @@ def test_b2_delete_chunks_cascade_return_counts_input_not_actual(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _b3_seed_legacy_config(conn):
+_LEGACY_CHUNKS_FTS_DDL = """
+CREATE VIRTUAL TABLE chunks_fts USING fts5(
+    content, content='chunks', content_rowid='id', tokenize='porter unicode61'
+);
+CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
+END;
+CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
+END;
+"""
+
+
+def _char_seed_legacy_config(conn):
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -1018,12 +1066,12 @@ def _b3_seed_legacy_config(conn):
 # === [#395] _migrate_source_type_figure ====================================
 
 
-def test_b3_migrate_source_type_figure_preserves_rows_and_accepts_figure(tmp_path):
+def test_char_migrate_source_type_figure_preserves_rows_and_accepts_figure(tmp_path):
     """OLD chunks (no 'figure' in CHECK, no chunk_strategy col) -> after
     init_schema: every pre-existing row survives with correct column values,
     'figure' rows are accepted, and the re-created FTS triggers still fire."""
     conn = get_connection(tmp_path / "test.db")
-    _b3_seed_legacy_config(conn)
+    _char_seed_legacy_config(conn)
     # OLD chunks table: source_type CHECK lacks 'figure', NO chunk_strategy col,
     # but HAS session_id (so the migration's conditional session_id branch runs).
     conn.executescript(
@@ -1039,21 +1087,9 @@ def test_b3_migrate_source_type_figure_preserves_rows_and_accepts_figure(tmp_pat
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             metadata TEXT DEFAULT '{}'
         );
-        CREATE VIRTUAL TABLE chunks_fts USING fts5(
-            content, content='chunks', content_rowid='id', tokenize='porter unicode61'
-        );
-        CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
-            INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
-        END;
-        CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
-        END;
-        CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
-            INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
-        END;
         """
     )
+    conn.executescript(_LEGACY_CHUNKS_FTS_DDL)
     conn.execute(
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id, metadata) "
         "VALUES ('old1', 'attention is all you need', 'pdf', '/p/a.pdf', 3, 'sess-X', '{\"k\":1}')"
@@ -1107,12 +1143,12 @@ def test_b3_migrate_source_type_figure_preserves_rows_and_accepts_figure(tmp_pat
     assert len(legacy_hit) == 1
 
 
-def test_b3_migrate_source_type_figure_minimal_old_schema_no_optional_cols(tmp_path):
+def test_char_migrate_source_type_figure_minimal_old_schema_no_optional_cols(tmp_path):
     """Very old chunks: neither session_id NOR chunk_strategy present. The
     migration's INSERT...SELECT must still preserve the base columns and add
     both new columns with their defaults (session_id NULL, strategy mechanical)."""
     conn = get_connection(tmp_path / "test.db")
-    _b3_seed_legacy_config(conn)
+    _char_seed_legacy_config(conn)
     conn.executescript(
         """
         CREATE TABLE chunks (
@@ -1125,21 +1161,9 @@ def test_b3_migrate_source_type_figure_minimal_old_schema_no_optional_cols(tmp_p
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             metadata TEXT DEFAULT '{}'
         );
-        CREATE VIRTUAL TABLE chunks_fts USING fts5(
-            content, content='chunks', content_rowid='id', tokenize='porter unicode61'
-        );
-        CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
-            INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
-        END;
-        CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
-        END;
-        CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
-            INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
-        END;
         """
     )
+    conn.executescript(_LEGACY_CHUNKS_FTS_DDL)
     conn.execute(
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
         "VALUES ('veryold', 'legacy body', 'code', '/p/x.py', 11)"
@@ -1158,11 +1182,11 @@ def test_b3_migrate_source_type_figure_minimal_old_schema_no_optional_cols(tmp_p
 # === [#395] _migrate_relationship_types ====================================
 
 
-def test_b3_migrate_relationship_types_accepts_similar_and_survives(tmp_path):
+def test_char_migrate_relationship_types_accepts_similar_and_survives(tmp_path):
     """OLD relationships (CHECK lacks 'similar') -> after init_schema the
     'similar' relation_type is accepted and the pre-existing row survives."""
     conn = get_connection(tmp_path / "test.db")
-    _b3_seed_legacy_config(conn)
+    _char_seed_legacy_config(conn)
     # papers needs abstract_chunk_id because _migrate_paper_paths runs earlier in
     # the chain and SELECTs it; the idempotent CREATE TABLE IF NOT EXISTS won't
     # add it to an already-present legacy papers table.
@@ -1186,19 +1210,11 @@ def test_b3_migrate_relationship_types_accepts_similar_and_survives(tmp_path):
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             metadata TEXT DEFAULT '{}'
         );
-        CREATE VIRTUAL TABLE chunks_fts USING fts5(
-            content, content='chunks', content_rowid='id', tokenize='porter unicode61'
-        );
-        CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
-            INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
-        END;
-        CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
-        END;
-        CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
-            INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
-        END;
+        """
+    )
+    conn.executescript(_LEGACY_CHUNKS_FTS_DDL)
+    conn.executescript(
+        """
         CREATE TABLE relationships (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_paper_id INTEGER NOT NULL REFERENCES papers(id),
@@ -1251,11 +1267,11 @@ def test_b3_migrate_relationship_types_accepts_similar_and_survives(tmp_path):
 # === [#395] _migrate_jobs_types ============================================
 
 
-def test_b3_migrate_jobs_types_accepts_auto_relate_and_rebuilds_index(tmp_path):
+def test_char_migrate_jobs_types_accepts_auto_relate_and_rebuilds_index(tmp_path):
     """OLD jobs (CHECK lacks 'auto_relate') -> after init_schema the value is
     accepted, the pre-existing job survives, and idx_jobs_status_created exists."""
     conn = get_connection(tmp_path / "test.db")
-    _b3_seed_legacy_config(conn)
+    _char_seed_legacy_config(conn)
     conn.executescript(
         """
         CREATE TABLE papers (
@@ -1317,13 +1333,13 @@ def test_b3_migrate_jobs_types_accepts_auto_relate_and_rebuilds_index(tmp_path):
 # === [#395] _migrate_papers_fts (backfill guard contract) ==================
 
 
-def test_b3_migrate_papers_fts_count_guard_reflects_content_table(tmp_path):
+def test_char_migrate_papers_fts_count_guard_reflects_content_table(tmp_path):
     """SURPRISE pinned: papers_fts is an external-content FTS5 table, so
     `SELECT count(*) FROM papers_fts` returns the *papers* (content) table row
     count, NOT the number of indexed FTS entries. Build a legacy schema where
     the FTS index is genuinely UNPOPULATED (no trigger has fired) yet papers
-    has a row -> the migration's `count > 0` guard short-circuits and the
-    backfill INSERT at db.py:297 never runs. The title stays unsearchable."""
+    has a row -> the `count > 0` guard in _migrate_papers_fts short-circuits and
+    its backfill INSERT never runs. The title stays unsearchable."""
     conn = get_connection(tmp_path / "test.db")
     # Legacy schema: papers + external-content papers_fts, NO trigger to populate.
     conn.executescript(
@@ -1359,8 +1375,21 @@ def test_b3_migrate_papers_fts_count_guard_reflects_content_table(tmp_path):
         == []
     )
 
+    # Non-vacuous guard: prove the unsearchable result is the MIGRATION's failure,
+    # not an unpopulatable index. A forced FTS rebuild DOES make the title
+    # searchable — so a correct backfill would have too. This distinguishes the
+    # buggy short-circuit from "the index simply cannot be populated here".
+    conn.execute("INSERT INTO papers_fts(papers_fts) VALUES('rebuild')")
+    conn.commit()
+    assert (
+        conn.execute(
+            "SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'reinforcement'"
+        ).fetchall()
+        != []
+    )
 
-def test_b3_migrate_papers_fts_noop_guards_dont_raise(tmp_path):
+
+def test_char_migrate_papers_fts_noop_guards_dont_raise(tmp_path):
     """The early-return guards (missing papers_fts table; empty papers) are
     no-ops that do not raise."""
     # (1) papers_fts table absent -> first guard returns.
@@ -1390,12 +1419,12 @@ def test_b3_migrate_papers_fts_noop_guards_dont_raise(tmp_path):
 # === [#395] _migrate_extraction_source =====================================
 
 
-def test_b3_migrate_extraction_source_adds_source_column(tmp_path):
+def test_char_migrate_extraction_source_adds_source_column(tmp_path):
     """OLD methods/datasets/metrics/entities (no 'source' col) -> the migration
     adds a NOT NULL DEFAULT 'user' source column to each, defaulting existing
     rows to 'user'."""
     conn = get_connection(tmp_path / "test.db")
-    _b3_seed_legacy_config(conn)
+    _char_seed_legacy_config(conn)
     # init_schema would create these WITH the source col, so build them WITHOUT
     # it and call the migration directly against the legacy form.
     conn.executescript(
@@ -1447,7 +1476,7 @@ def test_b3_migrate_extraction_source_adds_source_column(tmp_path):
     assert row["source"] == "user"
 
 
-def test_b3_migrate_extraction_source_idempotent(tmp_path):
+def test_char_migrate_extraction_source_idempotent(tmp_path):
     """Run on a current DB (source col already present) -> no-op, no raise."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -1461,10 +1490,10 @@ def test_b3_migrate_extraction_source_idempotent(tmp_path):
 # === [#396] _bootstrap_embed_spaces ========================================
 
 
-def test_b3_bootstrap_counts_existing_vecs_and_forces_mechanical(tmp_path):
+def test_char_bootstrap_counts_existing_vecs_and_forces_mechanical(tmp_path):
     """(a) chunks_vec pre-populated with K embeddings + config.chunk_strategy set
     to 'semantic' -> default space gets chunk_count == K and chunk_strategy
-    FORCED to 'mechanical' regardless of config (db.py:611-617)."""
+    FORCED to 'mechanical' regardless of config (per _bootstrap_embed_spaces)."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
@@ -1499,7 +1528,7 @@ def test_b3_bootstrap_counts_existing_vecs_and_forces_mechanical(tmp_path):
     assert space["table_name"] == "chunks_vec"
 
 
-def test_b3_bootstrap_picks_up_custom_config_model_provider(tmp_path):
+def test_char_bootstrap_picks_up_custom_config_model_provider(tmp_path):
     """(b) custom config embed_model/embed_provider -> bootstrapped space adopts
     them (not the DEFAULT_* fallbacks)."""
     conn = get_connection(tmp_path / "test.db")
@@ -1520,7 +1549,7 @@ def test_b3_bootstrap_picks_up_custom_config_model_provider(tmp_path):
     assert space["dim"] == DEFAULT_EMBED_DIM
 
 
-def test_b3_bootstrap_falls_back_to_defaults_when_config_absent(tmp_path):
+def test_char_bootstrap_falls_back_to_defaults_when_config_absent(tmp_path):
     """(b cont.) embed_model/embed_provider config rows ABSENT -> space falls
     back to DEFAULT_EMBED_MODEL / DEFAULT_EMBED_PROVIDER."""
     conn = get_connection(tmp_path / "test.db")
@@ -1537,9 +1566,9 @@ def test_b3_bootstrap_falls_back_to_defaults_when_config_absent(tmp_path):
     assert space["provider"] == DEFAULT_EMBED_PROVIDER
 
 
-def test_b3_bootstrap_count_falls_back_to_zero_without_chunks_vec(tmp_path):
+def test_char_bootstrap_count_falls_back_to_zero_without_chunks_vec(tmp_path):
     """(c) DB lacking chunks_vec -> count falls back to 0 without raising
-    (db.py:606-609 swallows the OperationalError)."""
+    (_bootstrap_embed_spaces swallows the OperationalError)."""
     conn = get_connection(tmp_path / "test.db")
     # Minimal hand-built schema: config + embed_spaces but NO chunks_vec table.
     conn.executescript(
@@ -1571,7 +1600,7 @@ def test_b3_bootstrap_count_falls_back_to_zero_without_chunks_vec(tmp_path):
     assert space["chunk_count"] == 0
 
 
-def test_b3_bootstrap_idempotent_second_call_is_noop(tmp_path):
+def test_char_bootstrap_idempotent_second_call_is_noop(tmp_path):
     """(d) a second bootstrap call early-returns (existing-space guard) and does
     not insert a duplicate or mutate the existing default space."""
     conn = get_connection(tmp_path / "test.db")
