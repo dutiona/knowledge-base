@@ -37,3 +37,6 @@ tmp/
 .worktrees/
 scripts/.pm-ids.env
 scripts/mapping.tsv
+
+# pytest-cov artifact
+.coverage
