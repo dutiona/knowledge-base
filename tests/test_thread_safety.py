@@ -63,6 +63,13 @@ def test_cross_thread_usage_after_parallel_burst(tmp_path, monkeypatch):
     a tool call on a different thread."""
     _patch_conn(monkeypatch, tmp_path)
 
+    # Initialise schema on the main thread first — mirrors the sibling test and
+    # the real MCP server (which boots before handling parallel tool calls).
+    # Without it, the 4 workers race to run init_schema() concurrently and
+    # intermittently hit "database is locked" (issue #175) — a schema-init race,
+    # not the cross-thread connection bug (#19) this test targets.
+    _get_conn()
+
     barrier = threading.Barrier(4)
     errors = []
 
