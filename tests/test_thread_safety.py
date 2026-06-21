@@ -46,9 +46,7 @@ def test_get_conn_returns_separate_connections_per_thread(tmp_path, monkeypatch)
 
     assert not errors, f"Thread errors: {errors}"
     conn_ids = list(results.values())
-    assert len(set(conn_ids)) == 4, (
-        f"Expected 4 distinct connections, got {len(set(conn_ids))}: {conn_ids}"
-    )
+    assert len(set(conn_ids)) == 4, f"Expected 4 distinct connections, got {len(set(conn_ids))}: {conn_ids}"
 
 
 def test_get_conn_reuses_connection_within_same_thread(tmp_path, monkeypatch):
@@ -64,6 +62,13 @@ def test_cross_thread_usage_after_parallel_burst(tmp_path, monkeypatch):
     """Simulates the exact failure from issue #19: parallel ingestion followed by
     a tool call on a different thread."""
     _patch_conn(monkeypatch, tmp_path)
+
+    # Initialise schema on the main thread first — mirrors the sibling test and
+    # the real MCP server (which boots before handling parallel tool calls).
+    # Without it, the 4 workers race to run init_schema() concurrently and
+    # intermittently hit "database is locked" (issue #175) — a schema-init race,
+    # not the cross-thread connection bug (#19) this test targets.
+    _get_conn()
 
     barrier = threading.Barrier(4)
     errors = []

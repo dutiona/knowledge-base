@@ -149,7 +149,7 @@ CREATE TABLE config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-"""
+"""  # noqa: S608  # static test-fixture DDL; only the int DEFAULT_EMBED_DIM is interpolated
 
 
 def test_schema_accepts_figure_source_type(tmp_path):
@@ -163,9 +163,7 @@ def test_schema_accepts_figure_source_type(tmp_path):
     )
     conn.commit()
 
-    row = conn.execute(
-        "SELECT source_type FROM chunks WHERE content_hash = 'fig_hash'"
-    ).fetchone()
+    row = conn.execute("SELECT source_type FROM chunks WHERE content_hash = 'fig_hash'").fetchone()
     assert row["source_type"] == "figure"
 
 
@@ -203,9 +201,7 @@ def test_migration_preserves_existing_data(tmp_path):
     init_schema(conn)
 
     # Verify old data is preserved
-    rows = conn.execute(
-        "SELECT content_hash, source_type FROM chunks ORDER BY id"
-    ).fetchall()
+    rows = conn.execute("SELECT content_hash, source_type FROM chunks ORDER BY id").fetchall()
     assert len(rows) == 2
     assert rows[0]["content_hash"] == "old_hash_1"
     assert rows[0]["source_type"] == "pdf"
@@ -219,15 +215,11 @@ def test_migration_preserves_existing_data(tmp_path):
     )
     conn.commit()
 
-    fig_row = conn.execute(
-        "SELECT source_type FROM chunks WHERE content_hash = 'fig_hash'"
-    ).fetchone()
+    fig_row = conn.execute("SELECT source_type FROM chunks WHERE content_hash = 'fig_hash'").fetchone()
     assert fig_row["source_type"] == "figure"
 
     # Verify FTS still works after migration
-    fts_rows = conn.execute(
-        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'architecture'"
-    ).fetchall()
+    fts_rows = conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'architecture'").fetchall()
     assert len(fts_rows) == 1
 
 
@@ -284,15 +276,50 @@ def test_configure_vision_roundtrip(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    result = configure_vision(
-        conn, model="llava:13b", base_url="http://localhost:11434"
-    )
+    result = configure_vision(conn, model="llava:13b", base_url="http://localhost:11434")
     assert result["model"] == "llava:13b"
     assert result["base_url"] == "http://localhost:11434"
 
     cfg = _get_vision_config(conn)
     assert cfg["model"] == "llava:13b"
     assert cfg["base_url"] == "http://localhost:11434"
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "ftp://host:1234",
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+    ],
+)
+def test_configure_vision_rejects_invalid_scheme(tmp_path, bad_url):
+    """Non-http(s) base_url schemes are rejected."""
+    from knowledge_base.vision import configure_vision
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    with pytest.raises(ValidationError):
+        configure_vision(conn, base_url=bad_url)
+
+
+def test_configure_vision_empty_base_url_is_noop(tmp_path):
+    """An empty base_url is falsy: it is neither stored nor rejected (no-op)."""
+    from knowledge_base.vision import _get_vision_config, configure_vision
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # No vision_base_url is stored, so config falls back to the Ollama default.
+    before = _get_vision_config(conn)
+    result = configure_vision(conn, base_url="")
+    assert result["base_url"] == before["base_url"]
+    # No vision_base_url row was written.
+    row = conn.execute("SELECT value FROM config WHERE key = 'vision_base_url'").fetchone()
+    assert row is None
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +370,105 @@ def test_validate_figure_rejects_missing_type():
 
     result = _validate_figure({"description": "something"})
     assert result is None
+
+
+def test_validate_figure_coerces_non_list_entities():
+    """A non-list entities_mentioned is coerced to an empty list."""
+    from knowledge_base.vision import _validate_figure
+
+    obj = {
+        "figure_type": "chart",
+        "description": "Loss curves",
+        "entities_mentioned": "ResNet",  # str, not list
+    }
+    result = _validate_figure(obj)
+    assert result is not None
+    assert result["entities_mentioned"] == []
+
+
+def test_validate_figure_coerces_non_str_title():
+    """A non-str title is coerced to str (None stays None)."""
+    from knowledge_base.vision import _validate_figure
+
+    obj = {"figure_type": "chart", "description": "Loss curves", "title": 42}
+    result = _validate_figure(obj)
+    assert result is not None
+    assert result["title"] == "42"
+
+
+# ---------------------------------------------------------------------------
+# Geometry helpers: clustering & cropping (pure)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "elements",
+    [
+        [],  # zero bboxes
+        [{"bbox": [0.1, 0.1, 0.5, 0.5]}],  # single bbox
+    ],
+)
+def test_cluster_bboxes_returns_full_frame_for_few_elements(elements):
+    """0 or 1 usable bbox yields the full-frame region."""
+    from knowledge_base.vision import _cluster_bboxes
+
+    regions = _cluster_bboxes(elements, {"width": 100, "height": 100})
+    assert regions == [(0.0, 0.0, 1.0, 1.0)]
+
+
+def test_cluster_bboxes_splits_vertically_separated():
+    """Two bboxes separated by a y-gap above threshold yield 2 clusters."""
+    from knowledge_base.vision import _CLUSTER_GAP_THRESHOLD, _cluster_bboxes
+
+    # Gap (0.5 - 0.1 = 0.4) is well above the cluster threshold; the two
+    # bands share the same x-extent so x-splitting does not fragment further.
+    assert _CLUSTER_GAP_THRESHOLD < 0.4
+    elements = [
+        {"bbox": [0.1, 0.0, 0.9, 0.1]},  # top band
+        {"bbox": [0.1, 0.5, 0.9, 0.7]},  # bottom band, clearly separated
+    ]
+    regions = _cluster_bboxes(elements, {"width": 100, "height": 100})
+    assert len(regions) == 2
+    # Regions are returned top-to-bottom (sorted by vertical midpoint upstream).
+    assert regions[0][1] < regions[1][1]
+
+
+def test_cluster_bboxes_keeps_contiguous_as_single_region():
+    """Two bboxes closer than the gap threshold collapse to one full-frame region."""
+    from knowledge_base.vision import _cluster_bboxes
+
+    elements = [
+        {"bbox": [0.1, 0.0, 0.9, 0.1]},
+        {"bbox": [0.1, 0.11, 0.9, 0.2]},  # tiny gap, below threshold
+    ]
+    regions = _cluster_bboxes(elements, {"width": 100, "height": 100})
+    assert regions == [(0.0, 0.0, 1.0, 1.0)]
+
+
+def test_crop_regions_produces_one_png_per_region():
+    """_crop_regions returns one decodable PNG per ratio-region."""
+    import io
+
+    from PIL import Image
+
+    from knowledge_base.vision import _crop_regions
+
+    # Build a 200x100 RGB PNG in-memory.
+    src = Image.new("RGB", (200, 100), color=(255, 0, 0))
+    buf = io.BytesIO()
+    src.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+
+    regions = [(0.0, 0.0, 0.5, 1.0), (0.5, 0.0, 1.0, 1.0)]
+    crops = _crop_regions(png_bytes, regions, {"width": 200, "height": 100})
+
+    assert len(crops) == 2
+    for crop in crops:
+        with Image.open(io.BytesIO(crop)) as img:
+            w, h = img.size
+            # Left/right halves are ~100px wide (plus padding), full height.
+            assert 0 < w <= 200
+            assert 0 < h <= 100
 
 
 # ---------------------------------------------------------------------------
@@ -427,16 +553,12 @@ def test_get_paper_source_uri_found(tmp_path):
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
         "VALUES ('abs_hash', 'abstract text', 'pdf', '/tmp/paper.pdf', 0)"
     )
-    chunk_id = conn.execute(
-        "SELECT id FROM chunks WHERE content_hash = 'abs_hash'"
-    ).fetchone()["id"]
+    chunk_id = conn.execute("SELECT id FROM chunks WHERE content_hash = 'abs_hash'").fetchone()["id"]
     conn.execute(
         "INSERT INTO papers (title, abstract_chunk_id) VALUES ('Test Paper', ?)",
         (chunk_id,),
     )
-    paper_id = conn.execute(
-        "SELECT id FROM papers WHERE title = 'Test Paper'"
-    ).fetchone()["id"]
+    paper_id = conn.execute("SELECT id FROM papers WHERE title = 'Test Paper'").fetchone()["id"]
     conn.commit()
 
     uri = _get_paper_source_uri(conn, paper_id)
@@ -452,9 +574,7 @@ def test_get_paper_source_uri_not_found(tmp_path):
     init_schema(conn)
 
     conn.execute("INSERT INTO papers (title) VALUES ('No Abstract Paper')")
-    paper_id = conn.execute(
-        "SELECT id FROM papers WHERE title = 'No Abstract Paper'"
-    ).fetchone()["id"]
+    paper_id = conn.execute("SELECT id FROM papers WHERE title = 'No Abstract Paper'").fetchone()["id"]
     conn.commit()
 
     uri = _get_paper_source_uri(conn, paper_id)
@@ -506,9 +626,7 @@ def test_vision_call_parses_valid_response():
     call_kwargs = mock_post.call_args
     assert (
         "http://localhost:11434/v1/chat/completions" in call_kwargs.args
-        or call_kwargs.kwargs.get(
-            "url", call_kwargs.args[0] if call_kwargs.args else ""
-        )
+        or call_kwargs.kwargs.get("url", call_kwargs.args[0] if call_kwargs.args else "")
         == "http://localhost:11434/v1/chat/completions"
     )
 
@@ -529,9 +647,7 @@ def test_vision_call_strips_markdown_fences():
     mock_resp = _mock_httpx_response(content)
 
     with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
-        result = _vision_call(
-            "base64data", "prompt", base_url="http://localhost:11434", model="test"
-        )
+        result = _vision_call("base64data", "prompt", base_url="http://localhost:11434", model="test")
 
     assert len(result) == 1
     assert result[0]["figure_type"] == "chart"
@@ -550,9 +666,7 @@ def test_vision_call_filters_invalid_figures():
     mock_resp = _mock_httpx_response(json.dumps(figures))
 
     with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
-        result = _vision_call(
-            "base64data", "prompt", base_url="http://localhost:11434", model="test"
-        )
+        result = _vision_call("base64data", "prompt", base_url="http://localhost:11434", model="test")
 
     assert len(result) == 2
     assert result[0]["figure_type"] == "diagram"
@@ -568,9 +682,7 @@ def test_vision_call_unwraps_dict_wrapper():
     mock_resp = _mock_httpx_response(json.dumps(wrapper))
 
     with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
-        result = _vision_call(
-            "base64data", "prompt", base_url="http://localhost:11434", model="test"
-        )
+        result = _vision_call("base64data", "prompt", base_url="http://localhost:11434", model="test")
 
     assert len(result) == 1
     assert result[0]["figure_type"] == "photo"
@@ -585,14 +697,16 @@ def test_vision_call_malformed_response():
     resp.json.return_value = {"error": "something went wrong"}
     resp.raise_for_status = MagicMock()
 
-    with patch("knowledge_base.vision.httpx.post", return_value=resp):
-        with pytest.raises(ValueError, match="Malformed vision API response"):
-            _vision_call(
-                "base64data",
-                "prompt",
-                base_url="http://localhost:11434",
-                model="test",
-            )
+    with (
+        patch("knowledge_base.vision.httpx.post", return_value=resp),
+        pytest.raises(ValueError, match="Malformed vision API response"),
+    ):
+        _vision_call(
+            "base64data",
+            "prompt",
+            base_url="http://localhost:11434",
+            model="test",
+        )
 
 
 def test_vision_call_skips_non_dict_items():
@@ -609,9 +723,7 @@ def test_vision_call_skips_non_dict_items():
     mock_resp = _mock_httpx_response(json.dumps(mixed))
 
     with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
-        result = _vision_call(
-            "base64data", "prompt", base_url="http://localhost:11434", model="test"
-        )
+        result = _vision_call("base64data", "prompt", base_url="http://localhost:11434", model="test")
 
     assert len(result) == 2
     assert result[0]["figure_type"] == "diagram"
@@ -643,16 +755,12 @@ def _setup_paper_with_pdf(tmp_path, pages_text: list[str] | None = None):
         "VALUES ('abs_hash', 'abstract text', 'pdf', ?, 0)",
         (pdf_path,),
     )
-    chunk_id = conn.execute(
-        "SELECT id FROM chunks WHERE content_hash = 'abs_hash'"
-    ).fetchone()["id"]
+    chunk_id = conn.execute("SELECT id FROM chunks WHERE content_hash = 'abs_hash'").fetchone()["id"]
     conn.execute(
         "INSERT INTO papers (title, abstract_chunk_id) VALUES ('Test Paper', ?)",
         (chunk_id,),
     )
-    paper_id = conn.execute(
-        "SELECT id FROM papers WHERE title = 'Test Paper'"
-    ).fetchone()["id"]
+    paper_id = conn.execute("SELECT id FROM papers WHERE title = 'Test Paper'").fetchone()["id"]
     conn.commit()
 
     return conn, paper_id, pdf_path
@@ -729,9 +837,7 @@ def test_extract_figures_end_to_end(mock_vision, mock_embed, tmp_path):
     assert "vision_model" in meta
 
     # Verify vector embedding inserted
-    vec_rows = conn.execute(
-        "SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (row["id"],)
-    ).fetchall()
+    vec_rows = conn.execute("SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (row["id"],)).fetchall()
     assert len(vec_rows) == 1
 
 
@@ -756,9 +862,7 @@ def test_extract_figures_idempotent(mock_vision, mock_embed, tmp_path):
 
     # First run
     extract_figures(conn, paper_id=paper_id, pages=[0])
-    count_1 = conn.execute(
-        "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()["c"]
+    count_1 = conn.execute("SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'").fetchone()["c"]
 
     # Second run — old chunks should be deleted first
     # Use a different description so content_hash differs
@@ -772,25 +876,19 @@ def test_extract_figures_idempotent(mock_vision, mock_embed, tmp_path):
     ]
     mock_vision.return_value = mock_figures_2
     extract_figures(conn, paper_id=paper_id, pages=[0])
-    count_2 = conn.execute(
-        "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()["c"]
+    count_2 = conn.execute("SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'").fetchone()["c"]
 
     assert count_1 == 1
     assert count_2 == 1  # No duplicates — old one was deleted
 
     # Verify it's the new one
-    row = conn.execute(
-        "SELECT content FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    row = conn.execute("SELECT content FROM chunks WHERE source_type = 'figure'").fetchone()
     assert "v2" in row["content"]
 
 
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
-def test_extract_figures_idempotent_with_fk_references(
-    mock_vision, mock_embed, tmp_path
-):
+def test_extract_figures_idempotent_with_fk_references(mock_vision, mock_embed, tmp_path):
     """Re-extracting figures when entity_mentions/methods/datasets reference
     figure chunk IDs must not raise FOREIGN KEY constraint error (#53)."""
     from knowledge_base.vision import extract_figures
@@ -812,23 +910,17 @@ def test_extract_figures_idempotent_with_fk_references(
     result1 = extract_figures(conn, paper_id=paper_id, pages=[0])
     assert result1["chunks_created"] == 1
 
-    fig_chunk_id = conn.execute(
-        "SELECT id FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()["id"]
+    fig_chunk_id = conn.execute("SELECT id FROM chunks WHERE source_type = 'figure'").fetchone()["id"]
 
     # Simulate extract_structure creating FK references to figure chunks:
     # 1. entity_mentions referencing the figure chunk
     conn.execute(
-        "INSERT INTO entities (canonical_name, entity_type, paper_id) "
-        "VALUES ('BERT', 'method', ?)",
+        "INSERT INTO entities (canonical_name, entity_type, paper_id) VALUES ('BERT', 'method', ?)",
         (paper_id,),
     )
-    entity_id = conn.execute(
-        "SELECT id FROM entities WHERE canonical_name = 'BERT'"
-    ).fetchone()["id"]
+    entity_id = conn.execute("SELECT id FROM entities WHERE canonical_name = 'BERT'").fetchone()["id"]
     conn.execute(
-        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) "
-        "VALUES (?, 'BERT', ?)",
+        "INSERT INTO entity_mentions (entity_id, surface_form, chunk_id) VALUES (?, 'BERT', ?)",
         (entity_id, fig_chunk_id),
     )
 
@@ -883,9 +975,7 @@ def test_extract_figures_idempotent_with_fk_references(
 
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
-def test_extract_figures_cleans_conclusions_and_other_fk_refs(
-    mock_vision, mock_embed, tmp_path
-):
+def test_extract_figures_cleans_conclusions_and_other_fk_refs(mock_vision, mock_embed, tmp_path):
     """Re-extracting figures must clean up conclusions (zombie deletion),
     papers.abstract_chunk_id, relationships.evidence_chunk_id, and
     metrics.chunk_id — not just entity_mentions/methods/datasets (#276)."""
@@ -908,16 +998,13 @@ def test_extract_figures_cleans_conclusions_and_other_fk_refs(
     result1 = extract_figures(conn, paper_id=paper_id, pages=[0])
     assert result1["chunks_created"] == 1
 
-    fig_chunk_id = conn.execute(
-        "SELECT id FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()["id"]
+    fig_chunk_id = conn.execute("SELECT id FROM chunks WHERE source_type = 'figure'").fetchone()["id"]
 
     # --- Create FK references to the figure chunk in ALL missing tables ---
 
     # 1. conclusion with source_chunk_ids pointing to figure chunk
     conn.execute(
-        "INSERT INTO conclusions (claim, source_chunk_ids) "
-        "VALUES ('Figure shows X', ?)",
+        "INSERT INTO conclusions (claim, source_chunk_ids) VALUES ('Figure shows X', ?)",
         (json.dumps([fig_chunk_id]),),
     )
 
@@ -932,9 +1019,7 @@ def test_extract_figures_cleans_conclusions_and_other_fk_refs(
     conn.execute(
         "INSERT INTO papers (title) VALUES ('Other paper')",
     )
-    other_paper_id = conn.execute(
-        "SELECT id FROM papers WHERE title = 'Other paper'"
-    ).fetchone()["id"]
+    other_paper_id = conn.execute("SELECT id FROM papers WHERE title = 'Other paper'").fetchone()["id"]
     conn.execute(
         "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type, evidence_chunk_id) "
         "VALUES (?, ?, 'cites', ?)",
@@ -943,8 +1028,7 @@ def test_extract_figures_cleans_conclusions_and_other_fk_refs(
 
     # 4. metrics.chunk_id pointing to figure chunk
     conn.execute(
-        "INSERT INTO metrics (paper_id, name, value, chunk_id) "
-        "VALUES (?, 'accuracy', '0.95', ?)",
+        "INSERT INTO metrics (paper_id, name, value, chunk_id) VALUES (?, 'accuracy', '0.95', ?)",
         (paper_id, fig_chunk_id),
     )
     conn.commit()
@@ -970,15 +1054,14 @@ def test_extract_figures_cleans_conclusions_and_other_fk_refs(
     assert conclusion_count == 0, "Zombie conclusion should be deleted"
 
     # papers.abstract_chunk_id should be NULLed
-    abstract_cid = conn.execute(
-        "SELECT abstract_chunk_id FROM papers WHERE id = ?", (paper_id,)
-    ).fetchone()["abstract_chunk_id"]
+    abstract_cid = conn.execute("SELECT abstract_chunk_id FROM papers WHERE id = ?", (paper_id,)).fetchone()[
+        "abstract_chunk_id"
+    ]
     assert abstract_cid is None, "abstract_chunk_id should be NULLed"
 
     # relationships.evidence_chunk_id should be NULLed
     rel = conn.execute(
-        "SELECT evidence_chunk_id FROM relationships "
-        "WHERE source_paper_id = ? AND target_paper_id = ?",
+        "SELECT evidence_chunk_id FROM relationships WHERE source_paper_id = ? AND target_paper_id = ?",
         (paper_id, other_paper_id),
     ).fetchone()
     assert rel["evidence_chunk_id"] is None, "evidence_chunk_id should be NULLed"
@@ -1007,9 +1090,7 @@ def test_extract_figures_pages_hint(mock_vision, mock_embed, tmp_path):
     ]
     mock_embed.return_value = [[0.3] * DEFAULT_EMBED_DIM]
 
-    conn, paper_id, _ = _setup_paper_with_pdf(
-        tmp_path, ["Page 0 text", "Page 1 text", "Page 2 text"]
-    )
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0 text", "Page 1 text", "Page 2 text"])
 
     result = extract_figures(conn, paper_id=paper_id, pages=[1])
 
@@ -1018,17 +1099,13 @@ def test_extract_figures_pages_hint(mock_vision, mock_embed, tmp_path):
     assert mock_vision.call_count == 1
 
     # Verify chunk_index encodes page 1
-    row = conn.execute(
-        "SELECT chunk_index FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    row = conn.execute("SELECT chunk_index FROM chunks WHERE source_type = 'figure'").fetchone()
     assert row["chunk_index"] == _FIGURE_BASE + 1 * _FIGS_PER_PAGE + 0
 
 
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
-def test_extract_figures_scoped_delete_preserves_other_pages(
-    mock_vision, mock_embed, tmp_path
-):
+def test_extract_figures_scoped_delete_preserves_other_pages(mock_vision, mock_embed, tmp_path):
     """Re-extracting a subset of pages must NOT delete figures from other pages (#79)."""
     from knowledge_base.vision import extract_figures
 
@@ -1085,9 +1162,7 @@ def test_extract_figures_scoped_delete_preserves_other_pages(
     rows = conn.execute(
         "SELECT chunk_index, content FROM chunks WHERE source_type = 'figure' ORDER BY chunk_index"
     ).fetchall()
-    assert len(rows) == 2, (
-        f"Expected 2 figure chunks, got {len(rows)}: page 2 was destroyed"
-    )
+    assert len(rows) == 2, f"Expected 2 figure chunks, got {len(rows)}: page 2 was destroyed"
     assert rows[0]["chunk_index"] == _FIGURE_BASE + 0 * _FIGS_PER_PAGE + 0
     assert "v2" in rows[0]["content"]
     assert rows[1]["chunk_index"] == _FIGURE_BASE + 2 * _FIGS_PER_PAGE + 0
@@ -1096,9 +1171,7 @@ def test_extract_figures_scoped_delete_preserves_other_pages(
 
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
-def test_extract_figures_fig_idx_overflow_capped(
-    mock_vision, mock_embed, tmp_path, caplog
-):
+def test_extract_figures_fig_idx_overflow_capped(mock_vision, mock_embed, tmp_path, caplog):
     """fig_idx >= _FIGS_PER_PAGE is capped at _FIGS_PER_PAGE-1 with a warning (#85)."""
     from knowledge_base.vision import extract_figures
 
@@ -1125,21 +1198,15 @@ def test_extract_figures_fig_idx_overflow_capped(
         extract_figures(conn, paper_id=paper_id, pages=[0])
 
     # Warning should fire for each overflow figure
-    overflow_warnings = [
-        r for r in caplog.records if "capping chunk_index" in r.message
-    ]
+    overflow_warnings = [r for r in caplog.records if "capping chunk_index" in r.message]
     assert len(overflow_warnings) == 5
 
     # All chunk_index values must stay within page 0's slot
-    rows = conn.execute(
-        "SELECT chunk_index FROM chunks WHERE source_type = 'figure' ORDER BY chunk_index"
-    ).fetchall()
+    rows = conn.execute("SELECT chunk_index FROM chunks WHERE source_type = 'figure' ORDER BY chunk_index").fetchall()
     for row in rows:
-        assert (
-            _FIGURE_BASE + 0 * _FIGS_PER_PAGE
-            <= row["chunk_index"]
-            < _FIGURE_BASE + 1 * _FIGS_PER_PAGE
-        ), f"chunk_index {row['chunk_index']} overflows page 0 slot"
+        assert _FIGURE_BASE + 0 * _FIGS_PER_PAGE <= row["chunk_index"] < _FIGURE_BASE + 1 * _FIGS_PER_PAGE, (
+            f"chunk_index {row['chunk_index']} overflows page 0 slot"
+        )
 
 
 @patch("knowledge_base.vision._embed_with_config")
@@ -1163,23 +1230,13 @@ def test_extract_figures_full_extraction_deletes_all(mock_vision, mock_embed, tm
     mock_vision.return_value = fig
     mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
     extract_figures(conn, paper_id=paper_id, pages=[0])
-    assert (
-        conn.execute(
-            "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
-        ).fetchone()["c"]
-        == 1
-    )
+    assert conn.execute("SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'").fetchone()["c"] == 1
 
     # Full extraction (pages=None) — should wipe page 0's figure even if heuristic
     # only processes page 0 again (the DELETE is unscoped)
     mock_vision.return_value = []  # no figures found
     extract_figures(conn, paper_id=paper_id, pages=None)
-    assert (
-        conn.execute(
-            "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
-        ).fetchone()["c"]
-        == 0
-    )
+    assert conn.execute("SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'").fetchone()["c"] == 0
 
 
 def test_extract_figures_empty_pages_is_noop(tmp_path):
@@ -1201,12 +1258,7 @@ def test_extract_figures_empty_pages_is_noop(tmp_path):
     assert result["pages_processed"] == 0
     assert result["figures_found"] == 0
     # The existing figure chunk must NOT have been deleted
-    assert (
-        conn.execute(
-            "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
-        ).fetchone()["c"]
-        == 1
-    )
+    assert conn.execute("SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'").fetchone()["c"] == 1
 
 
 @patch("knowledge_base.vision._embed_with_config")
@@ -1231,9 +1283,7 @@ def test_extract_figures_per_page_error(mock_vision, mock_embed, tmp_path):
     mock_vision.side_effect = side_effect
     mock_embed.return_value = [[0.4] * DEFAULT_EMBED_DIM]
 
-    conn, paper_id, _ = _setup_paper_with_pdf(
-        tmp_path, ["Page 0 with Figure 1: test", "Page 1 with Figure 2: test"]
-    )
+    conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0 with Figure 1: test", "Page 1 with Figure 2: test"])
 
     result = extract_figures(conn, paper_id=paper_id, pages=[0, 1])
 
@@ -1277,9 +1327,11 @@ def test_extract_figures_zero_indexed_boundary(tmp_path):
 
     # Page 2 (0-indexed, last page) should NOT error
     # It will fail at vision call (no mock), but should not return page-range error
-    with patch("knowledge_base.vision._vision_call", return_value=[]):
-        with patch("knowledge_base.vision._embed_with_config", return_value=[]):
-            result = extract_figures(conn, paper_id=paper_id, pages=[2])
+    with (
+        patch("knowledge_base.vision._vision_call", return_value=[]),
+        patch("knowledge_base.vision._embed_with_config", return_value=[]),
+    ):
+        result = extract_figures(conn, paper_id=paper_id, pages=[2])
     assert "error" not in result
 
     # Page 3 (0-indexed) is out of range for a 3-page doc
@@ -1327,14 +1379,14 @@ def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path)
             raise RuntimeError("Simulated insert failure")
         return original_insert_chunk(*args, **kwargs)
 
-    with patch("knowledge_base.vision._insert_chunk", side_effect=failing_insert):
-        with pytest.raises(RuntimeError, match="Simulated insert failure"):
-            extract_figures(conn, paper_id=paper_id, pages=[0])
+    with (
+        patch("knowledge_base.vision._insert_chunk", side_effect=failing_insert),
+        pytest.raises(RuntimeError, match="Simulated insert failure"),
+    ):
+        extract_figures(conn, paper_id=paper_id, pages=[0])
 
     # Rollback should have cleaned up: no figure chunks at all
-    figure_count = conn.execute(
-        "SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()["c"]
+    figure_count = conn.execute("SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'").fetchone()["c"]
     assert figure_count == 0, "Transaction should have been rolled back"
 
     vec_count = conn.execute("SELECT COUNT(*) as c FROM chunks_vec").fetchone()["c"]
@@ -1362,9 +1414,7 @@ def test_mcp_tool_page_conversion(mock_get_conn, mock_eft, mock_submit):
     }
     mock_submit.return_value = 42
 
-    result = json.loads(
-        extract_figures_tool(paper_id=1, pages=[1, 5, 10], confirmed=True)
-    )
+    result = json.loads(extract_figures_tool(paper_id=1, pages=[1, 5, 10], confirmed=True))
     assert result["deferred"] is True
     assert result["job_id"] == 42
 
@@ -1493,7 +1543,7 @@ def test_configure_omniparser_rejects_relative_path(tmp_path):
     (venv_bin / "python").write_text("# fake")
     (venv_bin / "python").chmod(0o755)
 
-    with pytest.raises(ValidationError, match="[Aa]bsolute"):
+    with pytest.raises(ValidationError, match=r"[Aa]bsolute"):
         configure_omniparser(conn, "omniparser")
 
 
@@ -1542,7 +1592,7 @@ def test_configure_omniparser_rejects_non_executable_python(tmp_path):
     (venv_bin / "python").write_text("# fake")
     (venv_bin / "python").chmod(0o644)  # NOT executable
 
-    with pytest.raises(ValidationError, match="[Ee]xecutable"):
+    with pytest.raises(ValidationError, match=r"[Ee]xecutable"):
         configure_omniparser(conn, str(omni_dir))
 
 
@@ -1768,10 +1818,7 @@ def test_merge_omniparser_elements_size_cap():
 
     figure = {"figure_type": "chart", "description": "Chart"}
     # 100 elements with 10-char content = 1000+ chars without cap
-    elements = [
-        {"type": "text", "content": f"element_{i:02d}", "bbox": [0, 0, 1, 1]}
-        for i in range(100)
-    ]
+    elements = [{"type": "text", "content": f"element_{i:02d}", "bbox": [0, 0, 1, 1]} for i in range(100)]
 
     result = _merge_omniparser_elements(figure, elements)
     # The appended portion (after "Chart\n\n") should be <= 500 chars
@@ -1811,9 +1858,7 @@ _OMNI_ELEMENTS = {
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._run_omniparser")
-def test_extract_figures_with_omniparser_single_figure(
-    mock_omni, mock_vision, mock_embed, tmp_path
-):
+def test_extract_figures_with_omniparser_single_figure(mock_omni, mock_vision, mock_embed, tmp_path):
     """Single figure on page: omniparser elements merged into description."""
     from knowledge_base.vision import extract_figures
 
@@ -1828,7 +1873,7 @@ def test_extract_figures_with_omniparser_single_figure(
     mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM]
     mock_omni.return_value = _OMNI_ELEMENTS
 
-    conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
+    conn, paper_id, _pdf_path = _setup_paper_with_pdf(tmp_path)
 
     # Configure omniparser
     omni_dir = tmp_path / "omniparser"
@@ -1850,9 +1895,7 @@ def test_extract_figures_with_omniparser_single_figure(
     assert result["omniparser_enriched"] == 1
 
     # Verify description was enriched
-    row = conn.execute(
-        "SELECT content FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    row = conn.execute("SELECT content FROM chunks WHERE source_type = 'figure'").fetchone()
     assert "A bar chart showing results" in row["content"]
     assert "X-axis label" in row["content"]
     assert "data point" in row["content"]
@@ -1861,9 +1904,7 @@ def test_extract_figures_with_omniparser_single_figure(
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._run_omniparser")
-def test_extract_figures_with_omniparser_multi_figure(
-    mock_omni, mock_vision, mock_embed, tmp_path
-):
+def test_extract_figures_with_omniparser_multi_figure(mock_omni, mock_vision, mock_embed, tmp_path):
     """Multiple figures on page: omniparser stored in metadata only, not in description."""
     from knowledge_base.vision import extract_figures
 
@@ -1884,7 +1925,7 @@ def test_extract_figures_with_omniparser_multi_figure(
     mock_embed.return_value = [[0.1] * DEFAULT_EMBED_DIM, [0.2] * DEFAULT_EMBED_DIM]
     mock_omni.return_value = _OMNI_ELEMENTS
 
-    conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
+    conn, paper_id, _pdf_path = _setup_paper_with_pdf(tmp_path)
 
     # Configure omniparser
     conn.execute(
@@ -1913,9 +1954,7 @@ def test_extract_figures_with_omniparser_multi_figure(
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._run_omniparser")
-def test_extract_figures_omniparser_failure_graceful(
-    mock_omni, mock_vision, mock_embed, tmp_path
-):
+def test_extract_figures_omniparser_failure_graceful(mock_omni, mock_vision, mock_embed, tmp_path):
     """Omniparser fails: figures still created with LLM-only description."""
     from knowledge_base.vision import extract_figures
 
@@ -1942,9 +1981,7 @@ def test_extract_figures_omniparser_failure_graceful(
     assert result["chunks_created"] == 1
     assert result["omniparser_enriched"] == 0
 
-    row = conn.execute(
-        "SELECT content FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    row = conn.execute("SELECT content FROM chunks WHERE source_type = 'figure'").fetchone()
     assert row["content"] == "Original caption only"
 
 
@@ -1973,9 +2010,7 @@ def test_extract_figures_without_omniparser(mock_vision, mock_embed, tmp_path):
     assert result["chunks_created"] == 1
     assert result.get("omniparser_enriched", 0) == 0
 
-    row = conn.execute(
-        "SELECT content FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    row = conn.execute("SELECT content FROM chunks WHERE source_type = 'figure'").fetchone()
     assert row["content"] == "Architecture diagram"
 
 
@@ -2049,9 +2084,7 @@ def test_extract_figures_timing_with_omniparser(mock_vision, mock_embed, tmp_pat
 
     # Mock _run_omniparser to return elements (avoid subprocess)
     with patch("knowledge_base.vision._run_omniparser") as mock_omni:
-        mock_omni.return_value = {
-            "elements": [{"type": "text", "content": "axis label"}]
-        }
+        mock_omni.return_value = {"elements": [{"type": "text", "content": "axis label"}]}
         result = extract_figures(conn, paper_id=paper_id, pages=[0])
 
     assert result["timing"]["omniparser_secs"] >= 0.0
@@ -2089,9 +2122,7 @@ def test_vision_call_logs_timing(caplog):
         import logging
 
         with caplog.at_level(logging.INFO, logger="knowledge_base.vision"):
-            _vision_call(
-                "fakebase64", "prompt", base_url="http://localhost", model="test"
-            )
+            _vision_call("fakebase64", "prompt", base_url="http://localhost", model="test")
 
     assert any("Vision call completed in" in msg for msg in caplog.messages)
 
@@ -2144,9 +2175,7 @@ def test_vision_call_warns_on_slow_response(caplog):
         import logging
 
         with caplog.at_level(logging.WARNING, logger="knowledge_base.vision"):
-            _vision_call(
-                "fakebase64", "prompt", base_url="http://localhost", model="test"
-            )
+            _vision_call("fakebase64", "prompt", base_url="http://localhost", model="test")
 
     assert any("consider raising" in msg for msg in caplog.messages)
 
@@ -2358,6 +2387,47 @@ def test_collect_extracted_images_deduplicates(vision_conn, tmp_path):
     assert result[0][1] == 1
 
 
+def test_collect_extracted_images_handles_malformed_metadata(vision_conn, tmp_path):
+    """Chunks with non-JSON or NULL metadata are skipped without raising."""
+    conn = vision_conn
+    source_uri = str(tmp_path / "paper.pdf")
+    image_dir = tmp_path / "figures" / "paper_abc" / "extracted"
+    image_dir.mkdir(parents=True)
+    (image_dir / "image_0.png").write_bytes(b"PNG_FAKE")
+
+    # Non-JSON string metadata -> json.JSONDecodeError, skipped.
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 0, ?)",
+        ("h_bad", "garbage", source_uri, "not valid json {{"),
+    )
+    # NULL metadata -> falsy, treated as empty dict, skipped.
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 1, NULL)",
+        ("h_null", "no meta", source_uri),
+    )
+    # A well-formed chunk so we can confirm the good row still surfaces.
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'pdf', ?, 2, ?)",
+        (
+            "h_ok",
+            "good",
+            source_uri,
+            json.dumps({"pages": [1], "images": ["image_0.png"]}),
+        ),
+    )
+    conn.commit()
+
+    from knowledge_base.vision import _collect_extracted_images
+
+    # Must not raise on the malformed rows.
+    result = _collect_extracted_images(conn, source_uri, image_dir)
+    assert len(result) == 1
+    assert result[0][0].name == "image_0.png"
+
+
 def test_detect_vector_pages_finds_drawing_heavy_pages(tmp_path):
     """Pages with many drawings but no extracted images are detected."""
     from knowledge_base.vision import _detect_vector_pages
@@ -2414,9 +2484,7 @@ def test_detect_vector_pages_excludes_pages_with_extracted_images(tmp_path):
 @patch("knowledge_base.vision.pdf_image_dir")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._embed_with_config")
-def test_extract_figures_uses_extracted_images(
-    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
-):
+def test_extract_figures_uses_extracted_images(mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path):
     """extract_figures reads pymupdf4llm-extracted images instead of rendering pages."""
     conn = vision_conn
     import fitz
@@ -2481,9 +2549,7 @@ def test_extract_figures_uses_extracted_images(
     call_args = mock_vision.call_args
     assert "figure image extracted from a research paper" in call_args[0][1]
     # The metadata should indicate source_image
-    row = conn.execute(
-        "SELECT metadata FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    row = conn.execute("SELECT metadata FROM chunks WHERE source_type = 'figure'").fetchone()
     meta = json.loads(row["metadata"])
     assert meta.get("source_image") == "image_0.png"
 
@@ -2491,9 +2557,7 @@ def test_extract_figures_uses_extracted_images(
 @patch("knowledge_base.vision.pdf_image_dir")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._embed_with_config")
-def test_extract_figures_multi_image_same_page(
-    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
-):
+def test_extract_figures_multi_image_same_page(mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path):
     """Multiple images on the same page must all be processed, not overwritten."""
     conn = vision_conn
     import fitz
@@ -2616,9 +2680,7 @@ def test_extract_figures_falls_back_to_render_for_vector_pages(
 
 @patch("knowledge_base.vision.pdf_image_dir")
 @patch("knowledge_base.vision._collect_extracted_images")
-def test_estimate_figures_time_accounts_for_extracted_images(
-    mock_collect, mock_image_dir, vision_conn, tmp_path
-):
+def test_estimate_figures_time_accounts_for_extracted_images(mock_collect, mock_image_dir, vision_conn, tmp_path):
     """ETA should be lower when extracted images are available."""
     conn = vision_conn
     import fitz
@@ -2873,7 +2935,7 @@ def test_extract_figures_processes_mixed_page_vector_regions(
 ):
     """Mixed pages produce both raster image figures and vector region figures."""
     conn = vision_conn
-    pdf_path, image_dir = _setup_mixed_page_paper(conn, tmp_path)
+    _pdf_path, image_dir = _setup_mixed_page_paper(conn, tmp_path)
     mock_image_dir.return_value = image_dir
 
     call_count = [0]
@@ -2905,12 +2967,10 @@ def test_extract_figures_processes_mixed_page_vector_regions(
 @patch("knowledge_base.vision.pdf_image_dir")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._embed_with_config")
-def test_extract_figures_mixed_page_explicit_pages(
-    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
-):
+def test_extract_figures_mixed_page_explicit_pages(mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path):
     """Mixed page handling works with explicit pages=[0]."""
     conn = vision_conn
-    pdf_path, image_dir = _setup_mixed_page_paper(conn, tmp_path)
+    _pdf_path, image_dir = _setup_mixed_page_paper(conn, tmp_path)
     mock_image_dir.return_value = image_dir
 
     call_count = [0]
@@ -2940,9 +3000,7 @@ def test_extract_figures_mixed_page_explicit_pages(
 @patch("knowledge_base.vision.pdf_image_dir")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._embed_with_config")
-def test_extract_figures_no_regression_pure_raster(
-    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
-):
+def test_extract_figures_no_regression_pure_raster(mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path):
     """Pure-raster page should not trigger mixed rendering."""
     conn = vision_conn
 
@@ -3011,10 +3069,7 @@ def test_extract_captions_finds_caption_near_image(vision_conn):
 
     conn = vision_conn
     chunk_text = (
-        "Some intro text.\n\n"
-        "![](img-0001.png)\n\n"
-        "Figure 1: Architecture of the proposed system.\n\n"
-        "More text follows."
+        "Some intro text.\n\n![](img-0001.png)\n\nFigure 1: Architecture of the proposed system.\n\nMore text follows."
     )
     conn.execute(
         "INSERT INTO chunks (content_hash, content, source_type, source_uri, "
@@ -3024,9 +3079,10 @@ def test_extract_captions_finds_caption_near_image(vision_conn):
     conn.commit()
 
     result = _extract_captions(conn, "/tmp/paper.pdf")
-    assert result.for_image("img-0001.png") is not None
-    assert "Figure 1" in result.for_image("img-0001.png")
-    assert "Architecture" in result.for_image("img-0001.png")
+    caption = result.for_image("img-0001.png")
+    assert caption is not None
+    assert "Figure 1" in caption
+    assert "Architecture" in caption
     # Also indexed by page (page 1 → 0-indexed = 0)
     assert len(result.for_page(0)) == 1
 
@@ -3070,8 +3126,12 @@ def test_extract_captions_multiple_images(vision_conn):
 
     result = _extract_captions(conn, "/tmp/paper.pdf")
     assert len(result.by_image) == 2
-    assert "First figure" in result.for_image("img-0001.png")
-    assert "Comparison" in result.for_image("img-0002.png")
+    caption1 = result.for_image("img-0001.png")
+    caption2 = result.for_image("img-0002.png")
+    assert caption1 is not None
+    assert caption2 is not None
+    assert "First figure" in caption1
+    assert "Comparison" in caption2
     assert len(result.for_page(0)) == 1
     assert len(result.for_page(2)) == 1
 
@@ -3100,10 +3160,12 @@ def test_extract_captions_multi_image_same_chunk(vision_conn):
     conn.commit()
 
     result = _extract_captions(conn, "/tmp/paper.pdf")
-    assert result.for_image("img-0001.png") is not None
-    assert result.for_image("img-0002.png") is not None
-    assert "First" in result.for_image("img-0001.png")
-    assert "Second" in result.for_image("img-0002.png")
+    caption1 = result.for_image("img-0001.png")
+    caption2 = result.for_image("img-0002.png")
+    assert caption1 is not None
+    assert caption2 is not None
+    assert "First" in caption1
+    assert "Second" in caption2
 
 
 # ---------------------------------------------------------------------------
@@ -3123,9 +3185,7 @@ def test_build_figure_vision_prompt_with_caption():
     """With caption, prompt includes caption context and instruction."""
     from knowledge_base.vision import _build_figure_vision_prompt
 
-    prompt = _build_figure_vision_prompt(
-        caption="Figure 3: ResNet accuracy over epochs"
-    )
+    prompt = _build_figure_vision_prompt(caption="Figure 3: ResNet accuracy over epochs")
     assert "Figure 3: ResNet accuracy over epochs" in prompt
     assert "caption" in prompt.lower()
     assert "do not repeat" in prompt.lower() or "do NOT repeat" in prompt
@@ -3261,9 +3321,7 @@ def test_format_omniparser_ocr_dedup_and_cap():
 @patch("knowledge_base.vision.pdf_image_dir")
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
-def test_extract_figures_hybrid_content(
-    mock_vision, mock_embed, mock_img_dir, tmp_path
-):
+def test_extract_figures_hybrid_content(mock_vision, mock_embed, mock_img_dir, tmp_path):
     """Hybrid enrichment produces structured content with section markers."""
     from knowledge_base.vision import extract_figures
     import struct
@@ -3317,9 +3375,7 @@ def test_extract_figures_hybrid_content(
     assert result["chunks_created"] >= 1
 
     # Check the created chunk has structured content
-    fig_chunk = conn.execute(
-        "SELECT content, metadata FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    fig_chunk = conn.execute("SELECT content, metadata FROM chunks WHERE source_type = 'figure'").fetchone()
     assert fig_chunk is not None
     content = fig_chunk["content"]
 
@@ -3358,9 +3414,7 @@ def test_extract_figures_metadata_enrichment_layers(mock_vision, mock_embed, tmp
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
     extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
 
-    fig_chunk = conn.execute(
-        "SELECT metadata FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    fig_chunk = conn.execute("SELECT metadata FROM chunks WHERE source_type = 'figure'").fetchone()
     meta = json.loads(fig_chunk["metadata"])
     assert "enrichment_layers" in meta
     assert "vision_llm" in meta["enrichment_layers"]
@@ -3376,9 +3430,7 @@ def test_extract_figures_metadata_enrichment_layers(mock_vision, mock_embed, tmp
 @patch("knowledge_base.vision.pdf_image_dir")
 @patch("knowledge_base.vision._embed_with_config")
 @patch("knowledge_base.vision._vision_call")
-def test_extract_figures_degrades_to_caption_on_vision_failure(
-    mock_vision, mock_embed, mock_img_dir, tmp_path
-):
+def test_extract_figures_degrades_to_caption_on_vision_failure(mock_vision, mock_embed, mock_img_dir, tmp_path):
     """When vision fails but caption exists, a caption-only chunk is created."""
     from knowledge_base.vision import extract_figures
     import struct
@@ -3423,9 +3475,7 @@ def test_extract_figures_degrades_to_caption_on_vision_failure(
     # Vision failed but caption exists — should still create a chunk
     assert result["chunks_created"] >= 1
 
-    fig_chunk = conn.execute(
-        "SELECT content, metadata FROM chunks WHERE source_type = 'figure'"
-    ).fetchone()
+    fig_chunk = conn.execute("SELECT content, metadata FROM chunks WHERE source_type = 'figure'").fetchone()
     assert fig_chunk is not None
     assert "Key results" in fig_chunk["content"]
 
@@ -3437,9 +3487,7 @@ def test_extract_figures_degrades_to_caption_on_vision_failure(
 @patch("knowledge_base.vision.pdf_image_dir")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._embed_with_config")
-def test_extract_figures_no_regression_pure_vector(
-    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
-):
+def test_extract_figures_no_regression_pure_vector(mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path):
     """Pure-vector page should use existing vector path, not mixed."""
     conn = vision_conn
 
@@ -3486,9 +3534,7 @@ def test_extract_figures_no_regression_pure_vector(
 @patch("knowledge_base.vision.pdf_image_dir")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._embed_with_config")
-def test_extract_figures_mixed_page_no_key_collision(
-    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path
-):
+def test_extract_figures_mixed_page_no_key_collision(mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path):
     """Multiple extracted images + mixed vector regions don't collide."""
     conn = vision_conn
     import io
@@ -3574,9 +3620,7 @@ def test_extract_figures_mixed_page_no_key_collision(
 
 @patch("knowledge_base.vision.pdf_image_dir")
 @patch("knowledge_base.vision._collect_extracted_images")
-def test_estimate_figures_time_includes_mixed_regions(
-    mock_collect, mock_image_dir, vision_conn, tmp_path
-):
+def test_estimate_figures_time_includes_mixed_regions(mock_collect, mock_image_dir, vision_conn, tmp_path):
     """ETA should include mixed-page vector regions in the estimate."""
     conn = vision_conn
 
@@ -3636,6 +3680,19 @@ class TestOmniParserServerHealth:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"status": "nginx"}
+
+        with patch("knowledge_base.vision.httpx.get", return_value=mock_resp):
+            assert _check_omniparser_server("http://127.0.0.1:7862") is False
+
+    @pytest.mark.parametrize("body", [["ok"], "ok", 1, None])
+    def test_foreign_service_non_dict_json(self, body):
+        # A foreign service on the same port may return 200 with a non-object
+        # JSON body — this must read as "not our server" (False), not raise.
+        from knowledge_base.vision import _check_omniparser_server
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = body
 
         with patch("knowledge_base.vision.httpx.get", return_value=mock_resp):
             assert _check_omniparser_server("http://127.0.0.1:7862") is False
@@ -3709,14 +3766,10 @@ class TestOmniParserFallback:
         http_result = {"elements": [{"text": "from_server"}]}
 
         with (
-            patch(
-                "knowledge_base.vision._run_omniparser_http", return_value=http_result
-            ) as mock_http,
+            patch("knowledge_base.vision._run_omniparser_http", return_value=http_result) as mock_http,
             patch("knowledge_base.vision.subprocess") as mock_subprocess,
         ):
-            result = _run_omniparser(
-                png, "/fake/omniparser", server_url="http://127.0.0.1:7862"
-            )
+            result = _run_omniparser(png, "/fake/omniparser", server_url="http://127.0.0.1:7862")
 
         assert result == http_result
         mock_http.assert_called_once()
@@ -3745,9 +3798,7 @@ class TestOmniParserFallback:
             patch("knowledge_base.vision.subprocess.run"),
             patch("knowledge_base.vision.json.load", return_value=subprocess_result),
         ):
-            result = _run_omniparser(
-                png, str(omni_dir), server_url="http://127.0.0.1:7862"
-            )
+            result = _run_omniparser(png, str(omni_dir), server_url="http://127.0.0.1:7862")
 
         assert result == subprocess_result
 
@@ -3794,6 +3845,22 @@ class TestOmniParserConfig:
 class TestOmniParserAutoStart:
     """Tests for _ensure_omniparser_server auto-start logic."""
 
+    @pytest.fixture(autouse=True)
+    def _restore_omniparser_process(self):
+        """Snapshot and restore the module-global _omniparser_process.
+
+        test_auto_start_success assigns the real module global, leaking a
+        MagicMock into other tests/sessions. Restore it around every test
+        in this class.
+        """
+        import knowledge_base.vision as vision_mod
+
+        saved = vision_mod._omniparser_process
+        try:
+            yield
+        finally:
+            vision_mod._omniparser_process = saved
+
     def test_already_running(self):
         from knowledge_base.vision import _ensure_omniparser_server
 
@@ -3823,9 +3890,7 @@ class TestOmniParserAutoStart:
         health_calls = iter([False, False, True])
 
         mock_proc = MagicMock()
-        mock_proc.stdout = io.BytesIO(
-            f"{_READY_SENTINEL} host=127.0.0.1 port=7862\n".encode()
-        )
+        mock_proc.stdout = io.BytesIO(f"{_READY_SENTINEL} host=127.0.0.1 port=7862\n".encode())
         mock_proc.poll.return_value = None  # process still running
 
         with (
@@ -3833,9 +3898,7 @@ class TestOmniParserAutoStart:
                 "knowledge_base.vision._check_omniparser_server",
                 side_effect=lambda _url: next(health_calls),
             ),
-            patch(
-                "knowledge_base.vision.subprocess.Popen", return_value=mock_proc
-            ) as mock_popen,
+            patch("knowledge_base.vision.subprocess.Popen", return_value=mock_proc) as mock_popen,
             patch("atexit.register"),
         ):
             url = _ensure_omniparser_server(str(omni_dir), 7862)

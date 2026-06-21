@@ -51,9 +51,7 @@ def test_set_schema_version_stores_text(tmp_path):  # F6
     conn = get_connection(tmp_path / "k.db")
     init_schema(conn)
     m.set_schema_version(conn, 5)
-    val = conn.execute(
-        "SELECT value FROM config WHERE key='schema_version'"
-    ).fetchone()[0]
+    val = conn.execute("SELECT value FROM config WHERE key='schema_version'").fetchone()[0]
     assert val == "5" and isinstance(val, str)
 
 
@@ -79,7 +77,7 @@ def test_init_schema_raises_when_behind(tmp_path, monkeypatch):
     conn = get_connection(tmp_path / "k.db")
     init_schema(conn)  # stamps 1
     monkeypatch.setattr(m, "CURRENT_SCHEMA_VERSION", 2)  # pretend code is newer
-    with pytest.raises(KnowledgeBaseError, match="behind|migrate"):
+    with pytest.raises(KnowledgeBaseError, match=r"behind|migrate"):
         init_schema(conn)
 
 
@@ -107,7 +105,9 @@ def test_backup_creates_self_contained_file(tmp_path):  # AC-2
     conn = get_connection(tmp_path / "k.db")
     init_schema(conn)
     _seed(conn)
-    out = m.backup_database(conn, m.resolve_backup_path(conn))
+    bp = m.resolve_backup_path(conn)
+    assert bp is not None
+    out = m.backup_database(conn, bp)
     assert out.is_file()
     b = sqlite3.connect(f"file:{out.as_posix()}?mode=ro", uri=True)
     try:
@@ -122,7 +122,9 @@ def test_restore_backup_roundtrip_deletes_sidecars(tmp_path):  # R1
     conn = get_connection(db)
     init_schema(conn)
     n = _seed(conn)
-    bp = m.backup_database(conn, m.resolve_backup_path(conn))
+    bp = m.resolve_backup_path(conn)
+    assert bp is not None
+    bp = m.backup_database(conn, bp)
     conn.execute("DELETE FROM chunks")
     conn.commit()
     conn.close()
@@ -244,7 +246,5 @@ def test_normalize_source_uri_migration_still_works(tmp_path):
     conn.commit()
     _migrate_normalize_source_uri(conn)
     conn.commit()
-    got = conn.execute(
-        "SELECT source_uri FROM chunks WHERE content_hash='h2'"
-    ).fetchone()[0]
+    got = conn.execute("SELECT source_uri FROM chunks WHERE content_hash='h2'").fetchone()[0]
     assert got == "C:/a/b.md"

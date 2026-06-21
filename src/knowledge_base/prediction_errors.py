@@ -28,9 +28,7 @@ def _query_hash(query: str) -> str:
 
 def get_threshold(conn: sqlite3.Connection) -> float:
     """Read prediction_error_threshold from config, with fallback."""
-    row = conn.execute(
-        "SELECT value FROM config WHERE key = 'prediction_error_threshold'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM config WHERE key = 'prediction_error_threshold'").fetchone()
     if row is None:
         return _DEFAULT_THRESHOLD
     try:
@@ -123,7 +121,7 @@ def list_prediction_errors(
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = conn.execute(
-        f"SELECT * FROM prediction_errors {where} ORDER BY detected_at DESC",
+        f"SELECT * FROM prediction_errors {where} ORDER BY detected_at DESC",  # noqa: S608  # trusted internal identifier, not user input
         params,
     ).fetchall()
 
@@ -142,14 +140,10 @@ def resolve_prediction_error(conn: sqlite3.Connection, error_id: int) -> dict:
     return {"resolved": error_id}
 
 
-def get_prediction_error_count(
-    conn: sqlite3.Connection, unresolved_only: bool = True
-) -> int:
+def get_prediction_error_count(conn: sqlite3.Connection, unresolved_only: bool = True) -> int:
     """Count prediction errors."""
     if unresolved_only:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM prediction_errors WHERE resolved_at IS NULL"
-        ).fetchone()
+        row = conn.execute("SELECT COUNT(*) FROM prediction_errors WHERE resolved_at IS NULL").fetchone()
     else:
         row = conn.execute("SELECT COUNT(*) FROM prediction_errors").fetchone()
     return row[0]

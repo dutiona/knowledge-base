@@ -96,9 +96,7 @@ def test_record_and_get_metric(tmp_path):
     m = record_method(conn, "ResNet", p)["method_id"]
     d = record_dataset(conn, "ImageNet", p)["dataset_id"]
 
-    result = record_metric(
-        conn, "accuracy", 76.1, p, method_id=m, dataset_id=d, unit="%"
-    )
+    result = record_metric(conn, "accuracy", 76.1, p, method_id=m, dataset_id=d, unit="%")
     assert "metric_id" in result
 
     metrics = get_metrics(conn, p)
@@ -124,12 +122,8 @@ def test_compare_papers_shared_dataset(tmp_path):
     d1 = record_dataset(conn, "ImageNet", p1)["dataset_id"]
     d2 = record_dataset(conn, "ImageNet", p2)["dataset_id"]
 
-    record_metric(
-        conn, "top-1 accuracy", 76.1, p1, method_id=m1, dataset_id=d1, unit="%"
-    )
-    record_metric(
-        conn, "top-1 accuracy", 81.3, p2, method_id=m2, dataset_id=d2, unit="%"
-    )
+    record_metric(conn, "top-1 accuracy", 76.1, p1, method_id=m1, dataset_id=d1, unit="%")
+    record_metric(conn, "top-1 accuracy", 81.3, p2, method_id=m2, dataset_id=d2, unit="%")
 
     comparison = compare_papers(conn, [p1, p2])
     assert len(comparison) >= 1
@@ -151,6 +145,13 @@ def test_compare_papers_no_shared(tmp_path):
     comparison = compare_papers(conn, [p1, p2])
     # No shared datasets
     assert comparison == []
+
+
+@pytest.mark.parametrize("paper_ids", [[], [1]], ids=["empty", "single"])
+def test_compare_papers_fewer_than_two_returns_empty(tmp_path, paper_ids):
+    """compare_papers early-returns [] when given fewer than two paper_ids."""
+    conn = _setup(tmp_path)
+    assert compare_papers(conn, paper_ids) == []
 
 
 # --- extract_structure ---
@@ -220,9 +221,7 @@ def test_entity_tables_exist(tmp_path):
         "INSERT INTO entities (canonical_name, entity_type, paper_id) VALUES (?, ?, ?)",
         ("CNN-LSTM", "method", p),
     )
-    row = conn.execute(
-        "SELECT * FROM entities WHERE canonical_name = 'CNN-LSTM'"
-    ).fetchone()
+    row = conn.execute("SELECT * FROM entities WHERE canonical_name = 'CNN-LSTM'").fetchone()
     assert row is not None
     assert row["entity_type"] == "method"
 
@@ -398,9 +397,7 @@ def test_store_resolved_writes_entities_and_methods(tmp_path):
     assert result["metrics_added"] >= 1
 
     # Check entities table
-    entities = conn.execute(
-        "SELECT * FROM entities WHERE paper_id = ?", (p,)
-    ).fetchall()
+    entities = conn.execute("SELECT * FROM entities WHERE paper_id = ?", (p,)).fetchall()
     assert len(entities) == 2
 
     # Check entity_mentions
@@ -451,9 +448,7 @@ def test_estimate_extraction_time_long_doc(tmp_path):
 
     conn = _setup(tmp_path)
     md = tmp_path / "long.md"
-    md.write_text(
-        "\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(50))
-    )
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(50)))
     ingest_file(conn, md)
     p = register_paper(conn, "Long Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -469,9 +464,7 @@ def test_extract_structure_map_reduce_confirmed(tmp_path):
     """Long docs with confirmed=True run the full pipeline."""
     conn = _setup(tmp_path)
     md = tmp_path / "long.md"
-    md.write_text(
-        "\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20))
-    )
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20)))
     ingest_file(conn, md)
     p = register_paper(conn, "Long Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -490,9 +483,7 @@ def test_extract_structure_map_reduce_confirmed(tmp_path):
     )
     resolve_response = json.dumps(
         {
-            "groups": [
-                {"canonical": "ResNet", "type": "method", "members": ["ResNet"]}
-            ],
+            "groups": [{"canonical": "ResNet", "type": "method", "members": ["ResNet"]}],
         }
     )
     call_count = {"n": 0}
@@ -549,20 +540,18 @@ def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
     """When all chunks return empty, the error list is populated."""
     conn = _setup(tmp_path)
     md = tmp_path / "long.md"
-    md.write_text(
-        "\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20))
-    )
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20)))
     ingest_file(conn, md)
     p = register_paper(conn, "Fail Paper", source_uri=str(md.resolve()))["paper_id"]
 
     def _mock_llm_empty(prompt, *, conn=None, cfg=None, client=None):
         raise ValueError("LLM returned empty response (possible thinking-mode issue)")
 
-    with patch("knowledge_base.extraction._llm_call", _mock_llm_empty):
-        with pytest.raises(
-            ExtractionError, match="All chunks failed extraction"
-        ) as exc_info:
-            extract_structure(conn, p, confirmed=True)
+    with (
+        patch("knowledge_base.extraction._llm_call", _mock_llm_empty),
+        pytest.raises(ExtractionError, match="All chunks failed extraction") as exc_info,
+    ):
+        extract_structure(conn, p, confirmed=True)
 
     assert exc_info.value.errors is not None
     assert len(exc_info.value.errors) > 0
@@ -612,9 +601,7 @@ def test_store_resolved_passes_chunk_id_to_metrics(tmp_path):
 
     _store_resolved(conn, p, map_results, resolution)
 
-    row = conn.execute(
-        "SELECT chunk_id FROM metrics WHERE paper_id = ?", (p,)
-    ).fetchone()
+    row = conn.execute("SELECT chunk_id FROM metrics WHERE paper_id = ?", (p,)).fetchone()
     assert row is not None
     assert row["chunk_id"] == chunk_id
 
@@ -638,9 +625,7 @@ def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
         result = extract_structure(conn, p)
 
     assert result["metrics_added"] == 1
-    row = conn.execute(
-        "SELECT chunk_id FROM metrics WHERE paper_id = ?", (p,)
-    ).fetchone()
+    row = conn.execute("SELECT chunk_id FROM metrics WHERE paper_id = ?", (p,)).fetchone()
     assert row is not None
     assert row["chunk_id"] == first_chunk_id
 
@@ -680,19 +665,13 @@ def test_store_resolved_passes_chunk_id_to_methods_and_datasets(tmp_path, table)
 
     _store_resolved(conn, p, map_results, resolution)
 
-    row = conn.execute(
-        f"SELECT chunk_id FROM {table} WHERE paper_id = ?", (p,)
-    ).fetchone()
+    row = conn.execute(f"SELECT chunk_id FROM {table} WHERE paper_id = ?", (p,)).fetchone()  # noqa: S608  # trusted internal identifier, not user input
     assert row is not None
     assert row["chunk_id"] == chunk_id
 
 
-@pytest.mark.parametrize(
-    "table,entity_type", [("methods", "methods"), ("datasets", "datasets")]
-)
-def test_store_resolved_description_and_chunk_id_same_provenance(
-    tmp_path, table, entity_type
-):
+@pytest.mark.parametrize("table,entity_type", [("methods", "methods"), ("datasets", "datasets")])
+def test_store_resolved_description_and_chunk_id_same_provenance(tmp_path, table, entity_type):
     """Description and chunk_id must originate from the same chunk (#39).
 
     When an entity is mentioned across multiple chunks but only the second
@@ -749,15 +728,11 @@ def test_store_resolved_description_and_chunk_id_same_provenance(
 
     _store_resolved(conn, p, map_results, resolution)
 
-    row = conn.execute(
-        f"SELECT description, chunk_id FROM {table} WHERE paper_id = ?", (p,)
-    ).fetchone()
+    row = conn.execute(f"SELECT description, chunk_id FROM {table} WHERE paper_id = ?", (p,)).fetchone()  # noqa: S608  # trusted internal identifier, not user input
     assert row is not None
     assert row["description"] == "Detailed description from chunk 2"
     # chunk_id must match the chunk that provided the description
-    assert row["chunk_id"] == chunk_2, (
-        f"chunk_id should be {chunk_2} (description source) but got {row['chunk_id']}"
-    )
+    assert row["chunk_id"] == chunk_2, f"chunk_id should be {chunk_2} (description source) but got {row['chunk_id']}"
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
@@ -780,9 +755,7 @@ def test_single_pass_passes_first_chunk_id_to_methods_and_datasets(tmp_path, tab
         result = extract_structure(conn, p)
 
     assert result["methods_added"] >= 1
-    row = conn.execute(
-        f"SELECT chunk_id FROM {table} WHERE paper_id = ?", (p,)
-    ).fetchone()
+    row = conn.execute(f"SELECT chunk_id FROM {table} WHERE paper_id = ?", (p,)).fetchone()  # noqa: S608  # trusted internal identifier, not user input
     assert row is not None
     assert row["chunk_id"] == first_chunk_id
 
@@ -799,9 +772,7 @@ def test_single_pass_passes_first_chunk_id_to_methods_and_datasets(tmp_path, tab
     ],
     ids=["method", "dataset", "metric"],
 )
-def test_record_commit_false_does_not_persist(
-    tmp_path, record_func, get_func, record_args
-):
+def test_record_commit_false_does_not_persist(tmp_path, record_func, get_func, record_args):
     """When commit=False, data is visible in-transaction but not persisted."""
     conn = _setup(tmp_path)
     p = register_paper(conn, "Test Paper")["paper_id"]
@@ -970,12 +941,14 @@ def test_store_resolved_rollback_on_error(tmp_path):
     resolution = {"groups": []}
 
     # Patch record_metric to raise after methods/datasets have been written
-    with patch(
-        "knowledge_base.extraction.record_metric",
-        side_effect=RuntimeError("simulated failure"),
+    with (
+        patch(
+            "knowledge_base.extraction.record_metric",
+            side_effect=RuntimeError("simulated failure"),
+        ),
+        pytest.raises(RuntimeError, match="simulated failure"),
     ):
-        with pytest.raises(RuntimeError, match="simulated failure"):
-            _store_resolved(conn, p, map_results, resolution)
+        _store_resolved(conn, p, map_results, resolution)
 
     # Verify rollback: no new methods or datasets from the failed transaction
     methods = get_methods(conn, p)
@@ -1009,13 +982,15 @@ def test_extract_single_pass_rollback_on_error(tmp_path):
         }
     )
 
-    with patch("knowledge_base.extraction._llm_call", return_value=llm_response):
-        with patch(
+    with (
+        patch("knowledge_base.extraction._llm_call", return_value=llm_response),
+        patch(
             "knowledge_base.extraction.record_metric",
             side_effect=RuntimeError("simulated failure"),
-        ):
-            with pytest.raises(RuntimeError, match="simulated failure"):
-                _extract_single_pass(conn, p, chunks)
+        ),
+        pytest.raises(RuntimeError, match="simulated failure"),
+    ):
+        _extract_single_pass(conn, p, chunks)
 
     methods = get_methods(conn, p)
     method_names = [m["name"] for m in methods]
@@ -1237,9 +1212,11 @@ def test_map_reduce_logs_per_chunk_progress(tmp_path, caplog):
         ).fetchall()
     ]
 
-    with caplog.at_level(logging.INFO, logger="knowledge_base.extraction"):
-        with patch("knowledge_base.extraction._llm_call", _mock_llm_for_progress):
-            _extract_map_reduce(conn, p, chunks)
+    with (
+        caplog.at_level(logging.INFO, logger="knowledge_base.extraction"),
+        patch("knowledge_base.extraction._llm_call", _mock_llm_for_progress),
+    ):
+        _extract_map_reduce(conn, p, chunks)
 
     chunk_logs = [m for m in caplog.messages if "Chunk" in m and "/" in m]
     assert len(chunk_logs) == len(chunks)
@@ -1256,9 +1233,7 @@ def test_map_reduce_logs_revised_eta_every_5_chunks(tmp_path, caplog):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
     # Need enough content for >5 chunks
-    md.write_text(
-        "\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(10))
-    )
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(10)))
     ingest_file(conn, md)
     p = register_paper(conn, "Test", source_uri=str(md.resolve()))["paper_id"]
     chunks = [
@@ -1270,9 +1245,11 @@ def test_map_reduce_logs_revised_eta_every_5_chunks(tmp_path, caplog):
     ]
     assert len(chunks) >= 5, f"Need >= 5 chunks for ETA test, got {len(chunks)}"
 
-    with caplog.at_level(logging.INFO, logger="knowledge_base.extraction"):
-        with patch("knowledge_base.extraction._llm_call", _mock_llm_for_progress):
-            _extract_map_reduce(conn, p, chunks)
+    with (
+        caplog.at_level(logging.INFO, logger="knowledge_base.extraction"),
+        patch("knowledge_base.extraction._llm_call", _mock_llm_for_progress),
+    ):
+        _extract_map_reduce(conn, p, chunks)
 
     eta_logs = [m for m in caplog.messages if "revised ETA" in m]
     # ETA logged every 5 chunks + on the last chunk (if not already a multiple of 5)
@@ -1307,9 +1284,11 @@ def test_map_reduce_logs_failed_chunk(tmp_path, caplog):
             raise ValueError("simulated LLM failure")
         return _mock_llm_for_progress(prompt, conn=conn, cfg=cfg, client=client)
 
-    with caplog.at_level(logging.INFO, logger="knowledge_base.extraction"):
-        with patch("knowledge_base.extraction._llm_call", _mock_llm_fail_first):
-            _extract_map_reduce(conn, p, chunks)
+    with (
+        caplog.at_level(logging.INFO, logger="knowledge_base.extraction"),
+        patch("knowledge_base.extraction._llm_call", _mock_llm_fail_first),
+    ):
+        _extract_map_reduce(conn, p, chunks)
 
     chunk_logs = [m for m in caplog.messages if "Chunk" in m and "/" in m]
     assert "FAILED" in chunk_logs[0]
@@ -1335,9 +1314,11 @@ def test_map_reduce_logs_entity_resolution(tmp_path, caplog):
         ).fetchall()
     ]
 
-    with caplog.at_level(logging.INFO, logger="knowledge_base.extraction"):
-        with patch("knowledge_base.extraction._llm_call", _mock_llm_for_progress):
-            _extract_map_reduce(conn, p, chunks)
+    with (
+        caplog.at_level(logging.INFO, logger="knowledge_base.extraction"),
+        patch("knowledge_base.extraction._llm_call", _mock_llm_for_progress),
+    ):
+        _extract_map_reduce(conn, p, chunks)
 
     assert any("Map phase complete" in m for m in caplog.messages)
     assert any("Starting entity resolution" in m for m in caplog.messages)
@@ -1381,9 +1362,7 @@ def test_parallel_map_phase_produces_same_results(tmp_path):
     """Parallel extraction (max_workers>1) produces identical results to sequential."""
     conn = _setup(tmp_path)
     md = tmp_path / "long.md"
-    md.write_text(
-        "\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20))
-    )
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20)))
     ingest_file(conn, md)
     p = register_paper(conn, "Parallel Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1402,9 +1381,7 @@ def test_parallel_map_phase_produces_same_results(tmp_path):
     )
     resolve_response = json.dumps(
         {
-            "groups": [
-                {"canonical": "ResNet", "type": "method", "members": ["ResNet"]}
-            ],
+            "groups": [{"canonical": "ResNet", "type": "method", "members": ["ResNet"]}],
         }
     )
 
@@ -1432,9 +1409,7 @@ def test_parallel_map_handles_partial_failures(tmp_path):
     """Parallel map phase continues past per-chunk failures."""
     conn = _setup(tmp_path)
     md = tmp_path / "long.md"
-    md.write_text(
-        "\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20))
-    )
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20)))
     ingest_file(conn, md)
     p = register_paper(conn, "Fail Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1462,20 +1437,14 @@ def test_parallel_map_calls_with_cfg_not_conn(tmp_path):
     """Parallel path passes pre-read cfg dict, not conn, to _map_extract."""
     conn = _setup(tmp_path)
     md = tmp_path / "long.md"
-    md.write_text(
-        "\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20))
-    )
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20)))
     ingest_file(conn, md)
     p = register_paper(conn, "CFG Paper", source_uri=str(md.resolve()))["paper_id"]
 
     received_args = []
 
-    def _spy_map_extract(
-        chunk_id, chunk_text, chunk_index, total_chunks, cfg, *, client=None
-    ):
-        received_args.append(
-            ("cfg", type(cfg).__name__, "client", type(client).__name__)
-        )
+    def _spy_map_extract(chunk_id, chunk_text, chunk_index, total_chunks, cfg, *, client=None):
+        received_args.append(("cfg", type(cfg).__name__, "client", type(client).__name__))
         return {"methods": [], "datasets": [], "metrics": []}
 
     resolve_response = json.dumps({"groups": []})
@@ -1490,12 +1459,8 @@ def test_parallel_map_calls_with_cfg_not_conn(tmp_path):
         extract_structure(conn, p, confirmed=True, max_workers=2)
 
     # All calls should receive a cfg dict and a shared httpx.Client
-    assert all(t[1] == "dict" for t in received_args), (
-        f"Expected all cfg dicts, got: {received_args}"
-    )
-    assert all(t[3] == "Client" for t in received_args), (
-        f"Expected shared httpx.Client, got: {received_args}"
-    )
+    assert all(t[1] == "dict" for t in received_args), f"Expected all cfg dicts, got: {received_args}"
+    assert all(t[3] == "Client" for t in received_args), f"Expected shared httpx.Client, got: {received_args}"
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
@@ -1504,9 +1469,7 @@ def test_parallel_map_progress_callback(tmp_path):
     """Progress callback fires for each chunk in parallel mode."""
     conn = _setup(tmp_path)
     md = tmp_path / "long.md"
-    md.write_text(
-        "\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20))
-    )
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20)))
     ingest_file(conn, md)
     p = register_paper(conn, "Progress Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1519,9 +1482,7 @@ def test_parallel_map_progress_callback(tmp_path):
 
     with patch("knowledge_base.extraction._llm_call", _mock_llm):
         chunks = _get_paper_chunks(conn, p)
-        _extract_map_reduce(
-            conn, p, chunks, on_progress=progress_calls.append, max_workers=2
-        )
+        _extract_map_reduce(conn, p, chunks, on_progress=progress_calls.append, max_workers=2)
 
     # Should have at least one progress call per chunk + resolve + store
     assert len(progress_calls) >= len(chunks)
@@ -1533,9 +1494,7 @@ def test_max_workers_clamped_to_chunk_count(tmp_path):
     """max_workers is clamped to the number of chunks (no idle threads)."""
     conn = _setup(tmp_path)
     md = tmp_path / "long.md"
-    md.write_text(
-        "\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20))
-    )
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20)))
     ingest_file(conn, md)
     p = register_paper(conn, "Clamp Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1557,9 +1516,7 @@ def test_max_workers_defaults_to_sequential(tmp_path):
     """Default max_workers=1 preserves sequential behavior."""
     conn = _setup(tmp_path)
     md = tmp_path / "long.md"
-    md.write_text(
-        "\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20))
-    )
+    md.write_text("\n".join(f"Section {i}: " + f"content-{i} " * 100 for i in range(20)))
     ingest_file(conn, md)
     p = register_paper(conn, "Seq Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1590,22 +1547,26 @@ class TestValidateExtractionSchemaIntegration:
     def test_map_extract_rejects_non_dict(self, tmp_path):
         _setup(tmp_path)
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps([{"name": "X"}]),
+        with (
+            patch(
+                "knowledge_base.extraction._llm_call",
+                return_value=json.dumps([{"name": "X"}]),
+            ),
+            pytest.raises(ValueError, match="expected dict"),
         ):
-            with pytest.raises(ValueError, match="expected dict"):
-                _map_extract(1, "text", 0, 1, cfg)
+            _map_extract(1, "text", 0, 1, cfg)
 
     def test_map_extract_rejects_methods_not_list(self, tmp_path):
         _setup(tmp_path)
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps({"methods": "BERT", "datasets": [], "metrics": []}),
+        with (
+            patch(
+                "knowledge_base.extraction._llm_call",
+                return_value=json.dumps({"methods": "BERT", "datasets": [], "metrics": []}),
+            ),
+            pytest.raises(ValueError, match="expected list"),
         ):
-            with pytest.raises(ValueError, match="expected list"):
-                _map_extract(1, "text", 0, 1, cfg)
+            _map_extract(1, "text", 0, 1, cfg)
 
     def test_map_extract_drops_non_dict_item(self, tmp_path):
         """Non-dict items in methods are silently dropped (permissive validation)."""
@@ -1613,9 +1574,7 @@ class TestValidateExtractionSchemaIntegration:
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
         with patch(
             "knowledge_base.extraction._llm_call",
-            return_value=json.dumps(
-                {"methods": ["BERT", {"name": "ok"}], "datasets": [], "metrics": []}
-            ),
+            return_value=json.dumps({"methods": ["BERT", {"name": "ok"}], "datasets": [], "metrics": []}),
         ):
             result = _map_extract(1, "text", 0, 1, cfg)
         assert len(result["methods"]) == 1
@@ -1637,9 +1596,7 @@ class TestValidateExtractionSchemaIntegration:
                 }
             ],
         }
-        with patch(
-            "knowledge_base.extraction._llm_call", return_value=json.dumps(valid)
-        ):
+        with patch("knowledge_base.extraction._llm_call", return_value=json.dumps(valid)):
             result = _map_extract(1, "text", 0, 1, cfg)
         assert len(result["methods"]) == 1
 
@@ -1649,9 +1606,7 @@ class TestValidateExtractionSchemaIntegration:
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
         with patch(
             "knowledge_base.extraction._llm_call",
-            return_value=json.dumps(
-                {"methods": [{"name": 42}], "datasets": [], "metrics": []}
-            ),
+            return_value=json.dumps({"methods": [{"name": 42}], "datasets": [], "metrics": []}),
         ):
             result = _map_extract(1, "text", 0, 1, cfg)
         assert len(result["methods"]) == 0
@@ -1660,12 +1615,14 @@ class TestValidateExtractionSchemaIntegration:
         conn = _setup(tmp_path)
         p = register_paper(conn, "P")["paper_id"]
         chunks = [{"id": 1, "content": "short text"}]
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps("just a string"),
+        with (
+            patch(
+                "knowledge_base.extraction._llm_call",
+                return_value=json.dumps("just a string"),
+            ),
+            pytest.raises(ExtractionError),
         ):
-            with pytest.raises(ExtractionError):
-                _extract_single_pass(conn, p, chunks)
+            _extract_single_pass(conn, p, chunks)
 
 
 class TestValidateResolutionSchemaIntegration:
@@ -1673,23 +1630,21 @@ class TestValidateResolutionSchemaIntegration:
 
     def test_resolve_rejects_non_dict(self, tmp_path):
         _setup(tmp_path)
-        map_results = [
-            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
-        ]
+        map_results = [{"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}]
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
-        with patch(
-            "knowledge_base.extraction._llm_call",
-            return_value=json.dumps([{"canonical": "X"}]),
+        with (
+            patch(
+                "knowledge_base.extraction._llm_call",
+                return_value=json.dumps([{"canonical": "X"}]),
+            ),
+            pytest.raises(ValueError, match="expected dict"),
         ):
-            with pytest.raises(ValueError, match="expected dict"):
-                _resolve_entities(map_results, cfg)
+            _resolve_entities(map_results, cfg)
 
     def test_resolve_drops_non_dict_group(self, tmp_path):
         """Non-dict groups are silently dropped."""
         _setup(tmp_path)
-        map_results = [
-            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
-        ]
+        map_results = [{"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}]
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
         with patch(
             "knowledge_base.extraction._llm_call",
@@ -1707,15 +1662,11 @@ class TestValidateResolutionSchemaIntegration:
 
     def test_resolve_accepts_valid(self, tmp_path):
         _setup(tmp_path)
-        map_results = [
-            {"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}
-        ]
+        map_results = [{"methods": [{"name": "X", "surface_forms": ["X"]}], "datasets": []}]
         cfg = {"provider": "ollama", "model": "t", "base_url": "http://localhost:11434"}
         with patch(
             "knowledge_base.extraction._llm_call",
-            return_value=json.dumps(
-                {"groups": [{"canonical": "X", "type": "method", "members": ["X"]}]}
-            ),
+            return_value=json.dumps({"groups": [{"canonical": "X", "type": "method", "members": ["X"]}]}),
         ):
             result = _resolve_entities(map_results, cfg)
         assert len(result["groups"]) == 1
@@ -1756,9 +1707,7 @@ class TestValidateExtraction:
         from knowledge_base.extraction import _validate_extraction
 
         with pytest.raises(ValueError, match="expected list"):
-            _validate_extraction(
-                {"methods": "not a list", "datasets": [], "metrics": []}
-            )
+            _validate_extraction({"methods": "not a list", "datasets": [], "metrics": []})
 
     def test_truncates_long_entity_name(self):
         from knowledge_base.extraction import _validate_extraction
@@ -1849,6 +1798,19 @@ class TestValidateExtraction:
         assert len(result["metrics"]) == 1
         assert result["metrics"][0]["metric"] == "f1"
 
+    @pytest.mark.parametrize("value", ["0.95", 95, 95.0], ids=["numeric-string", "int", "float"])
+    def test_metric_value_coerced_to_float(self, value):
+        from knowledge_base.extraction import _validate_extraction
+
+        data = {
+            "methods": [],
+            "datasets": [],
+            "metrics": [{"metric": "acc", "value": value}],
+        }
+        result = _validate_extraction(data)
+        assert len(result["metrics"]) == 1
+        assert isinstance(result["metrics"][0]["value"], float)
+
     def test_missing_keys_default_to_empty(self):
         from knowledge_base.extraction import _validate_extraction
 
@@ -1883,9 +1845,7 @@ class TestValidateExtraction:
         from knowledge_base.extraction import _validate_extraction, MAX_SURFACE_FORMS
 
         data = {
-            "methods": [
-                {"name": "CNN", "surface_forms": [f"alias{i}" for i in range(100)]}
-            ],
+            "methods": [{"name": "CNN", "surface_forms": [f"alias{i}" for i in range(100)]}],
             "datasets": [],
             "metrics": [],
         }
@@ -1899,11 +1859,7 @@ class TestValidateResolution:
     def test_valid_resolution_passes(self):
         from knowledge_base.extraction import _validate_resolution
 
-        data = {
-            "groups": [
-                {"canonical": "CNN", "type": "method", "members": ["CNN", "ConvNet"]}
-            ]
-        }
+        data = {"groups": [{"canonical": "CNN", "type": "method", "members": ["CNN", "ConvNet"]}]}
         result = _validate_resolution(data)
         assert len(result["groups"]) == 1
 
@@ -1916,9 +1872,7 @@ class TestValidateResolution:
     def test_drops_group_without_canonical(self):
         from knowledge_base.extraction import _validate_resolution
 
-        data = {
-            "groups": [{"members": ["a", "b"]}, {"canonical": "ok", "members": ["ok"]}]
-        }
+        data = {"groups": [{"members": ["a", "b"]}, {"canonical": "ok", "members": ["ok"]}]}
         result = _validate_resolution(data)
         assert len(result["groups"]) == 1
         assert result["groups"][0]["canonical"] == "ok"
@@ -1935,12 +1889,7 @@ class TestValidateResolution:
             _validate_resolution,
         )
 
-        data = {
-            "groups": [
-                {"canonical": f"e{i}", "type": "method", "members": [f"e{i}"]}
-                for i in range(200)
-            ]
-        }
+        data = {"groups": [{"canonical": f"e{i}", "type": "method", "members": [f"e{i}"]} for i in range(200)]}
         result = _validate_resolution(data)
         assert len(result["groups"]) <= MAX_RESOLUTION_GROUPS
 
@@ -1984,36 +1933,28 @@ class TestProvenanceColumn:
         conn = _setup(tmp_path)
         p = register_paper(conn, "Test")["paper_id"]
         record_method(conn, "Transformer", p)
-        row = conn.execute(
-            "SELECT source FROM methods WHERE paper_id = ?", (p,)
-        ).fetchone()
+        row = conn.execute("SELECT source FROM methods WHERE paper_id = ?", (p,)).fetchone()
         assert row["source"] == "user"
 
     def test_record_method_explicit_source(self, tmp_path):
         conn = _setup(tmp_path)
         p = register_paper(conn, "Test")["paper_id"]
         record_method(conn, "Transformer", p, source="llm_extraction")
-        row = conn.execute(
-            "SELECT source FROM methods WHERE paper_id = ?", (p,)
-        ).fetchone()
+        row = conn.execute("SELECT source FROM methods WHERE paper_id = ?", (p,)).fetchone()
         assert row["source"] == "llm_extraction"
 
     def test_record_dataset_default_source_is_user(self, tmp_path):
         conn = _setup(tmp_path)
         p = register_paper(conn, "Test")["paper_id"]
         record_dataset(conn, "MNIST", p)
-        row = conn.execute(
-            "SELECT source FROM datasets WHERE paper_id = ?", (p,)
-        ).fetchone()
+        row = conn.execute("SELECT source FROM datasets WHERE paper_id = ?", (p,)).fetchone()
         assert row["source"] == "user"
 
     def test_record_metric_default_source_is_user(self, tmp_path):
         conn = _setup(tmp_path)
         p = register_paper(conn, "Test")["paper_id"]
         record_metric(conn, "accuracy", 0.95, p)
-        row = conn.execute(
-            "SELECT source FROM metrics WHERE paper_id = ?", (p,)
-        ).fetchone()
+        row = conn.execute("SELECT source FROM metrics WHERE paper_id = ?", (p,)).fetchone()
         assert row["source"] == "user"
 
     def test_entities_table_has_source(self, tmp_path):
@@ -2024,9 +1965,7 @@ class TestProvenanceColumn:
             ("CNN", "method", p, "llm_extraction"),
         )
         conn.commit()
-        row = conn.execute(
-            "SELECT source FROM entities WHERE paper_id = ?", (p,)
-        ).fetchone()
+        row = conn.execute("SELECT source FROM entities WHERE paper_id = ?", (p,)).fetchone()
         assert row["source"] == "llm_extraction"
 
     def test_extract_single_pass_sets_llm_source(self, tmp_path):
@@ -2039,9 +1978,7 @@ class TestProvenanceColumn:
             ("Some research text about Transformers.", "test.pdf", "abc123", "pdf", 0),
         )
         chunk_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        conn.execute(
-            "INSERT INTO paper_paths (paper_id, path) VALUES (?, ?)", (p, "test.pdf")
-        )
+        conn.execute("INSERT INTO paper_paths (paper_id, path) VALUES (?, ?)", (p, "test.pdf"))
         conn.commit()
 
         llm_response = json.dumps(
@@ -2074,15 +2011,9 @@ class TestProvenanceColumn:
 
         # All stored entities should have source='llm_extraction'
         for table in ("methods", "datasets", "metrics"):
-            row = conn.execute(
-                f"SELECT source FROM {table} WHERE paper_id = ?", (p,)
-            ).fetchone()
+            row = conn.execute(f"SELECT source FROM {table} WHERE paper_id = ?", (p,)).fetchone()  # noqa: S608  # trusted internal identifier, not user input
             assert row is not None, f"No {table} row found"
-            assert row["source"] == "llm_extraction", (
-                f"{table} source should be llm_extraction"
-            )
+            assert row["source"] == "llm_extraction", f"{table} source should be llm_extraction"
 
-        entity_row = conn.execute(
-            "SELECT source FROM entities WHERE paper_id = ?", (p,)
-        ).fetchone()
+        entity_row = conn.execute("SELECT source FROM entities WHERE paper_id = ?", (p,)).fetchone()
         assert entity_row["source"] == "llm_extraction"

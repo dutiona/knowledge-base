@@ -42,9 +42,7 @@ def _mock_get_ok(*args, **kwargs):
 
 def test_llm_config_defaults(tmp_path):
     conn = _setup(tmp_path)
-    provider = conn.execute(
-        "SELECT value FROM config WHERE key = 'llm_provider'"
-    ).fetchone()
+    provider = conn.execute("SELECT value FROM config WHERE key = 'llm_provider'").fetchone()
     model = conn.execute("SELECT value FROM config WHERE key = 'llm_model'").fetchone()
     assert provider["value"] == "ollama"
     assert model["value"] == "qwen3.5:27b"
@@ -61,12 +59,8 @@ def test_get_llm_config_defaults(tmp_path):
 def test_get_llm_config_custom(tmp_path):
     conn = _setup(tmp_path)
     conn.execute("UPDATE config SET value = 'openai_compat' WHERE key = 'llm_provider'")
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', 'http://192.168.1.41:1234')"
-    )
-    conn.execute(
-        "UPDATE config SET value = 'qwen/qwen3.5-35b-a3b' WHERE key = 'llm_model'"
-    )
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', 'http://192.168.1.41:1234')")
+    conn.execute("UPDATE config SET value = 'qwen/qwen3.5-35b-a3b' WHERE key = 'llm_model'")
     conn.commit()
     cfg = _get_llm_config(conn)
     assert cfg["provider"] == "openai_compat"
@@ -100,9 +94,7 @@ def test_get_llm_config_strips_v1(tmp_path, input_url, expected):
 def test_get_llm_config_ollama_preserves_v1(tmp_path):
     """Ollama provider should NOT strip /v1 (proxy path-prefix scenario)."""
     conn = _setup(tmp_path)
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', 'http://proxy:8080/v1')"
-    )
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', 'http://proxy:8080/v1')")
     conn.commit()
     cfg = _get_llm_config(conn)
     assert cfg["provider"] == "ollama"
@@ -274,10 +266,7 @@ def test_configure_llm_connectivity_timeout(mock_get, tmp_path):
     conn = _setup(tmp_path)
     result = configure_llm(conn, provider="ollama", base_url="http://localhost:11434")
     assert result["reachable"] is False
-    assert (
-        "timed out" in result["warning"].lower()
-        or "timeout" in result["warning"].lower()
-    )
+    assert "timed out" in result["warning"].lower() or "timeout" in result["warning"].lower()
 
 
 def test_configure_llm_connectivity_server_error(tmp_path):
@@ -289,9 +278,7 @@ def test_configure_llm_connectivity_server_error(tmp_path):
 
     conn = _setup(tmp_path)
     with patch("knowledge_base.llm.httpx.get", _mock_get_500):
-        result = configure_llm(
-            conn, provider="ollama", base_url="http://localhost:11434"
-        )
+        result = configure_llm(conn, provider="ollama", base_url="http://localhost:11434")
     assert result["reachable"] is False
     assert "500" in result["warning"]
 
@@ -316,9 +303,7 @@ def test_configure_llm_connectivity_malformed_url(mock_get, tmp_path):
     """Unusual base_url: _sanitize_url doesn't crash, warning still works."""
     conn = _setup(tmp_path)
     # URL with valid scheme (passes validation) but unusual format
-    result = configure_llm(
-        conn, provider="ollama", base_url="http://user:pass@host:11434?token=secret"
-    )
+    result = configure_llm(conn, provider="ollama", base_url="http://user:pass@host:11434?token=secret")
     assert result["reachable"] is False
     assert "warning" in result
     # Verify URL sanitization: no query params or userinfo in warning
@@ -386,8 +371,7 @@ def test_configure_llm_connectivity_openai_fallback_auth(_mock_ip, tmp_path):
         ),
         # Reasoning + JSON inside think tags (qwen3.5 verbose thinking)
         (
-            "<think>\nLet me analyze this...\n"
-            '{"methods": [], "datasets": [], "metrics": []}\n</think>',
+            '<think>\nLet me analyze this...\n{"methods": [], "datasets": [], "metrics": []}\n</think>',
             '{"methods": [], "datasets": [], "metrics": []}',
         ),
         # <thinking> variant with JSON inside
@@ -465,9 +449,8 @@ def test_llm_call_empty_response_raises(tmp_path):
 
         return FakeResp()
 
-    with patch("knowledge_base.llm.httpx.post", _mock_post):
-        with pytest.raises(ValueError, match="empty response"):
-            _llm_call("test prompt", conn=conn)
+    with patch("knowledge_base.llm.httpx.post", _mock_post), pytest.raises(ValueError, match="empty response"):
+        _llm_call("test prompt", conn=conn)
 
 
 def test_llm_call_recovers_json_from_inside_think_tags(tmp_path):
@@ -483,10 +466,7 @@ def test_llm_call_recovers_json_from_inside_think_tags(tmp_path):
 
             def json(self):
                 return {
-                    "response": (
-                        "<think>\nLet me analyze this paper...\n"
-                        '{"methods": [{"name": "ResNet"}]}\n</think>'
-                    )
+                    "response": ('<think>\nLet me analyze this paper...\n{"methods": [{"name": "ResNet"}]}\n</think>')
                 }
 
         return FakeResp()
@@ -624,9 +604,7 @@ def test_ssrf_check_skipped_for_ollama(tmp_path):
 
     with patch("knowledge_base.llm.httpx.get", _mock_get_ok_local):
         # This should NOT raise despite localhost being a private IP
-        result = configure_llm(
-            conn, provider="ollama", base_url="http://localhost:11434"
-        )
+        result = configure_llm(conn, provider="ollama", base_url="http://localhost:11434")
     assert result["reachable"] is True
 
 

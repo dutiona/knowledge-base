@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import shutil
 from pathlib import Path
+from typing import cast
 
 import fitz
 import pymupdf4llm
@@ -41,7 +42,8 @@ def _extract_flat(path: Path) -> str:
 
 def _extract_markdown(path: Path) -> str:
     """pymupdf4llm extraction with pinned config."""
-    return pymupdf4llm.to_markdown(str(path), **_TO_MARKDOWN_KWARGS)
+    # page_chunks=False guarantees a single str (not a list of page dicts).
+    return cast(str, pymupdf4llm.to_markdown(str(path), **_TO_MARKDOWN_KWARGS))
 
 
 # ---------------------------------------------------------------------------
@@ -134,8 +136,7 @@ def _make_table_pdf(path: Path) -> Path:
             page.draw_rect(cell_rect, color=(0, 0, 0), width=0.5)
             # Insert text with padding
             text_rect = fitz.Rect(x + 4, y + 2, x + w - 4, y + row_height - 2)
-            fontsize = _FONT_BODY if row_idx > 0 else _FONT_BODY
-            page.insert_textbox(text_rect, cell_text, fontsize=fontsize)
+            page.insert_textbox(text_rect, cell_text, fontsize=_FONT_BODY)
             x += w
 
     doc.save(str(path))
@@ -156,9 +157,7 @@ def _make_image_pdf(path: Path, image_path: Path) -> Path:
     page.insert_image(img_rect, filename=str(image_path))
 
     rect = fitz.Rect(72, 360, 540, 400)
-    page.insert_textbox(
-        rect, "Figure 1: A test image for extraction evaluation.", fontsize=_FONT_BODY
-    )
+    page.insert_textbox(rect, "Figure 1: A test image for extraction evaluation.", fontsize=_FONT_BODY)
 
     doc.save(str(path))
     doc.close()
@@ -256,14 +255,11 @@ class TestMarkdownPreservesHeadings:
         # Markdown should contain heading markers
         heading_lines = [line for line in md.splitlines() if line.startswith("#")]
         assert len(heading_lines) > 0, (
-            f"Expected markdown heading markers, got none.\n"
-            f"First 500 chars of markdown:\n{md[:500]}"
+            f"Expected markdown heading markers, got none.\nFirst 500 chars of markdown:\n{md[:500]}"
         )
 
         # Flat text should NOT contain heading markers
-        flat_heading_lines = [
-            line for line in flat.splitlines() if line.startswith("#")
-        ]
+        flat_heading_lines = [line for line in flat.splitlines() if line.startswith("#")]
         assert len(flat_heading_lines) == 0
 
     def test_heading_hierarchy(self, tmp_path: Path) -> None:
@@ -278,9 +274,7 @@ class TestMarkdownPreservesHeadings:
         # If pymupdf4llm collapses all to same level, that's still acceptable
         # but worth noting. We assert at least headings exist.
         all_headings = h1_lines + h2_lines
-        assert len(all_headings) > 0, (
-            f"No heading hierarchy detected.\nMarkdown:\n{md[:1000]}"
-        )
+        assert len(all_headings) > 0, f"No heading hierarchy detected.\nMarkdown:\n{md[:1000]}"
 
 
 class TestMarkdownPreservesLists:
@@ -294,8 +288,7 @@ class TestMarkdownPreservesLists:
         list_pattern = re.compile(r"^\s*[-*\u2022]\s|^\s*\d+\.\s", re.MULTILINE)
         matches = list_pattern.findall(md)
         assert len(matches) > 0, (
-            f"Expected list markers in markdown output.\n"
-            f"Page 2 markdown:\n{md[len(md) // 2 :][:500]}"
+            f"Expected list markers in markdown output.\nPage 2 markdown:\n{md[len(md) // 2 :][:500]}"
         )
 
 
@@ -307,10 +300,9 @@ class TestMarkdownExtractsImageRefs:
         png_path = _create_test_png(tmp_path / "test_figure.png")
         pdf = _make_image_pdf(tmp_path / "with_image.pdf", png_path)
 
-        # Use write_images=True to see image references
-        md = pymupdf4llm.to_markdown(
-            str(pdf), write_images=True, image_path=str(tmp_path)
-        )
+        # Use write_images=True to see image references.
+        # page_chunks defaults to False, so to_markdown returns a single str.
+        md = cast(str, pymupdf4llm.to_markdown(str(pdf), write_images=True, image_path=str(tmp_path)))
 
         # Check for image reference syntax: ![...] or img tag
         has_img_ref = "![" in md or "<img" in md.lower()
@@ -367,9 +359,7 @@ class TestMarkdownTableExtraction:
         structural = has_pipe_table or has_html_table
         content = has_method_col and has_data
 
-        assert structural or content, (
-            f"Expected table structure in markdown output.\nMarkdown:\n{md[:1000]}"
-        )
+        assert structural or content, f"Expected table structure in markdown output.\nMarkdown:\n{md[:1000]}"
 
 
 class TestMarkdownMultiColumnOrder:
@@ -386,8 +376,7 @@ class TestMarkdownMultiColumnOrder:
         assert pos_b_start != -1, "COLUMN_B_START not found in markdown"
 
         assert pos_a_start < pos_b_start, (
-            f"pymupdf4llm reads Column B before Column A. "
-            f"Position A={pos_a_start}, B={pos_b_start}"
+            f"pymupdf4llm reads Column B before Column A. Position A={pos_a_start}, B={pos_b_start}"
         )
 
     def test_column_text_not_interleaved(self, tmp_path: Path) -> None:
@@ -403,8 +392,7 @@ class TestMarkdownMultiColumnOrder:
 
         # Column A should end before Column B starts (no interleaving)
         assert pos_a_end < pos_b_start, (
-            f"Column text appears interleaved. "
-            f"A_END at {pos_a_end}, B_START at {pos_b_start}"
+            f"Column text appears interleaved. A_END at {pos_a_end}, B_START at {pos_b_start}"
         )
 
 

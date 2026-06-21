@@ -58,9 +58,7 @@ def list_prediction_errors_tool(
         unresolved_only: Only show unresolved errors (default true).
     """
     conn = _get_conn()
-    return json.dumps(
-        _list_prediction_errors(conn, since=since, unresolved_only=unresolved_only)
-    )
+    return json.dumps(_list_prediction_errors(conn, since=since, unresolved_only=unresolved_only))
 
 
 @mcp.tool()

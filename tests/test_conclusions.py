@@ -1,5 +1,6 @@
 """Tests for conclusion recording, retrieval, supersession, and chains."""
 
+import contextlib
 import sqlite3
 from unittest.mock import patch
 
@@ -33,16 +34,12 @@ def _setup(tmp_path):
 
 def test_record_conclusion_basic(tmp_path):
     conn = _setup(tmp_path)
-    result = record_conclusion(
-        conn, "Transformers outperform RNNs on translation tasks", 0.9
-    )
+    result = record_conclusion(conn, "Transformers outperform RNNs on translation tasks", 0.9)
     assert "conclusion_id" in result
 
     conclusions = get_conclusions(conn)
     assert len(conclusions) == 1
-    assert (
-        conclusions[0]["claim"] == "Transformers outperform RNNs on translation tasks"
-    )
+    assert conclusions[0]["claim"] == "Transformers outperform RNNs on translation tasks"
     assert conclusions[0]["confidence"] == 0.9
 
 
@@ -55,9 +52,7 @@ def test_record_conclusion_with_evidence(tmp_path):
     ingest_file(conn, md)
     chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
 
-    result = record_conclusion(
-        conn, "Transformers improve BLEU", 0.95, [chunk_id], "Comparing Table 2 results"
-    )
+    result = record_conclusion(conn, "Transformers improve BLEU", 0.95, [chunk_id], "Comparing Table 2 results")
     assert "conclusion_id" in result
 
     conclusions = get_conclusions(conn)
@@ -179,10 +174,8 @@ def test_supersede_rolls_back_on_failure(tmp_path):
             return self._conn.execute(sql, params)
 
     proxy = _FailingUpdate(conn)
-    try:
-        supersede_conclusion(proxy, old_id, "Should be rolled back", 0.9)
-    except sqlite3.OperationalError:
-        pass
+    with contextlib.suppress(sqlite3.OperationalError):
+        supersede_conclusion(proxy, old_id, "Should be rolled back", 0.9)  # type: ignore[reportArgumentType]  # mock
 
     # The new conclusion must NOT have been persisted
     all_rows = conn.execute("SELECT * FROM conclusions").fetchall()
@@ -212,12 +205,8 @@ def test_supersede_rolls_back_on_validation_error(tmp_path):
 def test_conclusion_chain(tmp_path):
     conn = _setup(tmp_path)
     r1 = record_conclusion(conn, "V1: initial observation", 0.5)
-    r2 = supersede_conclusion(
-        conn, r1["conclusion_id"], "V2: refined with more data", 0.7
-    )
-    r3 = supersede_conclusion(
-        conn, r2["new_conclusion_id"], "V3: confirmed by replication", 0.95
-    )
+    r2 = supersede_conclusion(conn, r1["conclusion_id"], "V2: refined with more data", 0.7)
+    r3 = supersede_conclusion(conn, r2["new_conclusion_id"], "V3: confirmed by replication", 0.95)
 
     chain = get_conclusion_chain(conn, r1["conclusion_id"])
     assert len(chain) == 3

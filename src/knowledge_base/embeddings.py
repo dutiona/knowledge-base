@@ -44,7 +44,7 @@ def _get_ollama_url() -> str:
     if os.environ.get("WSL_DISTRO_NAME"):
         try:
             result = subprocess.run(
-                ["ip", "route", "show", "default"],
+                ["ip", "route", "show", "default"],  # noqa: S607  # trusted argv, no shell
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -55,8 +55,8 @@ def _get_ollama_url() -> str:
             if resp.status_code == 200:
                 _OLLAMA_URL = url
                 return _OLLAMA_URL
-        except Exception:
-            pass
+        except Exception as err:
+            logger.debug("WSL2 Ollama gateway probe failed, falling back to localhost: %s", err)
 
     # 3. Localhost (baremetal Linux or WSL2 fallback)
     _OLLAMA_URL = "http://localhost:11434"
@@ -71,9 +71,7 @@ def _l2_normalize(vec: list[float]) -> list[float]:
     """
     norm = math.sqrt(sum(x * x for x in vec))
     if norm == 0:
-        raise ZeroNormError(
-            "Zero-norm embedding vector — upstream model returned all zeros"
-        )
+        raise ZeroNormError("Zero-norm embedding vector — upstream model returned all zeros")
     return [x / norm for x in vec]
 
 
@@ -158,9 +156,7 @@ class OpenAIProvider:
     ) -> list[list[float] | None]:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            raise RuntimeError(
-                "OPENAI_API_KEY environment variable required for OpenAI embeddings"
-            )
+            raise RuntimeError("OPENAI_API_KEY environment variable required for OpenAI embeddings")
         results = []
         batch_size = 512  # OpenAI supports up to 2048, 512 balances throughput/memory
         for i in range(0, len(texts), batch_size):
@@ -178,7 +174,7 @@ class OpenAIProvider:
         texts: list[str],
         model: str,
         dimensions: int | None,
-    ) -> list[list[float] | None]:
+    ) -> list[list[float]]:
         body: dict = {"model": model, "input": texts}
         if dimensions is not None:
             body["dimensions"] = dimensions
@@ -237,8 +233,7 @@ class ONNXProvider:
                 import onnxruntime as ort
             except ImportError:
                 raise ImportError(
-                    "onnxruntime is required for ONNX embeddings. "
-                    "Install with: uv sync --group onnx"
+                    "onnxruntime is required for ONNX embeddings. Install with: uv sync --group onnx"
                 ) from None
             if not model_path:
                 raise RuntimeError(
@@ -275,10 +270,7 @@ def get_provider(name: str, *, allow_env_override: bool = True) -> EmbeddingProv
         return _provider_cache[resolved]
     cls = _PROVIDERS.get(resolved)
     if cls is None:
-        raise ValueError(
-            f"Unknown embedding provider '{resolved}'. "
-            f"Available: {', '.join(sorted(_PROVIDERS))}"
-        )
+        raise ValueError(f"Unknown embedding provider '{resolved}'. Available: {', '.join(sorted(_PROVIDERS))}")
     instance = cls()
     _provider_cache[resolved] = instance
     return instance
@@ -311,6 +303,4 @@ def embed_single(
     _provider_name: str = "ollama",
 ) -> list[float] | None:
     """Embed a single text using the named provider. Returns None for zero-norm."""
-    return embed(
-        [text], model=model, expected_dim=expected_dim, _provider_name=_provider_name
-    )[0]
+    return embed([text], model=model, expected_dim=expected_dim, _provider_name=_provider_name)[0]

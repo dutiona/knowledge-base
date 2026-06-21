@@ -79,9 +79,7 @@ def record_metric_tool(
         unit: Unit of measurement (e.g. '%', 'ms').
     """
     conn = _get_conn()
-    return json.dumps(
-        record_metric(conn, name, value, paper_id, method_id, dataset_id, unit)
-    )
+    return json.dumps(record_metric(conn, name, value, paper_id, method_id, dataset_id, unit))
 
 
 @mcp.tool()
@@ -135,7 +133,7 @@ def extract_structure_tool(
                 )
             )
         except ExtractionError as e:
-            result = {"error": str(e)}
+            result: dict[str, object] = {"error": str(e)}
             if e.errors:
                 result["errors"] = e.errors
             if e.raw:
@@ -151,11 +149,7 @@ def extract_structure_tool(
                 "warning": (
                     f"Extraction will take ~{wall_estimate // 60}min "
                     f"for {est['chunk_count']} chunks"
-                    + (
-                        f" ({effective_workers} workers)"
-                        if effective_workers > 1
-                        else ""
-                    )
+                    + (f" ({effective_workers} workers)" if effective_workers > 1 else "")
                 ),
                 "estimated_seconds": wall_estimate,
                 "chunk_count": est["chunk_count"],
@@ -214,9 +208,7 @@ def get_entities_tool(paper_id: int) -> str:
 
 
 @mcp.tool()
-def extract_figures_tool(
-    paper_id: int, pages: list[int] | None = None, confirmed: bool = False
-) -> str:
+def extract_figures_tool(paper_id: int, pages: list[int] | None = None, confirmed: bool = False) -> str:
     """Extract figures from a paper's PDF using a vision model.
 
     Renders candidate pages as images, sends them to the configured vision model,
@@ -285,9 +277,7 @@ def configure_vision_tool(
 
 
 @mcp.tool()
-def configure_omniparser_tool(
-    path: str | None = None, server_url: str | None = None
-) -> str:
+def configure_omniparser_tool(path: str | None = None, server_url: str | None = None) -> str:
     """Configure OmniParser for figure enrichment.
 
     OmniParser adds OCR text and icon detection to figure descriptions.

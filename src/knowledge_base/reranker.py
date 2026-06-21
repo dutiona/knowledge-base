@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -55,14 +56,10 @@ class ONNXReranker:
 
         # Tokenize all (query, candidate) pairs with padding/truncation.
         # encode_batch is faster than per-pair encode() calls.
-        encodings = tokenizer.encode_batch(
-            [(query, candidate) for candidate in candidates]
-        )
+        encodings = tokenizer.encode_batch([(query, candidate) for candidate in candidates])
 
         input_ids = np.array([enc.ids for enc in encodings], dtype=np.int64)
-        attention_mask = np.array(
-            [enc.attention_mask for enc in encodings], dtype=np.int64
-        )
+        attention_mask = np.array([enc.attention_mask for enc in encodings], dtype=np.int64)
 
         # Build feed dict — include token_type_ids if model expects them
         feed: dict[str, Any] = {
@@ -71,9 +68,7 @@ class ONNXReranker:
         }
         input_names = {inp.name for inp in session.get_inputs()}
         if "token_type_ids" in input_names:
-            feed["token_type_ids"] = np.array(
-                [enc.type_ids for enc in encodings], dtype=np.int64
-            )
+            feed["token_type_ids"] = np.array([enc.type_ids for enc in encodings], dtype=np.int64)
 
         outputs = session.run(None, feed)
 
@@ -96,16 +91,14 @@ class ONNXReranker:
                 import onnxruntime as ort
             except ImportError:
                 raise ImportError(
-                    "onnxruntime is required for ONNX reranking. "
-                    "Install with: uv sync --group reranker"
+                    "onnxruntime is required for ONNX reranking. Install with: uv sync --group reranker"
                 ) from None
 
             try:
                 from tokenizers import Tokenizer
             except ImportError:
                 raise ImportError(
-                    "tokenizers is required for ONNX reranking. "
-                    "Install with: uv sync --group reranker"
+                    "tokenizers is required for ONNX reranking. Install with: uv sync --group reranker"
                 ) from None
 
             if not model_path:
@@ -122,8 +115,8 @@ class ONNXReranker:
 
             session = ort.InferenceSession(model_path)
             tokenizer_file = tokenizer_path
-            if os.path.isdir(tokenizer_path):
-                tokenizer_file = os.path.join(tokenizer_path, "tokenizer.json")
+            if Path(tokenizer_path).is_dir():
+                tokenizer_file = str(Path(tokenizer_path) / "tokenizer.json")
             tokenizer = Tokenizer.from_file(tokenizer_file)
             # Enable padding and truncation so batched encode produces
             # rectangular arrays (candidates have different lengths).
@@ -152,9 +145,7 @@ _RERANKER_PROVIDERS: dict[str, type] = {
 _reranker_cache: dict[str, RerankerProvider] = {}
 
 
-def get_reranker(
-    name: str = "onnx", *, allow_env_override: bool = True
-) -> RerankerProvider:
+def get_reranker(name: str = "onnx", *, allow_env_override: bool = True) -> RerankerProvider:
     """Get a reranker provider by name.
 
     When *allow_env_override* is True (the default), ``RERANK_PROVIDER``
@@ -170,10 +161,7 @@ def get_reranker(
 
     cls = _RERANKER_PROVIDERS.get(resolved)
     if cls is None:
-        raise ValueError(
-            f"Unknown reranker provider '{resolved}'. "
-            f"Available: {', '.join(sorted(_RERANKER_PROVIDERS))}"
-        )
+        raise ValueError(f"Unknown reranker provider '{resolved}'. Available: {', '.join(sorted(_RERANKER_PROVIDERS))}")
     instance = cls()
     _reranker_cache[resolved] = instance
     return instance

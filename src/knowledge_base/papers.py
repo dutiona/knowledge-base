@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import sqlite3
@@ -52,8 +53,7 @@ def get_paper_source_uri(conn: sqlite3.Connection, paper_id: int) -> str | None:
 
     # Legacy fallback
     row = conn.execute(
-        "SELECT source_uri FROM chunks WHERE id = "
-        "(SELECT abstract_chunk_id FROM papers WHERE id = ?)",
+        "SELECT source_uri FROM chunks WHERE id = (SELECT abstract_chunk_id FROM papers WHERE id = ?)",
         (paper_id,),
     ).fetchone()
     return row["source_uri"] if row else None
@@ -79,10 +79,7 @@ def get_paper_chunks(
         query += " AND source_type != 'figure'"
     query += " ORDER BY chunk_index"
     chunks = conn.execute(query, (source_uri,)).fetchall()
-    return [
-        {"id": c["id"], "content": c["content"], "chunk_index": c["chunk_index"]}
-        for c in chunks
-    ]
+    return [{"id": c["id"], "content": c["content"], "chunk_index": c["chunk_index"]} for c in chunks]
 
 
 def relocate_paper(
@@ -100,8 +97,7 @@ def relocate_paper(
     new_path = Path(new_path).resolve().as_posix()
 
     current = conn.execute(
-        "SELECT id, path, content_hash FROM paper_paths "
-        "WHERE paper_id = ? AND is_primary = TRUE LIMIT 1",
+        "SELECT id, path, content_hash FROM paper_paths WHERE paper_id = ? AND is_primary = TRUE LIMIT 1",
         (paper_id,),
     ).fetchone()
     if not current:
@@ -118,9 +114,7 @@ def relocate_paper(
         (new_path, paper_id),
     ).fetchone()
     if conflict:
-        raise ValidationError(
-            f"Path already owned by paper {conflict['paper_id']}: {new_path}"
-        )
+        raise ValidationError(f"Path already owned by paper {conflict['paper_id']}: {new_path}")
 
     if content_hash is None:
         try:
@@ -181,8 +175,7 @@ def register_paper(
             abstract_chunk_id = row["id"]
 
     cursor = conn.execute(
-        "INSERT INTO papers (title, authors, year, venue, doi, bibtex, abstract_chunk_id)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO papers (title, authors, year, venue, doi, bibtex, abstract_chunk_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (title, authors_json, year, venue, doi, bibtex, abstract_chunk_id),
     )
 
@@ -192,19 +185,15 @@ def register_paper(
         file_hash = None
         p = Path(source_uri)
         if p.exists():
-            try:
+            # Hash is best-effort; paper is still registered if hashing fails
+            with contextlib.suppress(OSError):
                 file_hash = compute_file_hash(p)
-            except OSError:
-                pass  # Hash is best-effort; paper is still registered
 
         # Check if path is already owned by another paper
-        existing_path = conn.execute(
-            "SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)
-        ).fetchone()
+        existing_path = conn.execute("SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)).fetchone()
         if not existing_path:
             conn.execute(
-                "INSERT INTO paper_paths (paper_id, path, content_hash, is_primary) "
-                "VALUES (?, ?, ?, TRUE)",
+                "INSERT INTO paper_paths (paper_id, path, content_hash, is_primary) VALUES (?, ?, ?, TRUE)",
                 (cursor.lastrowid, source_uri, file_hash),
             )
         else:
@@ -271,9 +260,7 @@ def get_paper(
                 "target_paper_id": r["target_paper_id"],
                 "relation_type": r["relation_type"],
                 "confidence": r["confidence"],
-                "direction": "outgoing"
-                if r["source_paper_id"] == row["id"]
-                else "incoming",
+                "direction": "outgoing" if r["source_paper_id"] == row["id"] else "incoming",
                 "related_title": r["related_title"],
             }
             for r in rels
@@ -349,7 +336,7 @@ def get_relationships(
         params.append(relation_type)
 
     rows = conn.execute(
-        f"SELECT r.*, sp.title as source_title, tp.title as target_title"
+        f"SELECT r.*, sp.title as source_title, tp.title as target_title"  # noqa: S608  # trusted internal identifier, not user input
         " FROM relationships r"
         " JOIN papers sp ON r.source_paper_id = sp.id"
         " JOIN papers tp ON r.target_paper_id = tp.id"
@@ -370,9 +357,7 @@ def get_relationships(
             "evidence_chunk_id": r["evidence_chunk_id"],
         }
         if r["evidence_chunk_id"]:
-            chunk = conn.execute(
-                "SELECT content FROM chunks WHERE id = ?", (r["evidence_chunk_id"],)
-            ).fetchone()
+            chunk = conn.execute("SELECT content FROM chunks WHERE id = ?", (r["evidence_chunk_id"],)).fetchone()
             entry["evidence_content"] = chunk["content"] if chunk else None
         results.append(entry)
     return results
@@ -463,9 +448,7 @@ def suggest_relationships(
     for doi in found_dois:
         if doi == paper["doi"]:
             continue
-        match = conn.execute(
-            "SELECT id, title FROM papers WHERE doi = ?", (doi,)
-        ).fetchone()
+        match = conn.execute("SELECT id, title FROM papers WHERE doi = ?", (doi,)).fetchone()
         if match:
             if match["id"] not in existing_cites:
                 suggestions.append(
@@ -483,9 +466,7 @@ def suggest_relationships(
             unmatched.append({"doi": doi})
 
     # Strategy 2: Title word-ratio matching (skip stopwords and short words)
-    other_papers = conn.execute(
-        "SELECT id, title, authors, year FROM papers WHERE id != ?", (paper_id,)
-    ).fetchall()
+    other_papers = conn.execute("SELECT id, title, authors, year FROM papers WHERE id != ?", (paper_id,)).fetchall()
     text_words = set(re.findall(r"\b\w+\b", full_text.lower()))
     for other in other_papers:
         if other["id"] in suggested_ids or other["id"] in existing_cites:
@@ -494,9 +475,7 @@ def suggest_relationships(
         if len(title_words) < 3:
             continue
         # Only count meaningful words (skip stopwords and very short words)
-        meaningful = [
-            w for w in title_words if w.lower() not in _STOPWORDS and len(w) > 2
-        ]
+        meaningful = [w for w in title_words if w.lower() not in _STOPWORDS and len(w) > 2]
         if len(meaningful) < 2:
             continue
         matched_words = sum(1 for w in meaningful if w.lower() in text_words)

@@ -18,9 +18,14 @@ uv sync                          # install deps
 uv run knowledge-base            # start MCP server
 uv run pytest tests/ -q          # run all tests
 uv run pytest tests/test_X.py -v # run one test file
-ruff check src/ tests/           # lint
-ruff format src/ tests/          # format
+ruff check src/ tests/           # lint (strict select: E,F,W,B,SIM,UP,C4,PTH,RUF,S)
+ruff format src/ tests/          # format (120 cols)
+uv sync --all-groups             # install optional deps (browser, reranker, …) for type-check
+uv run basedpyright src/ tests/  # type-check (basedpyright; needs --all-groups synced)
 ```
+
+CI gates on all four (`ruff check`, `ruff format --check`, `pytest -m "not slow"`,
+`basedpyright`).
 
 ## Architecture
 

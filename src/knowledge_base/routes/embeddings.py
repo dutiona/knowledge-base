@@ -153,8 +153,7 @@ def promote_embed_space_tool(name: str) -> str:
         conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
         conn.commit()
         result["note"] = (
-            "All 'similar' relationships removed (embedding space changed). "
-            "Run scan_relationships() to recompute."
+            "All 'similar' relationships removed (embedding space changed). Run scan_relationships() to recompute."
         )
         return json.dumps(result)
     except ValueError as e:
@@ -308,18 +307,14 @@ def benchmark_spaces_tool(
             continue
 
         try:
-            comparison = batch_compare_spaces(
-                conn, baseline_name, space["name"], queries, top_k, mode="vec"
-            )
+            comparison = batch_compare_spaces(conn, baseline_name, space["name"], queries, top_k, mode="vec")
         except (ValueError, RuntimeError, ImportError, OSError) as e:
             results.append({"space": space["name"], "error": str(e)})
             continue
 
         # Storage estimate: bytes per vector = bytes_per_element * dim
         bpe = _BYTES_PER_ELEMENT.get(space.get("element_type", "float32"), 4)
-        baseline_bpe = _BYTES_PER_ELEMENT.get(
-            baseline.get("element_type", "float32"), 4
-        )
+        baseline_bpe = _BYTES_PER_ELEMENT.get(baseline.get("element_type", "float32"), 4)
         vec_bytes = bpe * space["dim"]
         baseline_vec_bytes = baseline_bpe * baseline["dim"]
         storage_ratio = vec_bytes / baseline_vec_bytes if baseline_vec_bytes else 1.0

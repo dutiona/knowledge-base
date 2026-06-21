@@ -62,22 +62,19 @@ def validate_base_url(url: str) -> None:
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
-        raise ValidationError(
-            f"Invalid URL scheme: {parsed.scheme!r}. Use http or https."
-        )
+        raise ValidationError(f"Invalid URL scheme: {parsed.scheme!r}. Use http or https.")
     if not parsed.hostname:
         raise ValidationError("URL must include a hostname.")
     if is_private_ip(parsed.hostname):
         raise ValidationError(
-            f"URL points to a private/reserved address ({parsed.hostname}). "
-            "Use a public IP or hostname."
+            f"URL points to a private/reserved address ({parsed.hostname}). Use a public IP or hostname."
         )
 
 
 def compute_file_hash(path: Path) -> str:
     """SHA-256 hex digest of file bytes."""
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with path.open("rb") as f:
         for block in iter(lambda: f.read(8192), b""):
             h.update(block)
     return h.hexdigest()
@@ -115,19 +112,172 @@ VALID_ELEMENT_TYPES: frozenset[str] = frozenset(ELEMENT_INSERT_EXPR.keys())
 # Not exhaustive: FTS5's porter stemmer handles morphological variants,
 # and BM25 naturally down-weights high-frequency terms.
 STOPWORDS: frozenset[str] = frozenset(
-    "a about above after again against all am an and any are aren't as at be "
-    "because been before being below between both but by can could did didn't "
-    "do does doesn't doing don't down during each few for from further get got "
-    "had has have having he her here hers herself him himself his how i if in "
-    "into is it its itself just let me more most my myself no nor not of off on "
-    "once only or other our ours ourselves out over own same she should so some "
-    "such than that the their theirs them themselves then there these they this "
-    "those through to too under until up very was we were what when where which "
-    "while who whom why will with would you your yours yourself yourselves "
-    "also use used using can't won't shall may might must need vs "
-    "best better good well many much several "
-    "won don doesn didn shouldn couldn wouldn isn aren hasn weren "
-    "via based".split()
+    [
+        "a",
+        "about",
+        "above",
+        "after",
+        "again",
+        "against",
+        "all",
+        "am",
+        "an",
+        "and",
+        "any",
+        "are",
+        "aren't",
+        "as",
+        "at",
+        "be",
+        "because",
+        "been",
+        "before",
+        "being",
+        "below",
+        "between",
+        "both",
+        "but",
+        "by",
+        "can",
+        "could",
+        "did",
+        "didn't",
+        "do",
+        "does",
+        "doesn't",
+        "doing",
+        "don't",
+        "down",
+        "during",
+        "each",
+        "few",
+        "for",
+        "from",
+        "further",
+        "get",
+        "got",
+        "had",
+        "has",
+        "have",
+        "having",
+        "he",
+        "her",
+        "here",
+        "hers",
+        "herself",
+        "him",
+        "himself",
+        "his",
+        "how",
+        "i",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "itself",
+        "just",
+        "let",
+        "me",
+        "more",
+        "most",
+        "my",
+        "myself",
+        "no",
+        "nor",
+        "not",
+        "of",
+        "off",
+        "on",
+        "once",
+        "only",
+        "or",
+        "other",
+        "our",
+        "ours",
+        "ourselves",
+        "out",
+        "over",
+        "own",
+        "same",
+        "she",
+        "should",
+        "so",
+        "some",
+        "such",
+        "than",
+        "that",
+        "the",
+        "their",
+        "theirs",
+        "them",
+        "themselves",
+        "then",
+        "there",
+        "these",
+        "they",
+        "this",
+        "those",
+        "through",
+        "to",
+        "too",
+        "under",
+        "until",
+        "up",
+        "very",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "while",
+        "who",
+        "whom",
+        "why",
+        "will",
+        "with",
+        "would",
+        "you",
+        "your",
+        "yours",
+        "yourself",
+        "yourselves",
+        "also",
+        "use",
+        "used",
+        "using",
+        "can't",
+        "won't",
+        "shall",
+        "may",
+        "might",
+        "must",
+        "need",
+        "vs",
+        "best",
+        "better",
+        "good",
+        "well",
+        "many",
+        "much",
+        "several",
+        "won",
+        "don",
+        "doesn",
+        "didn",
+        "shouldn",
+        "couldn",
+        "wouldn",
+        "isn",
+        "aren",
+        "hasn",
+        "weren",
+        "via",
+        "based",
+    ]
 )
 
 # Compact stopwords for title matching — only function words and prepositions.

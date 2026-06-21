@@ -33,9 +33,7 @@ def test_schema_creates_all_tables(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    tables = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    ).fetchall()
+    tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
     table_names = {row["name"] for row in tables}
 
     assert "chunks" in table_names
@@ -56,9 +54,7 @@ def test_fts_trigger(tmp_path):
     )
     conn.commit()
 
-    rows = conn.execute(
-        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'attention'"
-    ).fetchall()
+    rows = conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'attention'").fetchall()
     assert len(rows) == 1
 
 
@@ -131,9 +127,7 @@ def test_session_id_column_exists(tmp_path):
     )
     conn.commit()
 
-    rows = conn.execute(
-        "SELECT content_hash, session_id FROM chunks ORDER BY content_hash"
-    ).fetchall()
+    rows = conn.execute("SELECT content_hash, session_id FROM chunks ORDER BY content_hash").fetchall()
     assert rows[0]["session_id"] is None
     assert rows[1]["session_id"] == "sess-001"
 
@@ -202,7 +196,7 @@ def test_co_occurrence_pairs_min_sessions(tmp_path):
     # a.md and b.md share TWO sessions
     for sess in ("s1", "s2"):
         conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "  # noqa: S608  # trusted test literal (loop over fixed tuple), not user input
             f"VALUES ('a_{sess}', 'ca', 'note', '/tmp/a.md', 0, ?)",
             (sess,),
         )
@@ -212,7 +206,7 @@ def test_co_occurrence_pairs_min_sessions(tmp_path):
             (cid, sess),
         )
         conn.execute(
-            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, session_id) "  # noqa: S608  # trusted test literal (loop over fixed tuple), not user input
             f"VALUES ('b_{sess}', 'cb', 'note', '/tmp/b.md', 0, ?)",
             (sess,),
         )
@@ -227,9 +221,7 @@ def test_co_occurrence_pairs_min_sessions(tmp_path):
         "VALUES ('c_s1', 'cc', 'note', '/tmp/c.md', 0, 's1')"
     )
     cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.execute(
-        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)", (cid, "s1")
-    )
+    conn.execute("INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)", (cid, "s1"))
     conn.commit()
 
     # min_sessions=2 should only return a.md/b.md
@@ -274,9 +266,7 @@ def test_chunk_strategy_column_exists(tmp_path):
     )
     conn.commit()
 
-    row = conn.execute(
-        "SELECT chunk_strategy FROM chunks WHERE content_hash = 'cs_test'"
-    ).fetchone()
+    row = conn.execute("SELECT chunk_strategy FROM chunks WHERE content_hash = 'cs_test'").fetchone()
     assert row["chunk_strategy"] == "mechanical"
 
 
@@ -286,9 +276,7 @@ def test_chunk_strategy_config_default(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    row = conn.execute(
-        "SELECT value FROM config WHERE key = 'chunk_strategy'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
     assert row is not None
     assert row["value"] == "mechanical"
 
@@ -327,15 +315,11 @@ def test_chunk_strategy_migration(tmp_path):
     init_schema(conn)
 
     # Verify chunk_strategy column exists with default
-    row = conn.execute(
-        "SELECT chunk_strategy FROM chunks WHERE content_hash = 'old'"
-    ).fetchone()
+    row = conn.execute("SELECT chunk_strategy FROM chunks WHERE content_hash = 'old'").fetchone()
     assert row["chunk_strategy"] == "mechanical"
 
     # Config key also set
-    cfg = conn.execute(
-        "SELECT value FROM config WHERE key = 'chunk_strategy'"
-    ).fetchone()
+    cfg = conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
     assert cfg["value"] == "mechanical"
 
 
@@ -371,9 +355,7 @@ def test_migrate_session_id_on_existing_db(tmp_path):
     init_schema(conn)
 
     # Verify session_id column exists and old data preserved
-    row = conn.execute(
-        "SELECT session_id FROM chunks WHERE content_hash = 'old'"
-    ).fetchone()
+    row = conn.execute("SELECT session_id FROM chunks WHERE content_hash = 'old'").fetchone()
     assert row["session_id"] is None
 
     # Can now insert with session_id
@@ -391,9 +373,7 @@ def test_chunk_sessions_table_exists(tmp_path):
     init_schema(conn)
 
     # Table exists
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_sessions'"
-    ).fetchone()
+    row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_sessions'").fetchone()
     assert row is not None
 
     # Has correct columns
@@ -415,9 +395,7 @@ def test_chunk_sessions_table_exists(tmp_path):
         "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, 'sess-1')",
         (chunk_id,),
     )
-    count = conn.execute(
-        "SELECT COUNT(*) FROM chunk_sessions WHERE chunk_id = ?", (chunk_id,)
-    ).fetchone()[0]
+    count = conn.execute("SELECT COUNT(*) FROM chunk_sessions WHERE chunk_id = ?", (chunk_id,)).fetchone()[0]
     assert count == 1
 
 
@@ -463,17 +441,13 @@ def test_migrate_chunk_sessions_backfill(tmp_path):
     init_schema(conn)
 
     # Verify backfill: chunks with session_id should have entries
-    rows = conn.execute(
-        "SELECT chunk_id, session_id FROM chunk_sessions ORDER BY chunk_id"
-    ).fetchall()
+    rows = conn.execute("SELECT chunk_id, session_id FROM chunk_sessions ORDER BY chunk_id").fetchall()
     assert len(rows) == 2
     assert rows[0]["session_id"] == "sess-A"
     assert rows[1]["session_id"] == "sess-A"
 
     # Verify NULL session_id chunk was NOT backfilled
-    null_rows = conn.execute(
-        "SELECT * FROM chunk_sessions WHERE chunk_id = 3"
-    ).fetchall()
+    null_rows = conn.execute("SELECT * FROM chunk_sessions WHERE chunk_id = 3").fetchall()
     assert len(null_rows) == 0
 
 
@@ -495,12 +469,8 @@ def test_co_occurrence_pairs_uses_join_table(tmp_path):
     conn.commit()
 
     # Manually populate chunk_sessions (simulating the new write path)
-    conn.execute(
-        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (1, 'sess-X')"
-    )
-    conn.execute(
-        "INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (2, 'sess-X')"
-    )
+    conn.execute("INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (1, 'sess-X')")
+    conn.execute("INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (2, 'sess-X')")
     conn.commit()
 
     pairs = co_occurrence_pairs(conn)
@@ -533,9 +503,7 @@ def test_migrate_normalize_source_uri(tmp_path):
     _migrate_normalize_source_uri(conn)
     conn.commit()
 
-    chunk_uri = conn.execute(
-        "SELECT source_uri FROM chunks WHERE content_hash = 'h1'"
-    ).fetchone()
+    chunk_uri = conn.execute("SELECT source_uri FROM chunks WHERE content_hash = 'h1'").fetchone()
     assert chunk_uri["source_uri"] == "C:/Users/foo/papers/a.md"
 
     pp = conn.execute("SELECT path FROM paper_paths WHERE paper_id = 1").fetchone()
@@ -738,9 +706,7 @@ def _char_active_count(conn):
 
 
 def _char_space_count(conn, name):
-    return conn.execute(
-        "SELECT chunk_count FROM embed_spaces WHERE name = ?", (name,)
-    ).fetchone()["chunk_count"]
+    return conn.execute("SELECT chunk_count FROM embed_spaces WHERE name = ?", (name,)).fetchone()["chunk_count"]
 
 
 # --- #394 insert_chunk_vec chunk_count side-effect ---
@@ -769,9 +735,7 @@ def test_char_insert_chunk_vec_nonactive_table_leaves_active_unchanged(tmp_path)
 
     create_space(conn, "other", "model", DEFAULT_EMBED_DIM, "ollama")
     cid = _char_add_chunk(conn, "non-active vec", 0)
-    insert_chunk_vec(
-        conn, cid, [0.2] * DEFAULT_EMBED_DIM, table_name="chunks_vec_other"
-    )
+    insert_chunk_vec(conn, cid, [0.2] * DEFAULT_EMBED_DIM, table_name="chunks_vec_other")
     conn.commit()
 
     # Active space (default) chunk_count is untouched: status='active' gate.
@@ -815,9 +779,7 @@ def test_char_delete_chunk_vecs_empty_is_noop(tmp_path):
 
     assert _char_active_count(conn) == before
     # Row still present
-    row = conn.execute(
-        "SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (cid,)
-    ).fetchone()
+    row = conn.execute("SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (cid,)).fetchone()
     assert row is not None
 
 
@@ -845,9 +807,7 @@ def test_char_delete_chunk_vecs_counts_actual_rows_not_input_length(tmp_path):
     # Decremented by 2 (rows that actually existed), NOT by 4 (input length).
     assert _char_active_count(conn) == start - 2
     # The remaining embedded chunk is still present.
-    remaining = conn.execute(
-        "SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (with_vec[2],)
-    ).fetchone()
+    remaining = conn.execute("SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (with_vec[2],)).fetchone()
     assert remaining is not None
 
 
@@ -864,9 +824,7 @@ def test_char_delete_chunk_vecs_clamps_chunk_count_at_zero(tmp_path):
     assert _char_active_count(conn) == 3
 
     # Manually corrupt the registry so chunk_count (1) < actual rows (3).
-    conn.execute(
-        "UPDATE embed_spaces SET chunk_count = 1 WHERE table_name = 'chunks_vec'"
-    )
+    conn.execute("UPDATE embed_spaces SET chunk_count = 1 WHERE table_name = 'chunks_vec'")
     conn.commit()
 
     delete_chunk_vecs(conn, cids)  # actual_deleted == 3, but count was 1
@@ -902,9 +860,7 @@ def test_char_delete_chunk_vecs_explicit_nonactive_table(tmp_path):
     conn.commit()
 
     # Row gone from the explicit table.
-    row = conn.execute(
-        "SELECT chunk_id FROM [chunks_vec_expl] WHERE chunk_id = ?", (cid,)
-    ).fetchone()
+    row = conn.execute("SELECT chunk_id FROM [chunks_vec_expl] WHERE chunk_id = ?", (cid,)).fetchone()
     assert row is None
     # expl.chunk_count went 5 -> 4: the decrement matched by table_name with NO
     # status='active' filter (a status-gated delete would have left it at 5).
@@ -980,9 +936,7 @@ def test_char_delete_chunks_cascade_removes_chunk_vec_and_fts(tmp_path):
     conn.commit()
 
     # FTS sees the content before deletion.
-    pre = conn.execute(
-        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'attention'"
-    ).fetchall()
+    pre = conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'attention'").fetchall()
     assert len(pre) == 1
 
     n = delete_chunks_cascade(conn, [cid])
@@ -992,14 +946,9 @@ def test_char_delete_chunks_cascade_removes_chunk_vec_and_fts(tmp_path):
     # chunks row gone.
     assert conn.execute("SELECT 1 FROM chunks WHERE id = ?", (cid,)).fetchone() is None
     # vec row gone.
-    assert (
-        conn.execute("SELECT 1 FROM chunks_vec WHERE chunk_id = ?", (cid,)).fetchone()
-        is None
-    )
+    assert conn.execute("SELECT 1 FROM chunks_vec WHERE chunk_id = ?", (cid,)).fetchone() is None
     # FTS no longer matches — the AFTER DELETE trigger cleaned the index.
-    post = conn.execute(
-        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'attention'"
-    ).fetchall()
+    post = conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'attention'").fetchall()
     assert len(post) == 0
 
 
@@ -1124,22 +1073,15 @@ def test_char_migrate_source_type_figure_preserves_rows_and_accepts_figure(tmp_p
     )
     conn.commit()
     assert (
-        conn.execute(
-            "SELECT source_type FROM chunks WHERE content_hash = 'fig1'"
-        ).fetchone()["source_type"]
-        == "figure"
+        conn.execute("SELECT source_type FROM chunks WHERE content_hash = 'fig1'").fetchone()["source_type"] == "figure"
     )
 
     # The re-created INSERT trigger still mirrors content into the FTS index.
-    hit = conn.execute(
-        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'caption'"
-    ).fetchall()
+    hit = conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'caption'").fetchall()
     assert len(hit) == 1
     # And the legacy pre-migration content is also searchable (the rebuild
     # preserved the external-content FTS rows mapped by rowid=id).
-    legacy_hit = conn.execute(
-        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'attention'"
-    ).fetchall()
+    legacy_hit = conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'attention'").fetchall()
     assert len(legacy_hit) == 1
 
 
@@ -1237,31 +1179,19 @@ def test_char_migrate_relationship_types_accepts_similar_and_survives(tmp_path):
     init_schema(conn)
 
     # CHECK widened to include 'similar'.
-    rsql = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE name = 'relationships'"
-    ).fetchone()
+    rsql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'relationships'").fetchone()
     assert "'similar'" in rsql[0]
 
     # Pre-existing row survived with values intact.
-    pre = conn.execute(
-        "SELECT * FROM relationships WHERE relation_type = 'cites'"
-    ).fetchone()
+    pre = conn.execute("SELECT * FROM relationships WHERE relation_type = 'cites'").fetchone()
     assert pre["source_paper_id"] == 1
     assert pre["target_paper_id"] == 2
     assert pre["confidence"] == 0.7
 
     # 'similar' now accepted.
-    conn.execute(
-        "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) "
-        "VALUES (2, 1, 'similar')"
-    )
+    conn.execute("INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) VALUES (2, 1, 'similar')")
     conn.commit()
-    assert (
-        conn.execute(
-            "SELECT COUNT(*) FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()[0]
-        == 1
-    )
+    assert conn.execute("SELECT COUNT(*) FROM relationships WHERE relation_type = 'similar'").fetchone()[0] == 1
 
 
 # === [#395] _migrate_jobs_types ============================================
@@ -1307,9 +1237,7 @@ def test_char_migrate_jobs_types_accepts_auto_relate_and_rebuilds_index(tmp_path
     assert "'auto_relate'" in jsql[0]
 
     # Pre-existing job survived.
-    pre = conn.execute(
-        "SELECT * FROM jobs WHERE job_type = 'extract_structure'"
-    ).fetchone()
+    pre = conn.execute("SELECT * FROM jobs WHERE job_type = 'extract_structure'").fetchone()
     assert pre["paper_id"] == 1
     assert pre["status"] == "completed"
 
@@ -1322,12 +1250,7 @@ def test_char_migrate_jobs_types_accepts_auto_relate_and_rebuilds_index(tmp_path
     # 'auto_relate' accepted.
     conn.execute("INSERT INTO jobs (paper_id, job_type) VALUES (1, 'auto_relate')")
     conn.commit()
-    assert (
-        conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE job_type = 'auto_relate'"
-        ).fetchone()[0]
-        == 1
-    )
+    assert conn.execute("SELECT COUNT(*) FROM jobs WHERE job_type = 'auto_relate'").fetchone()[0] == 1
 
 
 # === [#395] _migrate_papers_fts (backfill guard contract) ==================
@@ -1354,12 +1277,7 @@ def test_char_migrate_papers_fts_count_guard_reflects_content_table(tmp_path):
     conn.commit()
 
     # The FTS index has no entries yet (MATCH finds nothing)...
-    assert (
-        conn.execute(
-            "SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'reinforcement'"
-        ).fetchall()
-        == []
-    )
+    assert conn.execute("SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'reinforcement'").fetchall() == []
     # ...but count(*) reflects the content table (papers), so it reads as 1.
     assert conn.execute("SELECT COUNT(*) FROM papers_fts").fetchone()[0] == 1
 
@@ -1368,12 +1286,7 @@ def test_char_migrate_papers_fts_count_guard_reflects_content_table(tmp_path):
 
     # Because count(*) > 0, the guard returned early: the backfill INSERT was
     # NOT executed, so the title remains unsearchable. (Dead-code backfill.)
-    assert (
-        conn.execute(
-            "SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'reinforcement'"
-        ).fetchall()
-        == []
-    )
+    assert conn.execute("SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'reinforcement'").fetchall() == []
 
     # Non-vacuous guard: prove the unsearchable result is the MIGRATION's failure,
     # not an unpopulatable index. A forced FTS rebuild DOES make the title
@@ -1381,12 +1294,7 @@ def test_char_migrate_papers_fts_count_guard_reflects_content_table(tmp_path):
     # buggy short-circuit from "the index simply cannot be populated here".
     conn.execute("INSERT INTO papers_fts(papers_fts) VALUES('rebuild')")
     conn.commit()
-    assert (
-        conn.execute(
-            "SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'reinforcement'"
-        ).fetchall()
-        != []
-    )
+    assert conn.execute("SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'reinforcement'").fetchall() != []
 
 
 def test_char_migrate_papers_fts_noop_guards_dont_raise(tmp_path):
@@ -1394,9 +1302,7 @@ def test_char_migrate_papers_fts_noop_guards_dont_raise(tmp_path):
     no-ops that do not raise."""
     # (1) papers_fts table absent -> first guard returns.
     conn = get_connection(tmp_path / "absent.db")
-    conn.executescript(
-        "CREATE TABLE papers (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL);"
-    )
+    conn.executescript("CREATE TABLE papers (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL);")
     conn.commit()
     _migrate_papers_fts(conn)  # no raise
 
@@ -1608,15 +1514,11 @@ def test_char_bootstrap_idempotent_second_call_is_noop(tmp_path):
 
     before = conn.execute("SELECT COUNT(*) FROM embed_spaces").fetchone()[0]
     assert before == 1
-    orig = dict(
-        conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
-    )
+    orig = dict(conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone())
 
     _bootstrap_embed_spaces(conn, DEFAULT_EMBED_DIM)
 
     after = conn.execute("SELECT COUNT(*) FROM embed_spaces").fetchone()[0]
     assert after == 1
-    now = dict(
-        conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
-    )
+    now = dict(conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone())
     assert now == orig

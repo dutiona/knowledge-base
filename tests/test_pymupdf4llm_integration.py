@@ -115,9 +115,7 @@ def _make_image_pdf(path: Path, image_path: Path) -> Path:
     page.insert_image(img_rect, filename=str(image_path))
 
     rect = fitz.Rect(72, 360, 540, 400)
-    page.insert_textbox(
-        rect, "Figure 1: A test image for extraction.", fontsize=_FONT_BODY
-    )
+    page.insert_textbox(rect, "Figure 1: A test image for extraction.", fontsize=_FONT_BODY)
 
     doc.save(str(path))
     doc.close()
@@ -136,9 +134,7 @@ def test_real_pdf_headings_extracted(tmp_path):
     text, page_map = _extract_pdf_markdown(pdf)
 
     headings = re.findall(r"^#{1,6} .+", text, re.MULTILINE)
-    assert len(headings) >= 1, (
-        f"Expected headings in markdown, got none. Text:\n{text[:500]}"
-    )
+    assert len(headings) >= 1, f"Expected headings in markdown, got none. Text:\n{text[:500]}"
     assert len(page_map) >= 2
 
 
@@ -146,13 +142,10 @@ def test_real_pdf_headings_extracted(tmp_path):
 def test_real_pdf_table_intact(tmp_path):
     """Real synthetic PDF with table -> pipe-delimited table in output."""
     pdf = _make_table_pdf(tmp_path / "table.pdf")
-    text, page_map = _extract_pdf_markdown(pdf)
+    text, _page_map = _extract_pdf_markdown(pdf)
 
     pipe_lines = [line for line in text.splitlines() if line.startswith("|")]
-    assert len(pipe_lines) >= 2, (
-        f"Expected pipe-delimited table rows, got {len(pipe_lines)}. "
-        f"Text:\n{text[:500]}"
-    )
+    assert len(pipe_lines) >= 2, f"Expected pipe-delimited table rows, got {len(pipe_lines)}. Text:\n{text[:500]}"
 
 
 @pytest.mark.slow
@@ -168,7 +161,7 @@ def test_real_pdf_image_refs(tmp_path):
     pdf = _make_image_pdf(tmp_path / "image.pdf", img_path)
     image_dir = tmp_path / "extracted_images"
 
-    text, page_map = _extract_pdf_markdown(pdf, image_dir=image_dir)
+    text, _page_map = _extract_pdf_markdown(pdf, image_dir=image_dir)
 
     # pymupdf4llm may or may not produce ![](…) refs depending on detection.
     # Check permissively: if refs are present, verify files exist.
@@ -183,9 +176,7 @@ def test_fallback_on_import_error(tmp_path):
     pdf = _make_structured_pdf(tmp_path / "fallback.pdf")
 
     saved = sys.modules.pop("pymupdf4llm", None)
-    saved_subs = {
-        k: sys.modules.pop(k) for k in list(sys.modules) if k.startswith("pymupdf4llm.")
-    }
+    saved_subs = {k: sys.modules.pop(k) for k in list(sys.modules) if k.startswith("pymupdf4llm.")}
     try:
         from unittest.mock import patch
 
@@ -206,7 +197,7 @@ def test_fallback_on_import_error(tmp_path):
 def test_page_provenance_correct(tmp_path):
     """Page map maps char offsets to correct page numbers."""
     pdf = _make_structured_pdf(tmp_path / "provenance.pdf")
-    text, page_map = _extract_pdf_markdown(pdf)
+    _text, page_map = _extract_pdf_markdown(pdf)
 
     assert len(page_map) >= 2
 

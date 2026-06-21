@@ -70,9 +70,7 @@ def test_tilde_expanded(monkeypatch: pytest.MonkeyPatch) -> None:
 # --- get_connection honors the resolved path (server path) ----------------------
 
 
-def test_get_connection_honors_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_get_connection_honors_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # The MCP server reaches the DB via get_connection() with no argument
     # (knowledge_base._conn._get_conn). Setting the env var must redirect it.
     target = tmp_path / "nested" / "server.db"  # parent does not exist yet
@@ -85,9 +83,7 @@ def test_get_connection_honors_env(
         conn.close()
 
 
-def test_get_connection_explicit_path_ignores_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_get_connection_explicit_path_ignores_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(DB_PATH_ENV_VAR, str(tmp_path / "env.db"))
     explicit = tmp_path / "explicit.db"
     conn = get_connection(explicit)
@@ -100,9 +96,7 @@ def test_get_connection_explicit_path_ignores_env(
 # --- MCP status() reports the resolved path, not the hardcoded default ----------
 
 
-def test_status_reports_env_db_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_status_reports_env_db_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import json
     import threading
 

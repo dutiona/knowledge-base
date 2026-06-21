@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import posixpath
 import sqlite3
@@ -13,7 +14,7 @@ from .db import (
     get_space_element_type,
     get_vec_table_name,
 )
-from .embed_swap import get_embed_config
+from .embed_swap import get_embed_config, get_space
 from .embeddings import embed_single, truncate_embedding
 from .exceptions import ValidationError
 from .keywords import build_fts_query, extract_keywords
@@ -24,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SearchResult:
+    """A single hybrid-search hit: a chunk plus its fusion/rerank score and provenance."""
+
     chunk_id: int
     content: str
     source_type: str
@@ -44,6 +47,11 @@ RRF_K = 60
 # Folder-boost defaults: multiply scores for chunks in semantically relevant folders
 FOLDER_BOOST_FACTOR = 1.15
 FOLDER_BOOST_TOP_N = 5
+
+# Folder boost: include folders whose distance is within this multiple of the
+# best folder's distance; fall back to this minimum distance when best is zero.
+FOLDER_BOOST_DISTANCE_THRESHOLD_MULTIPLIER = 2
+FOLDER_BOOST_MIN_DISTANCE = 1e-6
 
 # Over-fetch multiplier: fetch more candidates than top_k for RRF merge quality
 SEARCH_OVERFETCH_MULTIPLIER = 3
@@ -86,8 +94,7 @@ def _fts_search(
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT rowid, bm25(chunks_fts) AS score FROM chunks_fts"
-            " WHERE chunks_fts MATCH ? ORDER BY score LIMIT ?",
+            "SELECT rowid, bm25(chunks_fts) AS score FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY score LIMIT ?",
             (query, limit),
         ).fetchall()
     return [(row["rowid"], row["score"]) for row in rows]
@@ -104,8 +111,7 @@ def _vec_search(
     element_type = get_space_element_type(conn, vec_table)
     query_expr = ELEMENT_QUERY_EXPR[element_type]
     rows = conn.execute(
-        f"SELECT chunk_id, distance FROM [{vec_table}]"
-        f" WHERE embedding MATCH {query_expr} ORDER BY distance LIMIT ?",
+        f"SELECT chunk_id, distance FROM [{vec_table}] WHERE embedding MATCH {query_expr} ORDER BY distance LIMIT ?",  # noqa: S608  # trusted internal identifier, not user input
         (_serialize_f32(query_embedding), limit),
     ).fetchall()
     return [(row["chunk_id"], row["distance"]) for row in rows]
@@ -154,8 +160,7 @@ def _folder_boost(
 
     # Find top matching folders
     folder_rows = conn.execute(
-        "SELECT folder_path, distance FROM folder_summaries_vec"
-        " WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+        "SELECT folder_path, distance FROM folder_summaries_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
         (_serialize_f32(query_embedding), top_folders),
     ).fetchall()
     if not folder_rows:
@@ -163,7 +168,9 @@ def _folder_boost(
 
     # Use the top folder's distance as threshold — boost folders within 2x of best
     best_distance = folder_rows[0]["distance"]
-    threshold = best_distance * 2 if best_distance > 0 else 1e-6
+    threshold = (
+        best_distance * FOLDER_BOOST_DISTANCE_THRESHOLD_MULTIPLIER if best_distance > 0 else FOLDER_BOOST_MIN_DISTANCE
+    )
     boosted_folders = set()
     for row in folder_rows:
         if row["distance"] <= threshold:
@@ -173,9 +180,7 @@ def _folder_boost(
         return scores
 
     # Look up source_uri for each candidate chunk (batched for safety)
-    uri_rows = _batched_select(
-        conn, "SELECT id, source_uri FROM chunks WHERE id IN ({ph})", chunk_ids
-    )
+    uri_rows = _batched_select(conn, "SELECT id, source_uri FROM chunks WHERE id IN ({ph})", chunk_ids)
 
     boosted = dict(scores)
     for row in uri_rows:
@@ -189,13 +194,9 @@ def _folder_boost(
     return boosted
 
 
-def _fetch_chunk_contents(
-    conn: sqlite3.Connection, chunk_ids: list[int]
-) -> dict[int, str]:
+def _fetch_chunk_contents(conn: sqlite3.Connection, chunk_ids: list[int]) -> dict[int, str]:
     """Fetch content for chunk IDs. Returns {chunk_id: content} dict."""
-    rows = _batched_select(
-        conn, "SELECT id, content FROM chunks WHERE id IN ({ph})", chunk_ids
-    )
+    rows = _batched_select(conn, "SELECT id, content FROM chunks WHERE id IN ({ph})", chunk_ids)
     return {row["id"]: row["content"] for row in rows}
 
 
@@ -215,6 +216,7 @@ def search(
     Hybrid search over indexed chunks.
 
     Args:
+        conn: Open SQLite connection to the knowledge-base DB.
         query: Natural language search query.
         top_k: Number of results to return.
         source_type: Filter by source type (pdf, markdown, code, web, note, figure).
@@ -232,31 +234,27 @@ def search(
         rerank_top_n: Number of candidates to feed into the reranker.
             Larger values improve recall at the cost of latency.
 
+    Returns:
+        Up to ``top_k`` SearchResult hits ordered by descending fused (or
+        rerank) score. Empty when nothing matches.
+
     Raises:
         ValidationError: If mode, source_type, or chunk_strategy are invalid,
             or top_k is not in [1, MAX_TOP_K].
     """
     if mode not in VALID_MODES:
-        raise ValidationError(
-            f"mode must be one of {sorted(VALID_MODES)}, got {mode!r}"
-        )
+        raise ValidationError(f"mode must be one of {sorted(VALID_MODES)}, got {mode!r}")
     if top_k < 1 or top_k > MAX_TOP_K:
         raise ValidationError(f"top_k must be between 1 and {MAX_TOP_K}, got {top_k}")
     if source_type and source_type not in VALID_SOURCE_TYPES:
-        raise ValidationError(
-            f"source_type must be one of {sorted(VALID_SOURCE_TYPES)}, got {source_type!r}"
-        )
+        raise ValidationError(f"source_type must be one of {sorted(VALID_SOURCE_TYPES)}, got {source_type!r}")
     if chunk_strategy and chunk_strategy not in VALID_CHUNK_STRATEGIES:
-        raise ValidationError(
-            f"chunk_strategy must be one of {sorted(VALID_CHUNK_STRATEGIES)}, got {chunk_strategy!r}"
-        )
+        raise ValidationError(f"chunk_strategy must be one of {sorted(VALID_CHUNK_STRATEGIES)}, got {chunk_strategy!r}")
 
     fetch_limit = top_k * SEARCH_OVERFETCH_MULTIPLIER
 
     # Resolve space configuration — either specific space or active
     if space_name:
-        from .embed_swap import get_space
-
         space = get_space(conn, space_name)
         space_cfg = {
             "model": space["model"],
@@ -277,9 +275,7 @@ def search(
         skip_folder_boost = False
 
     # Strategy filtering: only apply when the caller explicitly requests it.
-    strategy_fetch_limit = (
-        fetch_limit * STRATEGY_OVERFETCH_MULTIPLIER if chunk_strategy else fetch_limit
-    )
+    strategy_fetch_limit = fetch_limit * STRATEGY_OVERFETCH_MULTIPLIER if chunk_strategy else fetch_limit
 
     fts_results: list[tuple[int, float]] = []
     vec_results: list[tuple[int, float]] = []
@@ -292,13 +288,9 @@ def search(
         else:
             fts_query = query
         if fts_query:
-            try:
-                fts_results = _fts_search(
-                    conn, fts_query, strategy_fetch_limit, chunk_strategy=chunk_strategy
-                )
-            except sqlite3.OperationalError:
-                # FTS query syntax error — skip FTS leg
-                pass
+            # FTS query syntax error — skip FTS leg
+            with contextlib.suppress(sqlite3.OperationalError):
+                fts_results = _fts_search(conn, fts_query, strategy_fetch_limit, chunk_strategy=chunk_strategy)
 
     if mode in ("hybrid", "vec"):
         # Use space-specific config for query embedding
@@ -319,17 +311,13 @@ def search(
                 _provider_name=space_cfg["provider"],
             )
         if query_embedding is not None:
-            vec_results = _vec_search(
-                conn, query_embedding, strategy_fetch_limit, table_name=vec_table
-            )
+            vec_results = _vec_search(conn, query_embedding, strategy_fetch_limit, table_name=vec_table)
 
     # --- chunk_strategy filter (pre-RRF) ---
     if chunk_strategy:
         # Filter both result sets by joining against chunks table (batched
         # to stay under SQLite's 999 variable limit for large candidate sets)
-        all_candidate_ids = list(
-            {cid for cid, _ in fts_results} | {cid for cid, _ in vec_results}
-        )
+        all_candidate_ids = list({cid for cid, _ in fts_results} | {cid for cid, _ in vec_results})
         if all_candidate_ids:
             valid_rows = _batched_select(
                 conn,
@@ -346,14 +334,10 @@ def search(
         merged = _rrf_merge(fts_results, vec_results)
         match_type = "hybrid"
     elif fts_results:
-        merged = [
-            (cid, 1.0 / (RRF_K + rank + 1)) for rank, (cid, _) in enumerate(fts_results)
-        ]
+        merged = [(cid, 1.0 / (RRF_K + rank + 1)) for rank, (cid, _) in enumerate(fts_results)]
         match_type = "fts"
     elif vec_results:
-        merged = [
-            (cid, 1.0 / (RRF_K + rank + 1)) for rank, (cid, _) in enumerate(vec_results)
-        ]
+        merged = [(cid, 1.0 / (RRF_K + rank + 1)) for rank, (cid, _) in enumerate(vec_results)]
         match_type = "vec"
     else:
         return []
@@ -364,11 +348,7 @@ def search(
     pre_boost_ids = [cid for cid, _ in merged[:boost_window]]
     score_map = dict(merged[:boost_window])
 
-    if (
-        mode in ("hybrid", "vec")
-        and query_embedding is not None
-        and not skip_folder_boost
-    ):
+    if mode in ("hybrid", "vec") and query_embedding is not None and not skip_folder_boost:
         score_map = _folder_boost(conn, query_embedding, pre_boost_ids, score_map)
 
     # Re-sort after boost and take top_k
@@ -388,8 +368,7 @@ def search(
             if (source_type or chunk_strategy) and pool_ids:
                 rows = _batched_select(
                     conn,
-                    "SELECT id, source_type, chunk_strategy"
-                    " FROM chunks WHERE id IN ({ph})",
+                    "SELECT id, source_type, chunk_strategy FROM chunks WHERE id IN ({ph})",
                     pool_ids,
                 )
                 valid_ids: set[int] = set()
@@ -399,9 +378,7 @@ def search(
                     if chunk_strategy and row["chunk_strategy"] != chunk_strategy:
                         continue
                     valid_ids.add(row["id"])
-                rerank_candidates = [(cid, s) for cid, s in ranked if cid in valid_ids][
-                    :rerank_top_n
-                ]
+                rerank_candidates = [(cid, s) for cid, s in ranked if cid in valid_ids][:rerank_top_n]
             else:
                 rerank_candidates = ranked[:rerank_top_n]
 
@@ -414,7 +391,7 @@ def search(
                     texts = [contents[cid] for cid in fetchable_cids]
                     rerank_scores = rerank_fn(query, texts)
                     # Replace RRF scores with reranker scores
-                    for cid, rs in zip(fetchable_cids, rerank_scores):
+                    for cid, rs in zip(fetchable_cids, rerank_scores, strict=True):
                         score_map[cid] = rs
                         reranked_ids.add(cid)
 
@@ -423,9 +400,7 @@ def search(
         except (ImportError, RuntimeError, ValueError, OSError):
             # Graceful degradation: if reranker fails (missing deps,
             # bad model path, inference error), fall back to RRF ordering.
-            logger.warning(
-                "Reranker failed, falling back to RRF ordering", exc_info=True
-            )
+            logger.warning("Reranker failed, falling back to RRF ordering", exc_info=True)
 
     chunk_ids = [cid for cid, _ in ranked[:top_k]]
     if not chunk_ids:
@@ -444,7 +419,7 @@ def search(
         params.append(chunk_strategy)
 
     rows = conn.execute(
-        f"SELECT id, content, source_type, source_uri, chunk_index"
+        f"SELECT id, content, source_type, source_uri, chunk_index"  # noqa: S608  # trusted internal identifier, not user input
         f" FROM chunks WHERE id IN ({placeholders}){type_filter}{strategy_filter}",
         params,
     ).fetchall()

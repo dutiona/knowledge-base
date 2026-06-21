@@ -20,19 +20,14 @@ def _bibtex_key(authors: list[str], year: int | None) -> str:
     if authors:
         name = authors[0]
         # Handle "Last, First" format
-        if "," in name:
-            surname = name.split(",")[0].strip()
-        else:
-            surname = name.split()[-1]
+        surname = name.split(",")[0].strip() if "," in name else name.split()[-1]
         surname = re.sub(r"[^a-zA-Z]", "", surname).lower()
     else:
         surname = "unknown"
     return f"{surname}{year or 'nd'}"
 
 
-def _unique_bibtex_key(
-    authors: list[str], year: int | None, used_keys: set[str]
-) -> str:
+def _unique_bibtex_key(authors: list[str], year: int | None, used_keys: set[str]) -> str:
     """Generate a collision-free BibTeX key, appending a/b/c... suffixes."""
     base = _bibtex_key(authors, year)
     if base not in used_keys:
@@ -61,9 +56,7 @@ def _extract_bibtex_keys(text: str) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def _generate_bibtex(
-    paper: dict, used_keys: set[str] | None = None, paper_id: int | None = None
-) -> str:
+def _generate_bibtex(paper: dict, used_keys: set[str] | None = None, paper_id: int | None = None) -> str:
     """Generate a BibTeX entry from paper metadata."""
     if used_keys is None:
         used_keys = set()
@@ -97,9 +90,7 @@ def _query_papers(
 ) -> list:
     """Query papers with optional filters. Shared by export and sync."""
     if paper_ids:
-        return _batched_select(
-            conn, "SELECT * FROM papers WHERE id IN ({ph})", paper_ids
-        )
+        return _batched_select(conn, "SELECT * FROM papers WHERE id IN ({ph})", paper_ids)
     if title_pattern:
         return conn.execute(
             "SELECT * FROM papers WHERE title LIKE ? ESCAPE '\\'",

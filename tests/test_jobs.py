@@ -123,6 +123,7 @@ def test_worker_processes_to_completion(tmp_path):
         worker.stop()
 
     job = get_job(conn, 1)
+    assert job is not None
     assert job["status"] == "completed"
     result = json.loads(job["result"])
     assert result["methods_added"] == 3
@@ -148,6 +149,7 @@ def test_worker_handles_failure(tmp_path):
         worker.stop()
 
     job = get_job(conn, 1)
+    assert job is not None
     assert job["status"] == "failed"
     assert "LLM down" in job["error"]
 
@@ -178,6 +180,7 @@ def test_progress_callback_updates_row(tmp_path):
         worker.stop()
 
     job = get_job(conn, 1)
+    assert job is not None
     assert job["status"] == "completed"
     # Last progress written should be "storing results..."
     assert job["progress"] == "storing results..."
@@ -233,6 +236,7 @@ def test_crash_recovery(tmp_path):
     conn.commit()
 
     job_before = get_job(conn, 1)
+    assert job_before is not None
     assert job_before["status"] == "running"
 
     fake_result = {"methods_added": 0}
@@ -248,6 +252,7 @@ def test_crash_recovery(tmp_path):
         worker.stop()
 
     job = get_job(conn, 1)
+    assert job is not None
     assert job["status"] == "completed"
 
 

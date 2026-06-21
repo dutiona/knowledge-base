@@ -87,15 +87,11 @@ def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path):
     md.write_text("Content to re-embed.\n")
     ingest_file(conn, md)
 
-    chunk_ids_before = [
-        r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()
-    ]
+    chunk_ids_before = [r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()]
 
     re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
-    chunk_ids_after = [
-        r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()
-    ]
+    chunk_ids_after = [r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()]
     assert chunk_ids_before == chunk_ids_after
 
 

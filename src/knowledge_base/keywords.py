@@ -54,11 +54,7 @@ def extract_keywords(query: str, *, max_keywords: int = 5) -> list[str]:
 
     # Filter stopwords; keep single-char tokens only if they appeared as
     # standalone uppercase words in the original query.
-    content_words = [
-        t
-        for t in tokens
-        if t not in _STOPWORDS and (len(t) > 1 or t in single_char_ids)
-    ]
+    content_words = [t for t in tokens if t not in _STOPWORDS and (len(t) > 1 or t in single_char_ids)]
 
     if not content_words:
         return []
@@ -71,8 +67,7 @@ def extract_keywords(query: str, *, max_keywords: int = 5) -> list[str]:
         if w not in first_pos:
             first_pos[w] = i
     scored = [
-        (word, count + (0.5 if "-" in word or "." in word else 0), first_pos[word])
-        for word, count in counts.items()
+        (word, count + (0.5 if "-" in word or "." in word else 0), first_pos[word]) for word, count in counts.items()
     ]
     scored.sort(key=lambda x: (-x[1], x[2]))
 

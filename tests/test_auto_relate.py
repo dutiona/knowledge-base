@@ -29,9 +29,7 @@ def conn(tmp_path):
     db_path = tmp_path / "test.db"
     c = get_connection(db_path)
     # Pre-set dim=2 before init_schema creates chunks_vec
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-    )
+    c.execute("CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     c.execute("INSERT INTO config (key, value) VALUES ('embed_model', 'test')")
     c.execute("INSERT INTO config (key, value) VALUES ('embed_dim', ?)", (str(_DIM),))
     c.commit()
@@ -56,8 +54,7 @@ def _add_chunk(conn, source_uri, content, chunk_index, embedding):
     """Insert chunk + embedding. Returns chunk_id."""
     h = hashlib.sha256(content.encode()).hexdigest()
     cursor = conn.execute(
-        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
-        "VALUES (?, ?, 'pdf', ?, ?)",
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) VALUES (?, ?, 'pdf', ?, ?)",
         (h, content, source_uri, chunk_index),
     )
     chunk_id = cursor.lastrowid
@@ -115,8 +112,7 @@ class TestSchemaMigrations:
         p1 = _make_paper(conn, "A")
         p2 = _make_paper(conn, "B")
         conn.execute(
-            "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) "
-            "VALUES (?, ?, 'similar')",
+            "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) VALUES (?, ?, 'similar')",
             (p1, p2),
         )
         conn.commit()
@@ -128,22 +124,14 @@ class TestSchemaMigrations:
 
     def test_auto_relate_job_type_accepted(self, conn):
         p = _make_paper(conn, "Paper")
-        conn.execute(
-            "INSERT INTO jobs (paper_id, job_type) VALUES (?, 'auto_relate')", (p,)
-        )
+        conn.execute("INSERT INTO jobs (paper_id, job_type) VALUES (?, 'auto_relate')", (p,))
         conn.commit()
-        row = conn.execute(
-            "SELECT job_type FROM jobs WHERE paper_id = ?", (p,)
-        ).fetchone()
+        row = conn.execute("SELECT job_type FROM jobs WHERE paper_id = ?", (p,)).fetchone()
         assert row["job_type"] == "auto_relate"
 
     def test_config_threshold_defaults(self, conn):
-        propose = conn.execute(
-            "SELECT value FROM config WHERE key = 'auto_relate_propose_threshold'"
-        ).fetchone()
-        accept = conn.execute(
-            "SELECT value FROM config WHERE key = 'auto_relate_accept_threshold'"
-        ).fetchone()
+        propose = conn.execute("SELECT value FROM config WHERE key = 'auto_relate_propose_threshold'").fetchone()
+        accept = conn.execute("SELECT value FROM config WHERE key = 'auto_relate_accept_threshold'").fetchone()
         assert propose is not None
         assert accept is not None
         assert float(propose["value"]) == pytest.approx(0.82)
@@ -154,17 +142,14 @@ class TestSchemaMigrations:
         c = get_connection(db_path)
         init_schema(c)
         p = _make_paper(c, "Paper")
-        c.execute(
-            "INSERT INTO jobs (paper_id, job_type) VALUES (?, 'auto_relate')", (p,)
-        )
+        c.execute("INSERT INTO jobs (paper_id, job_type) VALUES (?, 'auto_relate')", (p,))
         c.commit()
         init_schema(c)
         assert c.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
 
     def test_jobs_index_exists(self, conn):
         row = conn.execute(
-            "SELECT name FROM sqlite_master "
-            "WHERE type='index' AND name='idx_jobs_status_created'"
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_jobs_status_created'"
         ).fetchone()
         assert row is not None
 
@@ -192,9 +177,7 @@ class TestAutoRelate:
         result = auto_relate(conn, pa)
         assert result["relationships_created"] >= 1
 
-        row = conn.execute(
-            "SELECT * FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()
+        row = conn.execute("SELECT * FROM relationships WHERE relation_type = 'similar'").fetchone()
         assert row is not None
         assert {row["source_paper_id"], row["target_paper_id"]} == {pa, pb}
 
@@ -224,14 +207,10 @@ class TestAutoRelate:
         conn.commit()
 
         auto_relate(conn, pa)
-        count = conn.execute(
-            "SELECT count(*) FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()[0]
+        count = conn.execute("SELECT count(*) FROM relationships WHERE relation_type = 'similar'").fetchone()[0]
         assert count == 1  # still one edge, not duplicated
 
-        row = conn.execute(
-            "SELECT confidence FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()
+        row = conn.execute("SELECT confidence FROM relationships WHERE relation_type = 'similar'").fetchone()
         assert row["confidence"] != 0.5  # confidence was updated by recomputation
 
     def test_rethreshold_deletes_stale_edge(self, conn):
@@ -246,17 +225,12 @@ class TestAutoRelate:
         assert result["relationships_created"] >= 1
 
         # Raise threshold above any achievable score
-        conn.execute(
-            "UPDATE config SET value = '0.9999' "
-            "WHERE key = 'auto_relate_propose_threshold'"
-        )
+        conn.execute("UPDATE config SET value = '0.9999' WHERE key = 'auto_relate_propose_threshold'")
         conn.commit()
 
         # Re-run should delete the stale edge
         auto_relate(conn, pa)
-        count = conn.execute(
-            "SELECT count(*) FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()[0]
+        count = conn.execute("SELECT count(*) FROM relationships WHERE relation_type = 'similar'").fetchone()[0]
         assert count == 0
 
     def test_coexists_with_other_types(self, conn):
@@ -266,9 +240,7 @@ class TestAutoRelate:
         pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
 
         conn.execute(
-            "INSERT INTO relationships "
-            "(source_paper_id, target_paper_id, relation_type) "
-            "VALUES (?, ?, 'cites')",
+            "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) VALUES (?, ?, 'cites')",
             (pa, pb),
         )
         conn.commit()
@@ -276,18 +248,13 @@ class TestAutoRelate:
         result = auto_relate(conn, pa)
         assert result["relationships_created"] >= 1
 
-        similar = conn.execute(
-            "SELECT * FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()
+        similar = conn.execute("SELECT * FROM relationships WHERE relation_type = 'similar'").fetchone()
         assert similar is not None
 
     def test_respects_thresholds(self, conn):
         from knowledge_base.auto_relate import auto_relate
 
-        conn.execute(
-            "UPDATE config SET value = '0.999' "
-            "WHERE key = 'auto_relate_propose_threshold'"
-        )
+        conn.execute("UPDATE config SET value = '0.999' WHERE key = 'auto_relate_propose_threshold'")
         conn.commit()
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
@@ -306,8 +273,7 @@ class TestAutoRelate:
         auto_relate(conn, higher)
 
         row = conn.execute(
-            "SELECT source_paper_id, target_paper_id FROM relationships "
-            "WHERE relation_type = 'similar'"
+            "SELECT source_paper_id, target_paper_id FROM relationships WHERE relation_type = 'similar'"
         ).fetchone()
         assert row is not None
         assert row["source_paper_id"] < row["target_paper_id"]
@@ -320,10 +286,7 @@ class TestAutoRelate:
 
         auto_relate(conn, pa)
 
-        row = conn.execute(
-            "SELECT evidence_chunk_id FROM relationships "
-            "WHERE relation_type = 'similar'"
-        ).fetchone()
+        row = conn.execute("SELECT evidence_chunk_id FROM relationships WHERE relation_type = 'similar'").fetchone()
         assert row is not None
         assert row["evidence_chunk_id"] is not None
 
@@ -342,9 +305,7 @@ class TestAutoRelate:
 
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A, _VEC_A])
         # 3 similar + 1 orthogonal → top-3 avg should still exceed threshold
-        pb, _ = _paper_with_chunks(
-            conn, "B", "/tmp/b.pdf", [_VEC_B, _VEC_B, _VEC_B, _VEC_C]
-        )
+        _pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B, _VEC_B, _VEC_B, _VEC_C])
 
         result = auto_relate(conn, pa)
         assert result["relationships_created"] >= 1
@@ -359,9 +320,7 @@ class TestAutoRelate:
 
         auto_relate(conn, pa)
 
-        row = conn.execute(
-            "SELECT confidence FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()
+        row = conn.execute("SELECT confidence FROM relationships WHERE relation_type = 'similar'").fetchone()
         assert row is not None
         assert row["confidence"] >= 0.95
 
@@ -384,9 +343,7 @@ class TestAutoRelateFallback:
         result = auto_relate(conn, pa)
         assert result["relationships_created"] >= 1
 
-        row = conn.execute(
-            "SELECT * FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()
+        row = conn.execute("SELECT * FROM relationships WHERE relation_type = 'similar'").fetchone()
         assert row is not None
         assert {row["source_paper_id"], row["target_paper_id"]} == {pa, pb}
 
@@ -402,9 +359,7 @@ class TestAutoRelateFallback:
         result = auto_relate(conn, pa)
         assert result["relationships_created"] >= 1
 
-        row = conn.execute(
-            "SELECT * FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()
+        row = conn.execute("SELECT * FROM relationships WHERE relation_type = 'similar'").fetchone()
         assert row is not None
         assert {row["source_paper_id"], row["target_paper_id"]} == {pa, pb}
 
@@ -418,9 +373,7 @@ class TestAutoRelateFallback:
         result = auto_relate(conn, pa)
         assert result["relationships_created"] >= 1
 
-        row = conn.execute(
-            "SELECT * FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()
+        row = conn.execute("SELECT * FROM relationships WHERE relation_type = 'similar'").fetchone()
         assert row is not None
         assert {row["source_paper_id"], row["target_paper_id"]} == {pa, pb}
 
@@ -431,15 +384,13 @@ class TestAutoRelateFallback:
         # Paper A owns /tmp/shared.pdf via paper_paths
         pa, _ = _paper_with_chunks(conn, "A", "/tmp/shared.pdf", [_VEC_A])
         # Paper B also points to /tmp/shared.pdf but via abstract_chunk_id only
-        pb, _ = _paper_with_chunks_no_path(conn, "B", "/tmp/shared.pdf", [_VEC_B])
+        _pb, _ = _paper_with_chunks_no_path(conn, "B", "/tmp/shared.pdf", [_VEC_B])
 
         result = auto_relate(conn, pa)
         # Should NOT create a relationship — same underlying chunks
         assert result["relationships_created"] == 0
 
-        count = conn.execute(
-            "SELECT count(*) FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()[0]
+        count = conn.execute("SELECT count(*) FROM relationships WHERE relation_type = 'similar'").fetchone()[0]
         assert count == 0
 
 
@@ -500,8 +451,8 @@ class TestOnlyCompareHigher:
 
         from knowledge_base.jobs import submit_job
 
-        pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
-        pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
+        _pa, _ = _paper_with_chunks(conn, "A", "/tmp/a.pdf", [_VEC_A])
+        _pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
 
         calls = []
         original_submit = submit_job
@@ -600,9 +551,7 @@ class TestStaleCleanup:
 
         # Simulate what server.py reingest cleanup should do
         source_uri = "/tmp/a.pdf"
-        affected = conn.execute(
-            "SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)
-        ).fetchall()
+        affected = conn.execute("SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)).fetchall()
         for row in affected:
             pid = row["paper_id"]
             conn.execute(
@@ -612,9 +561,7 @@ class TestStaleCleanup:
             )
         conn.commit()
 
-        count = conn.execute(
-            "SELECT count(*) FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()[0]
+        count = conn.execute("SELECT count(*) FROM relationships WHERE relation_type = 'similar'").fetchone()[0]
         assert count == 0
 
     def test_reingest_preserves_non_similar(self, conn):
@@ -623,9 +570,7 @@ class TestStaleCleanup:
         pb, _ = _paper_with_chunks(conn, "B", "/tmp/b.pdf", [_VEC_B])
 
         conn.execute(
-            "INSERT INTO relationships "
-            "(source_paper_id, target_paper_id, relation_type) "
-            "VALUES (?, ?, 'cites')",
+            "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) VALUES (?, ?, 'cites')",
             (pa, pb),
         )
         lo, hi = min(pa, pb), max(pa, pb)
@@ -645,12 +590,8 @@ class TestStaleCleanup:
         )
         conn.commit()
 
-        cites = conn.execute(
-            "SELECT count(*) FROM relationships WHERE relation_type = 'cites'"
-        ).fetchone()[0]
-        similar = conn.execute(
-            "SELECT count(*) FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()[0]
+        cites = conn.execute("SELECT count(*) FROM relationships WHERE relation_type = 'cites'").fetchone()[0]
+        similar = conn.execute("SELECT count(*) FROM relationships WHERE relation_type = 'similar'").fetchone()[0]
         assert cites == 1
         assert similar == 0
 
@@ -668,9 +609,7 @@ class TestStaleCleanup:
                 (lo, hi),
             )
         conn.execute(
-            "INSERT INTO relationships "
-            "(source_paper_id, target_paper_id, relation_type) "
-            "VALUES (?, ?, 'cites')",
+            "INSERT INTO relationships (source_paper_id, target_paper_id, relation_type) VALUES (?, ?, 'cites')",
             (pa, pb),
         )
         conn.commit()
@@ -679,11 +618,7 @@ class TestStaleCleanup:
         conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
         conn.commit()
 
-        similar = conn.execute(
-            "SELECT count(*) FROM relationships WHERE relation_type = 'similar'"
-        ).fetchone()[0]
-        cites = conn.execute(
-            "SELECT count(*) FROM relationships WHERE relation_type = 'cites'"
-        ).fetchone()[0]
+        similar = conn.execute("SELECT count(*) FROM relationships WHERE relation_type = 'similar'").fetchone()[0]
+        cites = conn.execute("SELECT count(*) FROM relationships WHERE relation_type = 'cites'").fetchone()[0]
         assert similar == 0
         assert cites == 1  # preserved

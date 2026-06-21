@@ -19,3 +19,7 @@ jobs:
         run: uv run ruff format --check src/ tests/
       - name: Pytest (fast suite)
         run: uv run pytest -q -m "not slow"
+      - name: Sync all groups (type-check needs optional deps)
+        run: uv sync --all-groups
+      - name: Type-check (basedpyright)
+        run: uv run basedpyright src/ tests/

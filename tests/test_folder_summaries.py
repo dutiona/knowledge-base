@@ -18,12 +18,7 @@ def test_folder_summaries_table_exists(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    tables = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type IN ('table')"
-        ).fetchall()
-    }
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table')").fetchall()}
     assert "folder_summaries" in tables
     assert "folder_summaries_vec" in tables
 
@@ -42,9 +37,7 @@ def test_init_schema_idempotent_folder_summaries(tmp_path):
 
     init_schema(conn)  # should not raise or drop data
 
-    row = conn.execute(
-        "SELECT * FROM folder_summaries WHERE folder_path = '/test'"
-    ).fetchone()
+    row = conn.execute("SELECT * FROM folder_summaries WHERE folder_path = '/test'").fetchone()
     assert row is not None
     assert row["summary"] == "test summary"
 
@@ -55,9 +48,7 @@ def test_folder_summaries_columns(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    cols = {
-        row[1] for row in conn.execute("PRAGMA table_info(folder_summaries)").fetchall()
-    }
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(folder_summaries)").fetchall()}
     assert cols == {"folder_path", "summary", "content_hash", "updated_at"}
 
 
@@ -200,9 +191,7 @@ def test_search_folder_summaries_populated(tmp_path):
 
     bio_folder = tmp_path / "biology"
     bio_folder.mkdir()
-    (bio_folder / "cells.md").write_text(
-        "Cell biology studies the structure and function of living organisms.\n"
-    )
+    (bio_folder / "cells.md").write_text("Cell biology studies the structure and function of living organisms.\n")
     ingest_file(conn, bio_folder / "cells.md")
 
     assert conn.execute("SELECT count(*) FROM folder_summaries").fetchone()[0] == 2
@@ -223,13 +212,11 @@ def test_folder_boost_multiplies_scores(tmp_path):
 
     # Manually insert two chunks in different folders
     conn.execute(
-        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
-        " VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) VALUES (?, ?, ?, ?, ?)",
         ("h1", "attention content", "markdown", "/papers/ml/a.md", 0),
     )
     conn.execute(
-        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
-        " VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) VALUES (?, ?, ?, ?, ?)",
         ("h2", "biology content", "markdown", "/papers/bio/b.md", 0),
     )
     chunk_ids = [1, 2]
@@ -271,13 +258,11 @@ def test_folder_boost_zero_distance_does_not_boost_all(tmp_path):
 
     # Two chunks in different folders
     conn.execute(
-        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
-        " VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) VALUES (?, ?, ?, ?, ?)",
         ("h1", "ml content", "markdown", "/papers/ml/a.md", 0),
     )
     conn.execute(
-        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
-        " VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) VALUES (?, ?, ?, ?, ?)",
         ("h2", "bio content", "markdown", "/papers/bio/b.md", 0),
     )
 
@@ -399,8 +384,7 @@ def test_folder_hash_escapes_like_wildcards(tmp_path):
     # Hash must not change — folder_a's query should not pick up folder_b's chunks
     hash_after = compute_folder_hash(conn, str(folder_a))
     assert hash_before == hash_after, (
-        "Folder hash changed after adding unrelated folder — "
-        "_ in folder name is being treated as LIKE wildcard"
+        "Folder hash changed after adding unrelated folder — _ in folder name is being treated as LIKE wildcard"
     )
 
 
@@ -444,9 +428,7 @@ def test_source_uri_uses_forward_slashes(tmp_path):
     ingest_file(conn, folder / "a.md")
 
     row = conn.execute("SELECT source_uri FROM chunks LIMIT 1").fetchone()
-    assert "\\" not in row["source_uri"], (
-        f"source_uri contains backslashes: {row['source_uri']}"
-    )
+    assert "\\" not in row["source_uri"], f"source_uri contains backslashes: {row['source_uri']}"
     assert row["source_uri"] == (folder / "a.md").as_posix()
 
 
@@ -465,9 +447,7 @@ def test_folder_summary_path_uses_forward_slashes(tmp_path):
 
     row = conn.execute("SELECT folder_path FROM folder_summaries LIMIT 1").fetchone()
     assert row is not None
-    assert "\\" not in row["folder_path"], (
-        f"folder_path contains backslashes: {row['folder_path']}"
-    )
+    assert "\\" not in row["folder_path"], f"folder_path contains backslashes: {row['folder_path']}"
     assert row["folder_path"] == folder.as_posix()
 
 
@@ -479,17 +459,14 @@ def test_backslash_uris_break_folder_summary_matching(tmp_path):
 
     # Simulate a Windows-style backslash source_uri in the DB
     conn.execute(
-        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
-        " VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) VALUES (?, ?, ?, ?, ?)",
         ("h1", "some content", "markdown", "C:\\Users\\foo\\papers\\a.md", 0),
     )
     conn.commit()
 
     # Forward-slash LIKE query (what folder_summaries uses) should NOT match
     fwd_hash = compute_folder_hash(conn, "C:/Users/foo/papers")
-    assert fwd_hash == "", (
-        "Forward-slash folder query should not match backslash source_uri"
-    )
+    assert fwd_hash == "", "Forward-slash folder query should not match backslash source_uri"
 
     # Backslash LIKE query would match, but we never generate one —
     # the point is normalization at ingestion time prevents the mismatch

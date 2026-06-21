@@ -32,11 +32,53 @@ markers = [
     "slow: marks tests as slow (run with -m slow)",
 ]
 
+[tool.uv]
+# Security floors for transitive deps flagged by super-qa #439 (infra/supply-chain-cves).
+# Bumped to the current latest-secure releases; keeps future resolves from regressing
+# below the known-CVE patch thresholds. (`pip` is N/A — this is a uv-managed project.)
+constraint-dependencies = [
+    "idna>=3.18",
+    "pygments>=2.20.0",
+    "urllib3>=2.7.0",
+    "requests>=2.34.2",
+    "certifi>=2026.6.17",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# super-qa #439 (infra/build-no-tool-config): a real select replacing ruff defaults.
+# E/F/W pycodestyle+pyflakes, B bugbear, SIM simplify, UP pyupgrade, C4 comprehensions,
+# PTH pathlib, RUF ruff-specific, S bandit security.
+select = ["E", "F", "W", "B", "SIM", "UP", "C4", "PTH", "RUF", "S"]
+ignore = [
+    # The codebase intentionally uses Unicode prose (em dashes, arrows) in comments,
+    # docstrings, and strings; ambiguous-character lints are noise here.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately use assert, dummy credentials, temp paths, try/except/pass
+# scaffolding, non-crypto randomness, bind-all hosts, and `assert False`.
+"tests/**" = ["S101", "S105", "S106", "S108", "S110", "S311", "S104", "B011"]
+
+[tool.pyright]
+# super-qa #439 (infra/build-no-tool-config): static type-check gate (basedpyright).
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+reportMissingImports = true
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.15.5",
+    "basedpyright>=1.21",
 ]
 docs = [
     "sphinx>=8.0",
@@ -50,3 +92,7 @@ reranker = [
     "onnxruntime>=1.16",
     "tokenizers>=0.15",
 ]
+# Browser-rendering backend for src/knowledge_base/browser/render_page.py. Previously
+# an undeclared runtime import; declared here so the type-checker resolves it and the
+# optional feature is installable via `uv sync --group browser`.
+browser = ["playwright>=1.40"]
