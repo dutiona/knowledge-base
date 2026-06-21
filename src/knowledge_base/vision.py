@@ -292,6 +292,10 @@ def _check_omniparser_server(base_url: str, *, require_models: bool = False) -> 
         if resp.status_code != 200:
             return False
         data = resp.json()
+        if not isinstance(data, dict):
+            # A foreign service on the same port may return 200 with a non-object
+            # JSON body (array/string/number) — that is not our server.
+            return False
         if data.get("status") != "omniparser":
             return False
         return not (require_models and not data.get("models_loaded"))

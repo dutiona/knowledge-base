@@ -3684,6 +3684,19 @@ class TestOmniParserServerHealth:
         with patch("knowledge_base.vision.httpx.get", return_value=mock_resp):
             assert _check_omniparser_server("http://127.0.0.1:7862") is False
 
+    @pytest.mark.parametrize("body", [["ok"], "ok", 1, None])
+    def test_foreign_service_non_dict_json(self, body):
+        # A foreign service on the same port may return 200 with a non-object
+        # JSON body — this must read as "not our server" (False), not raise.
+        from knowledge_base.vision import _check_omniparser_server
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = body
+
+        with patch("knowledge_base.vision.httpx.get", return_value=mock_resp):
+            assert _check_omniparser_server("http://127.0.0.1:7862") is False
+
 
 class TestOmniParserHTTP:
     """Tests for _run_omniparser_http client."""
