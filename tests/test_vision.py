@@ -3966,3 +3966,56 @@ class TestOmniParserAutoStart:
 
         mock_proc.terminate.assert_called_once()
         mock_proc.wait.assert_called_once()
+
+
+def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
+    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    return [[0.1] * dim for _ in texts]
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_persist_figures_chunk_count_matches_per_row(vision_conn):
+    """#392: _persist_figures batches the chunk_count bump across N figures.
+
+    The active-space chunk_count must equal the number of figure chunks that
+    actually embedded, and the actual vec-table row count — identical to the old
+    per-row path that fired one UPDATE per figure.
+    """
+    from knowledge_base.vision import CaptionMap, _persist_figures
+
+    conn = vision_conn
+    page_results = {
+        0: [
+            {
+                "description": "A bar chart of model accuracy.",
+                "figure_type": "chart",
+                "title": "Accuracy",
+                "entities_mentioned": [],
+            },
+            {
+                "description": "A line plot of training loss.",
+                "figure_type": "chart",
+                "title": "Loss",
+                "entities_mentioned": [],
+            },
+        ]
+    }
+    caption_map = CaptionMap(by_image={}, by_page={})
+
+    start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+
+    created = _persist_figures(
+        conn,
+        source_uri="/tmp/paper.pdf",
+        pages=None,
+        page_results=page_results,
+        caption_map=caption_map,
+        model="llava",
+        on_progress=None,
+    )
+    assert created == 2
+
+    active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+    assert active == start + created
+    vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+    assert active == vec_rows

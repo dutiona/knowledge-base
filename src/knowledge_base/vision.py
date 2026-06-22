@@ -27,7 +27,7 @@ import httpx
 from PIL import Image
 
 from .embeddings import _get_ollama_url
-from .db import delete_chunks_cascade, get_vec_table_name
+from .db import bump_chunk_count, delete_chunks_cascade, get_vec_table_name
 from .exceptions import NotFoundError, ValidationError
 from .ingest import (
     _content_hash,
@@ -1927,8 +1927,13 @@ def _persist_figures(
         fig_chunk_subquery = "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')"
         fig_delete_params = (source_uri,)
 
+    # Resolve the active vec table once (already done here) and bump chunk_count
+    # in a single batched UPDATE after the loop instead of per-row (#392).
+    # _insert_chunk runs with bump_count=False; only figures that actually embed
+    # (embeddings[i] is not None) increment the count, matching the per-row path.
     vec_table = get_vec_table_name(conn)
     chunks_created = 0
+    n_inserted = 0
     try:
         fig_chunk_ids = [r["id"] for r in conn.execute(fig_chunk_subquery[1:-1], fig_delete_params).fetchall()]
         _cleanup_figure_fk_refs(conn, fig_chunk_ids)
@@ -1993,8 +1998,14 @@ def _persist_figures(
                     embedding=embeddings[i],
                     metadata=metadata,
                     vec_table=vec_table,
+                    bump_count=False,
                 )
                 chunks_created += 1
+                if embeddings[i] is not None:
+                    n_inserted += 1
+
+        if n_inserted:
+            bump_chunk_count(conn, vec_table, n_inserted)
 
         conn.commit()
     except Exception:

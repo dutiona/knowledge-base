@@ -893,6 +893,43 @@ def test_ingest_url_basic(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_url_multichunk_chunk_count_matches_per_row(tmp_path):
+    """#392: the batched chunk_count bump on the web-text path must equal the per-row result.
+
+    Ingesting a multi-chunk web page now fires ONE bump_chunk_count(delta=N) instead
+    of N per-row UPDATEs. The active-space chunk_count must end up identical to N
+    per-row ``chunk_count + 1`` bumps, and equal to the actual vec-table row count.
+    """
+    # A long article body that mechanically chunks into several pieces (size 1000).
+    long_body = " ".join(f"paragraph{i} about transformers and attention" for i in range(400))
+    long_html = f"<html><head><title>Long Page</title></head><body><article><p>{long_body}</p></article></body></html>"
+
+    def _mock_long_get(url, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.text = long_html
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+
+    with patch("knowledge_base.web.httpx.get", _mock_long_get):
+        result = ingest_url(conn, "https://example.com/long")
+    added = result["chunks_added"]
+    assert added > 1, "fixture must produce multiple web-text chunks to exercise the batched bump"
+
+    active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+    assert active == start + added
+    # Registry counter equals the real vec-table row count: batched bump did not drift.
+    vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+    assert active == vec_rows
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.web.httpx.get", _mock_httpx_get)
 def test_ingest_url_dedup(tmp_path):
     db_path = tmp_path / "test.db"
@@ -1630,6 +1667,37 @@ def test_extract_web_figures_dedup(mock_vision_cfg, mock_vision_call, tmp_path):
     assert total == 1
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+def test_extract_web_figures_chunk_count_matches_per_row(mock_vision_cfg, mock_vision_call, tmp_path):
+    """#392: _extract_web_figures batches the chunk_count bump across N screenshot figures."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    mock_vision_cfg.return_value = {"base_url": "http://localhost:11434", "model": "llava"}
+    # Two distinct figures from one screenshot (multi-figure list disables single-figure
+    # OmniParser enrichment) → exercises the batched bump with N == 2.
+    mock_vision_call.return_value = [
+        {"description": "A bar chart of accuracy.", "figure_type": "chart", "title": "Accuracy"},
+        {"description": "A line plot of loss.", "figure_type": "chart", "title": "Loss"},
+    ]
+
+    screenshot = tmp_path / "screenshot.png"
+    screenshot.write_bytes(b"\x89PNG\r\n\x1a\nFAKE")
+
+    start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+
+    count = _extract_web_figures(conn, "https://example.com/page", screenshot)
+    assert count == 2
+
+    active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+    assert active == start + count
+    vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+    assert active == vec_rows
+
+
 # ---------------------------------------------------------------------------
 # _extract_html_images tests (issue #82)
 # ---------------------------------------------------------------------------
@@ -2036,6 +2104,46 @@ def test_extract_html_images_multiple(mock_stream, _mock_ip, mock_vision_cfg, mo
     )
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 3
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+@patch("knowledge_base.web.is_private_ip", return_value=False)
+@patch("knowledge_base.web.httpx.stream")
+def test_extract_html_images_chunk_count_matches_per_row(
+    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+):
+    """#392: _extract_html_images batches the chunk_count bump (one per N figures).
+
+    The active-space chunk_count must equal the number of figure chunks inserted
+    and the actual vec-table row count — identical to the old per-row path.
+    """
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    mock_vision_cfg.return_value = _VISION_CFG
+    mock_vision_call.side_effect = [
+        [{"description": f"Figure {i} description.", "figure_type": "diagram", "title": f"Fig {i}"}] for i in range(3)
+    ]
+    png_bytes = _make_test_png()
+    mock_stream.side_effect = [_mock_image_stream(png_bytes) for _ in range(3)]
+
+    start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+
+    html = (
+        "<html><body>"
+        '<img src="https://example.com/fig1.png">'
+        '<img src="https://example.com/fig2.png">'
+        '<img src="https://example.com/fig3.png">'
+        "</body></html>"
+    )
+    count = _extract_html_images(conn, html, "https://example.com/page")
+    assert count == 3
+
+    active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+    assert active == start + count
+    vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+    assert active == vec_rows
 
 
 # --- Filtering ---
@@ -3728,6 +3836,37 @@ class TestElementCapture:
         assert meta["figure_type"] == "chart"
         assert meta["element_tag"] == "canvas"
         assert "D3.js bar chart" in row["content"]
+
+    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
+    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @patch("knowledge_base.vision._vision_call")
+    @patch("knowledge_base.vision._get_vision_config")
+    def test_extract_element_captures_chunk_count_matches_per_row(self, mock_vision_cfg, mock_vision_call, tmp_path):
+        """#392: _extract_element_captures batches the chunk_count bump across N captures."""
+        mock_vision_cfg.return_value = {"base_url": "http://localhost:11434", "model": "gemma3:27b"}
+        # One vision call per capture; distinct descriptions to avoid content-hash dedup.
+        mock_vision_call.side_effect = [
+            [{"description": f"Element {i} chart.", "figure_type": "chart", "title": f"E{i}"}] for i in range(2)
+        ]
+
+        conn = get_connection(tmp_path / "test.db")
+        init_schema(conn)
+        captures = []
+        for i in range(2):
+            p = tmp_path / f"element_{i}.png"
+            p.write_bytes(_make_test_png(400, 300))
+            captures.append({"path": p, "tag": "canvas", "width": 400, "height": 300})
+
+        from knowledge_base.web import _extract_element_captures
+
+        start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+        count = _extract_element_captures(conn, "https://example.com/dashboard", captures)
+        assert count == 2
+
+        active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+        assert active == start + count
+        vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+        assert active == vec_rows
 
     @patch("knowledge_base.folder_summaries.embed", _fake_embed)
     @patch("knowledge_base.ingest.embed", _fake_embed)
