@@ -124,6 +124,39 @@ def test_ingest_dedup(tmp_path):
     assert r2["chunks_skipped"] == 1
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_multichunk_doc_chunk_count_matches_per_row(tmp_path):
+    """#392: batched chunk_count bump must equal the per-row result.
+
+    Ingesting an N-chunk document fires ONE db.bump_chunk_count(delta=N) instead
+    of N per-row UPDATEs. The resulting embed_spaces.chunk_count for the active
+    space must equal N — byte-identical to what N per-row ``chunk_count + 1`` bumps
+    would have produced.
+    """
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+
+    # ~5000 chars of fixed-size text -> several mechanical chunks (size 1000).
+    md_file = tmp_path / "big.md"
+    md_file.write_text(" ".join(f"paragraph{i} about transformers and attention" for i in range(400)) + "\n")
+    result = ingest_file(conn, md_file)
+    added = result["chunks_added"]
+    assert added > 1, "fixture must produce multiple chunks to exercise the batched bump"
+
+    # Active-space chunk_count advanced by exactly the number of embedded chunks.
+    active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+    assert active == start + added
+
+    # Cross-check the registry counter against the actual vec-table row count: the
+    # batched bump did not over- or under-count relative to real embeddings.
+    vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+    assert active == vec_rows
+
+
 # --- reingest_file ---
 
 
