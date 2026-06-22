@@ -25,8 +25,10 @@ from .chunking import (
 from .db import (
     _batched_execute,
     _batched_select,
+    bump_chunk_count,
     delete_chunks_cascade,
     get_active_space,
+    get_vec_table_name,
     insert_chunk_vec,
 )
 from .embed_swap import get_embed_config
@@ -126,10 +128,16 @@ def _insert_chunk(
     chunk_strategy: str | None = None,
     metadata: str = "{}",
     vec_table: str | None = None,
+    bump_count: bool = True,
 ) -> int:
     """Insert a single chunk row, its embedding, and session links.
 
     Returns the new chunk id.
+
+    *bump_count* is threaded straight through to :func:`insert_chunk_vec`: batch
+    callers pass ``False`` to skip the per-row ``chunk_count`` UPDATE and instead
+    bump once after the loop (#392). It defaults to ``True`` so single/incidental
+    callers keep the per-row bookkeeping.
     """
     columns = [
         "content_hash",
@@ -170,7 +178,7 @@ def _insert_chunk(
         )
 
     if embedding is not None:
-        insert_chunk_vec(conn, chunk_id, embedding, table_name=vec_table)
+        insert_chunk_vec(conn, chunk_id, embedding, table_name=vec_table, bump_count=bump_count)
 
     return chunk_id
 
@@ -370,6 +378,13 @@ def _produce_and_insert_chunks(
     texts_to_embed = [item[1] for item in items]
     embeddings = _embed_with_config(conn, texts_to_embed)
 
+    # Resolve the active vec table once so every per-chunk insert targets the same
+    # table AND the single batched chunk_count bump below matches it (#392). The
+    # per-row UPDATE is suppressed (bump_count=False); we tally the embeddings
+    # actually inserted and bump once after the loop — N+1 UPDATEs collapse to 1,
+    # with a chunk_count identical to the per-row path.
+    vec_table = get_vec_table_name(conn)
+    n_inserted = 0
     for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(items, embeddings, strict=True):
         _insert_chunk(
             conn,
@@ -383,7 +398,14 @@ def _produce_and_insert_chunks(
             session_ids=session_ids,
             chunk_strategy=effective_strategy,
             metadata=meta_json,
+            vec_table=vec_table,
+            bump_count=False,
         )
+        if emb_vec is not None:
+            n_inserted += 1
+
+    if n_inserted:
+        bump_chunk_count(conn, vec_table, n_inserted)
 
     return (len(items), skipped, deferred_session_links)
 

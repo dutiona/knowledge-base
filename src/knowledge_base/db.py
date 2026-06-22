@@ -27,6 +27,7 @@ __all__ = [
     "SPACE_NAME_RE",
     "CoOccurrencePair",
     "EmbedSpace",
+    "bump_chunk_count",
     "co_occurrence_pairs",
     "delete_chunk_vecs",
     "delete_chunks_cascade",
@@ -150,18 +151,32 @@ def _batched_execute(
     sql_template: str,
     ids: list,
     extra_params: list | None = None,
-) -> None:
+) -> int:
     """Execute a SQL statement with an IN clause in batches.
 
     sql_template must contain a single ``{ph}`` placeholder where the
     ``IN (?,?,...)`` list will be substituted.  extra_params (if given)
     are prepended to each batch's parameter list.
+
+    Returns the summed ``cursor.rowcount`` across all batches — the number of
+    rows affected by the statement (#433). For a DELETE this is the actual rows
+    deleted, letting callers avoid a separate COUNT pass. Existing callers that
+    ignore the return value are unaffected.
+
+    Each batch's ``rowcount`` is clamped to ``>= 0``: sqlite3 documents -1 for
+    statements whose affected-row count is indeterminate, and a negative value
+    would corrupt count bookkeeping downstream (e.g. ``MAX(0, count - (-1))`` would
+    *increment*). WHERE-qualified DELETEs report a true count in practice, so the
+    clamp is purely defensive — never observed to fire for current callers.
     """
+    affected = 0
     for i in range(0, len(ids), _SQL_BATCH_SIZE):
         batch = ids[i : i + _SQL_BATCH_SIZE]
         placeholders = ",".join("?" * len(batch))
         params = list(extra_params or []) + list(batch)
-        conn.execute(sql_template.replace("{ph}", placeholders, 1), params)
+        cursor = conn.execute(sql_template.replace("{ph}", placeholders, 1), params)
+        affected += max(cursor.rowcount, 0)
+    return affected
 
 
 def _batched_select(
@@ -521,17 +536,42 @@ def get_space_element_type(
     return row["element_type"] or "float32"
 
 
+def bump_chunk_count(conn: sqlite3.Connection, table_name: str, delta: int) -> None:
+    """Increment ``embed_spaces.chunk_count`` for the active space by *delta* (#392).
+
+    Performs the SAME ``status = 'active'`` gated, table-name-matched UPDATE that
+    :func:`insert_chunk_vec` runs per-row — once, with the batched *delta*. Calling
+    this once with ``delta == N`` is byte-equivalent to N per-row ``chunk_count + 1``
+    bumps, so the ingestion hot path can opt out of the per-row UPDATE (passing
+    ``bump_count=False`` to :func:`insert_chunk_vec`) and amortize the bookkeeping
+    into a single write. The active-space gate means a *table_name* belonging to a
+    non-active ('populating'/'deprecated') space is a no-op, matching the per-row path.
+    """
+    conn.execute(
+        "UPDATE embed_spaces SET chunk_count = chunk_count + ? WHERE table_name = ? AND status = 'active'",
+        (delta, table_name),
+    )
+
+
 def insert_chunk_vec(
     conn: sqlite3.Connection,
     chunk_id: int,
     embedding: list[float],
     table_name: str | None = None,
     element_type: str | None = None,
+    bump_count: bool = True,
 ) -> None:
     """Insert a single chunk embedding into the specified (or active) vec table.
 
     If *element_type* is ``None`` (the default), it is auto-resolved from the
     space registry so callers never need to look it up themselves.
+
+    When *bump_count* is ``True`` (the default), the per-row
+    ``embed_spaces.chunk_count`` UPDATE fires exactly as before, preserving behavior
+    for all incidental callers. Batch callers (the ingestion hot path, #392) pass
+    ``bump_count=False`` to skip the per-row UPDATE and instead call
+    :func:`bump_chunk_count` once with the total inserted — eliminating the N+1
+    write amplification while keeping the resulting ``chunk_count`` identical.
     """
     tbl = _resolve_vec_table(conn, table_name)
     if element_type is None:
@@ -541,11 +581,9 @@ def insert_chunk_vec(
         f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, {expr}, ?)",  # noqa: S608  # trusted internal identifier (vec table name + fixed expr), not user input
         (chunk_id, _serialize_f32(embedding), chunk_id),
     )
-    # Keep embed_spaces.chunk_count in sync for the active space
-    conn.execute(
-        "UPDATE embed_spaces SET chunk_count = chunk_count + 1 WHERE table_name = ? AND status = 'active'",
-        (tbl,),
-    )
+    # Keep embed_spaces.chunk_count in sync for the active space (per-row path).
+    if bump_count:
+        bump_chunk_count(conn, tbl, 1)
 
 
 def delete_chunk_vecs(
@@ -559,11 +597,16 @@ def delete_chunk_vecs(
     """
     if not chunk_ids:
         return
+    # Dedup so the rowcount-based count is unconditionally correct: a duplicate id
+    # split across two batches would otherwise be DELETEd in the first batch and
+    # matched-zero in the second, and (historically, via the old per-batch COUNT
+    # pass) over-counted. DELETE ... IN (deduped) is equivalent for the realistic
+    # unique-id callers, and makes actual_deleted the true affected-row count.
+    chunk_ids = list(dict.fromkeys(chunk_ids))
     tbl = _resolve_vec_table(conn, table_name)
-    # Count actual rows before deletion — not all chunks may have embeddings
-    count_rows = _batched_select(conn, f"SELECT COUNT(*) AS n FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids)  # noqa: S608  # trusted internal identifier (vec table name), not user input
-    actual_deleted = sum(r["n"] for r in count_rows)
-    _batched_execute(conn, f"DELETE FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids)  # noqa: S608  # trusted internal identifier (vec table name), not user input
+    # Single pass: the DELETE's affected-row count IS the number of vec rows that
+    # actually existed (not all chunks have embeddings) — no separate COUNT pass (#433).
+    actual_deleted = _batched_execute(conn, f"DELETE FROM [{tbl}] WHERE chunk_id IN ({{ph}})", chunk_ids)  # noqa: S608  # trusted internal identifier (vec table name), not user input
     # Keep embed_spaces.chunk_count in sync
     if actual_deleted:
         conn.execute(

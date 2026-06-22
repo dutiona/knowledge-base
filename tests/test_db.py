@@ -12,6 +12,7 @@ from knowledge_base.db import (
     _migrate_extraction_source,
     _migrate_normalize_source_uri,
     _migrate_papers_fts,
+    bump_chunk_count,
     co_occurrence_pairs,
     delete_chunk_vecs,
     delete_chunks_cascade,
@@ -713,10 +714,11 @@ def _char_space_count(conn, name):
 
 
 def test_char_insert_chunk_vec_increments_active_chunk_count(tmp_path):
-    # WAVE 1 / #392: this pins the CURRENT per-row chunk_count increment inside
-    # insert_chunk_vec. PR C batches that bookkeeping out of the per-row path —
-    # when it lands, this assertion (and the round-trip test below) must move to
-    # the new bulk-bump API. Expected to change, not a regression.
+    # WAVE 1 / #392 (PR C, landed): the DEFAULT insert_chunk_vec STILL bumps
+    # chunk_count per call — this contract is preserved for all incidental callers,
+    # so this assertion stands unchanged. Only the ingestion hot path opts out
+    # (insert_chunk_vec(..., bump_count=False)) and amortizes the bookkeeping into a
+    # single db.bump_chunk_count after the chunk loop.
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
     start = _char_active_count(conn)
@@ -745,9 +747,67 @@ def test_char_insert_chunk_vec_nonactive_table_leaves_active_unchanged(tmp_path)
     assert _char_space_count(conn, "other") == 0
 
 
+def test_insert_chunk_vec_bump_count_false_skips_per_row_update(tmp_path):
+    """#392: bump_count=False inserts the vec row but skips the chunk_count UPDATE."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    start = _char_active_count(conn)
+
+    cid = _char_add_chunk(conn, "no bump", 0)
+    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM, bump_count=False)
+    conn.commit()
+
+    # The vec row exists...
+    row = conn.execute("SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (cid,)).fetchone()
+    assert row is not None
+    # ...but chunk_count was NOT bumped (the batch caller bumps once afterwards).
+    assert _char_active_count(conn) == start
+
+
+def test_bump_chunk_count_n_equals_n_per_row_bumps(tmp_path):
+    """#392: bump_chunk_count(delta=N) is byte-equivalent to N per-row +1 bumps."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    tbl = get_active_space(conn)["table_name"]  # type: ignore[index]  # bootstrapped active space
+
+    # Batch path: 5 inserts with bump_count=False, then one bump of 5.
+    start_batch = _char_active_count(conn)
+    for i in range(5):
+        cid = _char_add_chunk(conn, f"batch {i}", i)
+        insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM, bump_count=False)
+    bump_chunk_count(conn, tbl, 5)
+    conn.commit()
+    batched = _char_active_count(conn)
+    assert batched == start_batch + 5
+
+    # Per-row path: 5 default inserts each bumping +1 — identical net delta.
+    start_per_row = _char_active_count(conn)
+    for i in range(5):
+        cid = _char_add_chunk(conn, f"perrow {i}", 100 + i)
+        insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    conn.commit()
+    assert _char_active_count(conn) == start_per_row + 5
+
+
+def test_bump_chunk_count_only_touches_active_space(tmp_path):
+    """#392: the active-space gate matches insert_chunk_vec's per-row UPDATE exactly."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    start = _char_active_count(conn)
+
+    create_space(conn, "pop", "model", DEFAULT_EMBED_DIM, "ollama")
+    # Bumping the populating space's table is a no-op (status='active' gate).
+    bump_chunk_count(conn, "chunks_vec_pop", 7)
+    conn.commit()
+    assert _char_space_count(conn, "pop") == 0
+    assert _char_active_count(conn) == start
+
+
 def test_char_insert_then_delete_round_trips_chunk_count(tmp_path):
-    # WAVE 1 / #392: also pins the current per-row insert increment (see note on
-    # test_char_insert_chunk_vec_increments_active_chunk_count) — update with PR C.
+    # WAVE 1 / #392 (PR C, landed): the default per-call insert bump is preserved
+    # (see note on test_char_insert_chunk_vec_increments_active_chunk_count), so this
+    # round-trip stands unchanged. The batched-bump path is exercised end-to-end by
+    # test_ingest_multichunk_doc_chunk_count_matches_per_row in tests/test_ingest.py.
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
     start = _char_active_count(conn)
@@ -781,6 +841,28 @@ def test_char_delete_chunk_vecs_empty_is_noop(tmp_path):
     # Row still present
     row = conn.execute("SELECT chunk_id FROM chunks_vec WHERE chunk_id = ?", (cid,)).fetchone()
     assert row is not None
+
+
+def test_char_delete_chunk_vecs_dedups_duplicate_ids(tmp_path):
+    """A duplicated chunk_id decrements chunk_count by exactly 1 (one row exists).
+
+    delete_chunk_vecs dedups ids, so the rowcount-based count can't double-count a
+    duplicate (which the old per-batch COUNT pass would have, over-decrementing).
+    """
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    cid = _char_add_chunk(conn, "dup target", 0)
+    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    conn.commit()
+    before = _char_active_count(conn)
+
+    delete_chunk_vecs(conn, [cid, cid, cid])  # same id three times
+    conn.commit()
+
+    # Exactly one row existed and was deleted -> chunk_count drops by exactly 1.
+    assert _char_active_count(conn) == before - 1
+    assert conn.execute("SELECT COUNT(*) AS n FROM chunks_vec WHERE chunk_id = ?", (cid,)).fetchone()["n"] == 0
 
 
 def test_char_delete_chunk_vecs_counts_actual_rows_not_input_length(tmp_path):

@@ -18,8 +18,10 @@ import trafilatura
 
 from .db import (
     _batched_execute,
+    bump_chunk_count,
     delete_chunk_vecs,
     delete_chunks_cascade,
+    get_vec_table_name,
 )
 from .exceptions import ValidationError
 from .utils import is_private_ip
@@ -504,7 +506,13 @@ def _extract_html_images(
         delete_chunks_cascade(conn, old_ids)
 
     # --- Insert new figure chunks ---
+    # Resolve the active vec table once so the per-chunk inserts and the single
+    # batched chunk_count bump below both target it; suppress the per-row UPDATE
+    # (bump_count=False) and bump once with the count of embeddings actually
+    # inserted (#392). Not every figure embeds, so tally non-None separately.
+    vec_table = get_vec_table_name(conn)
     figures_added = 0
+    n_inserted = 0
     for idx, ((desc, meta), emb_vec) in enumerate(zip(collected, embeddings, strict=True)):
         chunk_hash = _content_hash(desc)
         existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)).fetchone()
@@ -522,8 +530,15 @@ def _extract_html_images(
             chunk_index=chunk_index,
             embedding=emb_vec,
             metadata=meta_json,
+            vec_table=vec_table,
+            bump_count=False,
         )
         figures_added += 1
+        if emb_vec is not None:
+            n_inserted += 1
+
+    if n_inserted:
+        bump_chunk_count(conn, vec_table, n_inserted)
 
     if figures_added or old_ids:
         conn.commit()
@@ -816,7 +831,12 @@ def _extract_web_figures(
         delete_chunk_vecs(conn, old_fig_ids)
         _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_fig_ids)
 
+    # Resolve the active vec table once for the per-chunk inserts and the single
+    # batched chunk_count bump (#392); suppress the per-row UPDATE and bump once
+    # with the count of embeddings actually inserted (some figures may not embed).
+    vec_table = get_vec_table_name(conn)
     figures_added = 0
+    n_inserted = 0
 
     for idx, (fig, desc, emb_vec) in enumerate(zip(valid_figures, texts, embeddings, strict=True)):
         chunk_hash = _content_hash(desc)
@@ -844,8 +864,15 @@ def _extract_web_figures(
             chunk_index=chunk_index,
             embedding=emb_vec,
             metadata=meta_json,
+            vec_table=vec_table,
+            bump_count=False,
         )
         figures_added += 1
+        if emb_vec is not None:
+            n_inserted += 1
+
+    if n_inserted:
+        bump_chunk_count(conn, vec_table, n_inserted)
 
     if figures_added:
         conn.commit()
@@ -954,7 +981,12 @@ def _extract_element_captures(
         delete_chunk_vecs(conn, old_ids)
         _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
 
+    # Resolve the active vec table once for the per-chunk inserts and the single
+    # batched chunk_count bump (#392); suppress the per-row UPDATE and bump once
+    # with the count of embeddings actually inserted (some captures may not embed).
+    vec_table = get_vec_table_name(conn)
     figures_added = 0
+    n_inserted = 0
     for (desc, meta, cap_idx), emb_vec in zip(collected, embeddings, strict=True):
         chunk_hash = _content_hash(desc)
         existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)).fetchone()
@@ -972,8 +1004,15 @@ def _extract_element_captures(
             chunk_index=chunk_index,
             embedding=emb_vec,
             metadata=meta_json,
+            vec_table=vec_table,
+            bump_count=False,
         )
         figures_added += 1
+        if emb_vec is not None:
+            n_inserted += 1
+
+    if n_inserted:
+        bump_chunk_count(conn, vec_table, n_inserted)
 
     if figures_added:
         conn.commit()
@@ -1191,6 +1230,11 @@ def ingest_url(
     texts_to_embed = [c[1] for c in new_chunks]
     embeddings = _embed_with_config(conn, texts_to_embed)
 
+    # Resolve the active vec table once for the per-chunk inserts and the single
+    # batched chunk_count bump (#392); suppress the per-row UPDATE and bump once
+    # with the count of embeddings actually inserted (some chunks may not embed).
+    vec_table = get_vec_table_name(conn)
+    n_inserted = 0
     for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings, strict=True):
         _insert_chunk(
             conn,
@@ -1202,7 +1246,14 @@ def ingest_url(
             embedding=emb_vec,
             session_id=session_id,
             metadata=meta_json,
+            vec_table=vec_table,
+            bump_count=False,
         )
+        if emb_vec is not None:
+            n_inserted += 1
+
+    if n_inserted:
+        bump_chunk_count(conn, vec_table, n_inserted)
 
     # Embeddings succeeded — flush deferred session links for deduped chunks
     _flush_deferred_session_links(conn, deferred_session_links, session_id)

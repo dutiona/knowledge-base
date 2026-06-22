@@ -52,6 +52,15 @@ def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
     return [[0.1] * dim for _ in texts]
 
 
+def _fake_embed_odd_none(texts, model="bge-m3", expected_dim=None, **_kwargs):
+    """Like _fake_embed but returns None at odd indices — mimics embed() yielding
+    None for zero-norm vectors, so some chunks get NO vec row. Used to prove the
+    batched chunk_count bump counts VEC INSERTS (n_inserted), not chunk iterations.
+    """
+    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    return [None if i % 2 == 1 else [0.1] * dim for i in range(len(texts))]
+
+
 def test_chunk_text_basic():
     text = "a" * 2000
     chunks = _chunk_text(text, size=1000, overlap=200)
@@ -122,6 +131,71 @@ def test_ingest_dedup(tmp_path):
     assert r1["chunks_added"] == 1
     assert r2["chunks_added"] == 0
     assert r2["chunks_skipped"] == 1
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_multichunk_doc_chunk_count_matches_per_row(tmp_path):
+    """#392: batched chunk_count bump must equal the per-row result.
+
+    Ingesting an N-chunk document fires ONE db.bump_chunk_count(delta=N) instead
+    of N per-row UPDATEs. The resulting embed_spaces.chunk_count for the active
+    space must equal N — byte-identical to what N per-row ``chunk_count + 1`` bumps
+    would have produced.
+    """
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+
+    # ~5000 chars of fixed-size text -> several mechanical chunks (size 1000).
+    md_file = tmp_path / "big.md"
+    md_file.write_text(" ".join(f"paragraph{i} about transformers and attention" for i in range(400)) + "\n")
+    result = ingest_file(conn, md_file)
+    added = result["chunks_added"]
+    assert added > 1, "fixture must produce multiple chunks to exercise the batched bump"
+
+    # Active-space chunk_count advanced by exactly the number of embedded chunks.
+    active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+    assert active == start + added
+
+    # Cross-check the registry counter against the actual vec-table row count: the
+    # batched bump did not over- or under-count relative to real embeddings.
+    vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+    assert active == vec_rows
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed_odd_none)
+def test_ingest_partial_none_embeddings_chunk_count_counts_vec_inserts(tmp_path):
+    """#392: the batched bump must count VEC INSERTS, not chunk iterations.
+
+    With some embeddings None (zero-norm), those chunk rows are still recorded
+    but get NO vec row. chunk_count must advance by the number of embedded chunks
+    (== vec-table rows), strictly fewer than chunks_added. This pins n_inserted to
+    actual inserts; a regression to bump_chunk_count(vec_table, len(chunks)) would
+    make chunk_count == start + added != start + vec_rows and fail here.
+    """
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+
+    md_file = tmp_path / "big.md"
+    md_file.write_text(" ".join(f"paragraph{i} about transformers and attention" for i in range(400)) + "\n")
+    result = ingest_file(conn, md_file)
+    added = result["chunks_added"]
+    assert added > 1, "fixture must produce multiple chunks"
+
+    active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+    vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+
+    # The odd-index None embeddings skipped at least one vec insert...
+    assert vec_rows < added, "the None-embedding path must be exercised (fewer vec rows than chunks)"
+    # ...and chunk_count tracks vec inserts exactly, NOT the chunk-iteration count.
+    assert active == start + vec_rows
 
 
 # --- reingest_file ---
@@ -856,6 +930,43 @@ def test_ingest_url_basic(tmp_path):
     rows = conn.execute("SELECT source_uri, source_type FROM chunks").fetchall()
     assert all(r["source_uri"] == "https://example.com/paper" for r in rows)
     assert all(r["source_type"] == "web" for r in rows)
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_url_multichunk_chunk_count_matches_per_row(tmp_path):
+    """#392: the batched chunk_count bump on the web-text path must equal the per-row result.
+
+    Ingesting a multi-chunk web page now fires ONE bump_chunk_count(delta=N) instead
+    of N per-row UPDATEs. The active-space chunk_count must end up identical to N
+    per-row ``chunk_count + 1`` bumps, and equal to the actual vec-table row count.
+    """
+    # A long article body that mechanically chunks into several pieces (size 1000).
+    long_body = " ".join(f"paragraph{i} about transformers and attention" for i in range(400))
+    long_html = f"<html><head><title>Long Page</title></head><body><article><p>{long_body}</p></article></body></html>"
+
+    def _mock_long_get(url, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.text = long_html
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+
+    with patch("knowledge_base.web.httpx.get", _mock_long_get):
+        result = ingest_url(conn, "https://example.com/long")
+    added = result["chunks_added"]
+    assert added > 1, "fixture must produce multiple web-text chunks to exercise the batched bump"
+
+    active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+    assert active == start + added
+    # Registry counter equals the real vec-table row count: batched bump did not drift.
+    vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+    assert active == vec_rows
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
@@ -1597,6 +1708,37 @@ def test_extract_web_figures_dedup(mock_vision_cfg, mock_vision_call, tmp_path):
     assert total == 1
 
 
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+def test_extract_web_figures_chunk_count_matches_per_row(mock_vision_cfg, mock_vision_call, tmp_path):
+    """#392: _extract_web_figures batches the chunk_count bump across N screenshot figures."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    mock_vision_cfg.return_value = {"base_url": "http://localhost:11434", "model": "llava"}
+    # Two distinct figures from one screenshot (multi-figure list disables single-figure
+    # OmniParser enrichment) → exercises the batched bump with N == 2.
+    mock_vision_call.return_value = [
+        {"description": "A bar chart of accuracy.", "figure_type": "chart", "title": "Accuracy"},
+        {"description": "A line plot of loss.", "figure_type": "chart", "title": "Loss"},
+    ]
+
+    screenshot = tmp_path / "screenshot.png"
+    screenshot.write_bytes(b"\x89PNG\r\n\x1a\nFAKE")
+
+    start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+
+    count = _extract_web_figures(conn, "https://example.com/page", screenshot)
+    assert count == 2
+
+    active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+    assert active == start + count
+    vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+    assert active == vec_rows
+
+
 # ---------------------------------------------------------------------------
 # _extract_html_images tests (issue #82)
 # ---------------------------------------------------------------------------
@@ -2003,6 +2145,46 @@ def test_extract_html_images_multiple(mock_stream, _mock_ip, mock_vision_cfg, mo
     )
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 3
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._get_vision_config")
+@patch("knowledge_base.web.is_private_ip", return_value=False)
+@patch("knowledge_base.web.httpx.stream")
+def test_extract_html_images_chunk_count_matches_per_row(
+    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+):
+    """#392: _extract_html_images batches the chunk_count bump (one per N figures).
+
+    The active-space chunk_count must equal the number of figure chunks inserted
+    and the actual vec-table row count — identical to the old per-row path.
+    """
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    mock_vision_cfg.return_value = _VISION_CFG
+    mock_vision_call.side_effect = [
+        [{"description": f"Figure {i} description.", "figure_type": "diagram", "title": f"Fig {i}"}] for i in range(3)
+    ]
+    png_bytes = _make_test_png()
+    mock_stream.side_effect = [_mock_image_stream(png_bytes) for _ in range(3)]
+
+    start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+
+    html = (
+        "<html><body>"
+        '<img src="https://example.com/fig1.png">'
+        '<img src="https://example.com/fig2.png">'
+        '<img src="https://example.com/fig3.png">'
+        "</body></html>"
+    )
+    count = _extract_html_images(conn, html, "https://example.com/page")
+    assert count == 3
+
+    active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+    assert active == start + count
+    vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+    assert active == vec_rows
 
 
 # --- Filtering ---
@@ -3695,6 +3877,37 @@ class TestElementCapture:
         assert meta["figure_type"] == "chart"
         assert meta["element_tag"] == "canvas"
         assert "D3.js bar chart" in row["content"]
+
+    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
+    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @patch("knowledge_base.vision._vision_call")
+    @patch("knowledge_base.vision._get_vision_config")
+    def test_extract_element_captures_chunk_count_matches_per_row(self, mock_vision_cfg, mock_vision_call, tmp_path):
+        """#392: _extract_element_captures batches the chunk_count bump across N captures."""
+        mock_vision_cfg.return_value = {"base_url": "http://localhost:11434", "model": "gemma3:27b"}
+        # One vision call per capture; distinct descriptions to avoid content-hash dedup.
+        mock_vision_call.side_effect = [
+            [{"description": f"Element {i} chart.", "figure_type": "chart", "title": f"E{i}"}] for i in range(2)
+        ]
+
+        conn = get_connection(tmp_path / "test.db")
+        init_schema(conn)
+        captures = []
+        for i in range(2):
+            p = tmp_path / f"element_{i}.png"
+            p.write_bytes(_make_test_png(400, 300))
+            captures.append({"path": p, "tag": "canvas", "width": 400, "height": 300})
+
+        from knowledge_base.web import _extract_element_captures
+
+        start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+        count = _extract_element_captures(conn, "https://example.com/dashboard", captures)
+        assert count == 2
+
+        active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+        assert active == start + count
+        vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+        assert active == vec_rows
 
     @patch("knowledge_base.folder_summaries.embed", _fake_embed)
     @patch("knowledge_base.ingest.embed", _fake_embed)
