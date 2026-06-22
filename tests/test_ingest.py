@@ -52,6 +52,15 @@ def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
     return [[0.1] * dim for _ in texts]
 
 
+def _fake_embed_odd_none(texts, model="bge-m3", expected_dim=None, **_kwargs):
+    """Like _fake_embed but returns None at odd indices — mimics embed() yielding
+    None for zero-norm vectors, so some chunks get NO vec row. Used to prove the
+    batched chunk_count bump counts VEC INSERTS (n_inserted), not chunk iterations.
+    """
+    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    return [None if i % 2 == 1 else [0.1] * dim for i in range(len(texts))]
+
+
 def test_chunk_text_basic():
     text = "a" * 2000
     chunks = _chunk_text(text, size=1000, overlap=200)
@@ -155,6 +164,38 @@ def test_ingest_multichunk_doc_chunk_count_matches_per_row(tmp_path):
     # batched bump did not over- or under-count relative to real embeddings.
     vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
     assert active == vec_rows
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed_odd_none)
+def test_ingest_partial_none_embeddings_chunk_count_counts_vec_inserts(tmp_path):
+    """#392: the batched bump must count VEC INSERTS, not chunk iterations.
+
+    With some embeddings None (zero-norm), those chunk rows are still recorded
+    but get NO vec row. chunk_count must advance by the number of embedded chunks
+    (== vec-table rows), strictly fewer than chunks_added. This pins n_inserted to
+    actual inserts; a regression to bump_chunk_count(vec_table, len(chunks)) would
+    make chunk_count == start + added != start + vec_rows and fail here.
+    """
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+
+    md_file = tmp_path / "big.md"
+    md_file.write_text(" ".join(f"paragraph{i} about transformers and attention" for i in range(400)) + "\n")
+    result = ingest_file(conn, md_file)
+    added = result["chunks_added"]
+    assert added > 1, "fixture must produce multiple chunks"
+
+    active = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
+    vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
+
+    # The odd-index None embeddings skipped at least one vec insert...
+    assert vec_rows < added, "the None-embedding path must be exercised (fewer vec rows than chunks)"
+    # ...and chunk_count tracks vec inserts exactly, NOT the chunk-iteration count.
+    assert active == start + vec_rows
 
 
 # --- reingest_file ---

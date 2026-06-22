@@ -591,6 +591,12 @@ def delete_chunk_vecs(
     """
     if not chunk_ids:
         return
+    # Dedup so the rowcount-based count is unconditionally correct: a duplicate id
+    # split across two batches would otherwise be DELETEd in the first batch and
+    # matched-zero in the second, and (historically, via the old per-batch COUNT
+    # pass) over-counted. DELETE ... IN (deduped) is equivalent for the realistic
+    # unique-id callers, and makes actual_deleted the true affected-row count.
+    chunk_ids = list(dict.fromkeys(chunk_ids))
     tbl = _resolve_vec_table(conn, table_name)
     # Single pass: the DELETE's affected-row count IS the number of vec rows that
     # actually existed (not all chunks have embeddings) — no separate COUNT pass (#433).

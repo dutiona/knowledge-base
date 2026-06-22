@@ -843,6 +843,28 @@ def test_char_delete_chunk_vecs_empty_is_noop(tmp_path):
     assert row is not None
 
 
+def test_char_delete_chunk_vecs_dedups_duplicate_ids(tmp_path):
+    """A duplicated chunk_id decrements chunk_count by exactly 1 (one row exists).
+
+    delete_chunk_vecs dedups ids, so the rowcount-based count can't double-count a
+    duplicate (which the old per-batch COUNT pass would have, over-decrementing).
+    """
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+
+    cid = _char_add_chunk(conn, "dup target", 0)
+    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    conn.commit()
+    before = _char_active_count(conn)
+
+    delete_chunk_vecs(conn, [cid, cid, cid])  # same id three times
+    conn.commit()
+
+    # Exactly one row existed and was deleted -> chunk_count drops by exactly 1.
+    assert _char_active_count(conn) == before - 1
+    assert conn.execute("SELECT COUNT(*) AS n FROM chunks_vec WHERE chunk_id = ?", (cid,)).fetchone()["n"] == 0
+
+
 def test_char_delete_chunk_vecs_counts_actual_rows_not_input_length(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
