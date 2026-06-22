@@ -162,6 +162,12 @@ def _batched_execute(
     rows affected by the statement (#433). For a DELETE this is the actual rows
     deleted, letting callers avoid a separate COUNT pass. Existing callers that
     ignore the return value are unaffected.
+
+    Each batch's ``rowcount`` is clamped to ``>= 0``: sqlite3 documents -1 for
+    statements whose affected-row count is indeterminate, and a negative value
+    would corrupt count bookkeeping downstream (e.g. ``MAX(0, count - (-1))`` would
+    *increment*). WHERE-qualified DELETEs report a true count in practice, so the
+    clamp is purely defensive — never observed to fire for current callers.
     """
     affected = 0
     for i in range(0, len(ids), _SQL_BATCH_SIZE):
@@ -169,7 +175,7 @@ def _batched_execute(
         placeholders = ",".join("?" * len(batch))
         params = list(extra_params or []) + list(batch)
         cursor = conn.execute(sql_template.replace("{ph}", placeholders, 1), params)
-        affected += cursor.rowcount
+        affected += max(cursor.rowcount, 0)
     return affected
 
 
