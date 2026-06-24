@@ -1653,6 +1653,8 @@ def test_get_index_stats_counts_and_structure(tmp_path):
     assert sum(stats["embed_spaces"].values()) >= 1
     assert stats["chunk_strategy"] == "mechanical"
     assert stats["db_size_bytes"] > 0
+    # db_path is resolved from the connection's 'main' db (PRAGMA database_list).
+    assert stats["db_path"].endswith("test.db")
 
     # recent_ingestions: most-recent document first, with per-document chunk counts.
     recent = stats["recent_ingestions"]
