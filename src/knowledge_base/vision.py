@@ -1855,6 +1855,34 @@ def _enrich_with_omniparser(
     return omniparser_enriched
 
 
+def _figure_chunks_query(source_uri: str, pages: list[int] | None) -> tuple[str, tuple]:
+    """Build the SELECT that finds existing figure chunk ids for a scoped DELETE (#79).
+
+    Returns the bare SELECT SQL (no wrapping parens) plus its bound params. When
+    *pages* is given, the chunk_index range for each page (encoded as
+    ``_FIGURE_BASE + page * _FIGS_PER_PAGE``) is OR-joined so only those pages'
+    figures are matched; otherwise every figure for *source_uri* is selected.
+    """
+    if pages:
+        page_clauses: list[str] = []
+        page_params: list[int] = []
+        for p in pages:
+            page_clauses.append("(chunk_index >= ? AND chunk_index < ?)")
+            page_params.extend(
+                [
+                    _FIGURE_BASE + p * _FIGS_PER_PAGE,
+                    _FIGURE_BASE + (p + 1) * _FIGS_PER_PAGE,
+                ]
+            )
+        page_filter = f" AND ({' OR '.join(page_clauses)})"
+        # page_filter is built from fixed internal SQL fragments
+        # ("(chunk_index >= ? AND chunk_index < ?)" joined by " OR "); all values
+        # flow through ? placeholders, never string interpolation.
+        sql = f"SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'{page_filter}"  # noqa: S608  # trusted internal identifier, not user input
+        return sql, (source_uri, *page_params)
+    return "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'", (source_uri,)
+
+
 def _persist_figures(
     conn: sqlite3.Connection,
     source_uri: str,
@@ -1903,30 +1931,6 @@ def _persist_figures(
     if texts:
         embeddings = _embed_with_config(conn, texts)
 
-    # Determine candidate_pages for scoped DELETE (#79)
-    candidate_pages = pages
-
-    if candidate_pages is not None and candidate_pages:
-        page_clauses = []
-        page_params: list[int] = []
-        for p in candidate_pages:
-            page_clauses.append("(chunk_index >= ? AND chunk_index < ?)")
-            page_params.extend(
-                [
-                    _FIGURE_BASE + p * _FIGS_PER_PAGE,
-                    _FIGURE_BASE + (p + 1) * _FIGS_PER_PAGE,
-                ]
-            )
-        page_filter = f" AND ({' OR '.join(page_clauses)})"
-        # page_filter is built from fixed internal SQL fragments
-        # ("(chunk_index >= ? AND chunk_index < ?)" joined by " OR "); all values
-        # flow through ? placeholders, never string interpolation.
-        fig_chunk_subquery = f"(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure'{page_filter})"  # noqa: S608  # trusted internal identifier, not user input
-        fig_delete_params: tuple = (source_uri, *page_params)
-    else:
-        fig_chunk_subquery = "(SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure')"
-        fig_delete_params = (source_uri,)
-
     # Resolve the active vec table once (already done here) and bump chunk_count
     # in a single batched UPDATE after the loop instead of per-row (#392).
     # _insert_chunk runs with bump_count=False; only figures that actually embed
@@ -1935,7 +1939,10 @@ def _persist_figures(
     chunks_created = 0
     n_inserted = 0
     try:
-        fig_chunk_ids = [r["id"] for r in conn.execute(fig_chunk_subquery[1:-1], fig_delete_params).fetchall()]
+        # Scoped DELETE (#79): select existing figure chunk ids for source_uri,
+        # restricted to the given pages when provided.
+        sql, params = _figure_chunks_query(source_uri, pages)
+        fig_chunk_ids = [r["id"] for r in conn.execute(sql, params).fetchall()]
         _cleanup_figure_fk_refs(conn, fig_chunk_ids)
         delete_chunks_cascade(conn, fig_chunk_ids, table_name=vec_table)
 

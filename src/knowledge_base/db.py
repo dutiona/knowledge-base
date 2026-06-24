@@ -27,6 +27,8 @@ __all__ = [
     "SPACE_NAME_RE",
     "CoOccurrencePair",
     "EmbedSpace",
+    "IndexStats",
+    "RecentIngestion",
     "bump_chunk_count",
     "co_occurrence_pairs",
     "delete_chunk_vecs",
@@ -34,6 +36,7 @@ __all__ = [
     "escape_like",
     "get_active_space",
     "get_connection",
+    "get_index_stats",
     "get_space_element_type",
     "get_vec_table_name",
     "init_schema",
@@ -250,6 +253,111 @@ def co_occurrence_pairs(conn: sqlite3.Connection, min_sessions: int = 1) -> list
         }
         for r in rows
     ]
+
+
+class RecentIngestion(TypedDict):
+    """One recently-ingested document, aggregated over its chunks (#217)."""
+
+    source_uri: str
+    source_type: str
+    chunks: int
+    created_at: str
+
+
+class IndexStats(TypedDict):
+    """Aggregated index statistics backing the ``status`` MCP tool (#217).
+
+    Every field is computed by a single SQL pass over the database in
+    :func:`get_index_stats`; cross-module figures the tool also reports
+    (prediction-error count, embedding config) stay in the tool, since they are
+    not inline SQL. ``db_size_bytes`` is the on-disk size of the ``main``
+    database file (env/CLI-resolved via ``PRAGMA database_list``); the tool
+    derives the human-readable MB value and path from the connection itself.
+    """
+
+    total_chunks: int
+    by_type: dict[str, int]
+    papers: int
+    conclusions: int
+    relationships: int
+    folder_summaries: int
+    methods: int
+    datasets: int
+    metrics: int
+    recent_ingestions: list[RecentIngestion]
+    jobs: dict[str, int]
+    embed_spaces: dict[str, int]
+    chunk_strategy: str
+    db_size_bytes: int
+
+
+def get_index_stats(conn: sqlite3.Connection) -> IndexStats:
+    """Collect the count/aggregation statistics that back the ``status`` tool (#217).
+
+    Runs every inline aggregation query that previously lived in
+    ``routes.search.status`` and returns a structured :class:`IndexStats`. The
+    values are byte-for-byte the same as before the extraction — only the
+    location of the SQL changed. Cross-module figures (prediction errors,
+    embedding config) are intentionally left to the caller.
+    """
+    type_counts = conn.execute("SELECT source_type, COUNT(*) as count FROM chunks GROUP BY source_type").fetchall()
+
+    total: int = conn.execute("SELECT COUNT(*) as count FROM chunks").fetchone()["count"]
+
+    paper_count: int = conn.execute("SELECT COUNT(*) as count FROM papers").fetchone()["count"]
+    conclusion_count: int = conn.execute("SELECT COUNT(*) as count FROM conclusions").fetchone()["count"]
+    relationship_count: int = conn.execute("SELECT COUNT(*) as count FROM relationships").fetchone()["count"]
+    folder_summary_count: int = conn.execute("SELECT COUNT(*) as count FROM folder_summaries").fetchone()["count"]
+    method_count: int = conn.execute("SELECT COUNT(*) as count FROM methods").fetchone()["count"]
+    dataset_count: int = conn.execute("SELECT COUNT(*) as count FROM datasets").fetchone()["count"]
+    metric_count: int = conn.execute("SELECT COUNT(*) as count FROM metrics").fetchone()["count"]
+
+    recent = conn.execute(
+        "SELECT source_uri, source_type, COUNT(*) as chunks, created_at"
+        " FROM chunks GROUP BY source_uri ORDER BY created_at DESC LIMIT 5"
+    ).fetchall()
+
+    # Report the DB the connection actually opened (env/CLI-resolved, #449), not
+    # the hardcoded default — they differ when KNOWLEDGE_BASE_DB is set.
+    db_main = next((r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"), "")
+    db_path = Path(db_main) if db_main else None
+    db_size_bytes = db_path.stat().st_size if db_path and db_path.exists() else 0
+
+    job_counts: dict[str, int] = {}
+    for row in conn.execute("SELECT status, COUNT(*) as count FROM jobs GROUP BY status").fetchall():
+        job_counts[row["status"]] = row["count"]
+
+    space_counts: dict[str, int] = {}
+    for row in conn.execute("SELECT status, COUNT(*) as count FROM embed_spaces GROUP BY status").fetchall():
+        space_counts[row["status"]] = row["count"]
+
+    chunk_strategy_row = conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
+    chunk_strategy: str = chunk_strategy_row["value"] if chunk_strategy_row else "mechanical"
+
+    return {
+        "total_chunks": total,
+        "by_type": {row["source_type"]: row["count"] for row in type_counts},
+        "papers": paper_count,
+        "conclusions": conclusion_count,
+        "relationships": relationship_count,
+        "folder_summaries": folder_summary_count,
+        "methods": method_count,
+        "datasets": dataset_count,
+        "metrics": metric_count,
+        "recent_ingestions": [
+            {
+                "source_uri": row["source_uri"],
+                "source_type": row["source_type"],
+                "chunks": row["chunks"],
+                "created_at": row["created_at"],
+            }
+            for row in recent
+        ],
+        "jobs": job_counts,
+        "embed_spaces": space_counts,
+        "chunk_strategy": chunk_strategy,
+        "db_size_bytes": db_size_bytes,
+    }
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
