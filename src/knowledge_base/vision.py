@@ -1855,7 +1855,7 @@ def _enrich_with_omniparser(
     return omniparser_enriched
 
 
-def _figure_chunks_query(source_uri: str, pages: list[int] | None) -> tuple[str, tuple]:
+def _figure_chunks_query(source_uri: str, pages: list[int] | None) -> tuple[str, tuple[str | int, ...]]:
     """Build the SELECT that finds existing figure chunk ids for a scoped DELETE (#79).
 
     Returns the bare SELECT SQL (no wrapping parens) plus its bound params. When

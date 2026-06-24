@@ -289,6 +289,7 @@ class IndexStats(TypedDict):
     embed_spaces: dict[str, int]
     chunk_strategy: str
     db_size_bytes: int
+    db_path: str
 
 
 def get_index_stats(conn: sqlite3.Connection) -> IndexStats:
@@ -357,6 +358,7 @@ def get_index_stats(conn: sqlite3.Connection) -> IndexStats:
         "embed_spaces": space_counts,
         "chunk_strategy": chunk_strategy,
         "db_size_bytes": db_size_bytes,
+        "db_path": str(db_path) if db_path else "",
     }
 
 

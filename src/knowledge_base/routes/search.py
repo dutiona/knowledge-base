@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from fastmcp import FastMCP
 
@@ -104,11 +103,6 @@ def status() -> str:
     # here because they are already function calls, not inline SQL.
     stats = get_index_stats(conn)
 
-    # db_size_bytes is reported as a rounded MB value, and the on-disk path is
-    # derived from the connection the same way get_index_stats sized the file.
-    db_main = next((r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"), "")
-    db_path = Path(db_main) if db_main else None
-
     return json.dumps(
         {
             "total_chunks": stats["total_chunks"],
@@ -127,6 +121,6 @@ def status() -> str:
             "chunk_strategy": stats["chunk_strategy"],
             "recent_ingestions": stats["recent_ingestions"],
             "db_size_mb": round(stats["db_size_bytes"] / (1024 * 1024), 2),
-            "db_path": str(db_path) if db_path else "",
+            "db_path": stats["db_path"],
         }
     )
