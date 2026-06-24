@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 from knowledge_base.db import get_connection, init_schema, DEFAULT_EMBED_DIM
 from knowledge_base.exceptions import NotFoundError, ValidationError
-from knowledge_base.vision import _FIGURE_BASE, _FIGS_PER_PAGE
+from knowledge_base.vision import _FIGURE_BASE, _FIGS_PER_PAGE, _figure_chunks_query
 
 
 @pytest.fixture
@@ -20,6 +20,51 @@ def vision_conn(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
     return conn
+
+
+def test_figure_chunks_query_selects_correct_ids(vision_conn):
+    """_figure_chunks_query (#194) selects figure chunk ids for a source_uri,
+    optionally scoped to pages — replaces the old f-string subquery + [1:-1] hack.
+
+    Pins both branches (pages given / None), the OR-join over pages, and the
+    source_uri + source_type='figure' filters that bound the scoped DELETE (#79).
+    """
+    conn = vision_conn
+    uri = "/p/doc.pdf"
+
+    def add_fig(page: int, fig_idx: int, tag: str) -> int:
+        cidx = _FIGURE_BASE + page * _FIGS_PER_PAGE + fig_idx
+        conn.execute(
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+            "VALUES (?, ?, 'figure', ?, ?)",
+            (tag, f"figure {tag}", uri, cidx),
+        )
+        return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    p0 = add_fig(0, 0, "p0")
+    p1 = add_fig(1, 0, "p1")
+    p2 = add_fig(2, 0, "p2")
+    # Decoys that must NEVER match: a figure for ANOTHER uri, and a non-figure chunk for THIS uri.
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('other', 'x', 'figure', '/p/other.pdf', ?)",
+        (_FIGURE_BASE,),
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('text', 'x', 'pdf', ?, 0)",
+        (uri,),
+    )
+    conn.commit()
+
+    def run(pages: list[int] | None) -> set[int]:
+        sql, params = _figure_chunks_query(uri, pages)
+        return {r["id"] for r in conn.execute(sql, params).fetchall()}
+
+    assert run(None) == {p0, p1, p2}  # all figures for this uri (excludes other uri + non-figure)
+    assert run([1]) == {p1}  # single page
+    assert run([0, 2]) == {p0, p2}  # OR-join across pages
+    assert run([5]) == set()  # page with no figures
 
 
 OLD_SCHEMA_SQL = f"""

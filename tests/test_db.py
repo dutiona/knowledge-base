@@ -19,6 +19,7 @@ from knowledge_base.db import (
     escape_like,
     get_active_space,
     get_connection,
+    get_index_stats,
     init_schema,
     insert_chunk_vec,
 )
@@ -1604,3 +1605,62 @@ def test_char_bootstrap_idempotent_second_call_is_noop(tmp_path):
     assert after == 1
     now = dict(conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone())
     assert now == orig
+
+
+def test_get_index_stats_counts_and_structure(tmp_path):
+    """get_index_stats aggregates counts/structure backing the status tool (#217)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Three chunks across two source_types and two documents, with explicit
+    # created_at so recent_ingestions ordering (DESC) is deterministic.
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, created_at) "
+        "VALUES ('h1', 'c1', 'pdf', '/tmp/a.pdf', 0, '2026-01-01 00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, created_at) "
+        "VALUES ('h2', 'c2', 'pdf', '/tmp/a.pdf', 1, '2026-01-01 00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, created_at) "
+        "VALUES ('h3', 'c3', 'note', '/tmp/b.md', 0, '2026-01-02 00:00:00')"
+    )
+    # A paper and a pending job exercise the cross-table count/group branches.
+    conn.execute("INSERT INTO papers (title) VALUES ('Some Paper')")
+    paper_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO jobs (paper_id, job_type, status) VALUES (?, 'extract_figures', 'pending')",
+        (paper_id,),
+    )
+    conn.commit()
+
+    stats = get_index_stats(conn)
+
+    assert stats["total_chunks"] == 3
+    assert stats["by_type"] == {"pdf": 2, "note": 1}
+    assert stats["papers"] == 1
+    assert stats["conclusions"] == 0
+    assert stats["relationships"] == 0
+    assert stats["folder_summaries"] == 0
+    assert stats["methods"] == 0
+    assert stats["datasets"] == 0
+    assert stats["metrics"] == 0
+    assert stats["jobs"] == {"pending": 1}
+    # The bootstrapped default space is active, not yet 'building'/'ready' state.
+    assert isinstance(stats["embed_spaces"], dict)
+    assert sum(stats["embed_spaces"].values()) >= 1
+    assert stats["chunk_strategy"] == "mechanical"
+    assert stats["db_size_bytes"] > 0
+    # db_path is resolved from the connection's 'main' db (PRAGMA database_list).
+    assert stats["db_path"].endswith("test.db")
+
+    # recent_ingestions: most-recent document first, with per-document chunk counts.
+    recent = stats["recent_ingestions"]
+    assert len(recent) == 2
+    assert recent[0]["source_uri"] == "/tmp/b.md"
+    assert recent[0]["source_type"] == "note"
+    assert recent[0]["chunks"] == 1
+    assert recent[1]["source_uri"] == "/tmp/a.pdf"
+    assert recent[1]["chunks"] == 2

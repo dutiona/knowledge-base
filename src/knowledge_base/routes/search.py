@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from fastmcp import FastMCP
 
 from .._conn import _get_conn
-from ..db import co_occurrence_pairs
+from ..db import co_occurrence_pairs, get_index_stats
 from ..embed_swap import get_embed_config
 from ..exceptions import KnowledgeBaseError
 from ..prediction_errors import detect_and_log, get_prediction_error_count
@@ -99,65 +98,29 @@ def status() -> str:
     """Get index statistics: chunk counts by type, recent ingestions, DB size."""
     conn = _get_conn()
 
-    type_counts = conn.execute("SELECT source_type, COUNT(*) as count FROM chunks GROUP BY source_type").fetchall()
-
-    total = conn.execute("SELECT COUNT(*) as count FROM chunks").fetchone()["count"]
-
-    paper_count = conn.execute("SELECT COUNT(*) as count FROM papers").fetchone()["count"]
-    conclusion_count = conn.execute("SELECT COUNT(*) as count FROM conclusions").fetchone()["count"]
-    relationship_count = conn.execute("SELECT COUNT(*) as count FROM relationships").fetchone()["count"]
-    folder_summary_count = conn.execute("SELECT COUNT(*) as count FROM folder_summaries").fetchone()["count"]
-    method_count = conn.execute("SELECT COUNT(*) as count FROM methods").fetchone()["count"]
-    dataset_count = conn.execute("SELECT COUNT(*) as count FROM datasets").fetchone()["count"]
-    metric_count = conn.execute("SELECT COUNT(*) as count FROM metrics").fetchone()["count"]
-
-    recent = conn.execute(
-        "SELECT source_uri, source_type, COUNT(*) as chunks, created_at"
-        " FROM chunks GROUP BY source_uri ORDER BY created_at DESC LIMIT 5"
-    ).fetchall()
-
-    # Report the DB the connection actually opened (env/CLI-resolved, #449), not
-    # the hardcoded default — they differ when KNOWLEDGE_BASE_DB is set.
-    db_main = next((r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"), "")
-    db_path = Path(db_main) if db_main else None
-    db_size_bytes = db_path.stat().st_size if db_path and db_path.exists() else 0
-
-    job_counts = {}
-    for row in conn.execute("SELECT status, COUNT(*) as count FROM jobs GROUP BY status").fetchall():
-        job_counts[row["status"]] = row["count"]
-
-    space_counts = {}
-    for row in conn.execute("SELECT status, COUNT(*) as count FROM embed_spaces GROUP BY status").fetchall():
-        space_counts[row["status"]] = row["count"]
+    # All inline count/aggregation SQL now lives in db.get_index_stats (#217);
+    # the cross-module figures below (prediction errors, embedding config) stay
+    # here because they are already function calls, not inline SQL.
+    stats = get_index_stats(conn)
 
     return json.dumps(
         {
-            "total_chunks": total,
-            "by_type": {row["source_type"]: row["count"] for row in type_counts},
-            "papers": paper_count,
-            "conclusions": conclusion_count,
-            "relationships": relationship_count,
-            "folder_summaries": folder_summary_count,
-            "methods": method_count,
-            "datasets": dataset_count,
-            "metrics": metric_count,
+            "total_chunks": stats["total_chunks"],
+            "by_type": stats["by_type"],
+            "papers": stats["papers"],
+            "conclusions": stats["conclusions"],
+            "relationships": stats["relationships"],
+            "folder_summaries": stats["folder_summaries"],
+            "methods": stats["methods"],
+            "datasets": stats["datasets"],
+            "metrics": stats["metrics"],
             "prediction_errors": get_prediction_error_count(conn),
-            "jobs": job_counts,
-            "embed_spaces": space_counts,
+            "jobs": stats["jobs"],
+            "embed_spaces": stats["embed_spaces"],
             "embed_config": get_embed_config(conn),
-            "chunk_strategy": (lambda r: r["value"] if r else "mechanical")(
-                conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
-            ),
-            "recent_ingestions": [
-                {
-                    "source_uri": row["source_uri"],
-                    "source_type": row["source_type"],
-                    "chunks": row["chunks"],
-                    "created_at": row["created_at"],
-                }
-                for row in recent
-            ],
-            "db_size_mb": round(db_size_bytes / (1024 * 1024), 2),
-            "db_path": str(db_path) if db_path else "",
+            "chunk_strategy": stats["chunk_strategy"],
+            "recent_ingestions": stats["recent_ingestions"],
+            "db_size_mb": round(stats["db_size_bytes"] / (1024 * 1024), 2),
+            "db_path": stats["db_path"],
         }
     )
