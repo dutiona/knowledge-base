@@ -1339,13 +1339,15 @@ def test_char_migrate_jobs_types_accepts_auto_relate_and_rebuilds_index(tmp_path
 # === [#395] _migrate_papers_fts (backfill guard contract) ==================
 
 
-def test_char_migrate_papers_fts_count_guard_reflects_content_table(tmp_path):
-    """SURPRISE pinned: papers_fts is an external-content FTS5 table, so
-    `SELECT count(*) FROM papers_fts` returns the *papers* (content) table row
-    count, NOT the number of indexed FTS entries. Build a legacy schema where
-    the FTS index is genuinely UNPOPULATED (no trigger has fired) yet papers
-    has a row -> the `count > 0` guard in _migrate_papers_fts short-circuits and
-    its backfill INSERT never runs. The title stays unsearchable."""
+def test_migrate_papers_fts_backfills_legacy_index(tmp_path):
+    """_migrate_papers_fts backfills a legacy external-content papers_fts index (#486).
+
+    papers_fts is an external-content FTS5 table, so `SELECT count(*) FROM
+    papers_fts` returns the *papers* (content) row count, NOT the number of
+    indexed entries. The old `count > 0` guard was therefore dead code: it
+    short-circuited whenever papers had rows, leaving a legacy DB's index empty
+    and its titles unsearchable. After the fix the migration rebuilds the index,
+    so a title indexed by no trigger becomes searchable."""
     conn = get_connection(tmp_path / "test.db")
     # Legacy schema: papers + external-content papers_fts, NO trigger to populate.
     conn.executescript(
@@ -1359,24 +1361,17 @@ def test_char_migrate_papers_fts_count_guard_reflects_content_table(tmp_path):
     )
     conn.commit()
 
-    # The FTS index has no entries yet (MATCH finds nothing)...
+    # Before: the FTS index has no entries (no trigger fired), so MATCH finds
+    # nothing — even though count(*) reflects the content table (papers) as 1
+    # (the external-content semantics that made the old count-guard dead code).
     assert conn.execute("SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'reinforcement'").fetchall() == []
-    # ...but count(*) reflects the content table (papers), so it reads as 1.
     assert conn.execute("SELECT COUNT(*) FROM papers_fts").fetchone()[0] == 1
 
     _migrate_papers_fts(conn)
     conn.commit()
 
-    # Because count(*) > 0, the guard returned early: the backfill INSERT was
-    # NOT executed, so the title remains unsearchable. (Dead-code backfill.)
-    assert conn.execute("SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'reinforcement'").fetchall() == []
-
-    # Non-vacuous guard: prove the unsearchable result is the MIGRATION's failure,
-    # not an unpopulatable index. A forced FTS rebuild DOES make the title
-    # searchable — so a correct backfill would have too. This distinguishes the
-    # buggy short-circuit from "the index simply cannot be populated here".
-    conn.execute("INSERT INTO papers_fts(papers_fts) VALUES('rebuild')")
-    conn.commit()
+    # After: the migration rebuilt the external-content index, so the title is
+    # now searchable.
     assert conn.execute("SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'reinforcement'").fetchall() != []
 
 
