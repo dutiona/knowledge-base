@@ -181,6 +181,7 @@ erDiagram
         INTEGER chunk_count
         INTEGER total_chunks
         INTEGER matryoshka_base_dim
+        TEXT element_type
     }
 
     chunks ||--o| chunks_vec : "embedding"
@@ -316,11 +317,14 @@ Registry for embedding spaces. Each space owns a `sqlite-vec` virtual table and 
 | `chunk_count`         | INTEGER | --               | `0`               | Number of chunks backfilled so far                                      |
 | `total_chunks`        | INTEGER | --               | --                | Total chunks targeted for backfill                                      |
 | `matryoshka_base_dim` | INTEGER | --               | `NULL`            | Native model dimension for Matryoshka truncation (NULL = no truncation) |
+| `element_type`        | TEXT    | NOT NULL, CHECK  | `'float32'`       | Vector element storage type: `float32` or `int8` (quantized)            |
 
 **CHECK constraints:**
 
 - `chunk_strategy IN ('mechanical', 'semantic')`
 - `status IN ('active', 'populating', 'deprecated')`
+- `element_type IN ('float32', 'int8')`
+- `matryoshka_base_dim IS NULL OR matryoshka_base_dim > dim`
 
 **Index:** `idx_embed_spaces_one_active` -- UNIQUE on `(status)` WHERE `status = 'active'` (enforces at most one active space)
 
