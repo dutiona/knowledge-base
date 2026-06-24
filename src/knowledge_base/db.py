@@ -470,17 +470,24 @@ def _migrate_relationship_types(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_papers_fts(conn: sqlite3.Connection) -> None:
-    """Backfill papers_fts for databases created before this index existed."""
+    """Backfill papers_fts for databases created before this index existed (#486).
+
+    papers_fts is an external-content FTS5 table, so ``SELECT count(*) FROM
+    papers_fts`` returns the *papers* (content) row count, NOT the number of
+    indexed entries. The previous ``count > 0`` guard was therefore dead code:
+    it skipped the backfill whenever papers had any rows, leaving a legacy
+    DB's index permanently empty and its titles unsearchable. FTS5's built-in
+    ``'rebuild'`` command repopulates the external-content index from the content
+    table idempotently, so it is safe whether the index is empty, stale, or
+    already current.
+    """
     row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='papers_fts'").fetchone()
     if not row:
-        return
-    count = conn.execute("SELECT count(*) FROM papers_fts").fetchone()[0]
-    if count > 0:
         return
     paper_count = conn.execute("SELECT count(*) FROM papers").fetchone()[0]
     if paper_count == 0:
         return
-    conn.execute("INSERT INTO papers_fts(rowid, title) SELECT id, title FROM papers")
+    conn.execute("INSERT INTO papers_fts(papers_fts) VALUES('rebuild')")
 
 
 def _migrate_session_id(conn: sqlite3.Connection) -> None:
