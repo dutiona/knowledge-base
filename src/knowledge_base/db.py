@@ -363,9 +363,17 @@ def get_index_stats(conn: sqlite3.Connection) -> IndexStats:
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
-    # ``None`` resolves via $KNOWLEDGE_BASE_DB / DEFAULT_DB_PATH (#449), so callers
-    # that don't pass an explicit path (e.g. the MCP server via _conn._get_conn)
-    # honor the configured path. Callers passing a path keep full control.
+    """Open a configured SQLite connection: WAL, foreign keys, sqlite-vec, Row factory.
+
+    The connection loads the ``sqlite-vec`` extension, uses a dict-like
+    :class:`sqlite3.Row` factory, and enables WAL journaling + foreign-key
+    enforcement. The parent directory of *db_path* is created if missing.
+
+    When *db_path* is ``None`` it resolves via ``$KNOWLEDGE_BASE_DB`` /
+    ``DEFAULT_DB_PATH`` (#449), so callers that don't pass an explicit path (e.g.
+    the MCP server via ``_conn._get_conn``) honour the configured path; callers
+    passing an explicit path keep full control.
+    """
     if db_path is None:
         db_path = resolve_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
