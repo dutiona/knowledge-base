@@ -123,6 +123,191 @@ class TestGetProvider:
         assert p_ollama is not p_openai
 
 
+class TestOpenAICompatProvider:
+    """OpenAICompatProvider reaches any OpenAI-compatible backend via base_url (AC1)."""
+
+    @pytest.fixture(autouse=True)
+    def _allow_public(self):
+        # These tests target embed mechanics, not SSRF; keep them offline.
+        with patch("knowledge_base.utils.is_private_ip", return_value=False):
+            yield
+
+    def test_embeds_against_base_url(self):
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        captured = {}
+
+        def _mock_post(url, **kwargs):
+            captured["url"] = url
+            captured.update(kwargs)
+
+            class FakeResp:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"data": [{"index": 0, "embedding": [1.0, 0.0, 0.0]}]}
+
+            return FakeResp()
+
+        provider = OpenAICompatProvider(base_url="http://vllm.example.com", api_key="k")
+        with patch("knowledge_base.embeddings.httpx.post", _mock_post):
+            result = provider.embed(["hello"], model="bge-m3", expected_dim=3)
+
+        assert captured["url"] == "http://vllm.example.com/v1/embeddings"
+        assert captured["headers"]["Authorization"] == "Bearer k"
+        assert captured["follow_redirects"] is False
+        assert captured["json"]["dimensions"] == 3
+        # L2-normalized
+        assert result[0] is not None
+        assert abs(sum(x * x for x in result[0]) - 1.0) < 1e-6
+
+    def test_strips_v1_suffix(self):
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        captured = {}
+
+        def _mock_post(url, **kwargs):
+            captured["url"] = url
+
+            class FakeResp:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"data": [{"index": 0, "embedding": [1.0, 0.0]}]}
+
+            return FakeResp()
+
+        provider = OpenAICompatProvider(base_url="http://host/v1", api_key=None)
+        with patch("knowledge_base.embeddings.httpx.post", _mock_post):
+            provider.embed(["x"], model="m", expected_dim=2)
+        # normalize-first means no /v1/v1 doubling
+        assert captured["url"] == "http://host/v1/embeddings"
+
+    def test_no_auth_header_when_key_none(self):
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        captured = {}
+
+        def _mock_post(url, **kwargs):
+            captured.update(kwargs)
+
+            class FakeResp:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"data": [{"index": 0, "embedding": [1.0, 0.0]}]}
+
+            return FakeResp()
+
+        provider = OpenAICompatProvider(base_url="http://local-tei.example.com", api_key=None)
+        with patch("knowledge_base.embeddings.httpx.post", _mock_post):
+            provider.embed(["x"], model="m", expected_dim=2)
+        assert "Authorization" not in captured.get("headers", {})
+
+    def test_resolves_env_api_key_at_call_time(self, monkeypatch):
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        monkeypatch.setenv("KB_VLLM_KEY", "sk-from-env")
+        captured = {}
+
+        def _mock_post(url, **kwargs):
+            captured.update(kwargs)
+
+            class FakeResp:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"data": [{"index": 0, "embedding": [1.0, 0.0]}]}
+
+            return FakeResp()
+
+        # The raw spec 'env:KB_VLLM_KEY' is stored; the secret is resolved only at call time.
+        provider = OpenAICompatProvider(base_url="http://vllm.example.com", api_key="env:KB_VLLM_KEY")
+        with patch("knowledge_base.embeddings.httpx.post", _mock_post):
+            provider.embed(["x"], model="m", expected_dim=2)
+        assert captured["headers"]["Authorization"] == "Bearer sk-from-env"
+
+    def test_call_time_guard_rejects_private_base_url(self):
+        from knowledge_base.exceptions import ValidationError
+
+        # Override the autouse public mock for this one: a genuinely private host must reject.
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        provider = OpenAICompatProvider(base_url="http://169.254.169.254", api_key="k")
+        with (
+            patch("knowledge_base.utils.is_private_ip", return_value=True),
+            pytest.raises(ValidationError, match="private"),
+        ):
+            provider.embed(["x"], model="m", expected_dim=2)
+
+    def test_loopback_requires_optin(self):
+        from knowledge_base.embeddings import OpenAICompatProvider
+        from knowledge_base.exceptions import ValidationError
+
+        # is_private_ip un-mocked path: localhost rejected without opt-in, accepted with it.
+        with patch("knowledge_base.utils.is_private_ip", return_value=True):
+            no_optin = OpenAICompatProvider(base_url="http://localhost:11434", api_key=None)
+            with pytest.raises(ValidationError, match="private"):
+                no_optin.embed(["x"], model="m", expected_dim=2)
+
+        captured = {}
+
+        def _mock_post(url, **kwargs):
+            captured["url"] = url
+
+            class FakeResp:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"data": [{"index": 0, "embedding": [1.0, 0.0]}]}
+
+            return FakeResp()
+
+        with (
+            patch("knowledge_base.utils.is_private_ip", return_value=True),
+            patch("knowledge_base.embeddings.httpx.post", _mock_post),
+        ):
+            optin = OpenAICompatProvider(base_url="http://localhost:11434/v1", api_key=None, allow_loopback=True)
+            optin.embed(["x"], model="m", expected_dim=2)
+        assert captured["url"] == "http://localhost:11434/v1/embeddings"
+
+
+class TestProviderConfigCache:
+    """The frozen-ProviderConfig cache key fixes the openai_compat name-collision bug (AC1)."""
+
+    def test_distinct_base_urls_do_not_collide(self):
+        from knowledge_base.embeddings import OpenAICompatProvider, ProviderConfig
+
+        cfg_a = ProviderConfig(family="openai_compat", base_url="http://host-a.example.com", api_key="k")
+        cfg_b = ProviderConfig(family="openai_compat", base_url="http://host-b.example.com", api_key="k")
+        pa = get_provider(cfg=cfg_a)
+        pb = get_provider(cfg=cfg_b)
+        assert pa is not pb
+        assert isinstance(pa, OpenAICompatProvider)
+        assert isinstance(pb, OpenAICompatProvider)
+        assert pa._base_url == "http://host-a.example.com"
+        assert pb._base_url == "http://host-b.example.com"
+
+    def test_same_config_reuses_instance(self):
+        from knowledge_base.embeddings import ProviderConfig
+
+        cfg = ProviderConfig(family="openai_compat", base_url="http://host.example.com", api_key="k")
+        assert get_provider(cfg=cfg) is get_provider(cfg=cfg)
+
+    def test_provider_config_repr_redacts_key(self):
+        from knowledge_base.embeddings import ProviderConfig
+
+        cfg = ProviderConfig(family="openai_compat", base_url="https://u:secret@host.example.com", api_key="sk-xyz")
+        text = repr(cfg)
+        assert "sk-xyz" not in text
+        assert "secret" not in text
+
+
 class TestEmbedDispatch:
     """Test that module-level embed()/embed_single() dispatch through providers."""
 
@@ -171,6 +356,10 @@ class TestOpenAIProvider:
     @pytest.fixture(autouse=True)
     def _set_api_key(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        # OpenAICompatProvider.embed now runs a call-time validate_base_url; the OpenAI
+        # literal host is public but resolving it would hit the network — keep offline.
+        with patch("knowledge_base.utils.is_private_ip", return_value=False):
+            yield
 
     def test_implements_protocol(self):
         from knowledge_base.embeddings import OpenAIProvider
