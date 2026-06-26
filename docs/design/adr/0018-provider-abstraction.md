@@ -215,21 +215,30 @@ This is a hard requirement, not advice.
 - **The SSRF guard MUST stay for any non-loopback base_url.** A hosted endpoint can be
   attacker-influenced (an open-redirect, a typo'd host, a DNS-rebind); blocking
   non-global targets prevents the classic cloud-metadata / internal-service pivot.
-- **Loopback is the deliberate exception, scoped tightly — to literals only.** To make
-  local `openai_compat` servers (vLLM, LM Studio, TEI on `localhost`) first-class — the
-  current code wrongly rejects them — the guard permits a `base_url` whose host is a
-  **loopback IP literal** (`127.0.0.0/8`, `::1`) **only when an explicit opt-in config
-  flag `allow_loopback_base_url=true` is set**. The exception is deliberately restricted
-  to literals: it does **not** extend to any `hostname` that merely resolves to loopback
-  (e.g. `127.0.0.1.nip.io`, or a name whose A/AAAA record points at `127.0.0.1`). That
-  resolve-to-loopback case is exactly the DNS-rebinding vector `is_private_ip` was built
-  to defeat (it resolves all A/AAAA records and rejects if any is non-global), so the
-  flag must be checked **on the parsed host being an IP literal in the loopback range**,
-  before any DNS resolution — never by "did this resolve to loopback." The default
-  remains fail-closed: a non-flagged private/loopback URL is rejected, and the
-  non-loopback SSRF floor (private, link-local, metadata, rebinding) is **always**
-  mandatory regardless of the flag. This keeps the SSRF floor intact while removing the
-  "you can't run a local OpenAI-compatible server" footgun.
+- **Loopback is the deliberate exception, scoped tightly.** To make local `openai_compat`
+  servers (Ollama, vLLM, LM Studio, TEI) first-class — the current code wrongly rejects
+  them — the guard permits a `base_url` whose host is a **loopback IP literal**
+  (`127.0.0.0/8`, `::1`) **or the RFC-6761 reserved name `localhost`** (which a conformant
+  resolver MUST map to loopback and MUST NOT send to the network, so it is _not_ a
+  DNS-rebinding vector), **only when an explicit opt-in config flag
+  `allow_loopback_base_url=true` is set**. The reserved-name allowance is what makes the
+  recommended `http://localhost:11434/v1` local config first-class — without it the guard
+  would reject the very URL this ADR tells operators to use. The exception is restricted to
+  those two forms: it does **not** extend to any _other_ `hostname` that merely resolves to
+  loopback (e.g. `127.0.0.1.nip.io`, or a name whose A/AAAA record points at `127.0.0.1`).
+  That resolve-to-loopback case is exactly the DNS-rebinding vector `is_private_ip` was
+  built to defeat (it resolves all A/AAAA records and rejects if any is non-global), so the
+  flag is checked **on the parsed host being either a loopback IP literal or the exact
+  reserved label `localhost`**, before any DNS resolution — never by "did this resolve to
+  loopback." The default remains fail-closed: a non-flagged private/loopback URL is
+  rejected, and the non-loopback SSRF floor (private, link-local, metadata, rebinding) is
+  **always** mandatory regardless of the flag.
+- **Redirects are a per-request invariant, not a one-time check.** Validating only the
+  configured `base_url` is insufficient: a permitted host can open-redirect (or DNS-rebind
+  between validation and connect) to an internal target. The HTTP client MUST either
+  **disable cross-host redirect-following** or **re-run the guard on every redirect target**
+  before issuing the next hop. The guard binds the _actual connect target_ of each request,
+  before and after any redirect — never just the configured string.
 - **API keys: env-first, never logged, never returned.** A key may be given inline or,
   preferred, as an `env:VARNAME` indirection that is resolved at call time and **never
   written to the DB**. Inline keys are stored in the `config` table (documented as

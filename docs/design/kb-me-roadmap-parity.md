@@ -110,7 +110,7 @@ The owner's end-state — KB DB + ME DB in the cloud, shared across machines —
 
 **New KB epics/issues to file** (title = Conventional-Commits style; parent = existing KB epic):
 
-1. `feat(db): E0 faithful-metric substrate — whitening W + projection_matrices + CSLS` — under **#482** (landscape-gaps). The KB counterpart to ME #763. Sub-issues: (a) `projection_matrices` table + `element_type='whitened'` row; (b) CSLS in `_vec_search`; (c) re-point `auto_relate`/`folder_summaries`/search at the whitened space; (d) RMT Gavish–Donoho guard in `embed_swap.py`; (e) Euler-χ corpus-health monitor on the kNN graph.
+1. `feat(db): E0 faithful-metric substrate — whitening W + projection_matrices + CSLS` — under **#482** (landscape-gaps). The KB counterpart to ME #763. Sub-issues: (a) `projection_matrices` table + a whitened `embed_spaces` row (distinguished by `name`/`status`; `element_type` stays `float32` — it is `CHECK`-constrained to the vec0 storage encoding `float32`/`int8`, so the whitened _role_ lives in `projection_matrices`, never in `element_type`); (b) CSLS in `_vec_search`; (c) re-point `auto_relate`/`folder_summaries`/search at the whitened space; (d) RMT Gavish–Donoho guard in `embed_swap.py`; (e) Euler-χ corpus-health monitor on the kNN graph.
 2. `feat(search): diffusion-distance recall ranker on whitened kNN graph` — under **#472** (search-quality). Gated on #1; rebuild auto-relate edges on whitened vectors first.
 3. `feat(search): LID adaptive-k + OOD abstention` — under **#472**. Reuses the kNN from #1/#2; `lid` column.
 4. `feat(search): LEACE concept-erasure for cross-domain retrieval` — under **#472**. Gated on #1 (rides the whitened space); `leace_projection` cache. Parity-recommended (ADR-0017 §basis clause).

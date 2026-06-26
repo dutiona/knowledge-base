@@ -145,14 +145,18 @@ state it was fitted on changes. Two mechanisms are normative:
   consumer can read a new epoch against old vectors or vice versa.
 
 - **`DerivedStructureRegistry`** — a registry of every materialized derived structure,
-  each tagged with the **content fingerprint** it was built against. A structure is
-  **fresh iff its stored fingerprint equals the space's current fingerprint**; otherwise
-  it is stale and MUST be refused or rematerialized before use.
+  carrying both the **metric fingerprint** it was built against and a **`dirty_since`
+  marker** flipped by the ingest/expire notifier on **every** corpus write. A structure is
+  **fresh iff (its stored fingerprint equals the space's current fingerprint) AND (it has
+  not been dirtied by a write since it was materialized)**; otherwise it is stale and MUST
+  be refused or rematerialized before use. The two gates are orthogonal — the fingerprint
+  catches a changed _metric_, the dirty marker catches changed _corpus content_ — and
+  **both** are required.
 
-The **content fingerprint** is **not the epoch alone**. It is:
+The **metric fingerprint** is **not the epoch alone**. It is:
 
 ```
-fingerprint = hash{ epoch, W_version, csls_k, row_count_bucket }
+fingerprint = hash{ epoch, W_version, csls_k }
 ```
 
 **Why epoch-alone is insufficient.** The epoch advances only on a reconstruction/promote
@@ -162,10 +166,19 @@ re-estimating it on a grown corpus) produces a new linear map while the **epoch 
 unchanged** — the identity tuple never moved. A derived structure keyed on epoch alone
 would read as fresh against a metric that has silently shifted underneath it: **"looks
 fresh, is corrupt"** — the exact silent-corruption signature this whole policy family
-exists to kill, relocated from identity (ADR-0015) to metric. Including `W_version`,
-`csls_k`, and a bucketed `row_count` in the fingerprint closes that hole: any change to
-the de-biasing map, the hubness parameter, or a material change in corpus size flips the
-fingerprint and invalidates everything downstream, even when the epoch holds.
+exists to kill, relocated from identity (ADR-0015) to metric. Including `W_version` and
+`csls_k` closes that hole: any change to the de-biasing map or the hubness parameter flips
+the fingerprint, even when the epoch holds.
+
+**Corpus content is a separate axis — deliberately _not_ in the fingerprint.** An
+incremental ingest leaves `epoch`/`W_version`/`csls_k` unchanged yet still stales a kNN
+graph or CSLS cache built before it. Folding a coarse `row_count_bucket` into the
+fingerprint does **not** fix this — an ingest within the same bucket still reads fresh —
+so content-freshness is the `dirty_since` marker's job (flipped on every write), which is
+why the freshness rule is the **two-gate AND** above, not a fingerprint check alone.
+Material corpus _growth_ is handled not by invalidation but by a separate **W-refit
+policy**: when growth crosses a threshold `W` is re-fit, which bumps `W_version` and so
+flips the fingerprint through the normal path.
 
 ### 4. Composition with ADR-0015 and reconstruction
 
