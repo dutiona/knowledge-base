@@ -6,7 +6,7 @@ name: Auto-add to project
 # scope. The default GITHUB_TOKEN cannot write user-level Projects v2, so without
 # this secret every job 403s on the first item (harmless until set).
 #
-# Project numbers are placeholders — fill from scripts/.pm-ids.env after
+# Project numbers are placeholders — fill from utils/scripts/.pm-ids.env after
 # setup-projects.sh has created the boards.
 
 on:

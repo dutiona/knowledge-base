@@ -5,13 +5,13 @@
 # add the issue to KB — Main, and set its Phase + Priority fields. Then add the
 # fixed Critical-Path member list. Closed issues are never touched.
 #
-# Requires scripts/.pm-ids.env (from setup-projects.sh) for project/field/option
+# Requires utils/scripts/.pm-ids.env (from setup-projects.sh) for project/field/option
 # ids — gh project item-edit targets ids, not names.
 #
 # Usage:
-#   scripts/migrate-issues.sh --dry-run            # print every gh call
-#   scripts/migrate-issues.sh                      # apply
-#   scripts/migrate-issues.sh --dry-run mapping.tsv  # explicit mapping path
+#   utils/scripts/migrate-issues.sh --dry-run            # print every gh call
+#   utils/scripts/migrate-issues.sh                      # apply
+#   utils/scripts/migrate-issues.sh --dry-run mapping.tsv  # explicit mapping path
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/pm-common.sh

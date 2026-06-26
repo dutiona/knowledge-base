@@ -67,7 +67,7 @@ Additive: `priority:{critical,high,medium,low}`, `severity:{…}` (super-qa only
 `status:{blocked,needs-design}`, `super-qa`. Deferral is the Project **Phase**
 field value `Deferred`, not a label. New issues/PRs auto-add to the GitHub
 Projects via `.github/workflows/add-to-project.yml`. Full scheme:
-`docs/design/project-management.md`; scripts in `scripts/` (`scripts/README.md`).
+`docs/design/project-management.md`; scripts in `utils/scripts/` (`utils/scripts/README.md`).
 
 ## Architecture Docs
 

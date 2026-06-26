@@ -54,7 +54,7 @@ embeddings · extraction · vision · papers · db · mcp · infra · integratio
 docs). Additive: `priority:{critical,high,medium,low}`, `severity:*` (super-qa
 only), `status:{blocked,needs-design}`, `super-qa`. Deferral = Project **Phase**
 field value `Deferred`, not a label. New issues/PRs auto-add to GitHub Projects.
-Full scheme: `docs/design/project-management.md`; scripts in `scripts/`.
+Full scheme: `docs/design/project-management.md`; scripts in `utils/scripts/`.
 
 ## Deep-Dive Docs
 

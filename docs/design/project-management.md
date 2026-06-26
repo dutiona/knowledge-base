@@ -222,7 +222,7 @@ useful — KB has a large super-qa backlog (#181, #199–#233, #297, #298, #309,
 
 > **Sortable fields (added post-rollout):** a Projects table can only sort/group
 > by a _field_, not a label — so this board carries its own `Priority`,
-> `Severity`, and `Phase` single-select fields (`scripts/sync-board-fields.sh`),
+> `Severity`, and `Phase` single-select fields (`utils/scripts/sync-board-fields.sh`),
 > populated from the issues' `priority:`/`severity:` labels + Main's `Phase`, and
 > re-synced on `migrate-issues.sh` re-runs. Projects fields are per-board, so
 > these mirror — they do not share — Main's; the **labels stay the source of
@@ -355,7 +355,7 @@ jobs:
 
 Critical Path board is **manual** (no auto-job), matching reify.
 
-### 5.2 Labels-as-code (`scripts/sync-labels.sh`)
+### 5.2 Labels-as-code (`utils/scripts/sync-labels.sh`)
 
 An idempotent `gh label create … --force` script defining the full taxonomy
 (names, colors, descriptions). Run once to migrate, re-run to converge. Colors

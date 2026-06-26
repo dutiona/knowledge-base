@@ -12,8 +12,8 @@
 # the label stays authoritative and the fields never silently drift.
 #
 # Idempotent. Usage:
-#   scripts/sync-board-fields.sh --dry-run
-#   scripts/sync-board-fields.sh
+#   utils/scripts/sync-board-fields.sh --dry-run
+#   utils/scripts/sync-board-fields.sh
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/pm-common.sh

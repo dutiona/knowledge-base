@@ -35,8 +35,8 @@ tmp/
 !.claude/skills/
 .serena
 .worktrees/
-scripts/.pm-ids.env
-scripts/mapping.tsv
+utils/scripts/.pm-ids.env
+utils/scripts/mapping.tsv
 
 # pytest-cov artifact
 .coverage

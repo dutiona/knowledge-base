@@ -12,9 +12,9 @@
 #   4. DELETE noise default labels — report usage across all states first.
 #
 # Usage:
-#   scripts/sync-labels.sh --dry-run      # print every mutation, change nothing
-#   scripts/sync-labels.sh                # apply (prompts before each deletion)
-#   scripts/sync-labels.sh --yes          # apply, auto-confirm deletions
+#   utils/scripts/sync-labels.sh --dry-run      # print every mutation, change nothing
+#   utils/scripts/sync-labels.sh                # apply (prompts before each deletion)
+#   utils/scripts/sync-labels.sh --yes          # apply, auto-confirm deletions
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/pm-common.sh
