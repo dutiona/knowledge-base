@@ -1,6 +1,6 @@
 # Implementation Plan — Provider abstraction (ADR-0018, issue #516)
 
-**Status:** awaiting approval
+**Status:** implemented (commits A–F on `feat/516-provider-abstraction`) — see Post-Implementation Audit at end
 **Issue:** [#516](https://github.com/dutiona/knowledge-base/issues/516) — `feat(embeddings): provider abstraction (ADR-0018) — openai_compat/anthropic_compat/ollama/onnx`
 **Spec:** `docs/design/adr/0018-provider-abstraction.md` (Accepted 2026-06-26 — referenced, **not** restated/amended here)
 **Worktree:** `/home/mroynard/dev/knowledge-base/.worktrees/feat-516-provider-abstraction` (branch `feat/516-provider-abstraction`, off `master`, exists)
@@ -429,3 +429,73 @@ Worktree + branch already exist.
 | AC6 tuple populated + mismatch hard-reject + no key in logs            | C, D  | identity reject + no-key-in-logs      |
 | owner: `localhost` reserved name                                       | A     | exact-`localhost` accepted on flag    |
 | owner: redirect re-validation                                          | A     | redirects disabled both paths         |
+
+---
+
+## Post-Implementation Audit
+
+Audit of the 42 top-level plan checkboxes against what shipped (commits A–F on
+`feat/516-provider-abstraction`). Divergence ≈ 17% (< 30% → no arbitration required;
+`advisor()` was unavailable this session regardless). All acceptance criteria satisfied.
+
+### Per-slice status
+
+- **Slice A (SSRF guard)** — **Implemented** as planned. The clean-slate review's HIGH
+  finding was honored: task **A4-tests** repatched all 7 `knowledge_base.llm.is_private_ip`
+  patchers to the `utils` namespace (verified by a full `test_llm.py` green run, not a subset).
+- **Slice B (OpenAICompatProvider + cache)** — **Implemented**, with one **Modified**:
+  task **B3** (thread `ProviderConfig` through `ingest`/`embed_swap`) was **moved to Slice C**,
+  where `get_embed_config` gains `base_url`/`api_key` — doing it in B with `base_url=None` would
+  have been rework. Same intent, different slice.
+- **Slice C (configure_embeddings + migration)** — **Implemented**, plus **Added** (necessary
+  for the ACs, not scope creep):
+  - LLM-side parity for AC4/AC5: `configure_llm` gained write-time SSRF validation + the shared
+    `allow_loopback_base_url` flag, and `_get_llm_config` now returns `allow_loopback` (so a
+    local `openai_compat` LLM works end-to-end). The plan scoped C to `configure_embeddings`;
+    AC4/AC5 apply to the LLM path too.
+  - Threaded `ProviderConfig` through **`search.py`** and **`folder_summaries.py`** (not only
+    `ingest`/`embed_swap`) — without it an `openai_compat` config would fail the bare-name path
+    at query time.
+  - **Preserve-on-None** semantics for the shared `allow_loopback_base_url` flag (param
+    `bool | None = None`), so configuring one capability does not clobber the other's opt-in —
+    a correctness refinement of the ADR's "shared row" choice.
+  - `test_server.py` tool-inventory bump (new `configure_embeddings_tool`).
+  - `configure_llm`'s SSRF block became a **hard reject at write** (was advisory-at-connectivity);
+    `test_ssrf_blocks_openai_compat_connectivity` was rewritten to
+    `test_ssrf_blocks_openai_compat_config_write` (asserts the URL is never persisted).
+- **Slice D (identity reject)** — **Implemented** with one deliberate **Modified/Dropped**:
+  the plan called `_assert_identity_match` in **both** `ingest._embed_with_config` **and**
+  `backfill_space`. The `backfill_space` call was **dropped (with rationale)**: during `re_embed`
+  (create→backfill→promote) config still holds the old identity while a new-identity space is
+  backfilled, so a config-vs-space check there would break the swap. The guard belongs at the
+  steady-state producer seam (ingest) only — verified by 197 green consumer tests. The function
+  is `assert_embed_identity_match(conn)` (compares config vs the _active_ space).
+- **Slice E (anthropic_compat)** — **Implemented**, plus **Added**: `_resolve_api_key` (env:VAR
+  indirection) is now applied on the `openai_compat` LLM path too, for parity with the embedding
+  path and the new anthropic path.
+- **Slice F (docs + audit)** — **Implemented**. Audit checks all passed: zero
+  `_ssrf_check_openai_compat` refs; `web.py`/`vision.py` keep the strict `is_private_ip` path;
+  no api_key in any log statement; test/source ratio **1.69×** (≥ 1.35×).
+
+### Acceptance-criteria coverage (all met)
+
+| AC / owner-comment                                                   | Slice(s) | Evidence                                                                       |
+| -------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------ |
+| AC1 OpenAICompat base_url + alias, no per-vendor code                | B        | `TestOpenAICompatProvider`, `TestProviderConfigCache`                          |
+| AC2 anthropic_compat /v1/messages + content-blocks                   | E        | `test_llm_call_anthropic_*`                                                    |
+| AC3 configure_embeddings mirror + config selection + env back-compat | C        | `test_configure_embeddings_*`, `test_get_embed_config_*`                       |
+| AC4 single guard both paths + `_ssrf_check` removed + config-write   | A, C, F  | guard-migration tests + zero-refs grep                                         |
+| AC5 loopback IP-literal only-with-flag; rebind rejected              | A, C     | `test_validate_base_url_*`, `test_configure_embeddings_loopback_requires_flag` |
+| AC6 tuple populated + mismatch hard-reject + no key in logs          | C, D     | `test_assert_identity_match_*`, `test_*_no_key_in_logs`                        |
+| owner: `localhost` reserved name                                     | A        | `test_validate_base_url_allows_localhost_label_with_optin`                     |
+| owner: redirect re-validation                                        | A        | `test_llm_call_disables_redirects` (+ embed `follow_redirects=False`)          |
+
+### Divergences to flag in the PR
+
+1. `configure_llm` SSRF is now a **hard reject at config-write** (was advisory). Slightly
+   stricter contract — a private LLM `base_url` without the loopback flag now raises instead of
+   saving + warning. Intentional (AC4 "rejected before persisted").
+2. The shared `allow_loopback_base_url` flag uses **preserve-on-None** to avoid cross-capability
+   clobber — a refinement over the ADR's bare "shared row". Per-capability flags remain a
+   possible future split (architecture-lens open question), not needed now.
+3. Identity reject is **ingest-only** (not backfill) — see Slice D rationale.
