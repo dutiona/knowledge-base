@@ -1,6 +1,6 @@
 # ADR 0018: Embedding & LLM provider abstraction (standard-API provider portability)
 
-**Status:** Proposed (2026-06-26)
+**Status:** Accepted (2026-06-26)
 **Date:** 2026-06-26
 **Scope:** Knowledge layer — `embeddings.py`, `llm.py`, `config` table, `embed_spaces` registry
 **Roadmap:** KB delta 14 — epic #474 (embedding & quantization) primary, #480 (infra & scale) for the shared-port surface
