@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gen-mapping.sh — READ-ONLY. Generate scripts/mapping.tsv: one row per OPEN
+# gen-mapping.sh — READ-ONLY. Generate utils/scripts/mapping.tsv: one row per OPEN
 # issue with proposed type:/area:/cross-cutting/Phase, using ROADMAP.md as the
 # oracle and live gh labels. Rows needing human judgement are flagged ⚠ in the
 # needs_review column. Closed issues are NOT touched.
@@ -9,7 +9,7 @@
 #     xcut = the cross-cutting label to add (priority:* for planning issues,
 #            severity:* for super-qa findings), or empty.
 #
-# Usage: scripts/gen-mapping.sh   (writes scripts/mapping.tsv; prints summary)
+# Usage: utils/scripts/gen-mapping.sh   (writes utils/scripts/mapping.tsv; prints summary)
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/pm-common.sh

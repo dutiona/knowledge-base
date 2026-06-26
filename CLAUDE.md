@@ -93,9 +93,9 @@ in Phase 3 (intelligence, integration & search refinement).
 
 Issues and PRs are tracked with a `prefix:value` label taxonomy fed into four
 GitHub Projects. Design: `docs/design/project-management.md`. The label/project/
-migration scripts live in `scripts/` (`sync-labels.sh`, `setup-projects.sh`,
+migration scripts live in `utils/scripts/` (`sync-labels.sh`, `setup-projects.sh`,
 `gen-mapping.sh`, `migrate-issues.sh` — all idempotent, all `--dry-run`-aware;
-see `scripts/README.md`).
+see `utils/scripts/README.md`).
 
 **Title convention:** `type(area): description` (Conventional-Commits style),
 e.g. `feat(search): query-type classifier`.
@@ -139,8 +139,8 @@ CHILD=$(gh api graphql -f query='{ repository(owner:"dutiona",name:"knowledge-ba
 gh api graphql -f query="mutation { addSubIssue(input:{issueId:\"$PARENT\", subIssueId:\"$CHILD\"}){ subIssue { number }}}"
 ```
 
-> **Division of labour:** the `scripts/` automate labels, project containers,
+> **Division of labour:** the `utils/scripts/` automate labels, project containers,
 > fields, and migration. Project **views/boards** and the built-in Status field's
 > **In Review** option are web-UI-only (`gh` has no `view-create`/`field-edit`) —
-> see `scripts/README.md`. The auto-add workflow needs a `KB_PROJECT_TOKEN`
+> see `utils/scripts/README.md`. The auto-add workflow needs a `KB_PROJECT_TOKEN`
 > secret (classic PAT, `repo`+`project` scope).

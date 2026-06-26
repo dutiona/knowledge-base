@@ -8,7 +8,7 @@ Measures:
   - RSS after model load vs after N papers
 
 Usage:
-    python scripts/benchmark_warm_pymupdf4llm.py <paper1.pdf> [paper2.pdf ...]
+    python utils/scripts/benchmark_warm_pymupdf4llm.py <paper1.pdf> [paper2.pdf ...]
 
 Not run in CI — manual validation only.
 """
@@ -38,9 +38,7 @@ def benchmark(pdf_paths: list[Path], warm_iterations: int = 5) -> None:
     import pymupdf4llm
 
     rss_after_import = _get_rss_mb()
-    print(
-        f"RSS after import:  {rss_after_import:.1f} MB (+{rss_after_import - rss_before:.1f})"
-    )
+    print(f"RSS after import:  {rss_after_import:.1f} MB (+{rss_after_import - rss_before:.1f})")
     print(f"pymupdf4llm version: {pymupdf4llm.__version__}")
     print()
 
@@ -65,9 +63,7 @@ def benchmark(pdf_paths: list[Path], warm_iterations: int = 5) -> None:
         cold_time = time.perf_counter() - t0
         rss_after_cold = _get_rss_mb()
 
-        print(
-            f"  Cold call:       {cold_time:.3f}s  ({cold_time / num_pages:.3f}s/page)"
-        )
+        print(f"  Cold call:       {cold_time:.3f}s  ({cold_time / num_pages:.3f}s/page)")
         print(f"  RSS after cold:  {rss_after_cold:.1f} MB")
 
         # Warm calls
@@ -94,9 +90,7 @@ def benchmark(pdf_paths: list[Path], warm_iterations: int = 5) -> None:
         flat_time = time.perf_counter() - t0
 
         print(f"  Flat get_text(): {flat_time:.3f}s")
-        print(
-            f"  Warm ratio:      {avg_warm / flat_time:.1f}x  (cold: {cold_time / flat_time:.1f}x)"
-        )
+        print(f"  Warm ratio:      {avg_warm / flat_time:.1f}x  (cold: {cold_time / flat_time:.1f}x)")
         print()
 
     rss_final = _get_rss_mb()
@@ -106,9 +100,7 @@ def benchmark(pdf_paths: list[Path], warm_iterations: int = 5) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Warm-process pymupdf4llm benchmark")
     parser.add_argument("pdfs", nargs="+", type=Path, help="PDF files to benchmark")
-    parser.add_argument(
-        "-n", "--iterations", type=int, default=5, help="Warm iterations per file"
-    )
+    parser.add_argument("-n", "--iterations", type=int, default=5, help="Warm iterations per file")
     args = parser.parse_args()
 
     missing = [p for p in args.pdfs if not p.exists()]

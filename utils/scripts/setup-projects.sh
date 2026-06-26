@@ -13,12 +13,12 @@
 #   - add "In Review" to the built-in Status field   -> USER does this in the UI
 #   - create any board/table view                     -> USER does this in the UI
 #
-# Output: scripts/.pm-ids.env (gitignored) — project numbers, node-ids, field-ids
+# Output: utils/scripts/.pm-ids.env (gitignored) — project numbers, node-ids, field-ids
 # and per-option ids, consumed by migrate-issues.sh and to fill workflow YAML.
 #
 # Usage:
-#   scripts/setup-projects.sh --dry-run
-#   scripts/setup-projects.sh
+#   utils/scripts/setup-projects.sh --dry-run
+#   utils/scripts/setup-projects.sh
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/pm-common.sh

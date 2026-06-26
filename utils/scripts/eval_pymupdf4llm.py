@@ -4,9 +4,9 @@
 Trusted local PDFs only — no URL fetching.
 
 Usage:
-    python scripts/eval_pymupdf4llm.py paper1.pdf [paper2.pdf ...]
-    python scripts/eval_pymupdf4llm.py paper.pdf --page 0
-    python scripts/eval_pymupdf4llm.py paper.pdf --save-output
+    python utils/scripts/eval_pymupdf4llm.py paper1.pdf [paper2.pdf ...]
+    python utils/scripts/eval_pymupdf4llm.py paper.pdf --page 0
+    python utils/scripts/eval_pymupdf4llm.py paper.pdf --save-output
 """
 
 from __future__ import annotations
@@ -248,11 +248,7 @@ def evaluate_pdf(path: str, page: int | None = None, save_output: bool = False) 
         f"{flat_result['elapsed_s']:.2f}",
         f"{md_result['elapsed_s']:.2f}",
     )
-    ratio = (
-        md_result["elapsed_s"] / flat_result["elapsed_s"]
-        if flat_result["elapsed_s"] > 0
-        else float("inf")
-    )
+    ratio = md_result["elapsed_s"] / flat_result["elapsed_s"] if flat_result["elapsed_s"] > 0 else float("inf")
     _print_comparison("Ratio", "1.00x", f"{ratio:.2f}x")
 
     # Memory
@@ -337,9 +333,7 @@ def evaluate_pdf(path: str, page: int | None = None, save_output: bool = False) 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Evaluate pymupdf4llm vs page.get_text() on PDF files"
-    )
+    parser = argparse.ArgumentParser(description="Evaluate pymupdf4llm vs page.get_text() on PDF files")
     parser.add_argument("pdfs", nargs="+", help="PDF files to evaluate")
     parser.add_argument("--page", type=int, default=None, help="Single-page deep dive")
     parser.add_argument(
