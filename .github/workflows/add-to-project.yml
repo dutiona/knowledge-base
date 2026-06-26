@@ -7,7 +7,7 @@ name: Auto-add to project
 # this secret every job 403s on the first item (harmless until set).
 #
 # Project numbers are placeholders — fill from utils/scripts/.pm-ids.env after
-# setup-projects.sh has created the boards.
+# utils/scripts/setup-projects.sh has created the boards.
 
 on:
   issues:
