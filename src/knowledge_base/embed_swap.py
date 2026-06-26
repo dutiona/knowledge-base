@@ -50,10 +50,12 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
 
     Reads the full ``(provider, model, dim, base_url, api_key, allow_loopback)`` tuple.
     ``api_key`` is the **raw** spec (inline or ``env:VARNAME``) — resolved only at call
-    time, never returned by tools. During the deprecation window the legacy
-    ``EMBED_PROVIDER``/``OPENAI_API_KEY`` env vars still apply *while config is at its
-    seeded default*, so an explicit ``configure_embeddings()`` choice wins over env
-    (the no-drift guarantee for existing local installs).
+    time, never returned by tools. The provider comes solely from the ``config`` table
+    (authoritative). The legacy ``EMBED_PROVIDER`` env var no longer *selects* the
+    provider at runtime — it is honored only once at DB seed time
+    (``db._seed_default_config``) and otherwise only emits a deprecation warning, so
+    config can never diverge from the bootstrapped active-space identity. ``OPENAI_API_KEY``
+    remains a secret-value fallback (it does not affect identity).
     """
     from .db import DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL, DEFAULT_EMBED_PROVIDER
 

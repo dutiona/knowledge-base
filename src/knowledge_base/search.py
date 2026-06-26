@@ -310,6 +310,15 @@ def search(
         # fails clearly, signalling that re_embed is needed).
         _embed_conn = get_embed_config(conn)
         _same_family = _embed_conn["provider"] == space_cfg["provider"]
+        if not _same_family and space_cfg["provider"] in ("openai_compat", "anthropic_compat"):
+            # The space's family needs a base_url, but config has drifted to a different family
+            # so there is none to use. Fail clearly rather than let OpenAICompatProvider(None)
+            # silently fall back to https://api.openai.com (wrong backend + key exposure).
+            raise ValidationError(
+                f"The active embedding space's provider ({space_cfg['provider']}) requires a base_url, "
+                f"but the embed config has drifted to {_embed_conn['provider']!r}. Run re_embed() to "
+                "rebuild the space with the current provider, or reconfigure the provider to match the space."
+            )
         query_provider_cfg = ProviderConfig(
             family=space_cfg["provider"],
             base_url=_embed_conn["base_url"] if _same_family else None,

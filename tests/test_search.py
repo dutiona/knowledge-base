@@ -326,3 +326,31 @@ def test_search_query_uses_space_family_not_drifted_config(tmp_path):
     assert cfg is not None
     assert cfg.family == "ollama"  # the active space's family, NOT the drifted config
     assert cfg.base_url is None  # the drifted openai_compat URL is NOT used
+
+
+def test_search_openai_compat_space_drift_raises(tmp_path):
+    """An openai_compat space queried after config drifts to a different family raises clearly
+    instead of OpenAICompatProvider(None) silently falling back to api.openai.com (round-3 review)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "p.md"
+    md.write_text("Attention focus mechanisms.\n")
+    with (
+        patch("knowledge_base.ingest.embed", _fake_embed),
+        patch("knowledge_base.folder_summaries.embed", _fake_embed),
+    ):
+        ingest_file(conn, md)
+
+    # Simulate an openai_compat active space, then drift config to ollama (different family).
+    conn.execute("UPDATE embed_spaces SET provider = 'openai_compat' WHERE status = 'active'")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'ollama')")
+    conn.execute("DELETE FROM config WHERE key = 'embed_base_url'")
+    conn.commit()
+
+    with (
+        patch("knowledge_base.search.embed_single", _fake_embed_single),
+        pytest.raises(ValidationError, match="requires a base_url"),
+    ):
+        search(conn, "focus", mode="vec")
