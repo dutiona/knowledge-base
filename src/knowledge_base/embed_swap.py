@@ -68,18 +68,16 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     api_key = api_key_row["value"] if api_key_row else None
     allow_loopback = bool(loopback_row) and loopback_row["value"].strip().lower() == "true"
 
-    # Deprecation back-compat: legacy EMBED_PROVIDER is honored ONLY when the config key is
-    # ABSENT (a pre-migration DB). Once embed_provider is seeded/configured (the normal case),
-    # config is authoritative and the env var is ignored — this keeps get_embed_config aligned
-    # with the bootstrapped active-space identity (db._bootstrap_embed_spaces reads the same
-    # config), so the producer identity guard never falsely rejects a legacy env user.
-    if provider_row:
-        provider = provider_row["value"]
-    elif os.environ.get("EMBED_PROVIDER"):
-        provider = os.environ["EMBED_PROVIDER"]
+    # Config is authoritative for the provider (ADR-0018 §3). EMBED_PROVIDER no longer SELECTS
+    # the provider at runtime — it is honored only once at DB seed time
+    # (db._seed_default_config), so config, the bootstrapped active space, and dispatch all
+    # agree. Acting on EMBED_PROVIDER here would diverge from the recorded active-space identity
+    # and falsely trip the producer guard, so we only WARN to steer the operator to
+    # configure_embeddings.
+    provider = provider_row["value"] if provider_row else DEFAULT_EMBED_PROVIDER
+    if os.environ.get("EMBED_PROVIDER"):
         _warn_embed_env_deprecated()
-    else:
-        provider = DEFAULT_EMBED_PROVIDER
+    # OPENAI_API_KEY stays a secret-value fallback only (does not affect identity).
     if api_key is None and provider in ("openai", "openai_compat"):
         env_key = os.environ.get("OPENAI_API_KEY")
         if env_key:

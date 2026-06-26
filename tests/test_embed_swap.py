@@ -266,23 +266,36 @@ def test_configure_embeddings_no_key_in_logs(tmp_path, caplog):
     assert "hunter2" not in caplog.text
 
 
-def test_get_embed_config_env_backcompat_only_when_config_absent(tmp_path, monkeypatch, caplog):
-    """Legacy EMBED_PROVIDER is honored ONLY when the embed_provider config key is absent.
+def test_get_embed_config_env_no_longer_selects_provider(tmp_path, monkeypatch, caplog):
+    """EMBED_PROVIDER no longer SELECTS the provider at runtime — config is authoritative.
 
-    This keeps get_embed_config aligned with the bootstrapped active-space identity (which
-    reads config), so the producer identity guard never falsely rejects a legacy env user.
+    It is honored only once at DB seed time; at runtime it only warns. Acting on it would
+    diverge from the bootstrapped active-space identity and falsely trip the producer guard
+    (PR #524 round-2 review).
     """
     conn = _setup(tmp_path)
     monkeypatch.setenv("EMBED_PROVIDER", "onnx")
-    # Seeded DB: config present (ollama) → config wins, env ignored, no false drift.
-    assert get_embed_config(conn)["provider"] == "ollama"
-    # Pre-migration DB: config key absent → env fallback applies + deprecation warning.
-    conn.execute("DELETE FROM config WHERE key = 'embed_provider'")
-    conn.commit()
     with caplog.at_level("WARNING"):
         cfg = get_embed_config(conn)
-    assert cfg["provider"] == "onnx"
+    assert cfg["provider"] == "ollama"  # config (seeded) wins; env ignored
     assert "deprecated" in caplog.text.lower()
+    # Even with the config key absent (a pre-provider DB), env does NOT select — DEFAULT is
+    # returned, which matches the bootstrapped active space, so the identity guard won't reject.
+    conn.execute("DELETE FROM config WHERE key = 'embed_provider'")
+    conn.commit()
+    assert get_embed_config(conn)["provider"] == "ollama"
+
+
+def test_seed_honors_embed_provider_env_on_fresh_db(tmp_path, monkeypatch):
+    """A fresh DB seeds embed_provider from EMBED_PROVIDER once, aligning config + active space."""
+    from knowledge_base.db import get_active_space
+
+    monkeypatch.setenv("EMBED_PROVIDER", "onnx")
+    conn = _setup(tmp_path)  # init_schema runs the seed + bootstrap with env set
+    assert get_embed_config(conn)["provider"] == "onnx"
+    space = get_active_space(conn)
+    assert space is not None
+    assert space["provider"] == "onnx"  # aligned — no config/space divergence, no false reject
 
 
 def test_get_embed_config_explicit_config_overrides_env(tmp_path, monkeypatch):

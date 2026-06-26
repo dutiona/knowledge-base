@@ -275,3 +275,54 @@ def test_search_index_tool_returns_json_error(tmp_path):
         response = json.loads(response_str)
         assert "error" in response
         assert "mode must be one of" in response["error"]
+
+
+def test_search_query_uses_space_family_not_drifted_config(tmp_path):
+    """After a configure_embeddings() family drift, the query embedding uses the SPACE's
+    family with NO drifted connection details (PR #524 round-2 review)."""
+    from knowledge_base.embed_swap import configure_embeddings
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    md = tmp_path / "paper.md"
+    md.write_text("Attention mechanisms enable focus.\n")
+    with (
+        patch("knowledge_base.ingest.embed", _fake_embed),
+        patch("knowledge_base.folder_summaries.embed", _fake_embed),
+    ):
+        ingest_file(conn, md)
+
+    def _ok_get(*_a, **_k):
+        class R:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": []}
+
+        return R()
+
+    # Drift config to a DIFFERENT family (openai_compat) without re_embed.
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
+    ):
+        configure_embeddings(conn, provider="openai_compat", base_url="https://drifted.example.com", model="bge-m3")
+
+    captured = {}
+
+    def _capture(text, model="bge-m3", **kwargs):
+        captured["cfg"] = kwargs.get("_provider_cfg")
+        return [0.1] * DEFAULT_EMBED_DIM
+
+    with patch("knowledge_base.search.embed_single", _capture):
+        search(conn, "focus", mode="vec")
+
+    cfg = captured["cfg"]
+    assert cfg is not None
+    assert cfg.family == "ollama"  # the active space's family, NOT the drifted config
+    assert cfg.base_url is None  # the drifted openai_compat URL is NOT used

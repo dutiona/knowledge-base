@@ -118,11 +118,14 @@ def update_folder_summary(
     fam = active["provider"] if active else cfg.get("provider", "ollama")
     model = active["model"] if active else cfg["model"]
     dim = active["dim"] if active else cfg["dim"]
+    # Connection details from config only when its family matches the space's (else a
+    # configure_embeddings() drift would point the space's family at the wrong endpoint).
+    same_family = cfg.get("provider") == fam
     provider_cfg = ProviderConfig(
         family=fam,
-        base_url=cfg.get("base_url"),
-        api_key=cfg.get("api_key"),
-        allow_loopback=cfg.get("allow_loopback", False),
+        base_url=cfg.get("base_url") if same_family else None,
+        api_key=cfg.get("api_key") if same_family else None,
+        allow_loopback=cfg.get("allow_loopback", False) if same_family else False,
     )
     if base_dim:
         embedding = embed([summary], model=model, expected_dim=base_dim, _provider_cfg=provider_cfg)[0]

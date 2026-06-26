@@ -301,16 +301,20 @@ def search(
                 fts_results = _fts_search(conn, fts_query, strategy_fetch_limit, chunk_strategy=chunk_strategy)
 
     if mode in ("hybrid", "vec"):
-        # Query-vector provider: family from the (possibly non-active) space, connection
-        # details (base_url/api_key/allow_loopback) from the current embed config. The
-        # frozen ProviderConfig is the cache key, so an openai_compat space resolves the
-        # right base_url instead of failing the bare-name path.
-        _conn_cfg = space_cfg if "base_url" in space_cfg else get_embed_config(conn)
+        # Query-vector provider: family from the (possibly non-active) space. Connection
+        # details (base_url/api_key/allow_loopback) come from the current embed config ONLY
+        # when its family matches the space's — otherwise a configure_embeddings() drift to a
+        # different family would point the space's family at the wrong endpoint (e.g. an
+        # ollama space hitting an openai_compat URL). When families differ, omit the config
+        # connection (ollama auto-detects; an openai_compat space without a matching base_url
+        # fails clearly, signalling that re_embed is needed).
+        _embed_conn = get_embed_config(conn)
+        _same_family = _embed_conn["provider"] == space_cfg["provider"]
         query_provider_cfg = ProviderConfig(
             family=space_cfg["provider"],
-            base_url=_conn_cfg.get("base_url"),
-            api_key=_conn_cfg.get("api_key"),
-            allow_loopback=_conn_cfg.get("allow_loopback", False),
+            base_url=_embed_conn["base_url"] if _same_family else None,
+            api_key=_embed_conn["api_key"] if _same_family else None,
+            allow_loopback=_embed_conn["allow_loopback"] if _same_family else False,
         )
         # Use space-specific config for query embedding
         if space_base_dim:
