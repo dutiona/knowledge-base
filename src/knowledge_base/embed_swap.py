@@ -53,9 +53,13 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     time, never returned by tools. The provider comes solely from the ``config`` table
     (authoritative). The legacy ``EMBED_PROVIDER`` env var no longer *selects* the
     provider at runtime — it is honored only once at DB seed time
-    (``db._seed_default_config``) and otherwise only emits a deprecation warning, so
-    config can never diverge from the bootstrapped active-space identity. ``OPENAI_API_KEY``
-    remains a secret-value fallback (it does not affect identity).
+    (``db._seed_default_config``) and otherwise only emits a deprecation warning, so the
+    env var can never make the config provider diverge from the bootstrapped active-space
+    identity. (An explicit ``configure_embeddings()`` change *can* drift config ahead of
+    ``re_embed()``/``promote_space()``; that legitimate drift is caught by the producer
+    identity guard on ingest and by the family-match guards in ``search``/
+    ``folder_summaries``.) ``OPENAI_API_KEY`` remains a secret-value fallback (it does not
+    affect identity).
     """
     from .db import DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL, DEFAULT_EMBED_PROVIDER
 
