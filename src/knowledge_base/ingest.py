@@ -31,7 +31,7 @@ from .db import (
     get_vec_table_name,
     insert_chunk_vec,
 )
-from .embed_swap import get_embed_config
+from .embed_swap import assert_embed_identity_match, get_embed_config
 from .embeddings import ProviderConfig, embed, truncate_embedding
 from .exceptions import NotFoundError
 from .folder_summaries import update_folder_summary
@@ -86,6 +86,9 @@ def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[
 
     Returns None entries for texts whose embeddings had zero norm.
     """
+    # Producer-seam identity guard (AC6): reject writing vectors whose configured
+    # (family, model) differs from the active space's recorded identity (ADR-0015).
+    assert_embed_identity_match(conn)
     cfg = get_embed_config(conn)
     provider_cfg = ProviderConfig(
         family=cfg["provider"],

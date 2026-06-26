@@ -288,3 +288,76 @@ def test_get_embed_config_explicit_config_overrides_env(tmp_path, monkeypatch):
         configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com")
     monkeypatch.setenv("EMBED_PROVIDER", "onnx")
     assert get_embed_config(conn)["provider"] == "openai_compat"
+
+
+# --- Slice D: producer-side identity hard-reject (AC6, #516) ---
+
+
+def test_assert_identity_match_passes_when_aligned(tmp_path):
+    from knowledge_base.embed_swap import assert_embed_identity_match
+
+    conn = _setup(tmp_path)  # default: active space + config both (ollama, bge-m3)
+    assert_embed_identity_match(conn)  # no raise
+
+
+def test_assert_identity_match_rejects_family_change(tmp_path):
+    from knowledge_base.embed_swap import assert_embed_identity_match, configure_embeddings
+    from knowledge_base.exceptions import ValidationError
+
+    conn = _setup(tmp_path)
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
+    ):
+        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com", model="bge-m3")
+    # active space still (ollama, bge-m3); config now openai_compat → mismatch
+    with pytest.raises(ValidationError, match="identity"):
+        assert_embed_identity_match(conn)
+
+
+def test_assert_identity_match_rejects_model_change(tmp_path):
+    from knowledge_base.embed_swap import assert_embed_identity_match
+    from knowledge_base.exceptions import ValidationError
+
+    conn = _setup(tmp_path)
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_model', 'other-model')")
+    conn.commit()
+    with pytest.raises(ValidationError, match="identity"):
+        assert_embed_identity_match(conn)
+
+
+def test_assert_identity_match_allows_base_url_swap_same_family(tmp_path):
+    """tei→vllm: both openai_compat, same model — only base_url differs → allowed."""
+    from knowledge_base.embed_swap import assert_embed_identity_match
+
+    conn = _setup(tmp_path)
+    conn.execute("UPDATE embed_spaces SET provider = 'openai_compat' WHERE status = 'active'")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://vllm.example.com')")
+    conn.commit()
+    assert_embed_identity_match(conn)  # same family + model → no raise
+
+
+def test_assert_identity_match_noop_without_active_space(tmp_path):
+    from knowledge_base.embed_swap import assert_embed_identity_match
+
+    conn = _setup(tmp_path)
+    conn.execute("DELETE FROM embed_spaces")
+    conn.commit()
+    assert_embed_identity_match(conn)  # no active space → nothing to mismatch
+
+
+def test_embed_with_config_rejects_identity_mismatch(tmp_path):
+    from knowledge_base.embed_swap import configure_embeddings
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.ingest import _embed_with_config
+
+    conn = _setup(tmp_path)
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
+    ):
+        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com", model="bge-m3")
+    # active space (ollama, bge-m3) vs configured openai_compat → reject before any HTTP call
+    with pytest.raises(ValidationError, match="identity"):
+        _embed_with_config(conn, ["hello"])

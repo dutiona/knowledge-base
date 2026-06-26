@@ -102,6 +102,37 @@ def embed_provider_config(conn: sqlite3.Connection) -> ProviderConfig:
     )
 
 
+def assert_embed_identity_match(conn: sqlite3.Connection) -> None:
+    """Reject a configured embed identity that differs from the active space's (AC6).
+
+    The active ``embed_spaces`` row's ``(provider, model)`` is the authoritative
+    identity (ADR-0015 / ADR-0018 §5). The ``provider`` field is the API *family*
+    (``openai_compat``/``ollama``/``onnx``), not the backend host — so a ``base_url``
+    swap within the same family (e.g. ``tei`` → ``vllm``, both ``openai_compat``, same
+    model) keeps the identity and is allowed. Changing the family or the model without
+    creating a new space (``re_embed``) would silently write mismatched vectors into the
+    active space — hard-rejected here, at the producer seam.
+
+    This is the *steady-state ingest* guard only; ``backfill_space`` is deliberately NOT
+    guarded — during ``re_embed`` (create → backfill → promote) the config still holds the
+    old identity while a new-identity space is backfilled, so a config-vs-space check
+    there would break the swap. Provider-only swap does NOT invalidate any metric:
+    whitening is gated on *model* change (ADR-0017), and KB ships no whitening, so this is
+    satisfied by inaction.
+    """
+    active = get_active_space(conn)
+    if active is None:
+        return  # fresh DB / bootstrap — no recorded identity to mismatch
+    cfg = get_embed_config(conn)
+    if cfg["provider"] != active["provider"] or cfg["model"] != active["model"]:
+        raise ValidationError(
+            f"Configured embedding identity ({cfg['provider']}, {cfg['model']}) does not match the active "
+            f"space's recorded identity ({active['provider']}, {active['model']}). A provider-family or model "
+            "change requires a new space — run re_embed() rather than corrupting the active space "
+            "(ADR-0015 mismatch rule). A base_url change within the same family is allowed."
+        )
+
+
 _EMBED_CONNECTIVITY_TIMEOUT = 3
 
 
