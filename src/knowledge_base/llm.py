@@ -20,7 +20,11 @@ import httpx
 
 from .embeddings import _get_ollama_url
 from .exceptions import ValidationError
-from .utils import is_private_ip
+from .utils import _sanitize_url, validate_base_url
+
+# Re-exported for back-compat: _sanitize_url moved to utils.py (ADR-0018 §4) so
+# embeddings/embed_swap can share it; callers importing it from llm still resolve.
+__all__ = ["_sanitize_url"]
 
 logger = logging.getLogger(__name__)
 
@@ -124,29 +128,6 @@ def _strip_think_tags(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# SSRF guard for openai_compat
-# ---------------------------------------------------------------------------
-
-
-def _ssrf_check_openai_compat(base_url: str) -> None:
-    """Block openai_compat requests to private/reserved IPs.
-
-    Ollama (localhost) is trusted by definition; this check only runs for the
-    openai_compat code path where user-supplied URLs could target internal
-    infrastructure (cloud metadata, local services, etc.).
-    """
-    from urllib.parse import urlparse
-
-    hostname = urlparse(base_url).hostname
-    if hostname and is_private_ip(hostname):
-        raise ValidationError(
-            f"openai_compat base_url resolves to a private address ({hostname}). "
-            "This is blocked to prevent SSRF. Use the 'ollama' provider for "
-            "local endpoints, or provide a public URL."
-        )
-
-
-# ---------------------------------------------------------------------------
 # LLM calling
 # ---------------------------------------------------------------------------
 
@@ -176,7 +157,13 @@ def _llm_call(
 
     post = client.post if client is not None else httpx.post
 
+    # follow_redirects=False on every provider POST: an embeddings/chat endpoint is
+    # served directly, so a 3xx is anomalous — refusing to follow it closes the
+    # DNS-rebind-on-redirect vector (ADR-0018 §4). Do NOT harmonize with web.py's
+    # ingest_url path, which legitimately follows + re-validates redirects (#232).
     if cfg["provider"] == "ollama":
+        # ollama is localhost-trusted by family — no validate_base_url (no regression
+        # for default local installs); still no-follow for uniformity (defense-in-depth).
         resp = post(
             f"{cfg['base_url']}/api/generate",
             json={
@@ -187,11 +174,12 @@ def _llm_call(
                 "format": "json",
             },
             timeout=_LLM_TIMEOUT,
+            follow_redirects=False,
         )
         resp.raise_for_status()
         raw = resp.json()["response"]
     else:  # openai_compat
-        _ssrf_check_openai_compat(cfg["base_url"])
+        validate_base_url(cfg["base_url"], allow_loopback=cfg.get("allow_loopback", False))
         headers = {}
         if cfg.get("api_key"):
             headers["Authorization"] = f"Bearer {cfg['api_key']}"
@@ -207,6 +195,7 @@ def _llm_call(
                 "response_format": {"type": "json_object"},
             },
             timeout=_LLM_TIMEOUT,
+            follow_redirects=False,
         )
         resp.raise_for_status()
         raw = resp.json()["choices"][0]["message"]["content"]
@@ -224,41 +213,20 @@ def _llm_call(
 # ---------------------------------------------------------------------------
 
 
-def _sanitize_url(url: str) -> str:
-    """Strip query parameters and userinfo from a URL for safe logging."""
-    from urllib.parse import urlparse, urlunparse
-
-    try:
-        parsed = urlparse(url)
-        host = parsed.hostname or "unknown"
-        try:
-            port = f":{parsed.port}" if parsed.port else ""
-        except ValueError:
-            port = ""
-        return urlunparse((parsed.scheme, f"{host}{port}", parsed.path, "", "", ""))
-    except Exception:
-        # Conservative fallback: strip everything that could contain credentials
-        # Remove userinfo (before @), query params (?), and fragments (#)
-        safe = url.split("://", 1)[-1] if "://" in url else url
-        safe = safe.split("@")[-1]  # drop userinfo
-        safe = safe.split("?")[0]  # drop query
-        safe = safe.split("#")[0]  # drop fragment
-        scheme = url.split("://", 1)[0] if "://" in url else "http"
-        return f"{scheme}://{safe}"
-
-
 _CONNECTIVITY_TIMEOUT = 3
 
 
-def _test_llm_connectivity(provider: str, base_url: str, api_key: str | None = None) -> dict:
+def _test_llm_connectivity(
+    provider: str, base_url: str, api_key: str | None = None, *, allow_loopback: bool = False
+) -> dict:
     """Probe LLM endpoint reachability. Returns advisory status, never raises."""
     safe_url = _sanitize_url(base_url)
     try:
         if provider == "ollama":
-            resp = httpx.get(f"{base_url}/api/tags", timeout=_CONNECTIVITY_TIMEOUT)
+            resp = httpx.get(f"{base_url}/api/tags", timeout=_CONNECTIVITY_TIMEOUT, follow_redirects=False)
             resp.raise_for_status()
         else:
-            _ssrf_check_openai_compat(base_url)
+            validate_base_url(base_url, allow_loopback=allow_loopback)
             headers: dict[str, str] = {}
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
@@ -266,6 +234,7 @@ def _test_llm_connectivity(provider: str, base_url: str, api_key: str | None = N
                 f"{base_url}/v1/models",
                 headers=headers,
                 timeout=_CONNECTIVITY_TIMEOUT,
+                follow_redirects=False,
             )
             try:
                 resp.raise_for_status()
@@ -276,6 +245,7 @@ def _test_llm_connectivity(provider: str, base_url: str, api_key: str | None = N
                         f"{base_url}/v1/chat/completions",
                         headers=headers,
                         timeout=_CONNECTIVITY_TIMEOUT,
+                        follow_redirects=False,
                     )
                     # Any non-connection response (even 405) means reachable
                     if fallback.status_code in (401, 403):

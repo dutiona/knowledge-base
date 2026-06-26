@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import os
 import socket
 import struct
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from knowledge_base.exceptions import ValidationError
 
@@ -55,8 +56,32 @@ def is_private_ip(hostname: str) -> bool:
         return True  # Can't resolve → reject
 
 
-def validate_base_url(url: str) -> None:
+def _is_allowed_loopback(host: str) -> bool:
+    """Return True iff *host* is a loopback IP literal (127.0.0.0/8, ::1) or the
+    exact RFC-6761 reserved label ``localhost``.
+
+    Checked on the PARSED host, BEFORE any DNS resolution — never "resolved to
+    loopback" (that is the DNS-rebind vector :func:`is_private_ip` defeats). A
+    hostname such as ``127.0.0.1.nip.io`` is neither a loopback literal nor the
+    exact label, so it falls through to :func:`is_private_ip` and is rejected.
+    """
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_base_url(url: str, *, allow_loopback: bool = False) -> None:
     """Validate a base URL for scheme and SSRF safety.
+
+    The non-loopback SSRF floor (private, link-local, metadata, DNS-rebinding) is
+    **always** enforced. When *allow_loopback* is True, a loopback IP literal or the
+    exact reserved label ``localhost`` is permitted — for local ``openai_compat``
+    servers (ADR-0018 §4) — checked on the parsed host before any DNS resolution.
+    Every other host (including names that merely *resolve* to loopback) still goes
+    through :func:`is_private_ip`.
 
     Raises :class:`~knowledge_base.exceptions.ValidationError` on failure.
     """
@@ -65,10 +90,52 @@ def validate_base_url(url: str) -> None:
         raise ValidationError(f"Invalid URL scheme: {parsed.scheme!r}. Use http or https.")
     if not parsed.hostname:
         raise ValidationError("URL must include a hostname.")
+    if allow_loopback and _is_allowed_loopback(parsed.hostname):
+        return  # opt-in satisfied — accept without DNS resolution
     if is_private_ip(parsed.hostname):
         raise ValidationError(
             f"URL points to a private/reserved address ({parsed.hostname}). Use a public IP or hostname."
         )
+
+
+def _sanitize_url(url: str) -> str:
+    """Strip query parameters and userinfo from a URL for safe logging.
+
+    Shared by ``llm.py``/``embeddings.py``/``embed_swap.py`` so no api_key or
+    userinfo reaches a log line (ADR-0018 §4). ``llm.py`` re-exports this name for
+    back-compat.
+    """
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or "unknown"
+        try:
+            port = f":{parsed.port}" if parsed.port else ""
+        except ValueError:
+            port = ""
+        return urlunparse((parsed.scheme, f"{host}{port}", parsed.path, "", "", ""))
+    except Exception:
+        # Conservative fallback: strip everything that could contain credentials
+        safe = url.split("://", 1)[-1] if "://" in url else url
+        safe = safe.split("@")[-1]  # drop userinfo
+        safe = safe.split("?")[0]  # drop query
+        safe = safe.split("#")[0]  # drop fragment
+        scheme = url.split("://", 1)[0] if "://" in url else "http"
+        return f"{scheme}://{safe}"
+
+
+def _resolve_api_key(raw: str | None) -> str | None:
+    """Resolve an api_key spec to the actual secret at call time.
+
+    ``env:VARNAME`` indirection reads ``os.environ[VARNAME]`` (None if unset); a
+    plain string is returned as-is; ``None`` stays ``None``. The resolved secret is
+    **never persisted** — only the raw spec (``env:VARNAME`` or inline) is stored in
+    config (ADR-0018 §4).
+    """
+    if raw is None:
+        return None
+    if raw.startswith("env:"):
+        return os.environ.get(raw[4:])
+    return raw
 
 
 def compute_file_hash(path: Path) -> str:
