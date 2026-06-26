@@ -680,3 +680,133 @@ def test_llm_call_ollama_disables_redirects(_mock_ip):
     with patch("knowledge_base.llm.httpx.post", _mock_post):
         _llm_call("test", cfg=cfg)
     assert captured.get("follow_redirects") is False
+
+
+# --- Slice E: anthropic_compat chat branch (AC2, #516) ---
+
+
+def test_llm_call_anthropic_posts_messages():
+    """anthropic_compat POSTs /v1/messages with x-api-key + anthropic-version (AC2)."""
+    cfg = {
+        "provider": "anthropic_compat",
+        "base_url": "https://api.anthropic.com",
+        "model": "claude-x",
+        "api_key": "sk-ant-123",
+    }
+    captured = {}
+
+    def _mock_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+
+        class FakeResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"content": [{"type": "text", "text": '{"ok": true}'}]}
+
+        return FakeResp()
+
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.llm.httpx.post", _mock_post),
+    ):
+        result = _llm_call("hello", cfg=cfg)
+
+    assert captured["url"] == "https://api.anthropic.com/v1/messages"
+    assert captured["headers"]["x-api-key"] == "sk-ant-123"
+    assert captured["headers"]["anthropic-version"]  # pinned, non-empty
+    assert captured["follow_redirects"] is False
+    body = captured["json"]
+    assert body["system"]  # system is a top-level field, not a message
+    assert body["max_tokens"] > 0
+    assert body["messages"] == [{"role": "user", "content": "hello"}]
+    assert result == '{"ok": true}'
+
+
+def test_llm_call_anthropic_concatenates_text_blocks():
+    """Multiple text blocks concatenated; non-text blocks ignored."""
+    cfg = {
+        "provider": "anthropic_compat",
+        "base_url": "https://api.anthropic.com",
+        "model": "claude-x",
+        "api_key": "k",
+    }
+
+    def _mock_post(url, **kwargs):
+        class FakeResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "content": [
+                        {"type": "text", "text": '{"a":'},
+                        {"type": "tool_use", "id": "ignored"},
+                        {"type": "text", "text": "1}"},
+                    ]
+                }
+
+        return FakeResp()
+
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.llm.httpx.post", _mock_post),
+    ):
+        assert _llm_call("x", cfg=cfg) == '{"a":1}'
+
+
+def test_llm_call_anthropic_resolves_env_key(monkeypatch):
+    """anthropic_compat api_key supports env:VARNAME indirection resolved at call time."""
+    monkeypatch.setenv("KB_ANT_KEY", "sk-ant-from-env")
+    cfg = {
+        "provider": "anthropic_compat",
+        "base_url": "https://api.anthropic.com",
+        "model": "claude-x",
+        "api_key": "env:KB_ANT_KEY",
+    }
+    captured = {}
+
+    def _mock_post(url, **kwargs):
+        captured.update(kwargs)
+
+        class FakeResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"content": [{"type": "text", "text": "{}"}]}
+
+        return FakeResp()
+
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.llm.httpx.post", _mock_post),
+    ):
+        _llm_call("x", cfg=cfg)
+    assert captured["headers"]["x-api-key"] == "sk-ant-from-env"
+
+
+def test_llm_call_anthropic_ssrf_blocked():
+    cfg = {
+        "provider": "anthropic_compat",
+        "base_url": "http://169.254.169.254",
+        "model": "claude-x",
+        "api_key": "k",
+    }
+    with pytest.raises(ValidationError, match="private"):
+        _llm_call("x", cfg=cfg)
+
+
+@patch("knowledge_base.utils.is_private_ip", return_value=False)
+@patch("knowledge_base.llm.httpx.get", _mock_get_ok)
+def test_configure_llm_accepts_anthropic_compat(_mock_ip, tmp_path):
+    conn = _setup(tmp_path)
+    result = configure_llm(
+        conn, provider="anthropic_compat", base_url="https://api.anthropic.com", model="claude-x", api_key="sk-ant"
+    )
+    assert result["provider"] == "anthropic_compat"
+    cfg = _get_llm_config(conn)
+    assert cfg["provider"] == "anthropic_compat"
+    assert cfg["base_url"] == "https://api.anthropic.com"

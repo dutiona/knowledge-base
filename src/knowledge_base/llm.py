@@ -20,7 +20,7 @@ import httpx
 
 from .embeddings import _get_ollama_url
 from .exceptions import ValidationError
-from .utils import _sanitize_url, validate_base_url
+from .utils import _resolve_api_key, _sanitize_url, validate_base_url
 
 # Re-exported for back-compat: _sanitize_url moved to utils.py (ADR-0018 §4) so
 # embeddings/embed_swap can share it; callers importing it from llm still resolve.
@@ -139,6 +139,12 @@ def _strip_think_tags(text: str) -> str:
 
 _LLM_TIMEOUT = 120
 
+# Anthropic Messages API: the stable version header, and a max_tokens ceiling sized for
+# single-shot JSON extraction (the API requires max_tokens). Documented constants — a
+# future bump is a one-line change (ADR-0018 §1).
+_ANTHROPIC_VERSION = "2023-06-01"
+_ANTHROPIC_MAX_TOKENS = 8192
+
 
 def _llm_call(
     prompt: str,
@@ -183,11 +189,33 @@ def _llm_call(
         )
         resp.raise_for_status()
         raw = resp.json()["response"]
+    elif cfg["provider"] == "anthropic_compat":
+        validate_base_url(cfg["base_url"], allow_loopback=cfg.get("allow_loopback", False))
+        headers = {"anthropic-version": _ANTHROPIC_VERSION}
+        resolved_key = _resolve_api_key(cfg.get("api_key"))
+        if resolved_key:
+            headers["x-api-key"] = resolved_key
+        resp = post(
+            f"{cfg['base_url']}/v1/messages",
+            headers=headers,
+            json={
+                "model": cfg["model"],
+                "max_tokens": _ANTHROPIC_MAX_TOKENS,
+                "system": _SYSTEM_JSON_DIRECTIVE,  # Anthropic: system is a top-level field
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=_LLM_TIMEOUT,
+            follow_redirects=False,
+        )
+        resp.raise_for_status()
+        # Response is a list of content blocks; concatenate the text ones.
+        raw = "".join(block["text"] for block in resp.json()["content"] if block.get("type") == "text")
     else:  # openai_compat
         validate_base_url(cfg["base_url"], allow_loopback=cfg.get("allow_loopback", False))
         headers = {}
-        if cfg.get("api_key"):
-            headers["Authorization"] = f"Bearer {cfg['api_key']}"
+        resolved_key = _resolve_api_key(cfg.get("api_key"))
+        if resolved_key:
+            headers["Authorization"] = f"Bearer {resolved_key}"
         resp = post(
             f"{cfg['base_url']}/v1/chat/completions",
             headers=headers,
@@ -298,17 +326,17 @@ def configure_llm(
     ``env:VARNAME`` indirection). Acceptable for local-only use; keyring hardening is
     deferred.
     """
-    if provider not in ("ollama", "openai_compat"):
-        raise ValidationError(f"Unknown provider: {provider}. Use 'ollama' or 'openai_compat'.")
-    if provider == "openai_compat" and not base_url:
-        raise ValidationError("base_url is required for openai_compat provider")
+    if provider not in ("ollama", *_HTTP_LLM_FAMILIES):
+        raise ValidationError(f"Unknown provider: {provider}. Use 'ollama', 'openai_compat', or 'anthropic_compat'.")
+    if provider in _HTTP_LLM_FAMILIES and not base_url:
+        raise ValidationError(f"base_url is required for {provider} provider")
     # Preserve the shared loopback flag unless the caller set it explicitly.
     if allow_loopback_base_url is None:
         row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
         loopback = bool(row) and row["value"].strip().lower() == "true"
     else:
         loopback = allow_loopback_base_url
-    if base_url and provider == "openai_compat":
+    if base_url and provider in _HTTP_LLM_FAMILIES:
         # Normalize FIRST, then validate the normalized value (close the suffix-strip gap).
         base_url = base_url.rstrip("/").removesuffix("/v1")
         validate_base_url(base_url, allow_loopback=loopback)
