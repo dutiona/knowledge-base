@@ -64,17 +64,22 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     api_key_row = conn.execute("SELECT value FROM config WHERE key = 'embed_api_key'").fetchone()
     loopback_row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
 
-    provider = provider_row["value"] if provider_row else DEFAULT_EMBED_PROVIDER
     base_url = base_url_row["value"] if base_url_row else None
     api_key = api_key_row["value"] if api_key_row else None
     allow_loopback = bool(loopback_row) and loopback_row["value"].strip().lower() == "true"
 
-    # Deprecation back-compat: EMBED_PROVIDER overrides only while embed_provider is at
-    # its seeded default — an explicit configure_embeddings() choice takes precedence.
-    env_provider = os.environ.get("EMBED_PROVIDER")
-    if env_provider and provider == DEFAULT_EMBED_PROVIDER:
-        provider = env_provider
+    # Deprecation back-compat: legacy EMBED_PROVIDER is honored ONLY when the config key is
+    # ABSENT (a pre-migration DB). Once embed_provider is seeded/configured (the normal case),
+    # config is authoritative and the env var is ignored — this keeps get_embed_config aligned
+    # with the bootstrapped active-space identity (db._bootstrap_embed_spaces reads the same
+    # config), so the producer identity guard never falsely rejects a legacy env user.
+    if provider_row:
+        provider = provider_row["value"]
+    elif os.environ.get("EMBED_PROVIDER"):
+        provider = os.environ["EMBED_PROVIDER"]
         _warn_embed_env_deprecated()
+    else:
+        provider = DEFAULT_EMBED_PROVIDER
     if api_key is None and provider in ("openai", "openai_compat"):
         env_key = os.environ.get("OPENAI_API_KEY")
         if env_key:
@@ -207,10 +212,14 @@ def configure_embeddings(
         loopback = bool(row) and row["value"].strip().lower() == "true"
     else:
         loopback = allow_loopback_base_url
-    if base_url:
+    if base_url and provider == "openai_compat":
         # Normalize FIRST, then validate the normalized value (close the suffix-strip gap).
         base_url = base_url.rstrip("/").removesuffix("/v1")
         validate_base_url(base_url, allow_loopback=loopback)
+    elif base_url:
+        # ollama remote (e.g. LAN OLLAMA_HOST) — family-trusted, not SSRF-validated; Ollama
+        # uses /api/embed, so do not strip a /v1 suffix.
+        base_url = base_url.rstrip("/")
 
     conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', ?)", (provider,))
     conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_model', ?)", (model,))

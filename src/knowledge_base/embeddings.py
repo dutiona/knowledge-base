@@ -137,7 +137,15 @@ class ProviderConfig:
 
 
 class OllamaProvider:
-    """Embedding provider using Ollama's /api/embed endpoint."""
+    """Embedding provider using Ollama's /api/embed endpoint.
+
+    With no ``base_url`` the URL is auto-detected (``OLLAMA_HOST`` env > WSL2 Windows
+    host > localhost). A configured ``base_url`` (e.g. a remote/LAN Ollama) overrides
+    auto-detection. Ollama is localhost-trusted by family, so it is not SSRF-validated.
+    """
+
+    def __init__(self, base_url: str | None = None) -> None:
+        self._base_url = base_url.rstrip("/") if base_url else None
 
     def embed(
         self,
@@ -146,7 +154,7 @@ class OllamaProvider:
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
         dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
-        url = _get_ollama_url()
+        url = self._base_url or _get_ollama_url()
         results = []
         for i in range(0, len(texts), 32):
             batch = texts[i : i + 32]
@@ -327,7 +335,7 @@ def _build_provider(cfg: ProviderConfig) -> EmbeddingProvider:
     """Construct a provider from a resolved :class:`ProviderConfig`."""
     family = cfg.family.lower()
     if family == "ollama":
-        return OllamaProvider()
+        return OllamaProvider(cfg.base_url)
     if family in ("openai_compat", "openai"):
         return OpenAICompatProvider(cfg.base_url, cfg.api_key, allow_loopback=cfg.allow_loopback)
     if family == "onnx":

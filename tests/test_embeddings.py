@@ -521,3 +521,54 @@ class TestProviderZeroNormHandling:
             result = provider.embed(["empty"], model="bge-m3", expected_dim=3)
         assert result[0] is None
         assert "zero" in caplog.text.lower()
+
+
+# --- Slice review fixes: OllamaProvider honors a configured base_url (#524 review) ---
+
+
+class TestOllamaBaseUrl:
+    def test_honors_configured_base_url(self):
+        from knowledge_base.embeddings import OllamaProvider
+
+        captured = {}
+
+        def _mock_post(url, **kwargs):
+            captured["url"] = url
+
+            class FakeResp:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"embeddings": [[1.0, 0.0, 0.0]]}
+
+            return FakeResp()
+
+        provider = OllamaProvider(base_url="http://remote-ollama:11434")
+        with patch("knowledge_base.embeddings.httpx.post", _mock_post):
+            provider.embed(["x"], model="bge-m3", expected_dim=3)
+        assert captured["url"] == "http://remote-ollama:11434/api/embed"
+
+    def test_falls_back_to_autodetect_without_base_url(self):
+        from knowledge_base.embeddings import OllamaProvider
+
+        captured = {}
+
+        def _mock_post(url, **kwargs):
+            captured["url"] = url
+
+            class FakeResp:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"embeddings": [[1.0, 0.0, 0.0]]}
+
+            return FakeResp()
+
+        with (
+            patch("knowledge_base.embeddings._get_ollama_url", return_value="http://auto:11434"),
+            patch("knowledge_base.embeddings.httpx.post", _mock_post),
+        ):
+            OllamaProvider().embed(["x"], model="bge-m3", expected_dim=3)
+        assert captured["url"] == "http://auto:11434/api/embed"

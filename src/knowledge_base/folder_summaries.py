@@ -111,28 +111,25 @@ def update_folder_summary(
     cfg = get_embed_config(conn)
     active = get_active_space(conn)
     base_dim = active.get("matryoshka_base_dim") if active else None
+    # folder_summaries_vec is at the ACTIVE space's dim, so embed with the active space's
+    # (model, provider, dim) — NOT the mutable config — so a configure_embeddings() drift
+    # can't write a different-model vector here. Connection details (base_url/api_key) come
+    # from config (the space row stores none); the family is the space's recorded provider.
+    fam = active["provider"] if active else cfg.get("provider", "ollama")
+    model = active["model"] if active else cfg["model"]
+    dim = active["dim"] if active else cfg["dim"]
     provider_cfg = ProviderConfig(
-        family=cfg.get("provider", "ollama"),
+        family=fam,
         base_url=cfg.get("base_url"),
         api_key=cfg.get("api_key"),
         allow_loopback=cfg.get("allow_loopback", False),
     )
     if base_dim:
-        embedding = embed(
-            [summary],
-            model=cfg["model"],
-            expected_dim=base_dim,
-            _provider_cfg=provider_cfg,
-        )[0]
+        embedding = embed([summary], model=model, expected_dim=base_dim, _provider_cfg=provider_cfg)[0]
         if embedding is not None:
-            embedding = truncate_embedding(embedding, cfg["dim"])
+            embedding = truncate_embedding(embedding, dim)
     else:
-        embedding = embed(
-            [summary],
-            model=cfg["model"],
-            expected_dim=cfg["dim"],
-            _provider_cfg=provider_cfg,
-        )[0]
+        embedding = embed([summary], model=model, expected_dim=dim, _provider_cfg=provider_cfg)[0]
 
     # Upsert folder_summaries
     conn.execute(

@@ -103,6 +103,9 @@ def status() -> str:
     # here because they are already function calls, not inline SQL.
     stats = get_index_stats(conn)
 
+    embed_cfg = get_embed_config(conn)
+    embed_cfg.pop("api_key", None)  # never expose the key (or env: spec) over the tool surface
+
     return json.dumps(
         {
             "total_chunks": stats["total_chunks"],
@@ -117,7 +120,7 @@ def status() -> str:
             "prediction_errors": get_prediction_error_count(conn),
             "jobs": stats["jobs"],
             "embed_spaces": stats["embed_spaces"],
-            "embed_config": get_embed_config(conn),
+            "embed_config": embed_cfg,
             "chunk_strategy": stats["chunk_strategy"],
             "recent_ingestions": stats["recent_ingestions"],
             "db_size_mb": round(stats["db_size_bytes"] / (1024 * 1024), 2),

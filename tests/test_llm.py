@@ -810,3 +810,42 @@ def test_configure_llm_accepts_anthropic_compat(_mock_ip, tmp_path):
     cfg = _get_llm_config(conn)
     assert cfg["provider"] == "anthropic_compat"
     assert cfg["base_url"] == "https://api.anthropic.com"
+
+
+def test_llm_connectivity_resolves_env_key(tmp_path, monkeypatch):
+    """The openai_compat connectivity probe resolves env:VARNAME (not the literal spec)."""
+    from knowledge_base.llm import _test_llm_connectivity
+
+    monkeypatch.setenv("KB_LLM_KEY", "sk-real")
+    captured = {}
+
+    def _mock_get(url, **kwargs):
+        captured.update(kwargs.get("headers", {}))
+
+        class FakeResp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+        return FakeResp()
+
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.llm.httpx.get", _mock_get),
+    ):
+        result = _test_llm_connectivity("openai_compat", "https://x.example.com", "env:KB_LLM_KEY")
+    assert result["reachable"] is True
+    assert captured.get("Authorization") == "Bearer sk-real"
+
+
+def test_llm_connectivity_anthropic_validates_only(tmp_path):
+    """anthropic_compat has no /v1/models probe — validate the URL, assume reachable."""
+    from knowledge_base.llm import _test_llm_connectivity
+
+    with patch("knowledge_base.utils.is_private_ip", return_value=False):
+        result = _test_llm_connectivity("anthropic_compat", "https://api.anthropic.com", "k")
+    assert result["reachable"] is True
+    # A private anthropic base_url is still rejected (advisory unreachable, never raises).
+    blocked = _test_llm_connectivity("anthropic_compat", "http://169.254.169.254", "k")
+    assert blocked["reachable"] is False

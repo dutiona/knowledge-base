@@ -266,10 +266,19 @@ def test_configure_embeddings_no_key_in_logs(tmp_path, caplog):
     assert "hunter2" not in caplog.text
 
 
-def test_get_embed_config_env_backcompat(tmp_path, monkeypatch, caplog):
-    """Legacy EMBED_PROVIDER env still selects while config is at its seeded default."""
+def test_get_embed_config_env_backcompat_only_when_config_absent(tmp_path, monkeypatch, caplog):
+    """Legacy EMBED_PROVIDER is honored ONLY when the embed_provider config key is absent.
+
+    This keeps get_embed_config aligned with the bootstrapped active-space identity (which
+    reads config), so the producer identity guard never falsely rejects a legacy env user.
+    """
     conn = _setup(tmp_path)
     monkeypatch.setenv("EMBED_PROVIDER", "onnx")
+    # Seeded DB: config present (ollama) → config wins, env ignored, no false drift.
+    assert get_embed_config(conn)["provider"] == "ollama"
+    # Pre-migration DB: config key absent → env fallback applies + deprecation warning.
+    conn.execute("DELETE FROM config WHERE key = 'embed_provider'")
+    conn.commit()
     with caplog.at_level("WARNING"):
         cfg = get_embed_config(conn)
     assert cfg["provider"] == "onnx"
@@ -361,3 +370,15 @@ def test_embed_with_config_rejects_identity_mismatch(tmp_path):
     # active space (ollama, bge-m3) vs configured openai_compat → reject before any HTTP call
     with pytest.raises(ValidationError, match="identity"):
         _embed_with_config(conn, ["hello"])
+
+
+def test_configure_embeddings_remote_ollama_base_url(tmp_path):
+    """A LAN/remote Ollama base_url is accepted (family-trusted, not SSRF-validated) and honored."""
+    from knowledge_base.embed_swap import configure_embeddings
+
+    conn = _setup(tmp_path)
+    # 192.168.x is private — would be SSRF-rejected for openai_compat, but ollama is trusted.
+    with patch("knowledge_base.embed_swap.httpx.get", _ok_get):
+        result = configure_embeddings(conn, provider="ollama", base_url="http://192.168.1.5:11434", model="bge-m3")
+    assert result["provider"] == "ollama"
+    assert get_embed_config(conn)["base_url"] == "http://192.168.1.5:11434"

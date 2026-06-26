@@ -268,8 +268,16 @@ def search(
         active = get_active_space(conn)
         skip_folder_boost = not active or space["name"] != active["name"]
     else:
-        space_cfg = get_embed_config(conn)
         active = get_active_space(conn)
+        if active is not None:
+            # Use the ACTIVE SPACE's recorded identity for the query embedding — NOT the
+            # mutable config. After a configure_embeddings() drift (config changed but not
+            # yet re_embed'd), the stored vectors are still the space's model; querying with
+            # the config's (new) model would mix spaces. Connection details still come from
+            # config (the space row stores no base_url/api_key).
+            space_cfg = {"model": active["model"], "dim": active["dim"], "provider": active["provider"]}
+        else:
+            space_cfg = get_embed_config(conn)  # fresh DB / no active space
         space_base_dim = active.get("matryoshka_base_dim") if active else None
         vec_table = None  # use active space default
         skip_folder_boost = False

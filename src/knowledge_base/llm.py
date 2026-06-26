@@ -258,11 +258,18 @@ def _test_llm_connectivity(
         if provider == "ollama":
             resp = httpx.get(f"{base_url}/api/tags", timeout=_CONNECTIVITY_TIMEOUT, follow_redirects=False)
             resp.raise_for_status()
-        else:
+        elif provider == "anthropic_compat":
+            # Anthropic exposes no lightweight unauthenticated probe (no /v1/models; a real
+            # /v1/messages probe needs a billable call). Validate the URL and assume reachable
+            # — the config still persists either way (advisory probe).
+            validate_base_url(base_url, allow_loopback=allow_loopback)
+            return {"reachable": True}
+        else:  # openai_compat
             validate_base_url(base_url, allow_loopback=allow_loopback)
             headers: dict[str, str] = {}
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
+            resolved_key = _resolve_api_key(api_key)  # env:VARNAME resolved at probe time
+            if resolved_key:
+                headers["Authorization"] = f"Bearer {resolved_key}"
             resp = httpx.get(
                 f"{base_url}/v1/models",
                 headers=headers,

@@ -170,3 +170,17 @@ def test_co_occurrence_empty_db_returns_empty_json(kb_conn):
 
     # Default min_sessions=1; no co-ingested docs exist.
     assert json.loads(response_str) == []
+
+
+def test_status_redacts_embed_api_key(kb_conn):
+    """The status() tool must NOT expose the embedding api_key (or env: spec) (#524 review)."""
+    from knowledge_base.routes.search import status
+
+    kb_conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    kb_conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://x.example.com')")
+    kb_conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_api_key', 'sk-super-secret')")
+    kb_conn.commit()
+    with patch("knowledge_base.routes.search._get_conn", return_value=kb_conn):
+        out = status()
+    assert "sk-super-secret" not in out
+    assert "api_key" not in json.loads(out)["embed_config"]
