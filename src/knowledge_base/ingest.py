@@ -32,7 +32,7 @@ from .db import (
     insert_chunk_vec,
 )
 from .embed_swap import get_embed_config
-from .embeddings import embed, truncate_embedding
+from .embeddings import ProviderConfig, embed, truncate_embedding
 from .exceptions import NotFoundError
 from .folder_summaries import update_folder_summary
 from .utils import content_hash as _content_hash
@@ -87,6 +87,12 @@ def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[
     Returns None entries for texts whose embeddings had zero norm.
     """
     cfg = get_embed_config(conn)
+    provider_cfg = ProviderConfig(
+        family=cfg["provider"],
+        base_url=cfg["base_url"],
+        api_key=cfg["api_key"],
+        allow_loopback=cfg["allow_loopback"],
+    )
     active = get_active_space(conn)
     base_dim = active.get("matryoshka_base_dim") if active else None
     if base_dim:
@@ -94,14 +100,14 @@ def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[
             texts,
             model=cfg["model"],
             expected_dim=base_dim,
-            _provider_name=cfg["provider"],
+            _provider_cfg=provider_cfg,
         )
         return [truncate_embedding(v, cfg["dim"]) if v is not None else None for v in vecs]
     return embed(
         texts,
         model=cfg["model"],
         expected_dim=cfg["dim"],
-        _provider_name=cfg["provider"],
+        _provider_cfg=provider_cfg,
     )
 
 

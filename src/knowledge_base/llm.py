@@ -34,12 +34,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+_HTTP_LLM_FAMILIES = ("openai_compat", "anthropic_compat")
+
+
 def _get_llm_config(conn: sqlite3.Connection) -> dict:
     """Read LLM configuration from config table."""
     provider = conn.execute("SELECT value FROM config WHERE key = 'llm_provider'").fetchone()
     model = conn.execute("SELECT value FROM config WHERE key = 'llm_model'").fetchone()
     base_url_row = conn.execute("SELECT value FROM config WHERE key = 'llm_base_url'").fetchone()
     api_key_row = conn.execute("SELECT value FROM config WHERE key = 'llm_api_key'").fetchone()
+    loopback_row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
 
     prov = provider["value"] if provider else "ollama"
 
@@ -48,13 +52,14 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
     elif prov == "ollama":
         base_url = _get_ollama_url()
     else:
-        raise ValueError("llm_base_url is required when llm_provider is 'openai_compat'")
+        raise ValueError(f"llm_base_url is required when llm_provider is {prov!r}")
 
     return {
         "provider": prov,
         "model": model["value"] if model else "qwen3.5:27b",
-        "base_url": base_url.rstrip("/").removesuffix("/v1") if prov == "openai_compat" else base_url.rstrip("/"),
+        "base_url": base_url.rstrip("/").removesuffix("/v1") if prov in _HTTP_LLM_FAMILIES else base_url.rstrip("/"),
         "api_key": api_key_row["value"] if api_key_row else None,
+        "allow_loopback": bool(loopback_row) and loopback_row["value"].strip().lower() == "true",
     }
 
 
@@ -278,23 +283,40 @@ def configure_llm(
     base_url: str | None = None,
     model: str = "qwen3.5:27b",
     api_key: str | None = None,
+    allow_loopback_base_url: bool | None = None,
 ) -> dict:
     """Configure LLM provider settings.
 
-    Note: ``api_key`` is stored as plain text in the SQLite config table.
-    Acceptable for local-only use; consider system keyring integration
-    (e.g. ``keyring`` library) before exposing this tool over a network.
+    For ``openai_compat`` the ``base_url`` is normalized then SSRF-validated **before**
+    it is persisted (the primary gate, ADR-0018 §4); ``ollama`` is localhost-trusted by
+    family and skips the SSRF check (only its scheme is validated). ``allow_loopback_base_url``
+    is a config flag SHARED with the embedding path: pass ``True``/``False`` to set it,
+    or leave it ``None`` to preserve the current value (so configuring the LLM does not
+    clobber an embedding-side loopback opt-in).
+
+    Note: ``api_key`` is stored as plain text in the SQLite config table (or as an
+    ``env:VARNAME`` indirection). Acceptable for local-only use; keyring hardening is
+    deferred.
     """
     if provider not in ("ollama", "openai_compat"):
         raise ValidationError(f"Unknown provider: {provider}. Use 'ollama' or 'openai_compat'.")
     if provider == "openai_compat" and not base_url:
         raise ValidationError("base_url is required for openai_compat provider")
-    if base_url:
+    # Preserve the shared loopback flag unless the caller set it explicitly.
+    if allow_loopback_base_url is None:
+        row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
+        loopback = bool(row) and row["value"].strip().lower() == "true"
+    else:
+        loopback = allow_loopback_base_url
+    if base_url and provider == "openai_compat":
+        # Normalize FIRST, then validate the normalized value (close the suffix-strip gap).
+        base_url = base_url.rstrip("/").removesuffix("/v1")
+        validate_base_url(base_url, allow_loopback=loopback)
+    elif base_url:  # ollama remote: localhost trusted by family, scheme-only check
         from urllib.parse import urlparse
 
-        parsed = urlparse(base_url)
-        if parsed.scheme not in ("http", "https"):
-            raise ValidationError(f"Invalid URL scheme: {parsed.scheme!r}. Use http or https.")
+        if urlparse(base_url).scheme not in ("http", "https"):
+            raise ValidationError(f"Invalid URL scheme: {urlparse(base_url).scheme!r}. Use http or https.")
 
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_provider', ?)",
@@ -317,9 +339,15 @@ def configure_llm(
     elif provider == "ollama":
         # Clear stale api_key — Ollama doesn't use auth
         conn.execute("DELETE FROM config WHERE key = 'llm_api_key'")
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('allow_loopback_base_url', ?)",
+        ("true" if loopback else "false",),
+    )
     conn.commit()
     cfg = _get_llm_config(conn)
-    connectivity = _test_llm_connectivity(cfg["provider"], cfg["base_url"], cfg.get("api_key"))
+    connectivity = _test_llm_connectivity(
+        cfg["provider"], cfg["base_url"], cfg.get("api_key"), allow_loopback=cfg["allow_loopback"]
+    )
     # Redact sensitive fields from response
     cfg.pop("api_key", None)
     cfg.update(connectivity)

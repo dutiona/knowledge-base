@@ -15,7 +15,7 @@ from .db import (
     get_vec_table_name,
 )
 from .embed_swap import get_embed_config, get_space
-from .embeddings import embed_single, truncate_embedding
+from .embeddings import ProviderConfig, embed_single, truncate_embedding
 from .exceptions import ValidationError
 from .keywords import build_fts_query, extract_keywords
 from .utils import ELEMENT_QUERY_EXPR, serialize_f32 as _serialize_f32
@@ -293,13 +293,24 @@ def search(
                 fts_results = _fts_search(conn, fts_query, strategy_fetch_limit, chunk_strategy=chunk_strategy)
 
     if mode in ("hybrid", "vec"):
+        # Query-vector provider: family from the (possibly non-active) space, connection
+        # details (base_url/api_key/allow_loopback) from the current embed config. The
+        # frozen ProviderConfig is the cache key, so an openai_compat space resolves the
+        # right base_url instead of failing the bare-name path.
+        _conn_cfg = space_cfg if "base_url" in space_cfg else get_embed_config(conn)
+        query_provider_cfg = ProviderConfig(
+            family=space_cfg["provider"],
+            base_url=_conn_cfg.get("base_url"),
+            api_key=_conn_cfg.get("api_key"),
+            allow_loopback=_conn_cfg.get("allow_loopback", False),
+        )
         # Use space-specific config for query embedding
         if space_base_dim:
             query_embedding = embed_single(
                 query,
                 model=space_cfg["model"],
                 expected_dim=space_base_dim,
-                _provider_name=space_cfg["provider"],
+                _provider_cfg=query_provider_cfg,
             )
             if query_embedding is not None:
                 query_embedding = truncate_embedding(query_embedding, space_cfg["dim"])
@@ -308,7 +319,7 @@ def search(
                 query,
                 model=space_cfg["model"],
                 expected_dim=space_cfg["dim"],
-                _provider_name=space_cfg["provider"],
+                _provider_cfg=query_provider_cfg,
             )
         if query_embedding is not None:
             vec_results = _vec_search(conn, query_embedding, strategy_fetch_limit, table_name=vec_table)

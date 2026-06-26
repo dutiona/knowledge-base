@@ -12,7 +12,7 @@ import sqlite3
 
 from .db import escape_like, get_active_space
 from .embed_swap import get_embed_config
-from .embeddings import embed, truncate_embedding
+from .embeddings import ProviderConfig, embed, truncate_embedding
 from .utils import serialize_f32 as _serialize_f32
 
 __all__ = ["update_folder_summary"]
@@ -111,13 +111,18 @@ def update_folder_summary(
     cfg = get_embed_config(conn)
     active = get_active_space(conn)
     base_dim = active.get("matryoshka_base_dim") if active else None
-    provider_name = cfg.get("provider", "ollama")
+    provider_cfg = ProviderConfig(
+        family=cfg.get("provider", "ollama"),
+        base_url=cfg.get("base_url"),
+        api_key=cfg.get("api_key"),
+        allow_loopback=cfg.get("allow_loopback", False),
+    )
     if base_dim:
         embedding = embed(
             [summary],
             model=cfg["model"],
             expected_dim=base_dim,
-            _provider_name=provider_name,
+            _provider_cfg=provider_cfg,
         )[0]
         if embedding is not None:
             embedding = truncate_embedding(embedding, cfg["dim"])
@@ -126,7 +131,7 @@ def update_folder_summary(
             [summary],
             model=cfg["model"],
             expected_dim=cfg["dim"],
-            _provider_name=provider_name,
+            _provider_cfg=provider_cfg,
         )[0]
 
     # Upsert folder_summaries

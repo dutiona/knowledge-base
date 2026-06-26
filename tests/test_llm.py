@@ -608,17 +608,16 @@ def test_ssrf_check_skipped_for_ollama(tmp_path):
     assert result["reachable"] is True
 
 
-def test_ssrf_blocks_openai_compat_connectivity(tmp_path):
-    """configure_llm with openai_compat + private IP: connectivity reports SSRF error."""
+def test_ssrf_blocks_openai_compat_config_write(tmp_path):
+    """configure_llm with openai_compat + private IP hard-rejects at config-write (ADR-0018 §4).
+
+    The base_url is validated BEFORE it is persisted, so a malicious URL is never stored.
+    """
     conn = _setup(tmp_path)
-    result = configure_llm(
-        conn,
-        provider="openai_compat",
-        base_url="http://169.254.169.254",
-        model="test",
-    )
-    # The SSRF check raises ValidationError which _test_llm_connectivity catches
-    assert result["reachable"] is False
+    with pytest.raises(ValidationError, match="private"):
+        configure_llm(conn, provider="openai_compat", base_url="http://169.254.169.254", model="test")
+    # Nothing persisted: provider stays at the seeded default.
+    assert _get_llm_config(conn)["provider"] == "ollama"
 
 
 def test_ssrf_blocks_openai_compat_llm_call(tmp_path):
