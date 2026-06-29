@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
 from knowledge_base.embed_swap import get_embed_config, re_embed
 from knowledge_base.ingest import ingest_file
@@ -134,3 +136,313 @@ def test_re_embed_includes_folder_summaries(mock_provider, tmp_path):
     assert result["folders_processed"] == 1
     # Vec table rebuilt with new dim
     assert conn.execute("SELECT count(*) FROM folder_summaries_vec").fetchone()[0] == 1
+
+
+# --- Slice C: configure_embeddings + env→config migration + env:VAR secrets (#516) ---
+
+
+def _ok_get(*_args, **_kwargs):
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": []}
+
+    return FakeResp()
+
+
+def test_configure_embeddings_validates_and_redacts(tmp_path):
+    from knowledge_base.embed_swap import configure_embeddings
+
+    conn = _setup(tmp_path)
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
+    ):
+        result = configure_embeddings(
+            conn,
+            provider="openai_compat",
+            base_url="https://vllm.example.com/v1",
+            model="bge-m3",
+            api_key="sk-secret-123",
+        )
+    assert result["provider"] == "openai_compat"
+    assert "api_key" not in result  # redacted
+    assert result["base_url"] == "https://vllm.example.com"  # normalized (/v1 stripped)
+    # persisted
+    cfg = get_embed_config(conn)
+    assert cfg["provider"] == "openai_compat"
+    assert cfg["base_url"] == "https://vllm.example.com"
+    assert cfg["api_key"] == "sk-secret-123"
+
+
+def test_configure_embeddings_rejects_anthropic_compat(tmp_path):
+    from knowledge_base.embed_swap import configure_embeddings
+    from knowledge_base.exceptions import ValidationError
+
+    conn = _setup(tmp_path)
+    with pytest.raises(ValidationError, match="anthropic_compat"):
+        configure_embeddings(conn, provider="anthropic_compat", base_url="https://x.example.com")
+
+
+def test_configure_embeddings_loopback_requires_flag(tmp_path):
+    from knowledge_base.embed_swap import configure_embeddings
+    from knowledge_base.exceptions import ValidationError
+
+    conn = _setup(tmp_path)
+    # Without the opt-in, a localhost base_url is hard-rejected at config-write.
+    with pytest.raises(ValidationError, match="private"):
+        configure_embeddings(conn, provider="openai_compat", base_url="http://localhost:11434")
+    # With the opt-in, it is accepted (connectivity is advisory).
+    with patch("knowledge_base.embed_swap.httpx.get", _ok_get):
+        result = configure_embeddings(
+            conn,
+            provider="openai_compat",
+            base_url="http://localhost:11434/v1",
+            allow_loopback_base_url=True,
+        )
+    assert result["provider"] == "openai_compat"
+    assert get_embed_config(conn)["base_url"] == "http://localhost:11434"
+
+
+def test_configure_embeddings_env_indirection_not_persisted(tmp_path, monkeypatch):
+    from knowledge_base.embed_swap import configure_embeddings
+
+    conn = _setup(tmp_path)
+    monkeypatch.setenv("KB_EMBED_SECRET", "sk-resolved-at-call-time")
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
+    ):
+        configure_embeddings(
+            conn,
+            provider="openai_compat",
+            base_url="https://vllm.example.com",
+            api_key="env:KB_EMBED_SECRET",
+        )
+    # The raw indirection spec is stored verbatim — never the resolved secret.
+    stored = conn.execute("SELECT value FROM config WHERE key = 'embed_api_key'").fetchone()["value"]
+    assert stored == "env:KB_EMBED_SECRET"
+    all_values = " ".join(r["value"] for r in conn.execute("SELECT value FROM config").fetchall())
+    assert "sk-resolved-at-call-time" not in all_values
+
+
+def test_configure_embeddings_clears_stale_keys_for_ollama(tmp_path):
+    from knowledge_base.embed_swap import configure_embeddings
+
+    conn = _setup(tmp_path)
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
+    ):
+        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com", api_key="sk-1")
+    with patch("knowledge_base.embed_swap.httpx.get", _ok_get):
+        configure_embeddings(conn, provider="ollama", model="bge-m3")
+    cfg = get_embed_config(conn)
+    assert cfg["provider"] == "ollama"
+    assert cfg["base_url"] is None
+    assert cfg["api_key"] is None
+
+
+def test_configure_embeddings_no_key_in_logs(tmp_path, caplog):
+    from knowledge_base.embed_swap import configure_embeddings
+
+    conn = _setup(tmp_path)
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
+        caplog.at_level("DEBUG"),
+    ):
+        configure_embeddings(
+            conn,
+            provider="openai_compat",
+            base_url="https://user:hunter2@vllm.example.com",
+            api_key="sk-topsecret",
+        )
+    assert "sk-topsecret" not in caplog.text
+    assert "hunter2" not in caplog.text
+
+
+def test_get_embed_config_env_no_longer_selects_provider(tmp_path, monkeypatch, caplog):
+    """EMBED_PROVIDER no longer SELECTS the provider at runtime — config is authoritative.
+
+    It is honored only once at DB seed time; at runtime it only warns. Acting on it would
+    diverge from the bootstrapped active-space identity and falsely trip the producer guard
+    (PR #524 round-2 review).
+    """
+    conn = _setup(tmp_path)
+    monkeypatch.setenv("EMBED_PROVIDER", "onnx")
+    with caplog.at_level("WARNING"):
+        cfg = get_embed_config(conn)
+    assert cfg["provider"] == "ollama"  # config (seeded) wins; env ignored
+    assert "deprecated" in caplog.text.lower()
+    # Even with the config key absent (a pre-provider DB), env does NOT select — DEFAULT is
+    # returned, which matches the bootstrapped active space, so the identity guard won't reject.
+    conn.execute("DELETE FROM config WHERE key = 'embed_provider'")
+    conn.commit()
+    assert get_embed_config(conn)["provider"] == "ollama"
+
+
+def test_seed_honors_embed_provider_env_on_fresh_db(tmp_path, monkeypatch):
+    """A fresh DB seeds embed_provider from EMBED_PROVIDER once, aligning config + active space."""
+    from knowledge_base.db import get_active_space
+
+    monkeypatch.setenv("EMBED_PROVIDER", "onnx")
+    conn = _setup(tmp_path)  # init_schema runs the seed + bootstrap with env set
+    assert get_embed_config(conn)["provider"] == "onnx"
+    space = get_active_space(conn)
+    assert space is not None
+    assert space["provider"] == "onnx"  # aligned — no config/space divergence, no false reject
+
+
+def test_get_embed_config_explicit_config_overrides_env(tmp_path, monkeypatch):
+    """An explicit configure_embeddings() choice wins over the legacy env var."""
+    from knowledge_base.embed_swap import configure_embeddings
+
+    conn = _setup(tmp_path)
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
+    ):
+        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com")
+    monkeypatch.setenv("EMBED_PROVIDER", "onnx")
+    assert get_embed_config(conn)["provider"] == "openai_compat"
+
+
+# --- Slice D: producer-side identity hard-reject (AC6, #516) ---
+
+
+def test_assert_identity_match_passes_when_aligned(tmp_path):
+    from knowledge_base.embed_swap import assert_embed_identity_match
+
+    conn = _setup(tmp_path)  # default: active space + config both (ollama, bge-m3)
+    assert_embed_identity_match(conn)  # no raise
+
+
+def test_assert_identity_match_rejects_family_change(tmp_path):
+    from knowledge_base.embed_swap import assert_embed_identity_match, configure_embeddings
+    from knowledge_base.exceptions import ValidationError
+
+    conn = _setup(tmp_path)
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
+    ):
+        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com", model="bge-m3")
+    # active space still (ollama, bge-m3); config now openai_compat → mismatch
+    with pytest.raises(ValidationError, match="identity"):
+        assert_embed_identity_match(conn)
+
+
+def test_assert_identity_match_rejects_model_change(tmp_path):
+    from knowledge_base.embed_swap import assert_embed_identity_match
+    from knowledge_base.exceptions import ValidationError
+
+    conn = _setup(tmp_path)
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_model', 'other-model')")
+    conn.commit()
+    with pytest.raises(ValidationError, match="identity"):
+        assert_embed_identity_match(conn)
+
+
+def test_assert_identity_match_allows_base_url_swap_same_family(tmp_path):
+    """tei→vllm: both openai_compat, same model — only base_url differs → allowed."""
+    from knowledge_base.embed_swap import assert_embed_identity_match
+
+    conn = _setup(tmp_path)
+    conn.execute("UPDATE embed_spaces SET provider = 'openai_compat' WHERE status = 'active'")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://vllm.example.com')")
+    conn.commit()
+    assert_embed_identity_match(conn)  # same family + model → no raise
+
+
+def test_assert_identity_match_noop_without_active_space(tmp_path):
+    from knowledge_base.embed_swap import assert_embed_identity_match
+
+    conn = _setup(tmp_path)
+    conn.execute("DELETE FROM embed_spaces")
+    conn.commit()
+    assert_embed_identity_match(conn)  # no active space → nothing to mismatch
+
+
+def test_embed_with_config_rejects_identity_mismatch(tmp_path):
+    from knowledge_base.embed_swap import configure_embeddings
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.ingest import _embed_with_config
+
+    conn = _setup(tmp_path)
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
+    ):
+        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com", model="bge-m3")
+    # active space (ollama, bge-m3) vs configured openai_compat → reject before any HTTP call
+    with pytest.raises(ValidationError, match="identity"):
+        _embed_with_config(conn, ["hello"])
+
+
+def test_configure_embeddings_remote_ollama_base_url(tmp_path):
+    """A LAN/remote Ollama base_url is accepted (family-trusted, not SSRF-validated) and honored."""
+    from knowledge_base.embed_swap import configure_embeddings
+
+    conn = _setup(tmp_path)
+    # 192.168.x is private — would be SSRF-rejected for openai_compat, but ollama is trusted.
+    with patch("knowledge_base.embed_swap.httpx.get", _ok_get):
+        result = configure_embeddings(conn, provider="ollama", base_url="http://192.168.1.5:11434", model="bge-m3")
+    assert result["provider"] == "ollama"
+    assert get_embed_config(conn)["base_url"] == "http://192.168.1.5:11434"
+
+
+def test_openai_key_not_injected_into_generic_backend(tmp_path, monkeypatch):
+    """OPENAI_API_KEY must NOT be injected into a generic openai_compat backend (#524 review P1).
+
+    Injecting it would leak the user's OpenAI key to a third-party/local endpoint as the
+    Authorization header.
+    """
+    conn = _setup(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-must-not-leak")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://my-vllm.example.com')")
+    conn.commit()
+    assert get_embed_config(conn)["api_key"] is None  # generic backend → no env-key injection
+
+
+def test_openai_key_injected_for_openai_literal(tmp_path, monkeypatch):
+    """OPENAI_API_KEY IS still used for the OpenAI literal endpoint (api.openai.com) — back-compat."""
+    conn = _setup(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://api.openai.com')")
+    conn.commit()
+    assert get_embed_config(conn)["api_key"] == "sk-openai-real"
+
+
+def test_openai_key_not_injected_for_lookalike_host(tmp_path, monkeypatch):
+    """A look-alike host merely CONTAINING 'api.openai.com' must NOT be treated as the OpenAI
+    literal — exact hostname match only, else OPENAI_API_KEY leaks (#524 security review, HIGH)."""
+    conn = _setup(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-must-not-leak")
+    for bad in (
+        "https://api.openai.com.evil.com",  # suffix attack
+        "https://evil.com/?x=api.openai.com",  # query-string substring
+        "https://notapi.openai.com",  # prefix substring (old `in` check matched this)
+        "https://api-openai-com.evil.com",
+    ):
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', ?)", (bad,))
+        conn.commit()
+        assert get_embed_config(conn)["api_key"] is None, f"OPENAI_API_KEY leaked for look-alike {bad!r}"
+
+
+def test_openai_key_injected_for_trailing_dot_fqdn(tmp_path, monkeypatch):
+    """The canonical trailing-dot FQDN 'api.openai.com.' normalizes to the literal (still injects)."""
+    conn = _setup(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://API.OpenAI.com.')")
+    conn.commit()
+    assert get_embed_config(conn)["api_key"] == "sk-openai-real"  # case-insensitive + trailing-dot normalized

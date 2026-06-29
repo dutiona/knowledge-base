@@ -221,6 +221,24 @@ Populated on first run with:
 
 Additional keys set via configure tools: `llm_base_url`, `llm_api_key`, `vision_model`, `vision_base_url`, `omniparser_path`, `browser_mode`, `browser_endpoint`, `browser_venv`.
 
+**Provider keys** (set via `configure_embeddings` / `configure_llm`, per
+[ADR-0018](../design/adr/0018-provider-abstraction.md)):
+
+| Key                                          | Meaning                                                                                  |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `embed_provider`                             | Embedding API family: `openai_compat` \| `ollama` \| `onnx`                              |
+| `embed_base_url`                             | Embedding endpoint base URL (required for `openai_compat`; normalized + SSRF-validated)  |
+| `embed_api_key`                              | Embedding key — inline, or `env:VARNAME` indirection (stored verbatim, never the secret) |
+| `embed_model`                                | Embedding model slug — the `model` field of the embedding-identity tuple                 |
+| `llm_provider`                               | Chat API family: `openai_compat` \| `anthropic_compat` \| `ollama`                       |
+| `llm_base_url` / `llm_api_key` / `llm_model` | Chat counterparts (same semantics as the `embed_*` keys)                                 |
+| `allow_loopback_base_url`                    | `true`/`false` — **shared** opt-in permitting a loopback/`localhost` base_url            |
+
+The `embed_spaces.provider` and `.model` columns carry the family name and model slug — the
+ADR-0015 embedding-identity tuple that the producer (ingest) must match before writing. An
+`embed_api_key`/`llm_api_key` of the form `env:VARNAME` is resolved at call time and is **never**
+stored as the resolved secret; inline keys are stored plaintext-at-rest (local-only posture).
+
 ---
 
 ### chunks

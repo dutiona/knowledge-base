@@ -12,6 +12,7 @@ from ..db import get_active_space
 from ..embed_swap import (
     backfill_space,
     cleanup_space,
+    configure_embeddings,
     create_space,
     deprecate_space,
     get_embed_config,
@@ -19,15 +20,17 @@ from ..embed_swap import (
     promote_space,
     re_embed,
 )
+from ..exceptions import KnowledgeBaseError
 
 mcp = FastMCP("embeddings-routes")
 
 
 @mcp.tool()
 def embed_config() -> str:
-    """Get current embedding model configuration (model name and dimension)."""
+    """Get current embedding provider configuration (provider, model, dimension)."""
     conn = _get_conn()
     config = get_embed_config(conn)
+    config.pop("api_key", None)  # never expose the key (or env: spec) over the tool surface
     active = get_active_space(conn)
     if active:
         config["active_space"] = active["name"]
@@ -36,6 +39,37 @@ def embed_config() -> str:
         if active.get("matryoshka_base_dim"):
             config["matryoshka_base_dim"] = active["matryoshka_base_dim"]
     return json.dumps(config)
+
+
+@mcp.tool()
+def configure_embeddings_tool(
+    provider: str = "ollama",
+    base_url: str | None = None,
+    model: str = "bge-m3",
+    api_key: str | None = None,
+    allow_loopback_base_url: bool | None = None,
+) -> str:
+    """Configure the embedding provider (mirrors configure_llm_tool).
+
+    Args:
+        provider: 'ollama' (native), 'openai_compat' (OpenAI-compatible /v1/embeddings —
+            covers vLLM, LM Studio, OpenRouter, Ollama-Cloud, TEI), or 'onnx' (local).
+            'anthropic_compat' is rejected (Anthropic has no embeddings API).
+        base_url: Required for openai_compat (e.g. 'https://my-vllm.example.com' or
+            'http://localhost:11434/v1'). SSRF-validated before persisting.
+        model: Embedding model slug (e.g. 'bge-m3', 'text-embedding-3-large').
+        api_key: Inline key, or 'env:VARNAME' indirection (preferred — resolved at call
+            time, never stored as the secret). Omit for local/no-auth servers.
+        allow_loopback_base_url: Opt-in to a loopback IP-literal or 'localhost' base_url
+            (for local servers). Shared with the LLM path; omit to preserve the current
+            setting.
+    """
+    conn = _get_conn()
+    try:
+        return json.dumps(configure_embeddings(conn, provider, base_url, model, api_key, allow_loopback_base_url))
+    except KnowledgeBaseError as e:
+        err = {"error": str(e), **e.details}
+        return json.dumps(err)
 
 
 @mcp.tool()

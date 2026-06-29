@@ -10,6 +10,8 @@ import logging
 import math
 import os
 import subprocess
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -18,6 +20,7 @@ if TYPE_CHECKING:
 import httpx
 
 from .db import DEFAULT_EMBED_DIM
+from .utils import _resolve_api_key, _sanitize_url, validate_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +115,37 @@ class EmbeddingProvider(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderConfig:
+    """A resolved, hashable embedding-provider identity (ADR-0018 §2).
+
+    The frozen tuple ``(family, base_url, api_key, allow_loopback)`` is the provider
+    *cache key* — replacing the old name-keyed cache that made two ``openai_compat``
+    configs (different ``base_url``) collide. ``api_key`` holds the **raw** config
+    spec (inline value or ``env:VARNAME`` indirection, never a resolved secret); it is
+    omitted from ``__repr__`` so no key reaches a log line.
+    """
+
+    family: str
+    base_url: str | None = None
+    api_key: str | None = None
+    allow_loopback: bool = False
+
+    def __repr__(self) -> str:
+        bu = _sanitize_url(self.base_url) if self.base_url else None
+        return f"ProviderConfig(family={self.family!r}, base_url={bu!r}, allow_loopback={self.allow_loopback})"
+
+
 class OllamaProvider:
-    """Embedding provider using Ollama's /api/embed endpoint."""
+    """Embedding provider using Ollama's /api/embed endpoint.
+
+    With no ``base_url`` the URL is auto-detected (``OLLAMA_HOST`` env > WSL2 Windows
+    host > localhost). A configured ``base_url`` (e.g. a remote/LAN Ollama) overrides
+    auto-detection. Ollama is localhost-trusted by family, so it is not SSRF-validated.
+    """
+
+    def __init__(self, base_url: str | None = None) -> None:
+        self._base_url = base_url.rstrip("/") if base_url else None
 
     def embed(
         self,
@@ -122,7 +154,7 @@ class OllamaProvider:
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
         dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
-        url = _get_ollama_url()
+        url = self._base_url or _get_ollama_url()
         results = []
         for i in range(0, len(texts), 32):
             batch = texts[i : i + 32]
@@ -141,12 +173,26 @@ class OllamaProvider:
         return results
 
 
-class OpenAIProvider:
-    """Embedding provider using the OpenAI API.
+class OpenAICompatProvider:
+    """Embedding provider for ANY OpenAI-compatible ``/v1/embeddings`` endpoint.
 
-    Requires OPENAI_API_KEY env var. Uses httpx directly to avoid
-    hard dependency on the openai package.
+    One class reaches OpenAI, vLLM, LM Studio, OpenRouter, Ollama-Cloud, HuggingFace
+    TEI — selected purely by ``base_url`` (ADR-0018 §2), no per-vendor code. Uses
+    ``httpx`` directly to avoid a hard dependency on the openai package.
+
+    ``base_url`` is normalized FIRST (``rstrip('/').removesuffix('/v1')``) and that
+    same normalized value is what ``validate_base_url`` checks and what the request
+    targets — closing the suffix-strip smuggle gap (ADR-0018 §4/§5). ``api_key`` is
+    the raw spec (inline or ``env:VARNAME``), resolved at call time, never logged.
     """
+
+    def __init__(self, base_url: str | None, api_key: str | None = None, *, allow_loopback: bool = False) -> None:
+        self._base_url = (base_url or "https://api.openai.com").rstrip("/").removesuffix("/v1")
+        self._api_key = api_key  # raw spec; never logged
+        self._allow_loopback = allow_loopback
+
+    def __repr__(self) -> str:
+        return f"OpenAICompatProvider(base_url={_sanitize_url(self._base_url)!r})"
 
     def embed(
         self,
@@ -154,9 +200,9 @@ class OpenAIProvider:
         model: str = "text-embedding-3-large",
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY environment variable required for OpenAI embeddings")
+        # Defense-in-depth on the embed path (AC4); the primary gate is config-write.
+        validate_base_url(self._base_url, allow_loopback=self._allow_loopback)
+        api_key = _resolve_api_key(self._api_key)
         results = []
         batch_size = 512  # OpenAI supports up to 2048, 512 balances throughput/memory
         for i in range(0, len(texts), batch_size):
@@ -165,12 +211,12 @@ class OpenAIProvider:
             for emb in raw_embeddings:
                 if expected_dim is not None and len(emb) != expected_dim:
                     raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
-                results.append(_normalize_or_none(emb, "OpenAI"))
+                results.append(_normalize_or_none(emb, "OpenAI-compat"))
         return results
 
     def _call_api(
         self,
-        api_key: str,
+        api_key: str | None,
         texts: list[str],
         model: str,
         dimensions: int | None,
@@ -178,16 +224,41 @@ class OpenAIProvider:
         body: dict = {"model": model, "input": texts}
         if dimensions is not None:
             body["dimensions"] = dimensions
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         resp = httpx.post(
-            "https://api.openai.com/v1/embeddings",
-            headers={"Authorization": f"Bearer {api_key}"},
+            f"{self._base_url}/v1/embeddings",
+            headers=headers,
             json=body,
             timeout=120,
+            follow_redirects=False,
         )
         resp.raise_for_status()
         data = resp.json()["data"]
         data.sort(key=lambda x: x["index"])
         return [item["embedding"] for item in data]
+
+
+class OpenAIProvider(OpenAICompatProvider):
+    """OpenAI literal-endpoint alias (back-compat).
+
+    Degenerate case of :class:`OpenAICompatProvider` with ``base_url`` fixed to
+    ``https://api.openai.com``. Unlike a generic ``openai_compat`` server (where a
+    missing key means "no auth", valid for local backends), the OpenAI literal
+    *requires* ``OPENAI_API_KEY`` — that contract is preserved here.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("https://api.openai.com", os.environ.get("OPENAI_API_KEY"))
+
+    def embed(
+        self,
+        texts: list[str],
+        model: str = "text-embedding-3-large",
+        expected_dim: int | None = None,
+    ) -> list[list[float] | None]:
+        if not self._api_key:
+            raise RuntimeError("OPENAI_API_KEY environment variable required for OpenAI embeddings")
+        return super().embed(texts, model=model, expected_dim=expected_dim)
 
 
 class ONNXProvider:
@@ -244,34 +315,70 @@ class ONNXProvider:
         return self._sessions[cache_key]
 
 
-_PROVIDERS: dict[str, type] = {
+# Bare-name factories (legacy / no-config path). ``openai_compat`` is intentionally
+# absent here: it has no working default — it requires a configured ``base_url`` and
+# must be constructed via the config path (``get_provider(cfg=ProviderConfig(...))``).
+_PROVIDERS: dict[str, Callable[[], EmbeddingProvider]] = {
     "ollama": OllamaProvider,
     "openai": OpenAIProvider,
     "onnx": ONNXProvider,
 }
 
-_provider_cache: dict[str, EmbeddingProvider] = {}
+# Cache keyed by EITHER a resolved family name (str, legacy path) OR a frozen
+# ``ProviderConfig`` (config path). Keying the config path on the full identity tuple
+# is the fix for the old name-collision bug where two ``openai_compat`` base_urls
+# shared the single ``"openai_compat"`` slot (ADR-0018 §2).
+_provider_cache: dict[str | ProviderConfig, EmbeddingProvider] = {}
 
 
-def get_provider(name: str, *, allow_env_override: bool = True) -> EmbeddingProvider:
-    """Get an embedding provider by name.
+def _build_provider(cfg: ProviderConfig) -> EmbeddingProvider:
+    """Construct a provider from a resolved :class:`ProviderConfig`."""
+    family = cfg.family.lower()
+    if family == "ollama":
+        return OllamaProvider(cfg.base_url)
+    if family in ("openai_compat", "openai"):
+        return OpenAICompatProvider(cfg.base_url, cfg.api_key, allow_loopback=cfg.allow_loopback)
+    if family == "onnx":
+        return ONNXProvider()
+    raise ValueError(
+        f"'{cfg.family}' is not an embedding provider "
+        "(anthropic_compat is chat-only; valid: openai_compat, ollama, onnx)."
+    )
 
-    When *allow_env_override* is True (the default), ``EMBED_PROVIDER``
-    env-var takes precedence over *name*.  Callers that already resolved
-    an explicit provider choice (e.g. ``re_embed(provider=...)``) should
-    pass ``allow_env_override=False`` so the env-var cannot silently
-    redirect to a different backend.
+
+def get_provider(
+    name: str | None = None,
+    *,
+    cfg: ProviderConfig | None = None,
+    allow_env_override: bool = True,
+) -> EmbeddingProvider:
+    """Get an embedding provider, by config (preferred) or by bare name (legacy).
+
+    When *cfg* is given, the provider is built from the resolved identity tuple and
+    cached by it — two ``openai_compat`` configs with different ``base_url`` never
+    collide. When *cfg* is None, the legacy bare-name path applies: with
+    *allow_env_override* True (default) ``EMBED_PROVIDER`` takes precedence over
+    *name*; callers that already resolved an explicit choice pass
+    ``allow_env_override=False`` so the env-var cannot silently redirect the backend.
     """
-    resolved = name
+    if cfg is not None:
+        cached = _provider_cache.get(cfg)
+        if cached is not None:
+            return cached
+        instance = _build_provider(cfg)
+        _provider_cache[cfg] = instance
+        return instance
+
+    resolved = name or "ollama"
     if allow_env_override:
-        resolved = os.environ.get("EMBED_PROVIDER", name)
+        resolved = os.environ.get("EMBED_PROVIDER", resolved)
     resolved = resolved.lower()
     if resolved in _provider_cache:
         return _provider_cache[resolved]
-    cls = _PROVIDERS.get(resolved)
-    if cls is None:
+    factory = _PROVIDERS.get(resolved)
+    if factory is None:
         raise ValueError(f"Unknown embedding provider '{resolved}'. Available: {', '.join(sorted(_PROVIDERS))}")
-    instance = cls()
+    instance = factory()
     _provider_cache[resolved] = instance
     return instance
 
@@ -289,9 +396,16 @@ def embed(
     expected_dim: int | None = None,
     *,
     _provider_name: str = "ollama",
+    _provider_cfg: ProviderConfig | None = None,
 ) -> list[list[float] | None]:
-    """Embed a batch of texts using the named provider."""
-    provider = get_provider(_provider_name)
+    """Embed a batch of texts using the configured provider.
+
+    Signature is intentionally stable (ADR-0018 §2): the new ``_provider_cfg`` is a
+    purely-additive private kwarg, so existing callers and ``@patch(...embed)`` mocks
+    keep working. When *_provider_cfg* is given it selects the provider (config path);
+    otherwise the legacy *_provider_name* bare-name path applies.
+    """
+    provider = get_provider(cfg=_provider_cfg) if _provider_cfg is not None else get_provider(_provider_name)
     return provider.embed(texts, model=model, expected_dim=expected_dim)
 
 
@@ -301,6 +415,13 @@ def embed_single(
     expected_dim: int | None = None,
     *,
     _provider_name: str = "ollama",
+    _provider_cfg: ProviderConfig | None = None,
 ) -> list[float] | None:
-    """Embed a single text using the named provider. Returns None for zero-norm."""
-    return embed([text], model=model, expected_dim=expected_dim, _provider_name=_provider_name)[0]
+    """Embed a single text using the configured provider. Returns None for zero-norm."""
+    return embed(
+        [text],
+        model=model,
+        expected_dim=expected_dim,
+        _provider_name=_provider_name,
+        _provider_cfg=_provider_cfg,
+    )[0]

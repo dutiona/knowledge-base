@@ -179,18 +179,22 @@ def configure_llm_tool(
     base_url: str | None = None,
     model: str = "qwen3.5:27b",
     api_key: str | None = None,
+    allow_loopback_base_url: bool | None = None,
 ) -> str:
     """Configure the LLM used for structured extraction.
 
     Args:
         provider: 'ollama' (native API) or 'openai_compat' (OpenAI-compatible API).
-        base_url: Base URL (e.g. 'http://192.168.1.41:1234'). Required for openai_compat.
+        base_url: Base URL (e.g. 'http://192.168.1.41:1234'). Required for openai_compat;
+            SSRF-validated before persisting.
         model: Model name (e.g. 'qwen3.5:27b', 'qwen/qwen3.5-35b-a3b').
-        api_key: Optional API key for authenticated endpoints.
+        api_key: Inline key, or 'env:VARNAME' indirection (preferred). Optional.
+        allow_loopback_base_url: Opt-in to a loopback/localhost base_url (for a local
+            openai_compat server). Shared with the embedding path; omit to preserve.
     """
     conn = _get_conn()
     try:
-        return json.dumps(configure_llm(conn, provider, base_url, model, api_key))
+        return json.dumps(configure_llm(conn, provider, base_url, model, api_key, allow_loopback_base_url))
     except KnowledgeBaseError as e:
         err = {"error": str(e), **e.details}
         return json.dumps(err)

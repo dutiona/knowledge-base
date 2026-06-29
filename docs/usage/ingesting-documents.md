@@ -140,10 +140,10 @@ Use the `reingest` tool to force a full re-ingest. This deletes all existing chu
 
 Two chunking strategies are available for PDFs, selectable via the `configure_chunking` tool:
 
-| Strategy       | Target models  | PDF behavior                                              | Typical chunks/paper |
-| -------------- | -------------- | --------------------------------------------------------- | -------------------- |
-| **mechanical** | 8K context     | Fixed-size (1000 chars, 200 overlap), heading-aware split | 15+                  |
-| **semantic**   | 32K context    | Section-level split at H1/H2 boundaries, no overlap       | 3--5                 |
+| Strategy       | Target models | PDF behavior                                              | Typical chunks/paper |
+| -------------- | ------------- | --------------------------------------------------------- | -------------------- |
+| **mechanical** | 8K context    | Fixed-size (1000 chars, 200 overlap), heading-aware split | 15+                  |
+| **semantic**   | 32K context   | Section-level split at H1/H2 boundaries, no overlap       | 3--5                 |
 
 **Why two strategies?** Models like Qwen3-Embedding-0.6B have 32K context windows, making 1000-char chunks unnecessarily granular. Semantic chunking produces complete sections (Abstract, Methods, Results, etc.) as individual chunks, eliminating boundary artifacts and overlap waste. See [#100](https://github.com/dutiona/knowledge-base/issues/100) for the design rationale.
 
@@ -157,12 +157,12 @@ Two chunking strategies are available for PDFs, selectable via the `configure_ch
 
 **Per-source-type summary:**
 
-| Source type    | Chunking method       | Details                                                                                              |
-| -------------- | --------------------- | ---------------------------------------------------------------------------------------------------- |
-| PDF            | Mechanical or semantic | Mechanical: heading-aware 1000-char split. Semantic: section-level H1/H2 split (configurable).     |
-| Python (`.py`) | AST-aware             | Each function/class = one chunk; module-level code separate; oversized nodes sub-split               |
-| All other text | Fixed-size            | 1000 characters, 200-character overlap                                                               |
-| Web            | Fixed-size            | Same as other text, applied to trafilatura output                                                    |
+| Source type    | Chunking method        | Details                                                                                        |
+| -------------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| PDF            | Mechanical or semantic | Mechanical: heading-aware 1000-char split. Semantic: section-level H1/H2 split (configurable). |
+| Python (`.py`) | AST-aware              | Each function/class = one chunk; module-level code separate; oversized nodes sub-split         |
+| All other text | Fixed-size             | 1000 characters, 200-character overlap                                                         |
+| Web            | Fixed-size             | Same as other text, applied to trafilatura output                                              |
 
 ## Deduplication
 
@@ -220,25 +220,64 @@ Chunks are embedded automatically during ingestion using the configured embeddin
 
 Pluggable embedding providers decouple the knowledge base from any single inference backend. This design was motivated by competitive analysis (NornicDB supports Ollama, OpenAI, and local ONNX inference) and aligns with the [four-layer cognitive architecture](../insights/four-layer-cognitive-architecture.md) — embeddings sit in the Knowledge (infrastructure) layer where swappable backends enable cost/quality/latency trade-offs without touching higher layers.
 
-By default, knowledge-base uses **Ollama** (BGE-M3, 1024 dimensions). Three providers are supported:
+By default, knowledge-base uses **Ollama** (BGE-M3, 1024 dimensions). Providers are organized
+by **API family**, not vendor (per [ADR-0018](../design/adr/0018-provider-abstraction.md)):
 
-| Provider     | Config value       | Requirements                                            |
-| ------------ | ------------------ | ------------------------------------------------------- |
-| Ollama       | `ollama` (default) | Ollama running locally or via `OLLAMA_HOST`             |
-| OpenAI       | `openai`           | `OPENAI_API_KEY` env var                                |
-| ONNX Runtime | `onnx`             | `ONNX_EMBED_MODEL_PATH` env var, `uv sync --group onnx` |
+| Family            | Config value       | Endpoint                   | Covers (non-exhaustive)                                |
+| ----------------- | ------------------ | -------------------------- | ------------------------------------------------------ |
+| OpenAI-compatible | `openai_compat`    | `{base_url}/v1/embeddings` | OpenAI, vLLM, LM Studio, OpenRouter, Ollama-Cloud, TEI |
+| Ollama            | `ollama` (default) | `{base_url}/api/embed`     | native Ollama (auto-detected URL / `OLLAMA_HOST`)      |
+| ONNX Runtime      | `onnx`             | local `InferenceSession`   | local ONNX models (`uv sync --group onnx`)             |
 
-To switch providers, update the config table:
+`openai_compat` is the workhorse: it reaches **any** OpenAI-compatible embedding endpoint by
+`base_url` — no per-vendor code. (`anthropic_compat` is chat-only; Anthropic has no embeddings
+API, so it is rejected for embeddings.) `openai` remains a deprecated alias for the OpenAI
+literal endpoint.
 
-```sql
--- Switch to OpenAI
-UPDATE config SET value = 'openai' WHERE key = 'embed_provider';
-UPDATE config SET value = 'text-embedding-3-large' WHERE key = 'embed_model';
-UPDATE config SET value = '3072' WHERE key = 'embed_dim';
+### Configuring the embedding provider
+
+Use the **`configure_embeddings`** tool (mirrors `configure_llm`) — it validates the `base_url`,
+runs a connectivity probe, and stores the config in the DB (selection now lives in `config`,
+not env vars):
+
+```json
+// A hosted OpenAI-compatible embedder (e.g. vLLM / TEI / OpenRouter):
+{ "name": "configure_embeddings_tool",
+  "arguments": {
+    "provider": "openai_compat",
+    "base_url": "https://my-vllm.example.com",
+    "model": "Qwen/Qwen3-Embedding-0.6B",
+    "api_key": "env:VLLM_API_KEY"          // env:VARNAME — resolved at call time, never stored
+  } }
+
+// A LOCAL OpenAI-compatible server (vLLM/LM Studio/TEI on localhost):
+{ "name": "configure_embeddings_tool",
+  "arguments": {
+    "provider": "openai_compat",
+    "base_url": "http://localhost:11434/v1",
+    "model": "bge-m3",
+    "allow_loopback_base_url": true        // REQUIRED to permit a loopback/localhost base_url
+  } }
 ```
 
-After switching providers or models, re-embed existing chunks with `re_embed_tool`.
+After switching providers or models, re-embed existing chunks with `re_embed_tool`. A provider
+swap that changes the **family** or **model** without creating a new space is hard-rejected at
+ingest (the active space's recorded identity is authoritative) — a `base_url` change within the
+same family (e.g. TEI → vLLM, both `openai_compat`, same model) is allowed.
 
-### Environment Variable Override
+**API keys.** Prefer the `env:VARNAME` indirection (the secret is read from the environment at
+call time and never written to the DB). An inline key is stored plaintext-at-rest in the
+`config` table — acceptable for a local single-user setup; keyring hardening is deferred.
 
-Set `EMBED_PROVIDER=openai` (or `onnx`) to override the database config without modifying it. Useful for CI/dev environments.
+**SSRF safety.** Every `openai_compat` `base_url` is validated (scheme, private/link-local/
+metadata/DNS-rebinding rejected) before it is persisted and on each request (cross-host
+redirects are refused). A loopback IP literal or the exact name `localhost` is permitted **only**
+with `allow_loopback_base_url=true`; a hostname that merely _resolves_ to loopback
+(`127.0.0.1.nip.io`) stays rejected.
+
+### Environment Variable Override (deprecated)
+
+The legacy `EMBED_PROVIDER` / `OPENAI_API_KEY` env vars still apply **while `embed_provider` is
+at its seeded default** (an explicit `configure_embeddings` choice wins), with a one-time
+deprecation warning. Prefer `configure_embeddings`; env back-compat will be removed in a future
+release.

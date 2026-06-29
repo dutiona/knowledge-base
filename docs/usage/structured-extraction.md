@@ -163,22 +163,35 @@ Configure the LLM used for structured extraction:
 }
 ```
 
-Two providers are supported:
+Three chat API families are supported (organized by family, not vendor —
+[ADR-0018](../design/adr/0018-provider-abstraction.md)):
 
-- **`ollama`** -- Uses the native Ollama `/api/generate` endpoint. Base URL is auto-detected (OLLAMA_HOST env, WSL2 gateway, or localhost:11434).
-- **`openai_compat`** -- Uses the OpenAI `/v1/chat/completions` endpoint. Requires `base_url`. Supports optional `api_key` for authenticated endpoints.
+- **`ollama`** -- native Ollama `/api/generate`. Base URL auto-detected (OLLAMA_HOST env, WSL2 gateway, or localhost:11434).
+- **`openai_compat`** -- OpenAI-compatible `{base_url}/v1/chat/completions` (OpenAI, vLLM, LM Studio, OpenRouter, …). Requires `base_url`; optional `api_key`.
+- **`anthropic_compat`** -- Anthropic Messages API `{base_url}/v1/messages` (`x-api-key` + `anthropic-version` headers, `system` as a top-level field, content-block responses). Requires `base_url`; **chat-only** (Anthropic has no embeddings API — rejected by `configure_embeddings`).
 
 ```json
 {
   "name": "configure_llm_tool",
   "arguments": {
-    "provider": "openai_compat",
-    "base_url": "http://192.168.1.41:1234",
-    "model": "qwen/qwen3.5-35b-a3b"
+    "provider": "anthropic_compat",
+    "base_url": "https://api.anthropic.com",
+    "model": "claude-...",
+    "api_key": "env:ANTHROPIC_API_KEY"
   }
 }
 ```
 
-Configuration is saved to the database first, then an advisory connectivity probe runs. If the probe fails, a warning is returned but the config is **not** rolled back -- the saved settings remain. This lets you configure an endpoint before it comes online.
+A local `openai_compat` LLM on `localhost` requires `allow_loopback_base_url: true` (the same
+opt-in the embedding path uses; it is a **shared** config flag — omit it to preserve the current
+setting rather than clobber the embedding side).
 
-The API key, if provided, is stored as plain text in the SQLite config table. This is acceptable for local use but not suitable for network-exposed deployments.
+Configuration is saved to the database first, then an advisory connectivity probe runs. A
+private/loopback `base_url` without the loopback opt-in is **hard-rejected before persisting**
+(SSRF primary gate); a reachable-but-down endpoint returns a warning without rolling back the
+saved settings.
+
+The API key, if provided inline, is stored as plain text in the SQLite config table (acceptable
+for local use, not for network-exposed deployments). Prefer the `env:VARNAME` indirection — the
+secret is resolved at call time and never written to the DB. No vendor SDK is added; all three
+families use `httpx` directly. Streaming, tool-calling, and multi-turn are out of scope.

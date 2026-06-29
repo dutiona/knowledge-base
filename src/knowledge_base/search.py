@@ -15,7 +15,7 @@ from .db import (
     get_vec_table_name,
 )
 from .embed_swap import get_embed_config, get_space
-from .embeddings import embed_single, truncate_embedding
+from .embeddings import ProviderConfig, embed_single, truncate_embedding
 from .exceptions import ValidationError
 from .keywords import build_fts_query, extract_keywords
 from .utils import ELEMENT_QUERY_EXPR, serialize_f32 as _serialize_f32
@@ -268,8 +268,16 @@ def search(
         active = get_active_space(conn)
         skip_folder_boost = not active or space["name"] != active["name"]
     else:
-        space_cfg = get_embed_config(conn)
         active = get_active_space(conn)
+        if active is not None:
+            # Use the ACTIVE SPACE's recorded identity for the query embedding — NOT the
+            # mutable config. After a configure_embeddings() drift (config changed but not
+            # yet re_embed'd), the stored vectors are still the space's model; querying with
+            # the config's (new) model would mix spaces. Connection details still come from
+            # config (the space row stores no base_url/api_key).
+            space_cfg = {"model": active["model"], "dim": active["dim"], "provider": active["provider"]}
+        else:
+            space_cfg = get_embed_config(conn)  # fresh DB / no active space
         space_base_dim = active.get("matryoshka_base_dim") if active else None
         vec_table = None  # use active space default
         skip_folder_boost = False
@@ -293,13 +301,37 @@ def search(
                 fts_results = _fts_search(conn, fts_query, strategy_fetch_limit, chunk_strategy=chunk_strategy)
 
     if mode in ("hybrid", "vec"):
+        # Query-vector provider: family from the (possibly non-active) space. Connection
+        # details (base_url/api_key/allow_loopback) come from the current embed config ONLY
+        # when its family matches the space's — otherwise a configure_embeddings() drift to a
+        # different family would point the space's family at the wrong endpoint (e.g. an
+        # ollama space hitting an openai_compat URL). When families differ, omit the config
+        # connection (ollama auto-detects; an openai_compat space without a matching base_url
+        # fails clearly, signalling that re_embed is needed).
+        _embed_conn = get_embed_config(conn)
+        _same_family = _embed_conn["provider"] == space_cfg["provider"]
+        if not _same_family and space_cfg["provider"] in ("openai_compat", "anthropic_compat"):
+            # The space's family needs a base_url, but config has drifted to a different family
+            # so there is none to use. Fail clearly rather than let OpenAICompatProvider(None)
+            # silently fall back to https://api.openai.com (wrong backend + key exposure).
+            raise ValidationError(
+                f"The active embedding space's provider ({space_cfg['provider']}) requires a base_url, "
+                f"but the embed config has drifted to {_embed_conn['provider']!r}. Run re_embed() to "
+                "rebuild the space with the current provider, or reconfigure the provider to match the space."
+            )
+        query_provider_cfg = ProviderConfig(
+            family=space_cfg["provider"],
+            base_url=_embed_conn["base_url"] if _same_family else None,
+            api_key=_embed_conn["api_key"] if _same_family else None,
+            allow_loopback=_embed_conn["allow_loopback"] if _same_family else False,
+        )
         # Use space-specific config for query embedding
         if space_base_dim:
             query_embedding = embed_single(
                 query,
                 model=space_cfg["model"],
                 expected_dim=space_base_dim,
-                _provider_name=space_cfg["provider"],
+                _provider_cfg=query_provider_cfg,
             )
             if query_embedding is not None:
                 query_embedding = truncate_embedding(query_embedding, space_cfg["dim"])
@@ -308,7 +340,7 @@ def search(
                 query,
                 model=space_cfg["model"],
                 expected_dim=space_cfg["dim"],
-                _provider_name=space_cfg["provider"],
+                _provider_cfg=query_provider_cfg,
             )
         if query_embedding is not None:
             vec_results = _vec_search(conn, query_embedding, strategy_fetch_limit, table_name=vec_table)

@@ -859,13 +859,29 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
     """)
     existing = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
     if not existing:
+        # Fresh DB: honor the (deprecated) EMBED_PROVIDER env var ONCE at seed time, so the
+        # config, the bootstrapped active space, and runtime dispatch all agree from creation
+        # (ADR-0018 §3 — env selection is migrated into config; this is the one-time bridge).
+        seed_provider = os.environ.get("EMBED_PROVIDER") or DEFAULT_EMBED_PROVIDER
         conn.executemany(
             "INSERT INTO config (key, value) VALUES (?, ?)",
             [
                 ("embed_model", DEFAULT_EMBED_MODEL),
                 ("embed_dim", str(DEFAULT_EMBED_DIM)),
-                ("embed_provider", DEFAULT_EMBED_PROVIDER),
+                ("embed_provider", seed_provider),
             ],
+        )
+        conn.commit()
+    else:
+        # Upgraded pre-provider DB (embed_model present, embed_provider possibly absent):
+        # backfill embed_provider to the default so config is never absent. It matches the
+        # existing active space (which predates provider portability and is always the
+        # default), keeping the producer identity guard aligned. EMBED_PROVIDER is NOT applied
+        # here — config is authoritative for an existing DB; the env var only warns (see
+        # get_embed_config). Idempotent via INSERT OR IGNORE.
+        conn.execute(
+            "INSERT OR IGNORE INTO config (key, value) VALUES ('embed_provider', ?)",
+            (DEFAULT_EMBED_PROVIDER,),
         )
         conn.commit()
 
