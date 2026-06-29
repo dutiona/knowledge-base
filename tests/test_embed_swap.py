@@ -419,3 +419,30 @@ def test_openai_key_injected_for_openai_literal(tmp_path, monkeypatch):
     conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://api.openai.com')")
     conn.commit()
     assert get_embed_config(conn)["api_key"] == "sk-openai-real"
+
+
+def test_openai_key_not_injected_for_lookalike_host(tmp_path, monkeypatch):
+    """A look-alike host merely CONTAINING 'api.openai.com' must NOT be treated as the OpenAI
+    literal — exact hostname match only, else OPENAI_API_KEY leaks (#524 security review, HIGH)."""
+    conn = _setup(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-must-not-leak")
+    for bad in (
+        "https://api.openai.com.evil.com",  # suffix attack
+        "https://evil.com/?x=api.openai.com",  # query-string substring
+        "https://notapi.openai.com",  # prefix substring (old `in` check matched this)
+        "https://api-openai-com.evil.com",
+    ):
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', ?)", (bad,))
+        conn.commit()
+        assert get_embed_config(conn)["api_key"] is None, f"OPENAI_API_KEY leaked for look-alike {bad!r}"
+
+
+def test_openai_key_injected_for_trailing_dot_fqdn(tmp_path, monkeypatch):
+    """The canonical trailing-dot FQDN 'api.openai.com.' normalizes to the literal (still injects)."""
+    conn = _setup(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://API.OpenAI.com.')")
+    conn.commit()
+    assert get_embed_config(conn)["api_key"] == "sk-openai-real"  # case-insensitive + trailing-dot normalized

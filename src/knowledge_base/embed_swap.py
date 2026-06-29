@@ -11,6 +11,7 @@ import os
 import re
 import sqlite3
 import time
+from urllib.parse import urlparse
 
 import httpx
 
@@ -89,9 +90,8 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     # backend (vLLM/TEI/OpenRouter/localhost) — that would leak the user's OpenAI key to a
     # third-party/local endpoint as the Authorization header (#524 review, P1). Generic
     # backends must use an explicit inline or `env:VARNAME` key.
-    is_openai_literal = provider == "openai" or (
-        provider == "openai_compat" and base_url is not None and "api.openai.com" in base_url
-    )
+    _host = (urlparse(base_url or "").hostname or "").rstrip(".").lower()
+    is_openai_literal = provider == "openai" or (provider == "openai_compat" and _host == "api.openai.com")
     if api_key is None and is_openai_literal:
         env_key = os.environ.get("OPENAI_API_KEY")
         if env_key:
