@@ -395,3 +395,27 @@ def test_configure_embeddings_remote_ollama_base_url(tmp_path):
         result = configure_embeddings(conn, provider="ollama", base_url="http://192.168.1.5:11434", model="bge-m3")
     assert result["provider"] == "ollama"
     assert get_embed_config(conn)["base_url"] == "http://192.168.1.5:11434"
+
+
+def test_openai_key_not_injected_into_generic_backend(tmp_path, monkeypatch):
+    """OPENAI_API_KEY must NOT be injected into a generic openai_compat backend (#524 review P1).
+
+    Injecting it would leak the user's OpenAI key to a third-party/local endpoint as the
+    Authorization header.
+    """
+    conn = _setup(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-must-not-leak")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://my-vllm.example.com')")
+    conn.commit()
+    assert get_embed_config(conn)["api_key"] is None  # generic backend → no env-key injection
+
+
+def test_openai_key_injected_for_openai_literal(tmp_path, monkeypatch):
+    """OPENAI_API_KEY IS still used for the OpenAI literal endpoint (api.openai.com) — back-compat."""
+    conn = _setup(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://api.openai.com')")
+    conn.commit()
+    assert get_embed_config(conn)["api_key"] == "sk-openai-real"

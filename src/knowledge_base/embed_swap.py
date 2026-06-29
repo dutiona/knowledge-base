@@ -83,8 +83,16 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     provider = provider_row["value"] if provider_row else DEFAULT_EMBED_PROVIDER
     if os.environ.get("EMBED_PROVIDER"):
         _warn_embed_env_deprecated()
-    # OPENAI_API_KEY stays a secret-value fallback only (does not affect identity).
-    if api_key is None and provider in ("openai", "openai_compat"):
+    # OPENAI_API_KEY back-compat fallback — secret-value only (does not affect identity).
+    # SCOPED to the OpenAI *literal* endpoint: the legacy `openai` alias, or an `openai_compat`
+    # config whose base_url is api.openai.com. NEVER inject it into a generic openai_compat
+    # backend (vLLM/TEI/OpenRouter/localhost) — that would leak the user's OpenAI key to a
+    # third-party/local endpoint as the Authorization header (#524 review, P1). Generic
+    # backends must use an explicit inline or `env:VARNAME` key.
+    is_openai_literal = provider == "openai" or (
+        provider == "openai_compat" and base_url is not None and "api.openai.com" in base_url
+    )
+    if api_key is None and is_openai_literal:
         env_key = os.environ.get("OPENAI_API_KEY")
         if env_key:
             api_key = env_key
