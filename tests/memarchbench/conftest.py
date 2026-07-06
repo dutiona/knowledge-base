@@ -35,8 +35,8 @@ GOLDEN_SET = FIXTURES_DIR / "golden_queries.jsonl"
 def mb_conn(tmp_path) -> Iterator[sqlite3.Connection]:
     """Fresh schema-initialized tmp DB for the hermetic suites."""
     conn = get_connection(tmp_path / "memarchbench.db")
-    init_schema(conn)
     try:
+        init_schema(conn)
         yield conn
     finally:
         conn.close()
