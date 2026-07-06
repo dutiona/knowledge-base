@@ -33,6 +33,7 @@ from .ingest import (
     _content_hash,
     _embed_with_config,
     _insert_chunk,
+    kb_data_dir,
     pdf_image_dir,
 )
 from .web import _cleanup_figure_fk_refs
@@ -2026,11 +2027,16 @@ def _save_rendered_pngs(
     paper_id: int,
     rendered: dict[int, bytes],
     mixed_rendered: dict[int, list[tuple[fitz.Rect, bytes]]] | None = None,
+    base_dir: Path | None = None,
 ) -> None:
-    """Save rendered vector-page PNGs and mixed-page region crops to disk."""
+    """Save rendered vector-page PNGs and mixed-page region crops to disk.
+
+    Writes under ``base_dir`` when given, else ``kb_data_dir()/figures``
+    (redirectable via KNOWLEDGE_BASE_DATA_DIR — #391).
+    """
     if not rendered and not mixed_rendered:
         return
-    figures_dir = Path.home() / ".local" / "share" / "knowledge-base" / "figures" / str(paper_id)
+    figures_dir = (base_dir if base_dir is not None else kb_data_dir() / "figures") / str(paper_id)
     try:
         figures_dir.mkdir(parents=True, exist_ok=True)
         for page_num, png_bytes in rendered.items():

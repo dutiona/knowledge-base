@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import sqlite3
@@ -53,9 +54,22 @@ __all__ = [
     "CHUNK_SIZE",
     "ingest_directory",
     "ingest_file",
+    "kb_data_dir",
     "pdf_image_dir",
     "reingest_file",
 ]
+
+
+def kb_data_dir() -> Path:
+    """Base directory for on-disk artifacts (figures, rendered pages).
+
+    Honors the KNOWLEDGE_BASE_DATA_DIR environment variable so tests and
+    alternative deployments can redirect writes away from the real home
+    directory (#391). Resolved at call time, not import time, so a
+    monkeypatched environment takes effect immediately.
+    """
+    env = os.environ.get("KNOWLEDGE_BASE_DATA_DIR")
+    return Path(env) if env else Path.home() / ".local" / "share" / "knowledge-base"
 
 
 def _detect_source_type(path: Path) -> str:
@@ -227,7 +241,7 @@ def pdf_image_dir(path: Path) -> Path:
             h.update(chunk)
     file_hash = h.hexdigest()[:_FILE_HASH_HEX_LEN]
     sanitized = re.sub(r"[^\w\-.]", "_", path.stem)[:_STEM_MAX_LEN]
-    return Path.home() / ".local" / "share" / "knowledge-base" / "figures" / f"{sanitized}_{file_hash}" / "extracted"
+    return kb_data_dir() / "figures" / f"{sanitized}_{file_hash}" / "extracted"
 
 
 def _extract_pdf_markdown(path: Path, image_dir: Path | None = None) -> tuple[str, dict[int, int]]:

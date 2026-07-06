@@ -1,7 +1,9 @@
 """Shared pytest fixtures for the knowledge-base test suite.
 
-Fixtures here are opt-in by argument name — they do not change the behavior of
-existing tests that build their own temp databases inline.
+Database fixtures are opt-in by argument name — they do not change the
+behavior of existing tests that build their own temp databases inline.
+Two autouse guards apply to every test: the job-worker reset and the
+data-dir redirect (#391).
 """
 
 from __future__ import annotations
@@ -55,3 +57,18 @@ def _reset_job_worker():
     get_worker().reset()
     yield
     get_worker().reset()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_kb_data_dir(tmp_path, monkeypatch):
+    """Point KNOWLEDGE_BASE_DATA_DIR at a per-test temp dir (#391).
+
+    ``kb_data_dir()`` (ingest.py) resolves the base directory for on-disk
+    artifacts — figure PNGs, rendered vector pages — at call time. Without
+    this guard, any test exercising a code path that writes artifacts (e.g.
+    ``vision._save_rendered_pngs``) would pollute the developer's real
+    ``~/.local/share/knowledge-base``. Tests asserting on artifact locations
+    may still override the variable themselves; monkeypatch scoping keeps
+    each test hermetic either way.
+    """
+    monkeypatch.setenv("KNOWLEDGE_BASE_DATA_DIR", str(tmp_path / "kb-data"))
