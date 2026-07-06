@@ -398,30 +398,34 @@ def _produce_and_insert_chunks(
             return (0, 0, [])
         items = [(i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)]
 
-    # --- Deduplication (optional) ---
+    # --- Deduplication ---
+    # The intra-document (in-batch) hash collapse ALWAYS runs: two identical chunks
+    # in one document share a content_hash and the second would hit the
+    # chunks.content_hash UNIQUE constraint (#553). This is independent of
+    # *deduplicate*, which only governs the cross-document DB probe below —
+    # reingest_file() passes deduplicate=False (old rows already deleted) yet must
+    # still collapse in-document duplicates (#553 review).
     deferred_session_links: list[int] = []
-    if deduplicate:
-        new_items: list[tuple[int, str, str, str]] = []
-        skipped = 0
-        batch_hashes: set[str] = set()  # intra-document duplicates crash the INSERT otherwise (#553)
-        for item in items:
-            if item[2] in batch_hashes:
-                skipped += 1
-                continue
-            # Record the hash before the DB probe so later in-batch duplicates
-            # of an ALREADY-PERSISTED chunk skip here too — one session link
-            # and one DB query per distinct hash, not per occurrence.
-            batch_hashes.add(item[2])
+    new_items: list[tuple[int, str, str, str]] = []
+    skipped = 0
+    batch_hashes: set[str] = set()
+    for item in items:
+        if item[2] in batch_hashes:
+            skipped += 1
+            continue
+        # Record the hash before the DB probe so later in-batch duplicates
+        # of an ALREADY-PERSISTED chunk skip here too — one session link
+        # and one DB query per distinct hash, not per occurrence.
+        batch_hashes.add(item[2])
+        if deduplicate:
             existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (item[2],)).fetchone()
             if existing:
                 if session_id is not None:
                     deferred_session_links.append(existing["id"])
                 skipped += 1
                 continue
-            new_items.append(item)
-        items = new_items
-    else:
-        skipped = 0
+        new_items.append(item)
+    items = new_items
 
     if not items:
         return (0, skipped, deferred_session_links)
