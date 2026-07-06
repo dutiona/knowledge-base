@@ -138,6 +138,16 @@ Set `rerank: true` in the search tool call:
 }
 ```
 
+### Result Ordering
+
+Cross-encoder scores (in `[0, 1]`) and RRF scores (`~1/(60 + rank)`) live on
+incomparable scales, so they are never co-sorted. With `rerank: true`, results
+come back in two tiers: every reranked hit first (descending cross-encoder
+score, `match_type: "reranked"`), then any un-reranked tail (candidates beyond
+`rerank_top_n`) in RRF order. A reranked hit always outranks a tail hit — even
+when its absolute score is lower — because the tail was excluded from reranking
+precisely for ranking lower in the first stage.
+
 ### Latency Budget
 
 | Stage              | Typical Latency |

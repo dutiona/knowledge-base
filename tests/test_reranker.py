@@ -276,3 +276,92 @@ def test_search_index_rerank_passthrough(tmp_path):
 
     assert len(results) >= 1
     assert results[0].match_type == "reranked"
+
+
+# ---------------------------------------------------------------------------
+# Regression: reranker/RRF scale mixing (#387)
+# ---------------------------------------------------------------------------
+
+
+def _insert_graded_chunks(conn, n):
+    """Insert n chunks with decreasing BM25 relevance for query 'signal'.
+
+    Chunk i repeats the term (n - i) times, so FTS ranks them in
+    insertion order: chunk 0 first, chunk n-1 last.
+    """
+    for i in range(n):
+        content = " ".join(["signal"] * (n - i)) + f" filler{i}"
+        conn.execute(
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+            "VALUES (?, ?, 'markdown', ?, 0)",
+            (f"g{i}", content, f"/tmp/graded_{i}.md"),
+        )
+    conn.commit()
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_rerank_poor_scores_stay_above_unreranked_tail(tmp_path):
+    """Reranked items rank above the un-reranked tail even with poor scores (#387).
+
+    Cross-encoder scores live in [0, 1]; RRF scores are ~1/(RRF_K + rank + 1)
+    (~0.016 at rank 0). A legitimate weak cross-encoder score like 0.01 must
+    NOT sort below tail items the reranker never saw.
+    """
+    conn = _setup_db(tmp_path)
+    _insert_graded_chunks(conn, 5)
+
+    def _poor_rerank(query, candidates, **_kw):
+        # Weak-but-valid scores, all below the best RRF score (~0.0164)
+        return [0.01] * len(candidates)
+
+    with patch("knowledge_base.reranker.rerank", _poor_rerank):
+        results = search(conn, "signal", mode="fts", rerank=True, rerank_top_n=2)
+
+    assert len(results) == 5
+    # The two reranked items must occupy the top positions
+    assert [r.match_type for r in results] == ["reranked", "reranked", "fts", "fts", "fts"]
+    # They are the same two items the RRF ranking fed to the reranker
+    assert {r.source_uri for r in results[:2]} == {"/tmp/graded_0.md", "/tmp/graded_1.md"}
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_rerank_orders_within_tiers(tmp_path):
+    """Cross-encoder order wins inside the reranked tier; the tail keeps RRF order."""
+    conn = _setup_db(tmp_path)
+    _insert_graded_chunks(conn, 5)
+
+    def _reversing_poor_rerank(query, candidates, **_kw):
+        # Second candidate scores higher than the first — both still poor
+        return [0.01 + 0.001 * i for i in range(len(candidates))]
+
+    with patch("knowledge_base.reranker.rerank", _reversing_poor_rerank):
+        results = search(conn, "signal", mode="fts", rerank=True, rerank_top_n=2)
+
+    assert [r.source_uri for r in results] == [
+        "/tmp/graded_1.md",  # reranked, cross-encoder 0.011
+        "/tmp/graded_0.md",  # reranked, cross-encoder 0.010
+        "/tmp/graded_2.md",  # tail, RRF order preserved
+        "/tmp/graded_3.md",
+        "/tmp/graded_4.md",
+    ]
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_rerank_preserves_result_count(tmp_path):
+    """Fixing #387 must not drop the un-reranked tail from the result set."""
+    conn = _setup_db(tmp_path)
+    _insert_graded_chunks(conn, 5)
+
+    def _poor_rerank(query, candidates, **_kw):
+        return [0.01] * len(candidates)
+
+    with patch("knowledge_base.reranker.rerank", _poor_rerank):
+        results = search(conn, "signal", mode="fts", rerank=True, rerank_top_n=2, top_k=5)
+
+    assert len(results) == 5
