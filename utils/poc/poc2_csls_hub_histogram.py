@@ -41,7 +41,9 @@ def _open_ro(db_path: Path) -> sqlite3.Connection:
     """
     import sqlite_vec
 
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    # expanduser + resolve + as_uri: handle ~ (the live DB is under ~/.local/share)
+    # and percent-encode the path so a special char can't collide with the URI query.
+    conn = sqlite3.connect(f"{db_path.expanduser().resolve().as_uri()}?mode=ro", uri=True)
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)
