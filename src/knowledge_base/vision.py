@@ -1480,7 +1480,7 @@ def _collect_dual_path_inputs(
     pages: list[int] | None,
 ) -> DualPathInputs:
     """Collect extracted images and determine vector-page fallback set."""
-    image_dir = pdf_image_dir(pdf_path)
+    image_dir = pdf_image_dir(pdf_path, conn)
     extracted_images = _collect_extracted_images(conn, source_uri, image_dir)
 
     # 5a. Extract captions from ingest chunks for hybrid enrichment
@@ -2204,8 +2204,8 @@ def extract_figures(
         on_progress,
     )
 
-    # 11. Save rendered PNGs to disk
-    _save_rendered_pngs(paper_id, rendered, mixed_rendered)
+    # 11. Save rendered PNGs to disk, beside the DB they belong to (#391)
+    _save_rendered_pngs(paper_id, rendered, mixed_rendered, base_dir=kb_data_dir(conn) / "figures")
 
     # Build result summary
     total_figures = sum(len(figs) for figs in vision.page_results.values())

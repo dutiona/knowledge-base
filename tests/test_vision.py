@@ -4159,3 +4159,45 @@ def test_extract_figures_render_path_isolated_from_home(
     assert result.get("vector_pages_rendered", 0) > 0
     saved = list((data_dir / "figures" / "1").glob("page_*.png"))
     assert saved, "rendered PNGs must land under the injected data dir"
+
+
+def test_kb_data_dir_resolution_order(tmp_path, monkeypatch):
+    """Env var (stripped, expanduser'd) > conn DB-parent > home default."""
+    from knowledge_base.ingest import kb_data_dir
+
+    conn = sqlite3.connect(tmp_path / "sub" / ".." / "kb.db")
+
+    # 1. env wins over conn, with expanduser
+    monkeypatch.setenv("KNOWLEDGE_BASE_DATA_DIR", "~/custom-kb")
+    assert kb_data_dir(conn) == Path.home() / "custom-kb"
+
+    # whitespace-only env is ignored (mirrors resolve_db_path)
+    monkeypatch.setenv("KNOWLEDGE_BASE_DATA_DIR", "   ")
+    assert kb_data_dir(conn) == tmp_path
+
+    # 2. no env: conn's main DB parent
+    monkeypatch.delenv("KNOWLEDGE_BASE_DATA_DIR")
+    assert kb_data_dir(conn) == tmp_path
+    conn.close()
+
+    # 3. no env, no conn (or in-memory conn): home default
+    assert kb_data_dir() == Path.home() / ".local" / "share" / "knowledge-base"
+    mem = sqlite3.connect(":memory:")
+    assert kb_data_dir(mem) == Path.home() / ".local" / "share" / "knowledge-base"
+    mem.close()
+
+
+def test_pdf_image_dir_derives_from_conn_db(tmp_path, monkeypatch):
+    """Unpatched pdf_image_dir lands beside the connection's DB file."""
+    from knowledge_base.ingest import pdf_image_dir
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_DATA_DIR", raising=False)
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    conn = sqlite3.connect(tmp_path / "kb.db")
+
+    result = pdf_image_dir(pdf, conn)
+    conn.close()
+
+    assert result.is_relative_to(tmp_path / "figures")
+    assert result.name == "extracted"

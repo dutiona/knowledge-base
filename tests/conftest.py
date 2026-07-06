@@ -61,14 +61,18 @@ def _reset_job_worker():
 
 @pytest.fixture(autouse=True)
 def _isolated_kb_data_dir(tmp_path, monkeypatch):
-    """Point KNOWLEDGE_BASE_DATA_DIR at a per-test temp dir (#391).
+    """Point the artifact and DB env overrides at a per-test temp dir (#391).
 
     ``kb_data_dir()`` (ingest.py) resolves the base directory for on-disk
-    artifacts — figure PNGs, rendered vector pages — at call time. Without
-    this guard, any test exercising a code path that writes artifacts (e.g.
-    ``vision._save_rendered_pngs``) would pollute the developer's real
-    ``~/.local/share/knowledge-base``. Tests asserting on artifact locations
-    may still override the variable themselves; monkeypatch scoping keeps
-    each test hermetic either way.
+    artifacts — figure PNGs, rendered vector pages — at call time: env var
+    first, then the connection's DB directory, then the real home. Tests on
+    tmp-path DBs are isolated structurally by the second step; this guard
+    covers the conn-less and in-memory paths that would otherwise fall
+    through to the developer's real ``~/.local/share/knowledge-base``.
+    ``KNOWLEDGE_BASE_DB`` is pinned too so any future test hitting
+    ``resolve_db_path()`` with no explicit path cannot touch the real DB.
+    Tests asserting on artifact locations may still override either variable;
+    monkeypatch scoping keeps each test hermetic.
     """
     monkeypatch.setenv("KNOWLEDGE_BASE_DATA_DIR", str(tmp_path / "kb-data"))
+    monkeypatch.setenv("KNOWLEDGE_BASE_DB", str(tmp_path / "kb-data" / "knowledge.db"))

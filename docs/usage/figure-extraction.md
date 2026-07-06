@@ -30,7 +30,7 @@ Some figures are vector-drawn (plots, diagrams composed of PDF drawing primitive
 
 7. **Enrichment** -- OmniParser text/icons are merged into figure descriptions (keyed by image name for extracted images, by page number for vector pages).
 
-8. **Storage** -- Figure descriptions are embedded and stored as chunks with `source_type='figure'`. Old figure chunks are deleted first (unscoped for full refresh, page-scoped for explicit pages). Vector-rendered PNGs and mixed-page vector region crops are saved to `~/.local/share/knowledge-base/figures/<paper_id>/`.
+8. **Storage** -- Figure descriptions are embedded and stored as chunks with `source_type='figure'`. Old figure chunks are deleted first (unscoped for full refresh, page-scoped for explicit pages). Vector-rendered PNGs and mixed-page vector region crops are saved to `<data-dir>/figures/<paper_id>/`, where the data dir is resolved per `kb_data_dir()`: the `KNOWLEDGE_BASE_DATA_DIR` environment variable if set, else the directory containing the live database (so artifacts follow a relocated DB), else `~/.local/share/knowledge-base/`.
 
 ### Known limitations
 
