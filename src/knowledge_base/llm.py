@@ -175,18 +175,32 @@ def _llm_call(
     if cfg["provider"] == "ollama":
         # ollama is localhost-trusted by family — no validate_base_url (no regression
         # for default local installs); still no-follow for uniformity (defense-in-depth).
+        payload = {
+            "model": cfg["model"],
+            "prompt": prompt,
+            "system": _SYSTEM_JSON_DIRECTIVE,
+            "stream": False,
+            "format": "json",
+            # Thinking-capable models (qwen3.5) spend every token in the separate
+            # `thinking` field under format=json, leaving `response` empty (#552).
+            "think": False,
+        }
         resp = post(
             f"{cfg['base_url']}/api/generate",
-            json={
-                "model": cfg["model"],
-                "prompt": prompt,
-                "system": _SYSTEM_JSON_DIRECTIVE,
-                "stream": False,
-                "format": "json",
-            },
+            json=payload,
             timeout=_LLM_TIMEOUT,
             follow_redirects=False,
         )
+        if resp.status_code == 400:
+            # An Ollama build that rejects the think field for this model —
+            # retry once without it (non-thinking models never needed it).
+            payload.pop("think")
+            resp = post(
+                f"{cfg['base_url']}/api/generate",
+                json=payload,
+                timeout=_LLM_TIMEOUT,
+                follow_redirects=False,
+            )
         resp.raise_for_status()
         raw = resp.json()["response"]
     elif cfg["provider"] == "anthropic_compat":

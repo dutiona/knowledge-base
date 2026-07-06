@@ -849,3 +849,60 @@ def test_llm_connectivity_anthropic_validates_only(tmp_path):
     # A private anthropic base_url is still rejected (advisory unreachable, never raises).
     blocked = _test_llm_connectivity("anthropic_compat", "http://169.254.169.254", "k")
     assert blocked["reachable"] is False
+
+
+def test_llm_call_ollama_disables_thinking(tmp_path):
+    """Ollama payload carries think=False (#552): thinking models (qwen3.5)
+    otherwise put every token in `thinking` and return an empty `response`
+    under format=json."""
+    conn = _setup(tmp_path)
+    captured = {}
+
+    def _mock_post(url, **kwargs):
+        captured["json"] = kwargs.get("json")
+
+        class FakeResp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"response": '{"methods": []}'}
+
+        return FakeResp()
+
+    with patch("knowledge_base.llm.httpx.post", _mock_post):
+        _llm_call("test prompt", conn=conn)
+
+    assert captured["json"]["think"] is False
+
+
+def test_llm_call_ollama_retries_without_think_on_400(tmp_path):
+    """An Ollama build that rejects the think field gets one retry without it (#552)."""
+    conn = _setup(tmp_path)
+    calls: list[dict] = []
+
+    class FakeResp:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise httpx.HTTPStatusError("400", request=None, response=None)  # type: ignore[arg-type]
+
+        def json(self):
+            return {"response": '{"methods": []}'}
+
+    def _mock_post(url, **kwargs):
+        payload = kwargs.get("json") or {}
+        calls.append(dict(payload))  # snapshot — the caller mutates payload on retry
+        return FakeResp(400 if "think" in payload else 200)
+
+    with patch("knowledge_base.llm.httpx.post", _mock_post):
+        out = _llm_call("test prompt", conn=conn)
+
+    assert out == '{"methods": []}'
+    assert len(calls) == 2
+    assert "think" in calls[0]
+    assert "think" not in calls[1]
