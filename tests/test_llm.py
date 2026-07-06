@@ -884,8 +884,9 @@ def test_llm_call_ollama_retries_without_think_on_400(tmp_path):
     calls: list[dict] = []
 
     class FakeResp:
-        def __init__(self, status_code):
+        def __init__(self, status_code, text=""):
             self.status_code = status_code
+            self.text = text
 
         def raise_for_status(self):
             if self.status_code >= 400:
@@ -897,7 +898,9 @@ def test_llm_call_ollama_retries_without_think_on_400(tmp_path):
     def _mock_post(url, **kwargs):
         payload = kwargs.get("json") or {}
         calls.append(dict(payload))  # snapshot — the caller mutates payload on retry
-        return FakeResp(400 if "think" in payload else 200)
+        if "think" in payload:
+            return FakeResp(400, text='{"error": "registry.ollama.ai does not support think"}')
+        return FakeResp(200)
 
     with patch("knowledge_base.llm.httpx.post", _mock_post):
         out = _llm_call("test prompt", conn=conn)
@@ -906,3 +909,28 @@ def test_llm_call_ollama_retries_without_think_on_400(tmp_path):
     assert len(calls) == 2
     assert "think" in calls[0]
     assert "think" not in calls[1]
+
+
+def test_llm_call_ollama_unrelated_400_propagates(tmp_path):
+    """A 400 unrelated to the think field propagates after exactly one POST (#552 review)."""
+    conn = _setup(tmp_path)
+    calls: list[dict] = []
+
+    class FakeResp:
+        status_code = 400
+        text = '{"error": "model \'nonexistent\' not found"}'
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("400", request=None, response=None)  # type: ignore[arg-type]
+
+        def json(self):
+            return {"error": "model not found"}
+
+    def _mock_post(url, **kwargs):
+        calls.append(dict(kwargs.get("json") or {}))
+        return FakeResp()
+
+    with patch("knowledge_base.llm.httpx.post", _mock_post), pytest.raises(httpx.HTTPStatusError):
+        _llm_call("test prompt", conn=conn)
+
+    assert len(calls) == 1  # no blind retry on a non-think 400

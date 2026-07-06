@@ -4137,7 +4137,7 @@ def test_ingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
         lambda text: ["identical chunk body", "identical chunk body", "unique chunk body"],
     )
 
-    result = ingest_file(conn, f)
+    result = ingest_file(conn, f, session_id="dupsess")
 
     assert result["chunks_added"] == 2
     assert result["chunks_skipped"] == 1
@@ -4146,3 +4146,7 @@ def test_ingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
     # vec rows must stay in lockstep with chunk rows
     n_vec = conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0]
     assert n_vec == 2
+    # positional indices are preserved (gap where the duplicate sat) — downstream
+    # consumers order by chunk_index, so gaps are coherent
+    indices = [r[0] for r in conn.execute("SELECT chunk_index FROM chunks ORDER BY chunk_index")]
+    assert indices == [0, 2]

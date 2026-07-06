@@ -191,9 +191,11 @@ def _llm_call(
             timeout=_LLM_TIMEOUT,
             follow_redirects=False,
         )
-        if resp.status_code == 400:
+        if resp.status_code == 400 and "think" in resp.text.lower():
             # An Ollama build that rejects the think field for this model —
             # retry once without it (non-thinking models never needed it).
+            # Gated on the error text so a legitimate 400 (bad model, prompt
+            # rejection, proxy error) propagates instead of being re-POSTed.
             payload.pop("think")
             resp = post(
                 f"{cfg['base_url']}/api/generate",
