@@ -4115,3 +4115,34 @@ class TestElementCapture:
                 ],
             )
         assert count == 0
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
+    """Two identical chunks in ONE document dedup-skip instead of crashing (#553).
+
+    Real PDFs produce this (repeated boilerplate page content); the dedup pass
+    only checked existing DB rows, so the second in-batch duplicate hit the
+    chunks.content_hash UNIQUE constraint.
+    """
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    f = tmp_path / "dup.txt"
+    f.write_text("placeholder — chunks are injected below")
+    monkeypatch.setattr(
+        "knowledge_base.ingest._chunk_text",
+        lambda text: ["identical chunk body", "identical chunk body", "unique chunk body"],
+    )
+
+    result = ingest_file(conn, f)
+
+    assert result["chunks_added"] == 2
+    assert result["chunks_skipped"] == 1
+    n_chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    assert n_chunks == 2
+    # vec rows must stay in lockstep with chunk rows
+    n_vec = conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0]
+    assert n_vec == 2

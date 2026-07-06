@@ -403,13 +403,18 @@ def _produce_and_insert_chunks(
     if deduplicate:
         new_items: list[tuple[int, str, str, str]] = []
         skipped = 0
+        batch_hashes: set[str] = set()  # intra-document duplicates crash the INSERT otherwise (#553)
         for item in items:
+            if item[2] in batch_hashes:
+                skipped += 1
+                continue
             existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (item[2],)).fetchone()
             if existing:
                 if session_id is not None:
                     deferred_session_links.append(existing["id"])
                 skipped += 1
                 continue
+            batch_hashes.add(item[2])
             new_items.append(item)
         items = new_items
     else:
