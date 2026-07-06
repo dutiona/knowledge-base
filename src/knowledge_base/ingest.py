@@ -398,22 +398,34 @@ def _produce_and_insert_chunks(
             return (0, 0, [])
         items = [(i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)]
 
-    # --- Deduplication (optional) ---
+    # --- Deduplication ---
+    # The intra-document (in-batch) hash collapse ALWAYS runs: two identical chunks
+    # in one document share a content_hash and the second would hit the
+    # chunks.content_hash UNIQUE constraint (#553). This is independent of
+    # *deduplicate*, which only governs the cross-document DB probe below —
+    # reingest_file() passes deduplicate=False (old rows already deleted) yet must
+    # still collapse in-document duplicates (#553 review).
     deferred_session_links: list[int] = []
-    if deduplicate:
-        new_items: list[tuple[int, str, str, str]] = []
-        skipped = 0
-        for item in items:
+    new_items: list[tuple[int, str, str, str]] = []
+    skipped = 0
+    batch_hashes: set[str] = set()
+    for item in items:
+        if item[2] in batch_hashes:
+            skipped += 1
+            continue
+        # Record the hash before the DB probe so later in-batch duplicates
+        # of an ALREADY-PERSISTED chunk skip here too — one session link
+        # and one DB query per distinct hash, not per occurrence.
+        batch_hashes.add(item[2])
+        if deduplicate:
             existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (item[2],)).fetchone()
             if existing:
                 if session_id is not None:
                     deferred_session_links.append(existing["id"])
                 skipped += 1
                 continue
-            new_items.append(item)
-        items = new_items
-    else:
-        skipped = 0
+        new_items.append(item)
+    items = new_items
 
     if not items:
         return (0, skipped, deferred_session_links)
@@ -565,126 +577,133 @@ def reingest_file(
 
     old_ids = [r["id"] for r in existing]
 
-    # --- FK cleanup (batched to stay under SQLITE_MAX_VARIABLE_NUMBER) ---
-    # 1. papers.abstract_chunk_id → SET NULL (track affected papers for re-linking)
-    affected_paper_ids = [
-        r["id"] for r in _batched_select(conn, "SELECT id FROM papers WHERE abstract_chunk_id IN ({ph})", old_ids)
-    ]
-    _batched_execute(
-        conn,
-        "UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({ph})",
-        old_ids,
-    )
-
-    # 2. relationships.evidence_chunk_id → SET NULL
-    _batched_execute(
-        conn,
-        "UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({ph})",
-        old_ids,
-    )
-
-    # 3. conclusions.source_chunk_ids — targeted json_each() cleanup (#277)
-    _cleanup_conclusion_refs(conn, old_ids)
-
-    # 4. methods/datasets/metrics.chunk_id → SET NULL (track for re-linking)
-    affected_entities: dict[str, list[dict]] = {}
-    for table in ("methods", "datasets", "metrics"):
-        affected_entities[table] = [
-            {"id": r["id"], "name": r["name"], "old_chunk_id": r["chunk_id"]}
-            for r in _batched_select(
-                conn,
-                f"SELECT id, name, chunk_id FROM {table} WHERE chunk_id IN ({{ph}})",  # noqa: S608  # table is a hardcoded literal identifier, not user input
-                old_ids,
-            )
+    # Wrap the destructive delete+reinsert so a mid-reingest failure never
+    # leaves a dirty transaction on the reused thread-local connection that a
+    # later write would commit as a truncated document (#554 review).
+    try:
+        # --- FK cleanup (batched to stay under SQLITE_MAX_VARIABLE_NUMBER) ---
+        # 1. papers.abstract_chunk_id → SET NULL (track affected papers for re-linking)
+        affected_paper_ids = [
+            r["id"] for r in _batched_select(conn, "SELECT id FROM papers WHERE abstract_chunk_id IN ({ph})", old_ids)
         ]
         _batched_execute(
             conn,
-            f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",  # noqa: S608  # table is a hardcoded literal identifier, not user input
+            "UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({ph})",
             old_ids,
         )
 
-    # 5. entity_mentions.chunk_id — NOT NULL FK, must delete (re-created by extraction)
-    _batched_execute(
-        conn,
-        "DELETE FROM entity_mentions WHERE chunk_id IN ({ph})",
-        old_ids,
-    )
-
-    # --- Preserve historical session associations ---
-    historical_sessions = {
-        r["session_id"]
-        for r in conn.execute(
-            "SELECT DISTINCT session_id FROM chunk_sessions "
-            "WHERE chunk_id IN (SELECT id FROM chunks WHERE source_uri = ?)",
-            (source_uri,),
-        ).fetchall()
-    }
-
-    # --- Delete old chunks (vec + chunk rows) ---
-    delete_chunks_cascade(conn, old_ids)
-
-    # --- Re-ingest ---
-    if source_type is None:
-        source_type = _detect_source_type(path)
-
-    all_sessions = historical_sessions
-    if session_id is not None:
-        all_sessions = historical_sessions | {session_id}
-
-    added, _, _ = _produce_and_insert_chunks(
-        conn,
-        path=path,
-        source_type=source_type,
-        source_uri=source_uri,
-        session_id=session_id,
-        session_ids=all_sessions,
-        deduplicate=False,
-    )
-
-    # --- Re-link papers whose abstract_chunk_id was nullified ---
-    if affected_paper_ids:
-        new_first = conn.execute(
-            "SELECT id FROM chunks WHERE source_uri = ? ORDER BY chunk_index LIMIT 1",
-            (source_uri,),
-        ).fetchone()
-        if new_first:
-            _batched_execute(
-                conn,
-                "UPDATE papers SET abstract_chunk_id = ? WHERE id IN ({ph})",
-                affected_paper_ids,
-                extra_params=[new_first["id"]],
-            )
-
-    # --- Re-link methods/datasets/metrics by name search ---
-    new_chunks = conn.execute(
-        "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
-        (source_uri,),
-    ).fetchall()
-    if new_chunks:
-        for table, affected in affected_entities.items():
-            for entity in affected:
-                # Compile the word-boundary pattern once per entity, then reuse
-                # it across every candidate chunk (avoids per-chunk recompilation).
-                name_pattern = re.compile(r"\b" + re.escape(entity["name"]) + r"\b")
-                for nc in new_chunks:
-                    if name_pattern.search(nc["content"]):
-                        conn.execute(
-                            f"UPDATE {table} SET chunk_id = ? WHERE id = ?",  # noqa: S608  # table is a hardcoded literal identifier, not user input
-                            (nc["id"], entity["id"]),
-                        )
-                        break
-
-    # Update paper_paths content_hash if entry exists
-    if path.exists():
-        from .papers import compute_file_hash
-
-        new_hash = compute_file_hash(path)
-        conn.execute(
-            "UPDATE paper_paths SET content_hash = ? WHERE path = ?",
-            (new_hash, source_uri),
+        # 2. relationships.evidence_chunk_id → SET NULL
+        _batched_execute(
+            conn,
+            "UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({ph})",
+            old_ids,
         )
 
-    conn.commit()
+        # 3. conclusions.source_chunk_ids — targeted json_each() cleanup (#277)
+        _cleanup_conclusion_refs(conn, old_ids)
+
+        # 4. methods/datasets/metrics.chunk_id → SET NULL (track for re-linking)
+        affected_entities: dict[str, list[dict]] = {}
+        for table in ("methods", "datasets", "metrics"):
+            affected_entities[table] = [
+                {"id": r["id"], "name": r["name"], "old_chunk_id": r["chunk_id"]}
+                for r in _batched_select(
+                    conn,
+                    f"SELECT id, name, chunk_id FROM {table} WHERE chunk_id IN ({{ph}})",  # noqa: S608  # table is a hardcoded literal identifier, not user input
+                    old_ids,
+                )
+            ]
+            _batched_execute(
+                conn,
+                f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",  # noqa: S608  # table is a hardcoded literal identifier, not user input
+                old_ids,
+            )
+
+        # 5. entity_mentions.chunk_id — NOT NULL FK, must delete (re-created by extraction)
+        _batched_execute(
+            conn,
+            "DELETE FROM entity_mentions WHERE chunk_id IN ({ph})",
+            old_ids,
+        )
+
+        # --- Preserve historical session associations ---
+        historical_sessions = {
+            r["session_id"]
+            for r in conn.execute(
+                "SELECT DISTINCT session_id FROM chunk_sessions "
+                "WHERE chunk_id IN (SELECT id FROM chunks WHERE source_uri = ?)",
+                (source_uri,),
+            ).fetchall()
+        }
+
+        # --- Delete old chunks (vec + chunk rows) ---
+        delete_chunks_cascade(conn, old_ids)
+
+        # --- Re-ingest ---
+        if source_type is None:
+            source_type = _detect_source_type(path)
+
+        all_sessions = historical_sessions
+        if session_id is not None:
+            all_sessions = historical_sessions | {session_id}
+
+        added, _, _ = _produce_and_insert_chunks(
+            conn,
+            path=path,
+            source_type=source_type,
+            source_uri=source_uri,
+            session_id=session_id,
+            session_ids=all_sessions,
+            deduplicate=False,
+        )
+
+        # --- Re-link papers whose abstract_chunk_id was nullified ---
+        if affected_paper_ids:
+            new_first = conn.execute(
+                "SELECT id FROM chunks WHERE source_uri = ? ORDER BY chunk_index LIMIT 1",
+                (source_uri,),
+            ).fetchone()
+            if new_first:
+                _batched_execute(
+                    conn,
+                    "UPDATE papers SET abstract_chunk_id = ? WHERE id IN ({ph})",
+                    affected_paper_ids,
+                    extra_params=[new_first["id"]],
+                )
+
+        # --- Re-link methods/datasets/metrics by name search ---
+        new_chunks = conn.execute(
+            "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+            (source_uri,),
+        ).fetchall()
+        if new_chunks:
+            for table, affected in affected_entities.items():
+                for entity in affected:
+                    # Compile the word-boundary pattern once per entity, then reuse
+                    # it across every candidate chunk (avoids per-chunk recompilation).
+                    name_pattern = re.compile(r"\b" + re.escape(entity["name"]) + r"\b")
+                    for nc in new_chunks:
+                        if name_pattern.search(nc["content"]):
+                            conn.execute(
+                                f"UPDATE {table} SET chunk_id = ? WHERE id = ?",  # noqa: S608  # table is a hardcoded literal identifier, not user input
+                                (nc["id"], entity["id"]),
+                            )
+                            break
+
+        # Update paper_paths content_hash if entry exists
+        if path.exists():
+            from .papers import compute_file_hash
+
+            new_hash = compute_file_hash(path)
+            conn.execute(
+                "UPDATE paper_paths SET content_hash = ? WHERE path = ?",
+                (new_hash, source_uri),
+            )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     _update_folder_summary_safe(conn, path)
 
     return {

@@ -4115,3 +4115,142 @@ class TestElementCapture:
                 ],
             )
         assert count == 0
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
+    """Two identical chunks in ONE document dedup-skip instead of crashing (#553).
+
+    Real PDFs produce this (repeated boilerplate page content); the dedup pass
+    only checked existing DB rows, so the second in-batch duplicate hit the
+    chunks.content_hash UNIQUE constraint.
+    """
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    f = tmp_path / "dup.txt"
+    f.write_text("placeholder — chunks are injected below")
+    monkeypatch.setattr(
+        "knowledge_base.ingest._chunk_text",
+        lambda text: ["identical chunk body", "identical chunk body", "unique chunk body"],
+    )
+
+    result = ingest_file(conn, f, session_id="dupsess")
+
+    assert result["chunks_added"] == 2
+    assert result["chunks_skipped"] == 1
+    n_chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    assert n_chunks == 2
+    # vec rows must stay in lockstep with chunk rows
+    n_vec = conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0]
+    assert n_vec == 2
+    # positional indices are preserved (gap where the duplicate sat) — downstream
+    # consumers order by chunk_index, so gaps are coherent
+    indices = [r[0] for r in conn.execute("SELECT chunk_index FROM chunks ORDER BY chunk_index")]
+    assert indices == [0, 2]
+    # both retained chunks carry the session link
+    n_links = conn.execute("SELECT COUNT(*) FROM chunk_sessions WHERE session_id = 'dupsess'").fetchone()[0]
+    assert n_links == 2
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_intra_batch_duplicate_of_existing_chunk(tmp_path, monkeypatch):
+    """In-batch duplicates of an already-persisted chunk: one session link, once (#553 review)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    first = tmp_path / "first.txt"
+    first.write_text("seed")
+    monkeypatch.setattr("knowledge_base.ingest._chunk_text", lambda text: ["persisted chunk body"])
+    ingest_file(conn, first)
+
+    second = tmp_path / "second.txt"
+    second.write_text("dup twice against existing")
+    monkeypatch.setattr(
+        "knowledge_base.ingest._chunk_text",
+        lambda text: ["persisted chunk body", "persisted chunk body", "fresh body"],
+    )
+    result = ingest_file(conn, second, session_id="sess2")
+
+    assert result["chunks_added"] == 1
+    assert result["chunks_skipped"] == 2
+    # exactly ONE session link for the pre-existing chunk, despite two occurrences
+    existing_id = conn.execute("SELECT id FROM chunks WHERE content = 'persisted chunk body'").fetchone()["id"]
+    n_links = conn.execute(
+        "SELECT COUNT(*) FROM chunk_sessions WHERE chunk_id = ? AND session_id = 'sess2'", (existing_id,)
+    ).fetchone()[0]
+    assert n_links == 1
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_reingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
+    """Reingest of a doc with intra-document duplicate chunks must not crash (#553 review).
+
+    reingest_file() calls _produce_and_insert_chunks(deduplicate=False), which bypassed
+    the batch-hash guard entirely — so the second in-document duplicate hit the
+    chunks.content_hash UNIQUE constraint and aborted the whole reingest. The intra-batch
+    collapse must run regardless of DB-level deduplication.
+    """
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    f = tmp_path / "dup.txt"
+    f.write_text("placeholder — chunks are injected below")
+    monkeypatch.setattr("knowledge_base.ingest._chunk_text", lambda text: ["original body"])
+    ingest_file(conn, f)
+
+    # Reingest with intra-document duplicates (old chunks are deleted first, so the
+    # crash is purely the in-batch duplicate, not a collision with a persisted row).
+    monkeypatch.setattr(
+        "knowledge_base.ingest._chunk_text",
+        lambda text: ["identical chunk body", "identical chunk body", "unique chunk body"],
+    )
+    result = reingest_file(conn, f)
+
+    assert result["chunks_added"] == 2  # duplicate collapsed, not crashed
+    n_chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    assert n_chunks == 2
+    # vec rows must stay in lockstep with chunk rows
+    n_vec = conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0]
+    assert n_vec == 2
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_reingest_rolls_back_on_midway_failure(tmp_path, monkeypatch):
+    """A failure after the old chunks are deleted must roll back, not truncate (#554 review).
+
+    reingest_file deletes the source's chunks first, then re-inserts. On a persistent
+    thread-local connection with no autocommit, a mid-reingest exception used to leave a
+    dirty transaction that the next successful write would commit as a truncated document.
+    The delete+reinsert is now wrapped so any failure rolls back to the pre-reingest state.
+    """
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    f = tmp_path / "doc.txt"
+    f.write_text("placeholder — chunks are injected below")
+    monkeypatch.setattr("knowledge_base.ingest._chunk_text", lambda text: ["alpha body", "beta body"])
+    ingest_file(conn, f)
+    assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 2
+
+    # Force a failure during the re-insert, after delete_chunks_cascade has run.
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated mid-reingest failure")
+
+    monkeypatch.setattr("knowledge_base.ingest._produce_and_insert_chunks", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated mid-reingest failure"):
+        reingest_file(conn, f)
+
+    # The delete rolled back: the original chunks and vec rows survive intact.
+    rows = [r["content"] for r in conn.execute("SELECT content FROM chunks ORDER BY chunk_index")]
+    assert rows == ["alpha body", "beta body"]
+    assert conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0] == 2
