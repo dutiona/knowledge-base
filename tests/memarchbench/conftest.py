@@ -44,10 +44,15 @@ def mb_conn(tmp_path) -> Iterator[sqlite3.Connection]:
 
 @pytest.fixture(scope="session")
 def corpus_conn() -> Iterator[sqlite3.Connection]:
-    """Read-only connection to the real ingested corpus (retrieval quality only).
+    """Connection to the real ingested corpus (retrieval quality only).
 
     Skips the requesting test when MEMARCH_CORPUS_DB is unset or missing —
     the hermetic suites never request this fixture.
+
+    NOT read-only: get_connection forces WAL mode (writes the header,
+    creates -wal/-shm sidecars). When #250 lands, either copy the corpus
+    artifact into a tmp dir first or open with mode=ro&immutable=1 and skip
+    get_connection — do not point this at a shared read-only mount as-is.
     """
     db = os.environ.get("MEMARCH_CORPUS_DB")
     if not db or not Path(db).is_file():
@@ -63,9 +68,10 @@ def load_golden_set() -> list[dict]:
     """Load the #250 golden set (JSONL, one query per line).
 
     Schema per the locked format (#250):
-    id, query, source (query_log|seeded), type (single_hop|multi_hop|
-    comparison|temporal), judgments[{doc, quote, content_hash?, relevance}],
-    plus optional query_log_id / answer_note / curated_at.
+    schema (format version, currently 1), id, query, source
+    (query_log|seeded), type (single_hop|multi_hop|comparison|temporal),
+    judgments[{doc, quote, content_hash?, relevance}], plus optional
+    query_log_id / answer_note / curated_at.
     """
     if not GOLDEN_SET.is_file():
         return []
