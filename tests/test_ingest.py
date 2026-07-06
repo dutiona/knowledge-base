@@ -4150,6 +4150,9 @@ def test_ingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
     # consumers order by chunk_index, so gaps are coherent
     indices = [r[0] for r in conn.execute("SELECT chunk_index FROM chunks ORDER BY chunk_index")]
     assert indices == [0, 2]
+    # both retained chunks carry the session link
+    n_links = conn.execute("SELECT COUNT(*) FROM chunk_sessions WHERE session_id = 'dupsess'").fetchone()[0]
+    assert n_links == 2
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
