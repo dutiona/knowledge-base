@@ -91,6 +91,14 @@ def main() -> None:
     ap.add_argument("--allow-small", action="store_true")
     args = ap.parse_args()
 
+    # A non-positive --k silently corrupts results: k=0 makes r_k a NaN mean-of-empty,
+    # and argpartition's negative-kth semantics return a wrong-shaped neighbor set with
+    # no error. Reject both up front, along with a non-positive --sample.
+    if args.k < 1:
+        ap.error("--k must be >= 1")
+    if args.sample < 1:
+        ap.error("--sample must be >= 1")
+
     conn = _open_ro(args.db_path)
     mat, space_name = _load_embeddings(conn, args.space)
 
@@ -138,7 +146,9 @@ def main() -> None:
             "additionally requires recall@k non-degradation on the #250 golden set (owner+Fable checkpoint)."
         ),
     }
-    print(json.dumps(report, indent=2))
+    # allow_nan=False: a degenerate stat must fail loudly, not emit NaN (invalid JSON
+    # per RFC 8259) into a report that feeds the owner+Fable verdict.
+    print(json.dumps(report, indent=2, allow_nan=False))
 
 
 if __name__ == "__main__":

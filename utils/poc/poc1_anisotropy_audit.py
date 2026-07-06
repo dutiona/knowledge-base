@@ -103,6 +103,11 @@ def main() -> None:
     ap.add_argument("--allow-small", action="store_true", help="run ABT-only sweep below the 10K-chunk gate")
     args = ap.parse_args()
 
+    if args.pairs < 1:
+        ap.error("--pairs must be >= 1")
+    if args.max_p < 1:
+        ap.error("--max-p must be >= 1")
+
     conn = _open_ro(args.db_path)
     mat, space_name = _load_embeddings(conn, args.space)
     rng = np.random.default_rng(RNG_SEED)
@@ -114,7 +119,10 @@ def main() -> None:
             "Grow the corpus via T0 (#528), or pass --allow-small for an ABT-only sweep "
             "(no full-whitening verdict)."
         )
-    golden_n = sum(1 for line in GOLDEN_SET.open() if line.strip()) if GOLDEN_SET.is_file() else 0
+    golden_n = 0
+    if GOLDEN_SET.is_file():
+        with GOLDEN_SET.open() as fh:
+            golden_n = sum(1 for line in fh if line.strip())
     golden_ok = golden_n >= MIN_GOLDEN
 
     n = len(mat)
@@ -123,12 +131,19 @@ def main() -> None:
     pair_i, pair_j = rng.integers(0, n, args.pairs), rng.integers(0, n, args.pairs)
     keep = pair_i != pair_j
     pair_i, pair_j = pair_i[keep], pair_j[keep]
+    if len(pair_i) == 0:
+        sys.exit(f"corpus of {n} vector(s) has no distinct random pairs; need >= 2 vectors for the cosine audit")
 
     # ONE SVD for everything: removing the top-p principal components zeroes
     # exactly those singular values, so each level's spectrum is s[p:], and
     # each level's projection is a cheap slice of vt.
     centered = mat - mat.mean(axis=0)
     _, s, vt = np.linalg.svd(centered, full_matrices=False)
+
+    # Clamp the ABT sweep to the available spectrum: removing p >= len(s) principal
+    # components leaves s[p:] empty and spectrum_stats would index var[0] out of range
+    # (reachable under --allow-small on a corpus whose rank <= --max-p).
+    max_p = min(args.max_p, len(s) - 1)
 
     report: dict = {
         "poc": "E0-PoC-1 anisotropy audit",
@@ -142,7 +157,7 @@ def main() -> None:
         },
         "abt_sweep": [],
     }
-    for p in range(1, args.max_p + 1):
+    for p in range(1, max_p + 1):
         abt_mat = centered - (centered @ vt[:p].T) @ vt[:p]
         report["abt_sweep"].append({"p": p, **random_pair_cosine(abt_mat, pair_i, pair_j), **spectrum_stats(s[p:])})
 
@@ -157,7 +172,9 @@ def main() -> None:
         # anchoring). Deliberately unimplemented until then.
         report["recall_comparison"] = "TODO(#250): recall@k before/after — implement when the golden set lands"
 
-    print(json.dumps(report, indent=2))
+    # allow_nan=False: a degenerate stat must fail loudly, not emit NaN (invalid JSON
+    # per RFC 8259) into a report that feeds the owner+Fable verdict.
+    print(json.dumps(report, indent=2, allow_nan=False))
 
 
 if __name__ == "__main__":
