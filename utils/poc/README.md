@@ -15,3 +15,9 @@ checkpoint — never delegated (Tier-1 table, spike session 2026-07-06).
 
 If the PoCs fail: E0 goes dormant, not deleted (ADR-0017 stays a correct
 contract awaiting a bigger corpus) — #495.
+
+Operational caveats: only `float32` spaces are supported (int8 spaces are
+refused with a message); the strictly read-only open can fail against a live
+WAL DB whose `-wal` needs recovery — run against a checkpointed copy (or the
+throwaway campaign DB) when in doubt. PoC-2's `--sample` cap (default 20000)
+bounds the O(n²) similarity matrix at ~1.6 GB.

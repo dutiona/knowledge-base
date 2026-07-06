@@ -38,15 +38,37 @@ MIN_GOLDEN = 100
 RNG_SEED = 20260706  # fixed: the PoC must be reproducible run-to-run
 
 
+def _open_ro(db_path: Path) -> sqlite3.Connection:
+    """Read-only connection with the sqlite-vec extension loaded.
+
+    vec0 virtual tables are unreadable without the module (mirrors
+    db.py's connect()); loading an extension is per-connection state,
+    not a DB write, so it coexists with mode=ro.
+    """
+    import sqlite_vec
+
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+    return conn
+
+
 def _load_embeddings(conn: sqlite3.Connection, space: str | None) -> tuple[np.ndarray, str]:
     """Load all vectors of the active (or named) space as a float32 matrix."""
     if space:
-        row = conn.execute("SELECT name, dim, table_name FROM embed_spaces WHERE name = ?", (space,)).fetchone()
+        row = conn.execute(
+            "SELECT name, dim, table_name, element_type FROM embed_spaces WHERE name = ?", (space,)
+        ).fetchone()
     else:
-        row = conn.execute("SELECT name, dim, table_name FROM embed_spaces WHERE status = 'active'").fetchone()
+        row = conn.execute(
+            "SELECT name, dim, table_name, element_type FROM embed_spaces WHERE status = 'active'"
+        ).fetchone()
     if row is None:
-        sys.exit(f"no {'space named ' + space if space else 'active space'} in {conn}")
-    name, dim, table = row
+        sys.exit(f"no {'space named ' + space if space else 'active space'} in the database")
+    name, dim, table, element_type = row
+    if element_type != "float32":
+        sys.exit(f"space {name!r} has element_type={element_type!r}; only float32 spaces are supported here")
     blobs = conn.execute(f"SELECT embedding FROM {table}").fetchall()  # noqa: S608 — table name from embed_spaces registry
     if not blobs:
         sys.exit(f"space {name!r} has no vectors")
@@ -54,33 +76,22 @@ def _load_embeddings(conn: sqlite3.Connection, space: str | None) -> tuple[np.nd
     return mat, name
 
 
-def anisotropy_report(mat: np.ndarray, pairs: int, rng: np.random.Generator) -> dict:
-    """Random-pair cosine statistics + spectral concentration."""
-    n = len(mat)
+def random_pair_cosine(mat: np.ndarray, pair_i: np.ndarray, pair_j: np.ndarray) -> dict:
+    """Cosine statistics over a FIXED set of random pairs (paired comparison —
+    the same pairs are reused across the baseline and every ABT level)."""
     unit = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-12)
-    i, j = rng.integers(0, n, pairs), rng.integers(0, n, pairs)
-    keep = i != j
-    cos = np.einsum("ij,ij->i", unit[i[keep]], unit[j[keep]])
-    centered = mat - mat.mean(axis=0)
-    # Spectrum of the covariance: how much variance the top PCs hoard
-    s = np.linalg.svd(centered, compute_uv=False)
+    cos = np.einsum("ij,ij->i", unit[pair_i], unit[pair_j])
+    return {"random_pair_cosine_mean": float(cos.mean()), "random_pair_cosine_std": float(cos.std())}
+
+
+def spectrum_stats(s: np.ndarray) -> dict:
+    """Variance concentration from a singular-value slice."""
     var = s**2 / (s**2).sum()
     return {
-        "n_vectors": int(n),
-        "dim": int(mat.shape[1]),
-        "random_pair_cosine_mean": float(cos.mean()),
-        "random_pair_cosine_std": float(cos.std()),
         "top1_pc_variance_share": float(var[0]),
         "top10_pc_variance_share": float(var[:10].sum()),
         "effective_rank_participation": float(np.exp(-(var * np.log(var + 1e-12)).sum())),
     }
-
-
-def abt(mat: np.ndarray, p: int) -> np.ndarray:
-    """Mean-center + remove the top-p principal components (All-but-the-Top)."""
-    centered = mat - mat.mean(axis=0)
-    _, _, vt = np.linalg.svd(centered, full_matrices=False)
-    return centered - (centered @ vt[:p].T) @ vt[:p]
 
 
 def main() -> None:
@@ -92,7 +103,7 @@ def main() -> None:
     ap.add_argument("--allow-small", action="store_true", help="run ABT-only sweep below the 10K-chunk gate")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(f"file:{args.db_path}?mode=ro", uri=True)
+    conn = _open_ro(args.db_path)
     mat, space_name = _load_embeddings(conn, args.space)
     rng = np.random.default_rng(RNG_SEED)
 
@@ -106,15 +117,34 @@ def main() -> None:
     golden_n = sum(1 for line in GOLDEN_SET.open() if line.strip()) if GOLDEN_SET.is_file() else 0
     golden_ok = golden_n >= MIN_GOLDEN
 
+    n = len(mat)
+    # Fixed pair sample, drawn once: baseline vs every ABT level is a PAIRED
+    # comparison on identical pairs, not fresh draws per level.
+    pair_i, pair_j = rng.integers(0, n, args.pairs), rng.integers(0, n, args.pairs)
+    keep = pair_i != pair_j
+    pair_i, pair_j = pair_i[keep], pair_j[keep]
+
+    # ONE SVD for everything: removing the top-p principal components zeroes
+    # exactly those singular values, so each level's spectrum is s[p:], and
+    # each level's projection is a cheap slice of vt.
+    centered = mat - mat.mean(axis=0)
+    _, s, vt = np.linalg.svd(centered, full_matrices=False)
+
     report: dict = {
         "poc": "E0-PoC-1 anisotropy audit",
         "space": space_name,
-        "gates": {"chunks": len(mat), "chunks_gate_met": len(mat) >= MIN_CHUNKS, "golden_set_queries": golden_n},
-        "baseline": anisotropy_report(mat, args.pairs, rng),
+        "gates": {"chunks": n, "chunks_gate_met": n >= MIN_CHUNKS, "golden_set_queries": golden_n},
+        "baseline": {
+            "n_vectors": n,
+            "dim": int(mat.shape[1]),
+            **random_pair_cosine(mat, pair_i, pair_j),
+            **spectrum_stats(s),
+        },
         "abt_sweep": [],
     }
     for p in range(1, args.max_p + 1):
-        report["abt_sweep"].append({"p": p, **anisotropy_report(abt(mat, p), args.pairs, rng)})
+        abt_mat = centered - (centered @ vt[:p].T) @ vt[:p]
+        report["abt_sweep"].append({"p": p, **random_pair_cosine(abt_mat, pair_i, pair_j), **spectrum_stats(s[p:])})
 
     if not golden_ok:
         report["recall_comparison"] = (
