@@ -4219,3 +4219,38 @@ def test_reingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
     # vec rows must stay in lockstep with chunk rows
     n_vec = conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0]
     assert n_vec == 2
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_reingest_rolls_back_on_midway_failure(tmp_path, monkeypatch):
+    """A failure after the old chunks are deleted must roll back, not truncate (#554 review).
+
+    reingest_file deletes the source's chunks first, then re-inserts. On a persistent
+    thread-local connection with no autocommit, a mid-reingest exception used to leave a
+    dirty transaction that the next successful write would commit as a truncated document.
+    The delete+reinsert is now wrapped so any failure rolls back to the pre-reingest state.
+    """
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    f = tmp_path / "doc.txt"
+    f.write_text("placeholder — chunks are injected below")
+    monkeypatch.setattr("knowledge_base.ingest._chunk_text", lambda text: ["alpha body", "beta body"])
+    ingest_file(conn, f)
+    assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 2
+
+    # Force a failure during the re-insert, after delete_chunks_cascade has run.
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated mid-reingest failure")
+
+    monkeypatch.setattr("knowledge_base.ingest._produce_and_insert_chunks", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated mid-reingest failure"):
+        reingest_file(conn, f)
+
+    # The delete rolled back: the original chunks and vec rows survive intact.
+    rows = [r["content"] for r in conn.execute("SELECT content FROM chunks ORDER BY chunk_index")]
+    assert rows == ["alpha body", "beta body"]
+    assert conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0] == 2
