@@ -4150,3 +4150,34 @@ def test_ingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
     # consumers order by chunk_index, so gaps are coherent
     indices = [r[0] for r in conn.execute("SELECT chunk_index FROM chunks ORDER BY chunk_index")]
     assert indices == [0, 2]
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_intra_batch_duplicate_of_existing_chunk(tmp_path, monkeypatch):
+    """In-batch duplicates of an already-persisted chunk: one session link, once (#553 review)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    first = tmp_path / "first.txt"
+    first.write_text("seed")
+    monkeypatch.setattr("knowledge_base.ingest._chunk_text", lambda text: ["persisted chunk body"])
+    ingest_file(conn, first)
+
+    second = tmp_path / "second.txt"
+    second.write_text("dup twice against existing")
+    monkeypatch.setattr(
+        "knowledge_base.ingest._chunk_text",
+        lambda text: ["persisted chunk body", "persisted chunk body", "fresh body"],
+    )
+    result = ingest_file(conn, second, session_id="sess2")
+
+    assert result["chunks_added"] == 1
+    assert result["chunks_skipped"] == 2
+    # exactly ONE session link for the pre-existing chunk, despite two occurrences
+    existing_id = conn.execute("SELECT id FROM chunks WHERE content = 'persisted chunk body'").fetchone()["id"]
+    n_links = conn.execute(
+        "SELECT COUNT(*) FROM chunk_sessions WHERE chunk_id = ? AND session_id = 'sess2'", (existing_id,)
+    ).fetchone()[0]
+    assert n_links == 1

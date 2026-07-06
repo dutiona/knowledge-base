@@ -408,13 +408,16 @@ def _produce_and_insert_chunks(
             if item[2] in batch_hashes:
                 skipped += 1
                 continue
+            # Record the hash before the DB probe so later in-batch duplicates
+            # of an ALREADY-PERSISTED chunk skip here too — one session link
+            # and one DB query per distinct hash, not per occurrence.
+            batch_hashes.add(item[2])
             existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (item[2],)).fetchone()
             if existing:
                 if session_id is not None:
                     deferred_session_links.append(existing["id"])
                 skipped += 1
                 continue
-            batch_hashes.add(item[2])
             new_items.append(item)
         items = new_items
     else:
