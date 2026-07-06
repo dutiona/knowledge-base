@@ -440,6 +440,10 @@ def search(
         except (ImportError, RuntimeError, ValueError, OSError):
             # Graceful degradation: if reranker fails (missing deps,
             # bad model path, inference error), fall back to RRF ordering.
+            # A wrong-length score list raises mid-mutation (zip strict=True),
+            # so drop any partially-recorded ids — otherwise results would be
+            # stamped match_type="reranked" while carrying RRF scores/order.
+            reranked_ids.clear()
             logger.warning("Reranker failed, falling back to RRF ordering", exc_info=True)
 
     chunk_ids = [cid for cid, _ in ranked[:top_k]]
