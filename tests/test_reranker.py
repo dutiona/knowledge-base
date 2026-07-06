@@ -191,7 +191,13 @@ def test_rerank_with_empty_results(tmp_path):
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.search.embed_single", _fake_embed_single)
 def test_rerank_score_monotonic(tmp_path):
-    """After reranking, results[0].score >= results[1].score."""
+    """Within the reranked tier, scores are monotonically descending.
+
+    All fixture chunks fit in the default rerank_top_n, so every result is
+    reranked here. Global monotonicity across the reranked/tail boundary is
+    deliberately NOT a contract: cross-encoder and RRF scores live on
+    incomparable scales and are never co-sorted (#387).
+    """
     conn = _setup_db(tmp_path)
     for i in range(4):
         conn.execute(
@@ -204,6 +210,7 @@ def test_rerank_score_monotonic(tmp_path):
         results = search(conn, "neural", mode="fts", rerank=True)
 
     assert len(results) >= 2
+    assert all(r.match_type == "reranked" for r in results)  # no tail in this fixture
     for i in range(len(results) - 1):
         assert results[i].score >= results[i + 1].score
 
@@ -276,3 +283,180 @@ def test_search_index_rerank_passthrough(tmp_path):
 
     assert len(results) >= 1
     assert results[0].match_type == "reranked"
+
+
+# ---------------------------------------------------------------------------
+# Regression: reranker/RRF scale mixing (#387)
+# ---------------------------------------------------------------------------
+
+
+def _insert_graded_chunks(conn, n):
+    """Insert n chunks with decreasing BM25 relevance for query 'signal'.
+
+    Chunk i repeats the term (n - i) times, so FTS ranks them in
+    insertion order: chunk 0 first, chunk n-1 last.
+    """
+    for i in range(n):
+        content = " ".join(["signal"] * (n - i)) + f" filler{i}"
+        conn.execute(
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+            "VALUES (?, ?, 'markdown', ?, 0)",
+            (f"g{i}", content, f"/tmp/graded_{i}.md"),
+        )
+    conn.commit()
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_rerank_poor_scores_stay_above_unreranked_tail(tmp_path):
+    """Reranked items rank above the un-reranked tail even with poor scores (#387).
+
+    Cross-encoder scores live in [0, 1]; RRF scores are ~1/(RRF_K + rank + 1)
+    (~0.016 at rank 0). A legitimate weak cross-encoder score like 0.01 must
+    NOT sort below tail items the reranker never saw.
+    """
+    conn = _setup_db(tmp_path)
+    _insert_graded_chunks(conn, 5)
+
+    def _poor_rerank(query, candidates, **_kw):
+        # Weak-but-valid scores, all below the best RRF score (~0.0164)
+        return [0.01] * len(candidates)
+
+    with patch("knowledge_base.reranker.rerank", _poor_rerank):
+        results = search(conn, "signal", mode="fts", rerank=True, rerank_top_n=2)
+
+    assert len(results) == 5
+    # The two reranked items must occupy the top positions
+    assert [r.match_type for r in results] == ["reranked", "reranked", "fts", "fts", "fts"]
+    # They are the same two items the RRF ranking fed to the reranker
+    assert {r.source_uri for r in results[:2]} == {"/tmp/graded_0.md", "/tmp/graded_1.md"}
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_rerank_orders_within_tiers(tmp_path):
+    """Cross-encoder order wins inside the reranked tier; the tail keeps RRF order."""
+    conn = _setup_db(tmp_path)
+    _insert_graded_chunks(conn, 5)
+
+    def _reversing_poor_rerank(query, candidates, **_kw):
+        # Second candidate scores higher than the first — both still poor
+        return [0.01 + 0.001 * i for i in range(len(candidates))]
+
+    with patch("knowledge_base.reranker.rerank", _reversing_poor_rerank):
+        results = search(conn, "signal", mode="fts", rerank=True, rerank_top_n=2)
+
+    assert [r.source_uri for r in results] == [
+        "/tmp/graded_1.md",  # reranked, cross-encoder 0.011
+        "/tmp/graded_0.md",  # reranked, cross-encoder 0.010
+        "/tmp/graded_2.md",  # tail, RRF order preserved
+        "/tmp/graded_3.md",
+        "/tmp/graded_4.md",
+    ]
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_rerank_preserves_result_count(tmp_path):
+    """Fixing #387 must not drop the un-reranked tail from the result set."""
+    conn = _setup_db(tmp_path)
+    _insert_graded_chunks(conn, 5)
+
+    def _poor_rerank(query, candidates, **_kw):
+        return [0.01] * len(candidates)
+
+    with patch("knowledge_base.reranker.rerank", _poor_rerank):
+        results = search(conn, "signal", mode="fts", rerank=True, rerank_top_n=2, top_k=5)
+
+    assert len(results) == 5
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_rerank_tiering_with_source_type_filter(tmp_path):
+    """Filtered pool: reranked hits stay above the filter-passing tail (#387).
+
+    With a source_type filter, only filter-passing candidates reach the
+    reranker; filter-failing tail chunks are dropped at the final fetch. A
+    poor cross-encoder score must not sink the reranked hits below the
+    surviving tail.
+    """
+    conn = _setup_db(tmp_path)
+    # 3 pdf chunks (graded relevance) + 2 markdown decoys that rank well
+    for i in range(3):
+        content = " ".join(["signal"] * (5 - i)) + f" pdffiller{i}"
+        conn.execute(
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+            "VALUES (?, ?, 'pdf', ?, 0)",
+            (f"p{i}", content, f"/tmp/pdf_{i}.pdf"),
+        )
+    for i in range(2):
+        content = " ".join(["signal"] * (5 - i)) + f" mdfiller{i}"
+        conn.execute(
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+            "VALUES (?, ?, 'markdown', ?, 0)",
+            (f"m{i}", content, f"/tmp/md_{i}.md"),
+        )
+    conn.commit()
+
+    def _poor_rerank(query, candidates, **_kw):
+        return [0.01] * len(candidates)
+
+    with patch("knowledge_base.reranker.rerank", _poor_rerank):
+        results = search(conn, "signal", mode="fts", source_type="pdf", rerank=True, rerank_top_n=2)
+
+    # Only pdf chunks survive; the two reranked ones stay on top
+    assert [r.source_type for r in results] == ["pdf", "pdf", "pdf"]
+    assert [r.match_type for r in results] == ["reranked", "reranked", "fts"]
+
+
+# ---------------------------------------------------------------------------
+# Graceful degradation (reranker failure → clean RRF fallback)
+# ---------------------------------------------------------------------------
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_rerank_error_falls_back_to_rrf(tmp_path):
+    """Reranker raising RuntimeError degrades to pure RRF ordering."""
+    conn = _setup_db(tmp_path)
+    _insert_graded_chunks(conn, 3)
+
+    def _broken_rerank(query, candidates, **_kw):
+        raise RuntimeError("model exploded")
+
+    with patch("knowledge_base.reranker.rerank", _broken_rerank):
+        results = search(conn, "signal", mode="fts", rerank=True)
+
+    assert [r.source_uri for r in results] == ["/tmp/graded_0.md", "/tmp/graded_1.md", "/tmp/graded_2.md"]
+    assert all(r.match_type == "fts" for r in results)
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_rerank_wrong_length_scores_clean_fallback(tmp_path):
+    """A misbehaving provider returning too few scores must not leak state.
+
+    zip(strict=True) raises ValueError mid-mutation; the fallback must drop
+    the partially-recorded reranked ids so no result is stamped
+    match_type='reranked' while carrying an RRF score and ordering.
+    """
+    conn = _setup_db(tmp_path)
+    _insert_graded_chunks(conn, 4)
+
+    def _short_rerank(query, candidates, **_kw):
+        return [0.9] * (len(candidates) - 1)  # one score short → ValueError
+
+    with patch("knowledge_base.reranker.rerank", _short_rerank):
+        results = search(conn, "signal", mode="fts", rerank=True)
+
+    assert len(results) == 4
+    # Clean fallback: RRF order, and NO result claims to be reranked
+    assert [r.source_uri for r in results] == [f"/tmp/graded_{i}.md" for i in range(4)]
+    assert all(r.match_type == "fts" for r in results)

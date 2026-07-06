@@ -235,8 +235,12 @@ def search(
             Larger values improve recall at the cost of latency.
 
     Returns:
-        Up to ``top_k`` SearchResult hits ordered by descending fused (or
-        rerank) score. Empty when nothing matches.
+        Up to ``top_k`` SearchResult hits. Without reranking, ordered by
+        descending fused score. With ``rerank=True``, reranked hits come
+        first (descending cross-encoder score, ``match_type='reranked'``),
+        followed by any un-reranked tail in fused-score order — the two
+        score scales are not comparable, so they are never co-sorted.
+        Empty when nothing matches.
 
     Raises:
         ValidationError: If mode, source_type, or chunk_strategy are invalid,
@@ -427,11 +431,19 @@ def search(
                         score_map[cid] = rs
                         reranked_ids.add(cid)
 
-                # Re-sort with updated scores
-                ranked = sorted(score_map.items(), key=lambda x: x[1], reverse=True)
+                # Re-sort in two tiers: reranked items first (cross-encoder
+                # order), then the un-reranked tail (RRF order). Cross-encoder
+                # scores ([0, 1]) and RRF scores (~1/(RRF_K + rank)) are not
+                # comparable, so a flat sort would let tail items the reranker
+                # never saw outrank items it explicitly scored (#387).
+                ranked = sorted(score_map.items(), key=lambda x: (x[0] in reranked_ids, x[1]), reverse=True)
         except (ImportError, RuntimeError, ValueError, OSError):
             # Graceful degradation: if reranker fails (missing deps,
             # bad model path, inference error), fall back to RRF ordering.
+            # A wrong-length score list raises mid-mutation (zip strict=True),
+            # so drop any partially-recorded ids — otherwise results would be
+            # stamped match_type="reranked" while carrying RRF scores/order.
+            reranked_ids.clear()
             logger.warning("Reranker failed, falling back to RRF ordering", exc_info=True)
 
     chunk_ids = [cid for cid, _ in ranked[:top_k]]
