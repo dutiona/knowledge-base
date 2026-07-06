@@ -4064,3 +4064,140 @@ def test_persist_figures_chunk_count_matches_per_row(vision_conn):
     assert active == start + created
     vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
     assert active == vec_rows
+
+
+# ---------------------------------------------------------------------------
+# Figures dir isolation (#391)
+# ---------------------------------------------------------------------------
+
+
+def test_save_rendered_pngs_honors_data_dir_env(tmp_path, monkeypatch):
+    """_save_rendered_pngs writes under KNOWLEDGE_BASE_DATA_DIR, never the real home."""
+    from knowledge_base.vision import _save_rendered_pngs
+
+    data_dir = tmp_path / "kb-data"
+    monkeypatch.setenv("KNOWLEDGE_BASE_DATA_DIR", str(data_dir))
+    paper_id = 987654321  # unique — must not exist under the real home
+
+    rect = _fitz.Rect(0, 0, 1, 1)
+    _save_rendered_pngs(paper_id, {3: b"png-bytes"}, {5: [(rect, b"crop-0"), (rect, b"crop-1")]})
+
+    figures_dir = data_dir / "figures" / str(paper_id)
+    assert (figures_dir / "page_3.png").read_bytes() == b"png-bytes"
+    assert (figures_dir / "page_5_vector_0.png").read_bytes() == b"crop-0"
+    assert (figures_dir / "page_5_vector_1.png").read_bytes() == b"crop-1"
+    real_home_dir = Path.home() / ".local" / "share" / "knowledge-base" / "figures" / str(paper_id)
+    assert not real_home_dir.exists()
+
+
+def test_save_rendered_pngs_base_dir_param(tmp_path):
+    """An explicit base_dir wins over any resolver."""
+    from knowledge_base.vision import _save_rendered_pngs
+
+    _save_rendered_pngs(7, {1: b"x"}, None, base_dir=tmp_path / "figs")
+
+    assert (tmp_path / "figs" / "7" / "page_1.png").read_bytes() == b"x"
+
+
+def test_save_rendered_pngs_oserror_warns_not_raises(tmp_path, caplog):
+    """mkdir failure hits the OSError branch: warn and return, never raise."""
+    import logging
+
+    from knowledge_base.vision import _save_rendered_pngs
+
+    blocked = tmp_path / "blocked"
+    blocked.write_text("a file where a directory is needed")
+
+    with caplog.at_level(logging.WARNING):
+        _save_rendered_pngs(1, {1: b"x"}, None, base_dir=blocked)
+
+    assert "Failed to save figure PNGs" in caplog.text
+
+
+@patch("knowledge_base.vision.pdf_image_dir")
+@patch("knowledge_base.vision._vision_call")
+@patch("knowledge_base.vision._embed_with_config")
+def test_extract_figures_render_path_isolated_from_home(
+    mock_embed, mock_vision, mock_image_dir, vision_conn, tmp_path, monkeypatch
+):
+    """End-to-end: the vector-render path lands PNGs under the injected data dir (#391)."""
+    conn = vision_conn
+
+    doc = _fitz.open()
+    page = doc.new_page(width=612, height=792)
+    for i in range(15):
+        shape = page.new_shape()
+        shape.draw_line(_fitz.Point(10, 10 + i * 5), _fitz.Point(100, 10 + i * 5))
+        shape.finish()
+        shape.commit()
+    pdf_path = tmp_path / "paper.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    conn.execute("INSERT INTO papers (id, title) VALUES (1, 'Vector Paper')")
+    conn.execute(
+        "INSERT INTO paper_paths (paper_id, path, content_hash) VALUES (1, ?, 'abc')",
+        (str(pdf_path),),
+    )
+    image_dir = tmp_path / "extracted"
+    image_dir.mkdir(parents=True)
+    mock_image_dir.return_value = image_dir
+    conn.commit()
+
+    mock_vision.return_value = [
+        {"figure_type": "diagram", "description": "A vector diagram.", "title": None, "entities_mentioned": []}
+    ]
+    mock_embed.return_value = [[0.1] * 1024]
+
+    data_dir = tmp_path / "kb-data"
+    monkeypatch.setenv("KNOWLEDGE_BASE_DATA_DIR", str(data_dir))
+
+    from knowledge_base.vision import extract_figures
+
+    result = extract_figures(conn, paper_id=1, confirmed=True)
+
+    assert result.get("vector_pages_rendered", 0) > 0
+    saved = list((data_dir / "figures" / "1").glob("page_*.png"))
+    assert saved, "rendered PNGs must land under the injected data dir"
+
+
+def test_kb_data_dir_resolution_order(tmp_path, monkeypatch):
+    """Env var (stripped, expanduser'd) > conn DB-parent > home default."""
+    from knowledge_base.ingest import kb_data_dir
+
+    conn = sqlite3.connect(tmp_path / "sub" / ".." / "kb.db")
+
+    # 1. env wins over conn, with expanduser
+    monkeypatch.setenv("KNOWLEDGE_BASE_DATA_DIR", "~/custom-kb")
+    assert kb_data_dir(conn) == Path.home() / "custom-kb"
+
+    # whitespace-only env is ignored (mirrors resolve_db_path)
+    monkeypatch.setenv("KNOWLEDGE_BASE_DATA_DIR", "   ")
+    assert kb_data_dir(conn) == tmp_path
+
+    # 2. no env: conn's main DB parent
+    monkeypatch.delenv("KNOWLEDGE_BASE_DATA_DIR")
+    assert kb_data_dir(conn) == tmp_path
+    conn.close()
+
+    # 3. no env, no conn (or in-memory conn): home default
+    assert kb_data_dir() == Path.home() / ".local" / "share" / "knowledge-base"
+    mem = sqlite3.connect(":memory:")
+    assert kb_data_dir(mem) == Path.home() / ".local" / "share" / "knowledge-base"
+    mem.close()
+
+
+def test_pdf_image_dir_derives_from_conn_db(tmp_path, monkeypatch):
+    """Unpatched pdf_image_dir lands beside the connection's DB file."""
+    from knowledge_base.ingest import pdf_image_dir
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_DATA_DIR", raising=False)
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    conn = sqlite3.connect(tmp_path / "kb.db")
+
+    result = pdf_image_dir(pdf, conn)
+    conn.close()
+
+    assert result.is_relative_to(tmp_path / "figures")
+    assert result.name == "extracted"

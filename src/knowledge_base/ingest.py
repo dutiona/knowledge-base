@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import sqlite3
@@ -31,6 +32,7 @@ from .db import (
     get_vec_table_name,
     insert_chunk_vec,
 )
+from .migrate import _main_db_path
 from .embed_swap import assert_embed_identity_match, get_embed_config
 from .embeddings import ProviderConfig, embed, truncate_embedding
 from .exceptions import NotFoundError
@@ -53,9 +55,37 @@ __all__ = [
     "CHUNK_SIZE",
     "ingest_directory",
     "ingest_file",
+    "kb_data_dir",
     "pdf_image_dir",
     "reingest_file",
 ]
+
+
+def kb_data_dir(conn: sqlite3.Connection | None = None) -> Path:
+    """Base directory for on-disk artifacts (figures, rendered pages).
+
+    Resolution order (#391):
+
+    1. ``KNOWLEDGE_BASE_DATA_DIR`` environment variable (stripped and
+       ``expanduser``-ed, mirroring ``resolve_db_path``'s handling of
+       ``KNOWLEDGE_BASE_DB``);
+    2. the directory of *conn*'s main database file — artifacts live beside
+       the DB they belong to (same convention as ``migrate.py`` backups), so
+       tests on tmp-path DBs and relocated production DBs are isolated
+       structurally, not by remembering a knob;
+    3. the default home data dir (conn-less callers, in-memory DBs).
+
+    Resolved at call time, not import time, so a monkeypatched environment
+    takes effect immediately.
+    """
+    env = os.environ.get("KNOWLEDGE_BASE_DATA_DIR")
+    if env and env.strip():
+        return Path(env).expanduser()
+    if conn is not None:
+        db_file = _main_db_path(conn)
+        if db_file is not None:
+            return db_file.parent
+    return Path.home() / ".local" / "share" / "knowledge-base"
 
 
 def _detect_source_type(path: Path) -> str:
@@ -219,15 +249,20 @@ def _extract_pdf_text(path: Path) -> str:
     return "\n\n".join(pages)
 
 
-def pdf_image_dir(path: Path) -> Path:
-    """Content-hash keyed directory for extracted images."""
+def pdf_image_dir(path: Path, conn: sqlite3.Connection | None = None) -> Path:
+    """Content-hash keyed directory for extracted images.
+
+    Pass *conn* where available so the directory is derived from the live
+    DB's location (see :func:`kb_data_dir`) — ingest-time writers and
+    vision-time readers agree as long as they use the same database.
+    """
     h = hashlib.sha256()
     with path.open("rb") as f:
         while chunk := f.read(_HASH_READ_CHUNK_BYTES):
             h.update(chunk)
     file_hash = h.hexdigest()[:_FILE_HASH_HEX_LEN]
     sanitized = re.sub(r"[^\w\-.]", "_", path.stem)[:_STEM_MAX_LEN]
-    return Path.home() / ".local" / "share" / "knowledge-base" / "figures" / f"{sanitized}_{file_hash}" / "extracted"
+    return kb_data_dir(conn) / "figures" / f"{sanitized}_{file_hash}" / "extracted"
 
 
 def _extract_pdf_markdown(path: Path, image_dir: Path | None = None) -> tuple[str, dict[int, int]]:
@@ -303,7 +338,7 @@ def _produce_and_insert_chunks(
 
     # --- Text extraction ---
     if source_type == "pdf":
-        image_dir = pdf_image_dir(path)
+        image_dir = pdf_image_dir(path, conn)
         if image_dir.exists():
             shutil.rmtree(image_dir)
         text, page_map = _extract_pdf_markdown(path, image_dir=image_dir)

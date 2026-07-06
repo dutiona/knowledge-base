@@ -33,6 +33,7 @@ from .ingest import (
     _content_hash,
     _embed_with_config,
     _insert_chunk,
+    kb_data_dir,
     pdf_image_dir,
 )
 from .web import _cleanup_figure_fk_refs
@@ -1479,7 +1480,7 @@ def _collect_dual_path_inputs(
     pages: list[int] | None,
 ) -> DualPathInputs:
     """Collect extracted images and determine vector-page fallback set."""
-    image_dir = pdf_image_dir(pdf_path)
+    image_dir = pdf_image_dir(pdf_path, conn)
     extracted_images = _collect_extracted_images(conn, source_uri, image_dir)
 
     # 5a. Extract captions from ingest chunks for hybrid enrichment
@@ -2026,11 +2027,16 @@ def _save_rendered_pngs(
     paper_id: int,
     rendered: dict[int, bytes],
     mixed_rendered: dict[int, list[tuple[fitz.Rect, bytes]]] | None = None,
+    base_dir: Path | None = None,
 ) -> None:
-    """Save rendered vector-page PNGs and mixed-page region crops to disk."""
+    """Save rendered vector-page PNGs and mixed-page region crops to disk.
+
+    Writes under ``base_dir`` when given, else ``kb_data_dir()/figures``
+    (redirectable via KNOWLEDGE_BASE_DATA_DIR — #391).
+    """
     if not rendered and not mixed_rendered:
         return
-    figures_dir = Path.home() / ".local" / "share" / "knowledge-base" / "figures" / str(paper_id)
+    figures_dir = (base_dir if base_dir is not None else kb_data_dir() / "figures") / str(paper_id)
     try:
         figures_dir.mkdir(parents=True, exist_ok=True)
         for page_num, png_bytes in rendered.items():
@@ -2198,8 +2204,8 @@ def extract_figures(
         on_progress,
     )
 
-    # 11. Save rendered PNGs to disk
-    _save_rendered_pngs(paper_id, rendered, mixed_rendered)
+    # 11. Save rendered PNGs to disk, beside the DB they belong to (#391)
+    _save_rendered_pngs(paper_id, rendered, mixed_rendered, base_dir=kb_data_dir(conn) / "figures")
 
     # Build result summary
     total_figures = sum(len(figs) for figs in vision.page_results.values())
