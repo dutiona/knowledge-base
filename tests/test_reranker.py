@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -460,3 +461,38 @@ def test_rerank_wrong_length_scores_clean_fallback(tmp_path):
     # Clean fallback: RRF order, and NO result claims to be reranked
     assert [r.source_uri for r in results] == [f"/tmp/graded_{i}.md" for i in range(4)]
     assert all(r.match_type == "fts" for r in results)
+
+
+@pytest.mark.parametrize("exc_type", [ImportError, RuntimeError, ValueError, OSError])
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.search.embed_single", _fake_embed_single)
+def test_rerank_error_catch_set_locks_fallback(tmp_path, caplog, exc_type):
+    """Every exception in the rerank catch set degrades to clean RRF + a logged warning.
+
+    Locks the ``(ImportError, RuntimeError, ValueError, OSError)`` tuple at
+    ``search.py``: if any type were dropped from the ``except`` clause, the
+    matching parametrization would propagate out of ``search`` instead of
+    falling back, and this test would fail. Also pins the fallback's logged
+    warning (``search.py``'s ``logger.warning(...)``), otherwise unverified.
+    """
+    conn = _setup_db(tmp_path)
+    _insert_graded_chunks(conn, 3)
+
+    def _broken_rerank(query, candidates, **_kw):
+        raise exc_type("inference failed")
+
+    with (
+        patch("knowledge_base.reranker.rerank", _broken_rerank),
+        caplog.at_level(logging.WARNING, logger="knowledge_base.search"),
+    ):
+        results = search(conn, "signal", mode="fts", rerank=True)
+
+    # Fallback contract: full RRF-ordered result set, nothing stamped 'reranked'.
+    assert results  # non-empty
+    assert [r.source_uri for r in results] == [f"/tmp/graded_{i}.md" for i in range(3)]
+    assert all(r.match_type == "fts" for r in results)
+
+    # The degradation path logs a warning (RRF-fallback signal for operators).
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "Reranker failed" in r.getMessage()]
+    assert warnings, "expected a fallback warning to be logged"
