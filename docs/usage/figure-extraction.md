@@ -156,7 +156,7 @@ When ingesting web pages via `ingest_url`, inline `<img>` tags are extracted fro
 
 **Why this exists:** Text-rich pages (>= 200 chars from trafilatura) never trigger the browser fallback, so their images were completely lost — even pages with dozens of meaningful diagrams and charts. Even when the browser fallback fires, the single 1280x8000px screenshot approach misses images below the fold and asks one vision call to enumerate all figures from a dense composite image. Inline extraction solves both gaps by parsing `<img>` tags directly from the fetched HTML (see [#82](https://github.com/dutiona/knowledge-base/issues/82) for the full analysis).
 
-**When it runs:** Inline image extraction runs automatically when `KNOWLEDGE_BASE_VISION=on`, a vision model is configured, and the browser-based screenshot extraction did not already fire. If the browser fallback produced figures from a full-page screenshot, inline extraction is skipped to avoid duplicate descriptions of the same visual content.
+**When it runs:** Inline image extraction runs on every `ingest_url` when `KNOWLEDGE_BASE_VISION=on` and a vision model is configured, whether or not the browser fallback also produced figures from a full-page screenshot.
 
 **Filtering:** Not all images on a page are meaningful. The following are skipped:
 
@@ -182,7 +182,7 @@ This uses a separate range from PDF figure chunks (1,000,000+) and browser scree
 - `image_url`: The resolved absolute URL the image was downloaded from
 - `alt_text`: The `alt` attribute from the `<img>` tag (if present)
 - `original_source_type`: `"web"`
-- `source_url`: The page URL (post-redirect)
+- `source_url`: The requested page URL (the `source_uri` of the page's text chunks, not the post-redirect URL)
 - `vision_model`: The model used for description
 
 **Re-ingestion:** When the same URL is ingested again, old inline image chunks (chunk_index >= 2,000,000) are deleted and replaced. Foreign key references (entity mentions, methods, datasets, metrics, papers, relationships, conclusions) are cleaned up before deletion.
