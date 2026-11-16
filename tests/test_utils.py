@@ -447,3 +447,19 @@ def test_pinned_hosts_never_share_a_connection(pinned_to_loopback):
         server.server_close()
     assert [host for _port, host in seen] == [f"a.example.test:{port}", f"b.example.test:{port}"]
     assert seen[0][0] != seen[1][0]
+
+
+@pytest.mark.parametrize(
+    ("url", "host_header", "expected"),
+    [
+        ("https://203.0.113.10:8443/a", "page.example.test:8443", "page.example.test"),
+        ("https://[2001:db8::10]:8443/a", "[2001:db8::10]:8443", "2001:db8::10"),
+        ("https://203.0.113.10/a", "page.example.test", "page.example.test"),
+        ("https://203.0.113.10/a", "xn--fa-hia.example.test", "xn--fa-hia.example.test"),
+    ],
+)
+def test_the_recorder_keys_a_request_by_its_host_header(url, host_header, expected):
+    """The test recorder's dispatch key: the Host authority in ASCII form, without port or brackets."""
+    from tests.conftest import logical_host
+
+    assert logical_host(httpx.Request("GET", url, headers={"host": host_header})) == expected

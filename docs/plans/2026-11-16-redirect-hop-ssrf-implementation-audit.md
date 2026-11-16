@@ -2,7 +2,8 @@
 
 - Approved plan: `docs/plans/2026-11-16-redirect-hop-ssrf.md`, SHA-256
   `7f2a54eeb798c4bdd06d5a3fbd52817e378af744bf0c84d5e678089ee508d8f4`. Approved on #587.
-- Audited head: `b54eeba` (branch `fix/572-redirect-hop-ssrf`).
+- Audited head: the commit adding this file's final revision (branch `fix/572-redirect-hop-ssrf`); the gate below
+  was re-run there.
 - Scope: pre-review.
 
 ## Items
@@ -39,11 +40,11 @@ Each of these keeps the approved intent, so none is counted as Modified.
   turned it into a real 302 to `169.254.169.254`, so it now tests the transport's refusal rather than a mock.
 - **Item 8:** `_ensure_omniparser_server(path, port)` keeps its port-parameterized URL, passing
   `floor=False` (KB's own child). The two ETA f-strings now go through `_omniparser_endpoint`.
-- **Item 3 (recorder):** the plan's round-4 nit was adopted.
-  - The recorder fallback uses `raw_host`.
-  - The IDNA case is covered by `test_pinned_lookup_and_sni_use_the_idna_2008_name`, not by a conftest
-    self-test.
-  - No separate conftest self-test was added; `logical_host` is exercised by every pinned-request test.
+- **Item 3 (recorder):** the plan's round-4 nit was adopted. The recorder takes its key and fallback from
+  `raw_host`, so both are in ASCII form.
+  - The planned self-test was first missed. This audit found the gap and closed it:
+    `test_the_recorder_keys_a_request_by_its_host_header` in `tests/test_utils.py`.
+  - It covers `name:port`, `[IPv6]:port`, a portless name and an IDNA name.
 
 ## Counts
 
