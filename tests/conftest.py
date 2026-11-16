@@ -207,3 +207,15 @@ def public_net(monkeypatch) -> None:
         return any(ip in net for net in _PUBLIC_TEST_NETS) or real(ip)
 
     monkeypatch.setattr(utils, "_is_public", _is_public)
+
+
+@pytest.fixture
+def operator_ollama(monkeypatch) -> str:
+    """Declare an operator Ollama (``OLLAMA_HOST``) and return its logical host; the URL cache is reset.
+
+    Auto-detection then lands on ``http://<host>:11434`` with no probing, so a test serves that host
+    from ``http_requests.handlers`` instead of reaching a real or loopback Ollama.
+    """
+    monkeypatch.setenv("OLLAMA_HOST", "http://ollama.example.test:11434")
+    monkeypatch.setattr("knowledge_base.embeddings._OLLAMA_URL", None)
+    return "ollama.example.test"
