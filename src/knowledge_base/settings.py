@@ -78,7 +78,7 @@ def _parse_url(provider: str, raw: str) -> str:
     var = VARIABLES["base_url"]
     parsed = urlparse(raw)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValidationError(f"{var} must be an http or https URL with a host, got {raw!r}")
+        raise ValidationError(f"{var} must be an http or https URL with a host (got scheme {parsed.scheme!r})")
     if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
         raise ValidationError(f"{var} must not carry userinfo, a query or a fragment; put the key in {API_KEY_VAR}")
     return normalize_embed_url(provider, raw)

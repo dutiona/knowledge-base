@@ -160,3 +160,11 @@ def test_declared_embed_host(declare):
     assert declared_embed_host() == "embedder.example.test"
     declare(**_OPENAI_COMPAT)
     assert declared_embed_host() is None
+
+
+@pytest.mark.parametrize("url", ["htps://user:TOKEN@h.example.test", "https://user:TOKEN@h.example.test/?q=TOKEN"])
+def test_a_refused_url_never_echoes_its_credentials(declare, url):
+    declare(**_OPENAI_COMPAT, url=url)
+    with pytest.raises(ValidationError) as refused:
+        load_embed_settings()
+    assert "TOKEN" not in str(refused.value)
