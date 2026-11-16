@@ -96,6 +96,48 @@ To use a different location, set it by precedence (highest first):
 A configured path is used verbatim — its parent directory is created if needed, and
 there is no silent fallback to the default.
 
+## Container image
+
+The repository's `Containerfile` builds a server image from a checkout alone. Build it from a release tag, and let
+podman re-pull the base so a cached one never hides OS security updates:
+
+```bash
+git checkout v0.1.0
+podman build --pull=newer -t localhost/knowledge-base:v0.1.0 .
+```
+
+The image installs exactly `uv.lock` with `uv sync --frozen --no-dev --group reranker`: no dev tools, no uv. The
+reranker group ships its runtime, but not a model: mount one and set `ONNX_RERANK_MODEL_PATH` and
+`ONNX_RERANK_TOKENIZER_PATH` as described in [searching](../usage/searching.md#cross-encoder-reranking).
+
+The server runs as UID/GID `10001`. On a rootless host, map the service user onto it so the volumes stay owned by
+that user, with `--userns keep-id:uid=10001,gid=10001` (`UserNS=` in a quadlet). The state lives on two volumes:
+
+| Variable                  | Volume                         | Holds                               |
+| ------------------------- | ------------------------------ | ----------------------------------- |
+| `KNOWLEDGE_BASE_DB`       | `/var/lib/knowledge-base/db`   | `knowledge.db` and its WAL files    |
+| `KNOWLEDGE_BASE_DATA_DIR` | `/var/lib/knowledge-base/data` | figures and other on-disk artifacts |
+
+### Snapshotting a running server
+
+Take a backup inside the running container, read-only, through Python's `sqlite3` alone. Never use `knowledge-base`
+or `knowledge-base-ingest` for it: a KB entry point can start the job worker, whose crash recovery resets running
+jobs. `VACUUM INTO` refuses an existing target, so remove the previous snapshot (or a failed run's partial file) first:
+
+```bash
+podman exec knowledge-base sh -c 'SNAP=/var/lib/knowledge-base/db/snapshot.db; rm -f "$SNAP"
+python -c "import sqlite3, sys
+c = sqlite3.connect(f\"file:{sys.argv[1]}?mode=ro\", uri=True, timeout=30, autocommit=True)
+c.execute(\"VACUUM INTO ?\", (sys.argv[2],))" "$KNOWLEDGE_BASE_DB" "$SNAP" &&
+python -c "import sqlite3, sys
+r = sqlite3.connect(f\"file:{sys.argv[1]}?mode=ro\", uri=True).execute(\"PRAGMA integrity_check\").fetchall()
+sys.exit(r != [(\"ok\",)])" "$SNAP"'
+```
+
+The `timeout` is the busy timeout. The snapshot includes committed data still in the WAL, and needs no `sqlite-vec`:
+the `vec0` tables are copied as they are. The check opens the snapshot read-only too, because a plain `connect` on a
+missing file would create an empty database whose `integrity_check` is `ok`.
+
 ## Optional dependencies
 
 ### Vision model for figure extraction
