@@ -214,3 +214,37 @@ def test_look_alikes_keep_the_floor(fake_dns, url):
         fake_dns[host] = _TAILNET
     with pytest.raises(ValidationError):
         validate_base_url(url, exempt_host="embedder.example.test")
+
+
+# --- #572: the floor refuses the host's own addresses ---
+
+_HOST_LIST = "203.0.113.7,2001:db8:7::/64"
+
+
+@pytest.fixture
+def host_list(monkeypatch, public_net):
+    monkeypatch.setenv("KNOWLEDGE_BASE_HOST_ADDRESSES", _HOST_LIST)
+
+
+@pytest.mark.parametrize("host", ["203.0.113.7", "::ffff:203.0.113.7", "2001:db8:7::abcd", "self.example.test"])
+def test_host_address_is_refused(fake_dns, host_list, host):
+    fake_dns["self.example.test"] = ["203.0.113.10", "203.0.113.7"]
+    assert is_private_ip(host) is True
+    url_host = f"[{host}]" if ":" in host else host
+    with pytest.raises(ValidationError, match="private"):
+        validate_base_url(f"https://{url_host}/")
+
+
+@pytest.mark.parametrize("host", ["203.0.113.8", "2001:db8:8::1", "public.example.test"])
+def test_a_public_address_off_the_list_is_accepted(fake_dns, host_list, host):
+    # The control: these differ from the listed ones only by the list, so the list is what refuses those.
+    fake_dns["public.example.test"] = ["203.0.113.8", "2001:db8:8::1"]
+    assert is_private_ip(host) is False
+
+
+def test_the_floor_without_a_list_refuses_no_public_address(fake_dns, public_net):
+    assert is_private_ip("203.0.113.7") is False
+
+
+def test_a_failed_lookup_is_refused(fake_dns):
+    assert is_private_ip("unknown.example.test") is True

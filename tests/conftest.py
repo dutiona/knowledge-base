@@ -8,6 +8,7 @@ data-dir redirect (#391) and the embedding declaration (#569).
 
 from __future__ import annotations
 
+import ipaddress
 import sqlite3
 from collections.abc import Callable, Iterator
 
@@ -152,3 +153,25 @@ def fake_dns(monkeypatch) -> dict[str, list[str]]:
 
     monkeypatch.setattr("knowledge_base.utils.socket.getaddrinfo", _getaddrinfo)
     return table
+
+
+_PUBLIC_TEST_NETS = tuple(
+    ipaddress.ip_network(net) for net in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32")
+)
+
+
+@pytest.fixture
+def public_net(monkeypatch) -> None:
+    """Let the documentation ranges play the public internet for the SSRF floor.
+
+    Python counts them as non-global, and the public repository allows no real address, so a test of an
+    accepted (public) answer needs them. Every other address keeps the real rule.
+    """
+    from knowledge_base import utils
+
+    real = utils._is_public
+
+    def _is_public(ip) -> bool:
+        return any(ip in net for net in _PUBLIC_TEST_NETS) or real(ip)
+
+    monkeypatch.setattr(utils, "_is_public", _is_public)
