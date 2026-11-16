@@ -21,10 +21,13 @@ from knowledge_base.db import (
     get_connection,
     get_index_stats,
     init_schema,
+    bind_embed_config,
     insert_chunk_vec,
+    open_declared_db,
 )
 from knowledge_base.embed_swap import create_space
 from knowledge_base.exceptions import KnowledgeBaseError
+from knowledge_base.settings import load_embed_settings
 from tests.declared_env import TEST_EMBED_DIM, TEST_EMBED_MODEL, TEST_EMBED_PROVIDER
 
 
@@ -1746,3 +1749,147 @@ def test_existing_database_initializes_without_a_declaration(tmp_path, monkeypat
     space = get_active_space(conn)
     assert space is not None
     assert (space["provider"], space["model"], space["dim"]) == ("ollama", "bge-m3", 1024)
+
+
+# --- #569: an existing database is bound to the declaration ---
+
+
+def _seeded(tmp_path, monkeypatch, **declared):
+    """A database seeded under an openai_compat declaration, then the given variables changed."""
+    _declare_openai_compat(monkeypatch)
+    conn = get_connection(tmp_path / "kb.db")
+    init_schema(conn)
+    for name, value in declared.items():
+        var = f"KNOWLEDGE_BASE_EMBED_{name.upper()}"
+        if value is None:
+            monkeypatch.delenv(var, raising=False)
+        else:
+            monkeypatch.setenv(var, value)
+    return conn
+
+
+def _config(conn) -> dict:
+    return dict(conn.execute("SELECT key, value FROM config").fetchall())
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "key"),
+    [
+        ("provider", "ollama", "embed_provider"),
+        ("model", "other-model", "embed_model"),
+        ("dim", "8", "embed_dim"),
+        ("url", "https://moved.example.test", "embed_base_url"),
+    ],
+)
+def test_bind_refuses_a_disagreeing_field(tmp_path, monkeypatch, variable, value, key):
+    conn = _seeded(tmp_path, monkeypatch, **{variable: value})
+    before = _config(conn)
+    with pytest.raises(KnowledgeBaseError, match=rf"{key}.*KNOWLEDGE_BASE_EMBED_{variable.upper()}"):
+        bind_embed_config(conn, load_embed_settings())
+    assert _config(conn) == before
+
+
+def test_bind_accepts_a_legacy_normalized_url(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("UPDATE config SET value = 'https://embedder.example.test/v1' WHERE key = 'embed_base_url'")
+    conn.commit()
+    bind_embed_config(conn, load_embed_settings())
+
+
+def test_bind_records_an_unrecorded_endpoint(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("DELETE FROM config WHERE key IN ('embed_base_url', 'embed_api_key')")
+    conn.commit()
+    bind_embed_config(conn, load_embed_settings())
+    rows = _config(conn)
+    assert rows["embed_base_url"] == "https://embedder.example.test"
+    assert rows["embed_api_key"] == "env:KNOWLEDGE_BASE_EMBED_API_KEY"
+
+
+def test_bind_refuses_a_missing_identity_row(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("DELETE FROM config WHERE key = 'embed_dim'")
+    conn.commit()
+    with pytest.raises(KnowledgeBaseError, match="embed_dim"):
+        bind_embed_config(conn, load_embed_settings())
+
+
+def test_bind_derives_the_key_row(tmp_path, monkeypatch, caplog):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("UPDATE config SET value = 'sk-inline-secret' WHERE key = 'embed_api_key'")
+    conn.commit()
+    with caplog.at_level("WARNING"):
+        bind_embed_config(conn, load_embed_settings())
+    assert _config(conn)["embed_api_key"] == "env:KNOWLEDGE_BASE_EMBED_API_KEY"
+    assert "embed_api_key" in caplog.text
+    assert "sk-inline-secret" not in caplog.text
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_EMBED_API_KEY")
+    bind_embed_config(conn, load_embed_settings())
+    assert "embed_api_key" not in _config(conn)
+
+
+def test_bind_refuses_a_drifted_active_space(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("UPDATE embed_spaces SET model = 'older-model' WHERE status = 'active'")
+    conn.commit()
+    with pytest.raises(KnowledgeBaseError, match=r"active space.*older-model.*re-embed"):
+        bind_embed_config(conn, load_embed_settings())
+
+
+def test_bind_refuses_a_database_without_an_active_space(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("UPDATE embed_spaces SET status = 'deprecated'")
+    conn.commit()
+    with pytest.raises(KnowledgeBaseError, match="no active embedding space"):
+        bind_embed_config(conn, load_embed_settings())
+
+
+def test_bind_transition_rebind(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch, url="https://moved.example.test")
+    conn.execute("UPDATE config SET value = 'drifted-model' WHERE key = 'embed_model'")
+    conn.commit()
+    bind_embed_config(conn, load_embed_settings(), transition="rebind")
+    rows = _config(conn)
+    assert rows["embed_base_url"] == "https://moved.example.test"
+    assert rows["embed_model"] == "qwen3-embedding"
+    bind_embed_config(conn, load_embed_settings())  # a plain bind now passes
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
+    with pytest.raises(KnowledgeBaseError, match="embed_model"):
+        bind_embed_config(conn, load_embed_settings(), transition="rebind")
+
+
+def test_bind_transition_re_embed(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch, url="https://moved.example.test")
+    before = _config(conn)
+    with pytest.raises(KnowledgeBaseError, match="use rebind"):
+        bind_embed_config(conn, load_embed_settings(), transition="re-embed")
+    assert _config(conn) == before
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
+    bind_embed_config(conn, load_embed_settings(), transition="re-embed")
+    rows = _config(conn)
+    assert rows["embed_base_url"] == "https://moved.example.test"
+    assert rows["embed_model"] == "qwen3-embedding"  # re_embed's promotion moves the identity
+
+
+def test_bind_transition_re_embed_to_onnx_drops_the_url(tmp_path, monkeypatch):
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"")
+    conn = _seeded(tmp_path, monkeypatch, provider="onnx", url=None, api_key=None)
+    monkeypatch.setenv("ONNX_EMBED_MODEL_PATH", str(model))
+    bind_embed_config(conn, load_embed_settings(), transition="re-embed")
+    rows = _config(conn)
+    assert "embed_base_url" not in rows
+    assert "embed_api_key" not in rows
+
+
+def test_open_declared_db_returns_a_bound_connection(tmp_path, monkeypatch):
+    _declare_openai_compat(monkeypatch)
+    conn = open_declared_db(tmp_path / "kb.db")
+    assert _config(conn)["embed_base_url"] == "https://embedder.example.test"
+    conn.close()
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
+    with pytest.raises(KnowledgeBaseError, match="embed_model"):
+        open_declared_db(tmp_path / "kb.db")
