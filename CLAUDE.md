@@ -25,8 +25,23 @@ uv sync --all-groups             # install optional deps (browser, reranker, …
 uv run basedpyright src/ tests/  # type-check (basedpyright; needs --all-groups synced)
 ```
 
-CI gates on all four (`ruff check`, `ruff format --check`, `pytest -m "not slow"`,
-`basedpyright`).
+## Verify
+
+```bash
+sudo apt-get update && sudo apt-get install -y tesseract-ocr  # once per host: without it the OCR tests skip instead of running
+uv lock --check                        # uv.lock matches pyproject.toml; first, because uv sync rewrites a drifted lock
+uv sync
+uv run ruff check src/ tests/          # zero warnings
+uv run ruff format --check src/ tests/ # no reformats
+uv run pytest tests/ -q -m "not slow"
+uv sync --all-groups                   # the type-check resolves the optional groups' imports
+uv run basedpyright src/ tests/
+```
+
+This list is the merge gate: run every command, in this order, at the PR's final head with a
+clean tree (an earlier `uv sync` may already have rewritten a drifted `uv.lock`), and quote the
+results in the PR. It mirrors `.github/workflows/ci.yml`, which no longer runs, so CI is not
+relied on and a CI status is never evidence.
 
 ## Architecture
 
