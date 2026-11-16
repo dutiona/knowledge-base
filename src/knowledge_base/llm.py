@@ -20,6 +20,7 @@ import httpx
 
 from .embeddings import _get_ollama_url
 from .exceptions import ValidationError
+from .settings import LLM_API_KEY_VAR, LLM_VAR, switch_on
 from .utils import _resolve_api_key, _sanitize_url, validate_base_url
 
 # Re-exported for back-compat: _sanitize_url moved to utils.py (ADR-0018 §4) so
@@ -37,8 +38,21 @@ logger = logging.getLogger(__name__)
 _HTTP_LLM_FAMILIES = ("openai_compat", "anthropic_compat")
 
 
+def _require_llm() -> None:
+    """LLM extraction posts whole papers to a model; it runs only when switched on (#569)."""
+    if not switch_on(LLM_VAR):
+        raise ValidationError(f"LLM extraction is off; set {LLM_VAR}=on to enable it")
+
+
+def _check_llm_key_spec(spec: str | None) -> None:
+    """An LLM key is inline or ``env:KNOWLEDGE_BASE_LLM_API_KEY``: no other secret of the process."""
+    if spec and spec.startswith("env:") and spec != f"env:{LLM_API_KEY_VAR}":
+        raise ValidationError(f"an LLM api_key is an inline value or env:{LLM_API_KEY_VAR}, not {spec!r}")
+
+
 def _get_llm_config(conn: sqlite3.Connection) -> dict:
-    """Read LLM configuration from config table."""
+    """Read LLM configuration from config table. Refuses while LLM extraction is off."""
+    _require_llm()
     provider = conn.execute("SELECT value FROM config WHERE key = 'llm_provider'").fetchone()
     model = conn.execute("SELECT value FROM config WHERE key = 'llm_model'").fetchone()
     base_url_row = conn.execute("SELECT value FROM config WHERE key = 'llm_base_url'").fetchone()
@@ -46,6 +60,7 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
     loopback_row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
 
     prov = provider["value"] if provider else "ollama"
+    _check_llm_key_spec(api_key_row["value"] if api_key_row else None)
 
     if base_url_row:
         base_url = base_url_row["value"]
@@ -349,8 +364,14 @@ def configure_llm(
     ``env:VARNAME`` indirection). Acceptable for local-only use; keyring hardening is
     deferred.
     """
+    _require_llm()
     if provider not in ("ollama", *_HTTP_LLM_FAMILIES):
         raise ValidationError(f"Unknown provider: {provider}. Use 'ollama', 'openai_compat', or 'anthropic_compat'.")
+    if api_key or provider == "ollama":
+        _check_llm_key_spec(api_key)
+    else:  # an HTTP provider configured without a key keeps the stored one
+        row = conn.execute("SELECT value FROM config WHERE key = 'llm_api_key'").fetchone()
+        _check_llm_key_spec(row["value"] if row else None)
     if provider in _HTTP_LLM_FAMILIES and not base_url:
         raise ValidationError(f"base_url is required for {provider} provider")
     # Preserve the shared loopback flag unless the caller set it explicitly.
