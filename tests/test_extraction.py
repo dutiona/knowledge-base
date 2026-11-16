@@ -2018,3 +2018,33 @@ class TestProvenanceColumn:
 
         entity_row = conn.execute("SELECT source FROM entities WHERE paper_id = ?", (p,)).fetchone()
         assert entity_row["source"] == "llm_extraction"
+
+
+def test_the_map_phase_client_is_floored(tmp_path, http_requests, fake_dns, public_net):
+    """#572: the pooled map-phase client floors and pins a stored LLM URL like a single call does."""
+    import httpx
+
+    from knowledge_base.extraction import _extract_map_reduce
+
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    conn.executemany(
+        "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+        [("llm_provider", "openai_compat"), ("llm_base_url", "https://llm.example.test"), ("llm_model", "m")],
+    )
+    conn.commit()
+    fake_dns["llm.example.test"] = ["203.0.113.20"]
+    http_requests.handlers["llm.example.test"] = lambda _r: httpx.Response(200)
+
+    def _spy(_chunk_id, _content, _i, _n, cfg, *, client):
+        client.get(f"{cfg['base_url']}/probe")
+        return {"methods": [], "datasets": [], "metrics": []}
+
+    with (
+        patch("knowledge_base.extraction._map_extract", _spy),
+        patch("knowledge_base.extraction._resolve_entities", return_value={}),
+        patch("knowledge_base.extraction._store_resolved", return_value={}),
+    ):
+        _extract_map_reduce(conn, 1, [{"id": 1, "content": "a"}, {"id": 2, "content": "b"}])
+
+    assert http_requests.targets() == ["203.0.113.20", "203.0.113.20"]

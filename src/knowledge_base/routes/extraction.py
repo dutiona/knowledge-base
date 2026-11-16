@@ -185,13 +185,14 @@ def configure_llm_tool(
     """Configure the LLM used for structured extraction.
 
     Args:
-        provider: 'ollama' (native API) or 'openai_compat' (OpenAI-compatible API).
-        base_url: Base URL (e.g. 'http://192.168.1.41:1234'). Required for openai_compat;
-            SSRF-validated before persisting.
+        provider: 'ollama' (native API), 'openai_compat' or 'anthropic_compat'.
+        base_url: Base URL (e.g. 'https://llm.example.test'). Required for the HTTP families; for
+            ollama, omit it to use the auto-detected endpoint (OLLAMA_HOST, else localhost). Every
+            given URL keeps the SSRF floor, checked before persisting and on every request.
         model: Model name (e.g. 'qwen3.5:27b', 'qwen/qwen3.5-35b-a3b').
         api_key: Inline key, or exactly 'env:KNOWLEDGE_BASE_LLM_API_KEY' (preferred). Optional.
         allow_loopback_base_url: Opt-in to a loopback/localhost base_url (for a local
-            openai_compat server). Shared with the embedding path; omit to preserve.
+            server). Shared by every stored service URL; omit to preserve.
     """
     conn = _get_conn()
     try:

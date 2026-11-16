@@ -21,7 +21,7 @@ import httpx
 from .embeddings import _get_ollama_url
 from .exceptions import ValidationError
 from .settings import LLM_API_KEY_VAR, LLM_VAR, switch_on
-from .utils import _resolve_api_key, _sanitize_url, validate_base_url
+from .utils import _resolve_api_key, _sanitize_url, egress_client, loopback_opt_in, validate_base_url
 
 # Re-exported for back-compat: _sanitize_url moved to utils.py (ADR-0018 §4) so
 # embeddings/embed_swap can share it; callers importing it from llm still resolve.
@@ -57,7 +57,6 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
     model = conn.execute("SELECT value FROM config WHERE key = 'llm_model'").fetchone()
     base_url_row = conn.execute("SELECT value FROM config WHERE key = 'llm_base_url'").fetchone()
     api_key_row = conn.execute("SELECT value FROM config WHERE key = 'llm_api_key'").fetchone()
-    loopback_row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
 
     prov = provider["value"] if provider else "ollama"
     _check_llm_key_spec(api_key_row["value"] if api_key_row else None)
@@ -74,7 +73,9 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
         "model": model["value"] if model else "qwen3.5:27b",
         "base_url": base_url.rstrip("/").removesuffix("/v1") if prov in _HTTP_LLM_FAMILIES else base_url.rstrip("/"),
         "api_key": api_key_row["value"] if api_key_row else None,
-        "allow_loopback": bool(loopback_row) and loopback_row["value"].strip().lower() == "true",
+        "allow_loopback": loopback_opt_in(conn),
+        # A stored URL came from a tool and keeps the SSRF floor; the auto-detected Ollama is the operator's (#572).
+        "floor": base_url_row is not None,
     }
 
 
@@ -173,23 +174,23 @@ def _llm_call(
     Accepts either a ``conn`` (reads config from DB) or a pre-read ``cfg`` dict.
     The ``cfg`` path is preferred in hot loops to avoid threading issues.
 
-    When ``client`` is provided, uses that connection-pooled client instead of
-    creating a new connection per request (avoids TCP overhead in parallel loops).
+    When ``client`` is provided (an ``egress_client`` built for ``cfg``), it is shared across a
+    parallel loop; otherwise one is opened for the call.
     """
     if cfg is None:
         if conn is None:
             raise ValueError("Either conn or cfg must be provided to _llm_call")
         cfg = _get_llm_config(conn)
 
-    post = client.post if client is not None else httpx.post
+    if client is None:
+        # The client floors and pins a stored URL on every request (#572); the operator's endpoint is plain.
+        with egress_client(floor=cfg.get("floor", True), allow_loopback=cfg.get("allow_loopback", False)) as own:
+            return _llm_call(prompt, cfg=cfg, client=own)
+    post = client.post
 
-    # follow_redirects=False on every provider POST: an embeddings/chat endpoint is
-    # served directly, so a 3xx is anomalous — refusing to follow it closes the
-    # DNS-rebind-on-redirect vector (ADR-0018 §4). Do NOT harmonize with web.py's
-    # ingest_url path, which legitimately follows + re-validates redirects (#232).
+    # follow_redirects=False on every provider POST: a chat endpoint is served directly, so a 3xx is
+    # anomalous and is not followed (ADR-0018 §4). URL ingest, by contrast, follows redirects (web.py).
     if cfg["provider"] == "ollama":
-        # ollama is localhost-trusted by family — no validate_base_url (no regression
-        # for default local installs); still no-follow for uniformity (defense-in-depth).
         payload = {
             "model": cfg["model"],
             "prompt": prompt,
@@ -221,7 +222,6 @@ def _llm_call(
         resp.raise_for_status()
         raw = resp.json()["response"]
     elif cfg["provider"] == "anthropic_compat":
-        validate_base_url(cfg["base_url"], allow_loopback=cfg.get("allow_loopback", False))
         headers = {"anthropic-version": _ANTHROPIC_VERSION}
         resolved_key = _resolve_api_key(cfg.get("api_key"))
         if resolved_key:
@@ -242,7 +242,6 @@ def _llm_call(
         # Response is a list of content blocks; concatenate the text ones.
         raw = "".join(block["text"] for block in resp.json()["content"] if block.get("type") == "text")
     else:  # openai_compat
-        validate_base_url(cfg["base_url"], allow_loopback=cfg.get("allow_loopback", False))
         headers = {}
         resolved_key = _resolve_api_key(cfg.get("api_key"))
         if resolved_key:
@@ -280,53 +279,45 @@ def _llm_call(
 _CONNECTIVITY_TIMEOUT = 3
 
 
+def _probe(client: httpx.Client, provider: str, base_url: str, api_key: str | None) -> None:
+    """One reachability probe; raises an httpx error on failure."""
+    if provider == "ollama":
+        client.get(f"{base_url}/api/tags").raise_for_status()
+        return
+    # openai_compat
+    headers: dict[str, str] = {}
+    resolved_key = _resolve_api_key(api_key)  # env:VARNAME resolved at probe time
+    if resolved_key:
+        headers["Authorization"] = f"Bearer {resolved_key}"
+    resp = client.get(f"{base_url}/v1/models", headers=headers)
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 404:
+            raise
+        # Some providers don't implement /v1/models — fall back
+        fallback = client.get(f"{base_url}/v1/chat/completions", headers=headers)
+        # Any non-connection response (even 405) means reachable
+        if fallback.status_code in (401, 403):
+            raise httpx.HTTPStatusError(
+                f"HTTP {fallback.status_code}", request=fallback.request, response=fallback
+            ) from exc
+
+
 def _test_llm_connectivity(
-    provider: str, base_url: str, api_key: str | None = None, *, allow_loopback: bool = False
+    provider: str, base_url: str, api_key: str | None = None, *, floor: bool, allow_loopback: bool = False
 ) -> dict:
     """Probe LLM endpoint reachability. Returns advisory status, never raises."""
     safe_url = _sanitize_url(base_url)
     try:
-        if provider == "ollama":
-            resp = httpx.get(f"{base_url}/api/tags", timeout=_CONNECTIVITY_TIMEOUT, follow_redirects=False)
-            resp.raise_for_status()
-        elif provider == "anthropic_compat":
+        if provider == "anthropic_compat":
             # Anthropic exposes no lightweight unauthenticated probe (no /v1/models; a real
             # /v1/messages probe needs a billable call). Validate the URL and assume reachable
             # — the config still persists either way (advisory probe).
             validate_base_url(base_url, allow_loopback=allow_loopback)
             return {"reachable": True}
-        else:  # openai_compat
-            validate_base_url(base_url, allow_loopback=allow_loopback)
-            headers: dict[str, str] = {}
-            resolved_key = _resolve_api_key(api_key)  # env:VARNAME resolved at probe time
-            if resolved_key:
-                headers["Authorization"] = f"Bearer {resolved_key}"
-            resp = httpx.get(
-                f"{base_url}/v1/models",
-                headers=headers,
-                timeout=_CONNECTIVITY_TIMEOUT,
-                follow_redirects=False,
-            )
-            try:
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 404:
-                    # Some providers don't implement /v1/models — fall back
-                    fallback = httpx.get(
-                        f"{base_url}/v1/chat/completions",
-                        headers=headers,
-                        timeout=_CONNECTIVITY_TIMEOUT,
-                        follow_redirects=False,
-                    )
-                    # Any non-connection response (even 405) means reachable
-                    if fallback.status_code in (401, 403):
-                        raise httpx.HTTPStatusError(
-                            f"HTTP {fallback.status_code}",
-                            request=fallback.request,
-                            response=fallback,
-                        ) from exc
-                else:
-                    raise
+        with egress_client(floor=floor, allow_loopback=allow_loopback, timeout=_CONNECTIVITY_TIMEOUT) as client:
+            _probe(client, provider, base_url, api_key)
         return {"reachable": True}
     except httpx.ConnectError:
         warning = f"Cannot connect to {safe_url}"
@@ -353,9 +344,10 @@ def configure_llm(
 ) -> dict:
     """Configure LLM provider settings.
 
-    For ``openai_compat`` the ``base_url`` is normalized then SSRF-validated **before**
-    it is persisted (the primary gate, ADR-0018 §4); ``ollama`` is localhost-trusted by
-    family and skips the SSRF check (only its scheme is validated). ``allow_loopback_base_url``
+    Every family's ``base_url`` is normalized then SSRF-validated **before** it is persisted
+    (the primary gate, ADR-0018 §4; ``ollama`` included since #572), and every request to it is
+    floored and pinned again. Leave ``base_url`` unset for ``ollama`` to use the operator's
+    auto-detected endpoint (``OLLAMA_HOST``, else localhost), which is not floored. ``allow_loopback_base_url``
     is a config flag SHARED with the embedding path: pass ``True``/``False`` to set it,
     or leave it ``None`` to preserve the current value (so configuring the LLM does not
     clobber an embedding-side loopback opt-in).
@@ -375,20 +367,13 @@ def configure_llm(
     if provider in _HTTP_LLM_FAMILIES and not base_url:
         raise ValidationError(f"base_url is required for {provider} provider")
     # Preserve the shared loopback flag unless the caller set it explicitly.
-    if allow_loopback_base_url is None:
-        row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
-        loopback = bool(row) and row["value"].strip().lower() == "true"
-    else:
-        loopback = allow_loopback_base_url
-    if base_url and provider in _HTTP_LLM_FAMILIES:
+    loopback = loopback_opt_in(conn) if allow_loopback_base_url is None else allow_loopback_base_url
+    if base_url:
         # Normalize FIRST, then validate the normalized value (close the suffix-strip gap).
-        base_url = base_url.rstrip("/").removesuffix("/v1")
+        base_url = base_url.rstrip("/")
+        if provider in _HTTP_LLM_FAMILIES:
+            base_url = base_url.removesuffix("/v1")
         validate_base_url(base_url, allow_loopback=loopback)
-    elif base_url:  # ollama remote: localhost trusted by family, scheme-only check
-        from urllib.parse import urlparse
-
-        if urlparse(base_url).scheme not in ("http", "https"):
-            raise ValidationError(f"Invalid URL scheme: {urlparse(base_url).scheme!r}. Use http or https.")
 
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_provider', ?)",
@@ -418,7 +403,7 @@ def configure_llm(
     conn.commit()
     cfg = _get_llm_config(conn)
     connectivity = _test_llm_connectivity(
-        cfg["provider"], cfg["base_url"], cfg.get("api_key"), allow_loopback=cfg["allow_loopback"]
+        cfg["provider"], cfg["base_url"], cfg.get("api_key"), floor=cfg["floor"], allow_loopback=cfg["allow_loopback"]
     )
     # Redact sensitive fields from response
     cfg.pop("api_key", None)

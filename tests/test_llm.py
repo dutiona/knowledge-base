@@ -504,14 +504,68 @@ def test_ssrf_check_allows_public_ip(fake_dns, public_net):
     validate_base_url("http://api.example.test:1234")  # should not raise
 
 
-def test_ssrf_check_skipped_for_ollama(tmp_path, http_requests):
-    """Ollama provider bypasses SSRF check — localhost is trusted."""
+@pytest.mark.parametrize(
+    "url", ["http://tailnet.example.test:11434", "http://203.0.113.7:11434", "http://localhost:11434"]
+)
+def test_a_stored_ollama_url_keeps_the_floor(tmp_path, fake_dns, public_net, monkeypatch, url):
+    """#572: an ollama base_url a tool supplies goes through the floor like every other family."""
+    monkeypatch.setenv("KNOWLEDGE_BASE_HOST_ADDRESSES", "203.0.113.7")
+    fake_dns["tailnet.example.test"] = ["100.64.0.7"]
+    conn = _setup(tmp_path)
+    with pytest.raises(ValidationError, match="private"):
+        configure_llm(conn, provider="ollama", base_url=url)
+    assert conn.execute("SELECT value FROM config WHERE key = 'llm_base_url'").fetchone() is None
+
+
+def test_a_loopback_ollama_url_needs_the_opt_in(tmp_path, http_requests):
     conn = _setup(tmp_path)
     http_requests.handlers["localhost"] = _ok
-
-    # This should NOT raise despite localhost being a private IP
-    result = configure_llm(conn, provider="ollama", base_url="http://localhost:11434")
+    result = configure_llm(conn, provider="ollama", base_url="http://localhost:11434", allow_loopback_base_url=True)
     assert result["reachable"] is True
+    assert http_requests.targets() == ["localhost"]
+
+
+def test_a_stored_row_from_before_is_refused_at_use(tmp_path, http_requests, fake_dns):
+    conn = _setup(tmp_path)
+    fake_dns["tailnet.example.test"] = ["100.64.0.7"]
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', 'http://tailnet.example.test:11434')"
+    )
+    conn.commit()
+    with pytest.raises(ValidationError, match="private"):
+        _llm_call("p", conn=conn)
+    assert http_requests == []
+
+
+def test_the_auto_detected_ollama_is_not_floored(tmp_path, http_requests, fake_dns, operator_ollama):
+    conn = _setup(tmp_path)
+    http_requests.handlers[operator_ollama] = lambda _r: httpx.Response(200, json={"response": "{}"})
+    _llm_call("p", conn=conn)
+    assert fake_dns.lookups == []
+    assert http_requests.targets() == [operator_ollama]
+
+
+def test_a_stored_url_rebinding_at_use_is_refused(tmp_path, http_requests, fake_dns, public_net):
+    conn = _setup(tmp_path)
+    fake_dns["llm.example.test"] = (["203.0.113.20"], ["100.64.0.7"])
+    http_requests.handlers["llm.example.test"] = _ok
+    configure_llm(conn, provider="openai_compat", base_url="https://llm.example.test", model="m")
+    http_requests.clear()
+    with pytest.raises(ValidationError, match="private"):
+        _llm_call("p", conn=conn)
+    assert http_requests == []
+
+
+def test_a_floored_llm_call_targets_the_validated_address(tmp_path, http_requests, fake_dns, public_net):
+    conn = _setup(tmp_path)
+    fake_dns["llm.example.test"] = ["203.0.113.20"]
+    http_requests.handlers["llm.example.test"] = lambda _r: httpx.Response(
+        200, json={"choices": [{"message": {"content": "{}"}}], "data": []}
+    )
+    configure_llm(conn, provider="openai_compat", base_url="https://llm.example.test", model="m")
+    http_requests.clear()
+    _llm_call("p", conn=conn)
+    assert http_requests.targets() == ["203.0.113.20"]
 
 
 def test_ssrf_blocks_openai_compat_config_write(tmp_path):
@@ -648,7 +702,7 @@ def test_llm_connectivity_resolves_env_key(tmp_path, serve, monkeypatch):
     monkeypatch.setenv("KB_LLM_KEY", "sk-real")
     http_requests = serve("x.example.test", _ok)
 
-    result = _test_llm_connectivity("openai_compat", "https://x.example.test", "env:KB_LLM_KEY")
+    result = _test_llm_connectivity("openai_compat", "https://x.example.test", "env:KB_LLM_KEY", floor=True)
     assert result["reachable"] is True
     assert http_requests[0].headers.get("Authorization") == "Bearer sk-real"
 
@@ -658,10 +712,10 @@ def test_llm_connectivity_anthropic_validates_only(tmp_path, serve):
     from knowledge_base.llm import _test_llm_connectivity
 
     serve("api.example.test", _ok)
-    result = _test_llm_connectivity("anthropic_compat", "https://api.example.test", "k")
+    result = _test_llm_connectivity("anthropic_compat", "https://api.example.test", "k", floor=True)
     assert result["reachable"] is True
     # A private anthropic base_url is still rejected (advisory unreachable, never raises).
-    blocked = _test_llm_connectivity("anthropic_compat", "http://169.254.169.254", "k")
+    blocked = _test_llm_connectivity("anthropic_compat", "http://169.254.169.254", "k", floor=True)
     assert blocked["reachable"] is False
 
 

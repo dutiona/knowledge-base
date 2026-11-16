@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import os
 import socket
+import sqlite3
 import struct
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
@@ -25,6 +26,7 @@ __all__ = [
     "content_hash",
     "egress_client",
     "is_private_ip",
+    "loopback_opt_in",
     "serialize_f32",
     "validate_base_url",
 ]
@@ -144,7 +146,7 @@ def _pinned(request: httpx.Request, name: str, address: _IPAddress) -> httpx.Req
         request.method,
         request.url.copy_with(host=str(address)),
         headers=request.headers,
-        stream=request.stream,
+        content=request.read(),
         extensions={**request.extensions, "sni_hostname": name},
     )
 
@@ -207,6 +209,12 @@ def egress_client(
         follow_redirects=follow_redirects,
         headers=headers,
     )
+
+
+def loopback_opt_in(conn: sqlite3.Connection) -> bool:
+    """The shared ``allow_loopback_base_url`` opt-in (ADR-0018 §4) for every URL a tool stored."""
+    row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
+    return bool(row) and row["value"].strip().lower() == "true"
 
 
 def _sanitize_url(url: str) -> str:
