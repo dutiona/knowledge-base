@@ -1,3 +1,10 @@
-# Every build context is a commit's tracked files, from git archive (see the Containerfile). .gitattributes
-# export-ignores this file, so the archive omits it, while a working-tree "podman build ." finds nothing to copy.
+# Allowlist: only what the image build reads reaches the context, so the root .env, databases,
+# virtualenvs and worktrees never do.
 *
+!pyproject.toml
+!uv.lock
+!.python-version
+!LICENSE-MIT
+!LICENSE-APACHE
+!src/
+src/**/__pycache__

@@ -1,7 +1,6 @@
 # The knowledge-base MCP server, built from git alone: the committed uv.lock, no registry.
-# The context is the tag's tracked files, so nothing untracked in a working tree can reach the image:
+# Build from the tag's tracked files alone:
 #   git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -
-# A working-tree "podman build ." fails at the first COPY, by design (.containerignore).
 
 FROM docker.io/library/python:3.12-slim-trixie AS build
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -10,6 +9,10 @@ ENV UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
 COPY pyproject.toml uv.lock .python-version LICENSE-MIT LICENSE-APACHE ./
 COPY src ./src
+# Hatchling packages every file under src/, and a dirty checkout's context can carry an untracked .env or
+# credentials file, so refuse anything but Python sources. A new kind of package file is allowed here.
+RUN stray="$(find src -type f ! -name '*.py')"; \
+    if [ -n "$stray" ]; then printf 'refusing to build: non-Python files under src/:\n%s\n' "$stray" >&2; exit 1; fi
 # --locked installs exactly uv.lock and fails the build when it no longer matches pyproject.toml;
 # --no-editable installs the project as a wheel, so the runtime stage needs only the venv;
 # --compile-bytecode because the runtime user cannot write .pyc files into root-owned site-packages.
