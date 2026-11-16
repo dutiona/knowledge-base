@@ -8,9 +8,10 @@ ENV UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
 COPY pyproject.toml uv.lock .python-version LICENSE-MIT LICENSE-APACHE ./
 COPY src ./src
+# --locked installs exactly uv.lock and fails the build when it no longer matches pyproject.toml;
 # --no-editable installs the project as a wheel, so the runtime stage needs only the venv;
 # --compile-bytecode because the runtime user cannot write .pyc files into root-owned site-packages.
-RUN uv sync --frozen --no-dev --group reranker --no-editable --compile-bytecode
+RUN uv sync --locked --no-dev --group reranker --no-editable --compile-bytecode
 
 FROM docker.io/library/python:3.12-slim-trixie
 # Fixed IDs, so a rootless host maps its service user onto them with UserNS=keep-id:uid=10001,gid=10001.

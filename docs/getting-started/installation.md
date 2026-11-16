@@ -107,7 +107,8 @@ git checkout <tag>
 podman build --pull=newer -t localhost/knowledge-base:<tag> .
 ```
 
-The image installs exactly `uv.lock` with `uv sync --frozen --no-dev --group reranker`: no dev tools, no uv. The
+The image installs exactly `uv.lock` with `uv sync --locked --no-dev --group reranker`: no dev tools, no uv, and a
+build that stops when the lock no longer matches `pyproject.toml` (run `uv lock` and commit it). The
 reranker group ships its runtime, but not a model: mount one and set `ONNX_RERANK_MODEL_PATH` and
 `ONNX_RERANK_TOKENIZER_PATH` as described in [searching](../usage/searching.md#cross-encoder-reranking).
 
