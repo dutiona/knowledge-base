@@ -19,7 +19,7 @@ from ..extraction import (
     record_metric,
 )
 from ..jobs import submit_job
-from ..llm import configure_llm
+from ..llm import _require_llm, configure_llm
 from ..vision import configure_omniparser, configure_vision, estimate_figures_time
 
 mcp = FastMCP("extraction-routes")
@@ -115,6 +115,7 @@ def extract_structure_tool(
     """
     conn = _get_conn()
     try:
+        _require_llm()  # first: no inline call and no queued job while LLM extraction is off
         est = estimate_extraction_time(conn, paper_id)
     except KnowledgeBaseError as e:
         err = {"error": str(e), **e.details}
@@ -277,7 +278,10 @@ def configure_vision_tool(
         base_url: Base URL for the vision API (e.g. 'http://localhost:11434').
     """
     conn = _get_conn()
-    return json.dumps(configure_vision(conn, model=model, base_url=base_url))
+    try:
+        return json.dumps(configure_vision(conn, model=model, base_url=base_url))
+    except KnowledgeBaseError as e:
+        return json.dumps({"error": str(e), **e.details})
 
 
 @mcp.tool()
