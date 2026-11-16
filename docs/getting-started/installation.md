@@ -121,10 +121,11 @@ git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledg
 ```
 
 A build from a checkout, clean or dirty, `podman build .` included, is refused before any source is copied, and the
-error names that command. `git archive` writes the commit into `.archive-commit` (`export-subst` in `.gitattributes`),
-a checkout keeps its placeholder, and the build checks it first. A checkout missing the file fails at its `COPY`
-instead. The check tells an archive from a checkout, nothing more: an archive of any commit passes, not only a tag's,
-and so does a directory unpacked from an archive, so files added to that directory afterwards ship. Podman unpacks
+error gives the archive command above. `git archive` writes the commit into `.archive-commit` (`export-subst` in
+`.gitattributes`), a checkout keeps its placeholder, and the build checks it first. A checkout missing the file fails
+at its `COPY` instead. The check catches mistakes, not a deliberately edited marker, and it tells an archive from a
+checkout, nothing more: an archive of any commit passes, not only a tag's, and so does a directory unpacked from an
+archive, so files added to that directory afterwards ship. Podman unpacks
 the whole archive, and `.containerignore` lets the build copy only `pyproject.toml`, `uv.lock`, `.python-version`, the
 licences, `src/` and the marker.
 

@@ -10,7 +10,7 @@ WORKDIR /app
 # git archive writes the commit into .archive-commit (export-subst) and a checkout keeps the placeholder, so this
 # refuses a working-tree build, clean or dirty, before any source is copied.
 COPY .archive-commit ./
-RUN grep -Eqx '[0-9a-f]{40}|[0-9a-f]{64}' .archive-commit || { printf 'refusing to build: .archive-commit holds no commit id, so this is not a git archive; build with: git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -\n' >&2; exit 1; }
+RUN grep -Eqx '[0-9a-f]{40}|[0-9a-f]{64}' .archive-commit || { printf 'refusing to build: .archive-commit holds no commit id, so this is not a git archive of a commit; build with: git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -\n' >&2; exit 1; }
 COPY pyproject.toml uv.lock .python-version LICENSE-MIT LICENSE-APACHE ./
 COPY src ./src
 # --locked installs exactly uv.lock and fails the build when it no longer matches pyproject.toml;
