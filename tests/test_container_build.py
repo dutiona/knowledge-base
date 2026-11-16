@@ -10,10 +10,17 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 MARKER = ".archive-commit"
+GIT = shutil.which("git")
+SH = shutil.which("sh")
 
 pytestmark = pytest.mark.skipif(
-    shutil.which("git") is None or not (REPO / ".git").exists(), reason="needs git and a git checkout"
+    GIT is None or SH is None or not (REPO / ".git").exists(), reason="needs git, sh and a git checkout"
 )
+
+
+def _run(argv: list[str | None], cwd: Path) -> subprocess.CompletedProcess[bytes]:
+    # Trusted argv: git and sh resolved above, running this repository's own Containerfile check.
+    return subprocess.run([str(a) for a in argv], cwd=cwd, capture_output=True, check=False)  # noqa: S603
 
 
 def _archive_check() -> str:
@@ -24,16 +31,15 @@ def _archive_check() -> str:
     return checks[0]
 
 
-def _run_check(marker: bytes, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def _run_check(marker: bytes, tmp_path: Path) -> subprocess.CompletedProcess[bytes]:
     (tmp_path / MARKER).write_bytes(marker)
-    return subprocess.run(["sh", "-c", _archive_check()], cwd=tmp_path, capture_output=True, text=True, check=False)
+    return _run([SH, "-c", _archive_check()], tmp_path)
 
 
 def _archived_marker(*git_config: str) -> bytes:
-    tar = subprocess.run(
-        ["git", *git_config, "archive", "--format=tar", "HEAD", MARKER], cwd=REPO, capture_output=True, check=True
-    ).stdout
-    with tarfile.open(fileobj=io.BytesIO(tar)) as archive:
+    tar = _run([GIT, *git_config, "archive", "--format=tar", "HEAD", MARKER], REPO)
+    assert tar.returncode == 0, tar.stderr
+    with tarfile.open(fileobj=io.BytesIO(tar.stdout)) as archive:
         member = archive.extractfile(MARKER)
         assert member is not None
         return member.read()
@@ -42,12 +48,12 @@ def _archived_marker(*git_config: str) -> bytes:
 def test_checkout_marker_is_refused_with_the_archive_command(tmp_path: Path) -> None:
     result = _run_check((REPO / MARKER).read_bytes(), tmp_path)
     assert result.returncode != 0
-    assert "git archive --format=tar <tag> | podman build" in result.stderr
+    assert b"git archive --format=tar <tag> | podman build" in result.stderr
 
 
 @pytest.mark.parametrize("git_config", [(), ("-c", "core.autocrlf=true")], ids=["default", "autocrlf"])
 def test_archived_marker_passes(git_config: tuple[str, ...], tmp_path: Path) -> None:
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True)
+    head = _run([GIT, "rev-parse", "HEAD"], REPO).stdout
     marker = _archived_marker(*git_config)
-    assert marker == head.stdout.encode()
+    assert marker == head
     assert _run_check(marker, tmp_path).returncode == 0
