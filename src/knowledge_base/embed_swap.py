@@ -108,17 +108,6 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     }
 
 
-def embed_provider_config(conn: sqlite3.Connection) -> ProviderConfig:
-    """Build the resolved :class:`ProviderConfig` cache key from the embed config."""
-    cfg = get_embed_config(conn)
-    return ProviderConfig(
-        family=cfg["provider"],
-        base_url=cfg["base_url"],
-        api_key=cfg["api_key"],
-        allow_loopback=cfg["allow_loopback"],
-    )
-
-
 def assert_embed_identity_match(conn: sqlite3.Connection) -> None:
     """Reject a configured embed identity that differs from the active space's (AC6).
 
