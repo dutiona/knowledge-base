@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 import httpx
 
 from .exceptions import ValidationError
+from .settings import declared_embed_host
 from .utils import _resolve_api_key, _sanitize_url, validate_base_url
 
 logger = logging.getLogger(__name__)
@@ -204,8 +205,9 @@ class OpenAICompatProvider:
         model: str = "text-embedding-3-large",
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
-        # Defense-in-depth on the embed path (AC4); the primary gate is config-write.
-        validate_base_url(self._base_url, allow_loopback=self._allow_loopback)
+        # The floor on the embed path; the declared endpoint alone is exempt (#569), so a
+        # tailnet embedder works while any other private host is still refused.
+        validate_base_url(self._base_url, allow_loopback=self._allow_loopback, exempt_host=declared_embed_host())
         api_key = _resolve_api_key(self._api_key)
         results = []
         batch_size = 512  # OpenAI supports up to 2048, 512 balances throughput/memory

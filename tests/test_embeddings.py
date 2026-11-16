@@ -601,3 +601,59 @@ class TestNoImplicitEndpoint:
         bare = get_provider("openai")
         assert isinstance(bare, OpenAIProvider)
         assert bare._base_url == "https://api.openai.com"
+
+
+class TestDeclaredEndpointExemption:
+    """#569: the declared host is exempt from the SSRF floor on the embedding path only."""
+
+    @pytest.fixture
+    def declared(self, monkeypatch, fake_dns, tmp_path):
+        from knowledge_base.db import open_declared_db
+
+        tailnet = ["100.64.0.10", "fd7a:115c:a1e0::10"]
+        fake_dns["embedder.example.test"] = tailnet
+        fake_dns["other.example.test"] = tailnet
+        for name, value in {
+            "KNOWLEDGE_BASE_EMBED_PROVIDER": "openai_compat",
+            "KNOWLEDGE_BASE_EMBED_MODEL": "qwen3-embedding",
+            "KNOWLEDGE_BASE_EMBED_DIM": "8",
+            "KNOWLEDGE_BASE_EMBED_URL": "https://embedder.example.test",
+            "KNOWLEDGE_BASE_EMBED_API_KEY": "sk-test-only",
+        }.items():
+            monkeypatch.setenv(name, value)
+        conn = open_declared_db(tmp_path / "kb.db")  # no configure_* call anywhere
+        yield conn
+        conn.close()
+
+    def test_a_blank_database_embeds_against_the_declared_endpoint(self, declared, http_requests):
+        import httpx
+
+        from knowledge_base.ingest import _embed_with_config
+
+        http_requests.handlers["embedder.example.test"] = lambda request: httpx.Response(
+            200, json={"data": [{"index": 0, "embedding": [1.0] + [0.0] * 7}]}
+        )
+        vectors = _embed_with_config(declared, ["hello"])
+        assert len(vectors) == 1
+        assert [str(r.url) for r in http_requests] == ["https://embedder.example.test/v1/embeddings"]
+        assert http_requests[0].headers["Authorization"] == "Bearer sk-test-only"
+
+    def test_another_tailnet_host_keeps_the_floor(self, declared, http_requests):
+        from knowledge_base.embeddings import OpenAICompatProvider
+        from knowledge_base.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="private"):
+            OpenAICompatProvider("https://other.example.test").embed(["x"], model="m", expected_dim=8)
+        assert http_requests == []
+
+    def test_tool_urls_on_the_declared_host_keep_the_floor(self, declared, http_requests):
+        from knowledge_base.exceptions import ValidationError
+        from knowledge_base.llm import configure_llm
+        from knowledge_base.web import _validate_image_url, ingest_url
+
+        with pytest.raises(ValidationError):
+            ingest_url(declared, "https://embedder.example.test/doc")
+        assert _validate_image_url("https://embedder.example.test/a.png") is False
+        with pytest.raises(ValidationError):
+            configure_llm(declared, "openai_compat", "https://embedder.example.test")
+        assert http_requests == []

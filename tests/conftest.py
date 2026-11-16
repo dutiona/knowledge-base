@@ -129,3 +129,21 @@ def http_requests(monkeypatch) -> HttpRecorder:
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", lambda _transport, request: _handle(request))
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", _handle_async)
     return recorder
+
+
+@pytest.fixture
+def fake_dns(monkeypatch) -> dict[str, list[str]]:
+    """Answer ``getaddrinfo`` for the SSRF floor from a ``{host: [addresses]}`` map; fail closed otherwise."""
+    import socket
+
+    table: dict[str, list[str]] = {}
+
+    def _getaddrinfo(host, *_args, **_kwargs):
+        if host not in table:
+            raise socket.gaierror(f"fake_dns: unknown host {host}")
+        return [
+            (socket.AF_INET6 if ":" in a else socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 0)) for a in table[host]
+        ]
+
+    monkeypatch.setattr("knowledge_base.utils.socket.getaddrinfo", _getaddrinfo)
+    return table
