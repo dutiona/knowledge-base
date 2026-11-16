@@ -361,6 +361,10 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # The target may have changed or gone while its summaries embedded unlocked.
+            current_space = conn.execute("SELECT * FROM embed_spaces WHERE name = ?", (space_name,)).fetchone()
+            if current_space is None or dict(current_space) != dict(space):
+                raise ValueError(f"Embedding space {space_name!r} changed during promotion; rerun it")
             stale_warning = _check_promotable(conn, space)
             current = _folder_rows(conn)
             changed = [row for row in current if row not in snapshot]

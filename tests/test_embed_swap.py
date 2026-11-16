@@ -426,3 +426,31 @@ def test_a_running_process_embeds_only_at_its_own_declaration(kb_conn, http_requ
     _embed_with_config(kb_conn, ["hello"])
     assert http_requests.hosts() == ["embedder.example.test"]
     assert "Authorization" not in http_requests[0].headers
+
+
+def test_promote_refuses_a_target_removed_while_it_embedded(kb_conn):
+    from knowledge_base.embed_swap import cleanup_space, deprecate_space, promote_space
+
+    _two_folders(kb_conn)
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    path = Path(kb_conn.execute("PRAGMA database_list").fetchone()["file"])
+    before = (_config_rows(kb_conn), _space_rows(kb_conn))
+
+    def _embed(texts, model=None, expected_dim=TEST_EMBED_DIM):
+        other = get_connection(path)  # another tool removes the target mid-promotion
+        deprecate_space(other, "same")
+        cleanup_space(other, "same")
+        other.close()
+        return [[0.25] * expected_dim for _ in texts]
+
+    provider = MagicMock()
+    provider.embed.side_effect = _embed
+    with (
+        patch("knowledge_base.embed_swap.get_provider", return_value=provider),
+        pytest.raises(ValueError, match="changed"),
+    ):
+        promote_space(kb_conn, "same")
+    after_config, after_spaces = _config_rows(kb_conn), _space_rows(kb_conn)
+    assert after_config == before[0]
+    assert after_spaces == [row for row in before[1] if row[0] != "same"]
+    assert ("default", "active", TEST_EMBED_MODEL) in after_spaces
