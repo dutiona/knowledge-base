@@ -102,15 +102,35 @@ def _declared_environment(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+def logical_host(request: httpx.Request) -> str:
+    """The host a request is for: its ``Host`` header in ASCII form, without the port or IPv6 brackets.
+
+    A pinned request (#572) is sent to an address, so ``request.url.host`` is the connect target; the
+    name it is for travels in ``Host``. A bare ``Host`` value is an authority, not a URL, hence the scheme.
+    """
+    header = request.headers.get("host")
+    url = httpx.URL(f"http://{header}") if header else request.url
+    return url.raw_host.decode("ascii")
+
+
 class HttpRecorder(list):
-    """Every httpx request a test made, in order; ``handlers`` answers by host."""
+    """Every httpx request a test made, in order; ``handlers`` answers by logical host."""
 
     def __init__(self) -> None:
         super().__init__()
         self.handlers: dict[str, Callable[[httpx.Request], httpx.Response]] = {}
 
     def hosts(self) -> list[str]:
+        """The logical host of each request (what it was for)."""
+        return [logical_host(request) for request in self]
+
+    def targets(self) -> list[str]:
+        """The connect target of each request: the pinned address, or the host of an unpinned one."""
         return [request.url.host for request in self]
+
+    def urls(self) -> list[str]:
+        """Each request's URL with its logical host restored."""
+        return [str(request.url.copy_with(host=logical_host(request))) for request in self]
 
 
 @pytest.fixture
@@ -124,9 +144,10 @@ def http_requests(monkeypatch) -> HttpRecorder:
 
     def _handle(request: httpx.Request) -> httpx.Response:
         recorder.append(request)
-        handler = recorder.handlers.get(request.url.host)
+        host = logical_host(request)
+        handler = recorder.handlers.get(host)
         if handler is None:
-            raise httpx.ConnectError(f"unexpected host {request.url.host}", request=request)
+            raise httpx.ConnectError(f"unexpected host {host}", request=request)
         return handler(request)
 
     async def _handle_async(_transport, request: httpx.Request) -> httpx.Response:
@@ -137,19 +158,30 @@ def http_requests(monkeypatch) -> HttpRecorder:
     return recorder
 
 
+class FakeDns(dict):
+    """``{host: [addresses]}``; a tuple of lists answers lookup n with list n, the last one repeating."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.lookups: list[str] = []
+
+
 @pytest.fixture
-def fake_dns(monkeypatch) -> dict[str, list[str]]:
-    """Answer ``getaddrinfo`` for the SSRF floor from a ``{host: [addresses]}`` map; fail closed otherwise."""
+def fake_dns(monkeypatch) -> FakeDns:
+    """Answer ``getaddrinfo`` for the SSRF floor from a ``FakeDns`` table; fail closed otherwise."""
     import socket
 
-    table: dict[str, list[str]] = {}
+    table = FakeDns()
 
     def _getaddrinfo(host, *_args, **_kwargs):
+        index = table.lookups.count(host)
+        table.lookups.append(host)
         if host not in table:
             raise socket.gaierror(f"fake_dns: unknown host {host}")
-        return [
-            (socket.AF_INET6 if ":" in a else socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 0)) for a in table[host]
-        ]
+        answers = table[host]
+        if isinstance(answers, tuple):
+            answers = answers[min(index, len(answers) - 1)]
+        return [(socket.AF_INET6 if ":" in a else socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 0)) for a in answers]
 
     monkeypatch.setattr("knowledge_base.utils.socket.getaddrinfo", _getaddrinfo)
     return table
