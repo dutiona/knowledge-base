@@ -1385,6 +1385,47 @@ def test_a_refused_stored_cdp_endpoint_disables_the_fallback(tmp_path, caplog):
     assert "CDP endpoint" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "ws://100.64.0.7:3000\\@203.0.113.10:3000/",  # Python reads 203.0.113.10, a browser 100.64.0.7
+        "ws://user@203.0.113.10:3000/",
+        "ws://203.0.113.10:3000/\tx",
+    ],
+)
+def test_a_cdp_endpoint_that_parsers_could_read_differently_is_refused(tmp_path, endpoint):
+    """#572 review: the floor must check the host the browser will connect to, so ambiguous forms are refused."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    with pytest.raises(ValidationError, match="CDP endpoint"):
+        configure_browser(conn, cdp_endpoint=endpoint, venv_path=str(_fake_venv(tmp_path)))
+    assert conn.execute("SELECT 1 FROM config WHERE key = 'browser_endpoint'").fetchone() is None
+
+
+def test_a_stored_cdp_endpoint_with_a_parser_differential_is_refused_at_use(tmp_path):
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    conn.executemany(
+        "INSERT INTO config (key, value) VALUES (?, ?)",
+        [
+            ("browser_mode", "cdp"),
+            ("browser_venv", str(_fake_venv(tmp_path))),
+            ("browser_endpoint", "ws://100.64.0.7:3000\\@203.0.113.10:3000/"),
+        ],
+    )
+    conn.commit()
+    assert _get_browser_config(conn) is None
+
+
+def test_the_stored_cdp_endpoint_is_the_canonical_checked_form(tmp_path):
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    result = configure_browser(
+        conn, cdp_endpoint="WS://203.0.113.10:3000/devtools/browser/x?t=1#frag", venv_path=str(_fake_venv(tmp_path))
+    )
+    assert result["browser"]["endpoint"] == "ws://203.0.113.10:3000/devtools/browser/x?t=1"
+
+
 def test_configure_browser_query_mode(tmp_path):
     """None args return current config without modifying."""
     conn = get_connection(tmp_path / "test.db")

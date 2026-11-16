@@ -12,7 +12,7 @@ import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 import trafilatura
@@ -556,15 +556,22 @@ def _find_venv_python(venv_path: str | Path) -> Path | None:
     return None
 
 
-def _check_cdp_endpoint(endpoint: str, *, allow_loopback: bool) -> None:
-    """The CDP endpoint keeps the SSRF floor (#572).
+def _check_cdp_endpoint(endpoint: str, *, allow_loopback: bool) -> str:
+    """The CDP endpoint keeps the SSRF floor (#572); returns the canonical form to store and use.
 
     Playwright connects to it out of process and would resolve a name again after this check, so the host
     must be an IP literal, or ``localhost`` under the loopback opt-in: there is then no lookup to rebind.
+    The browser also parses the URL itself (WHATWG rules), so any form two parsers could read differently
+    (userinfo, a backslash, whitespace) is refused, and the endpoint is rebuilt from the checked parts.
     """
+    if "\\" in endpoint or any(c.isspace() or not c.isprintable() for c in endpoint):
+        raise ValidationError("the CDP endpoint must not contain backslashes, whitespace or control characters")
     parsed = urlparse(endpoint)
-    if parsed.scheme not in ("ws", "wss"):
+    scheme = parsed.scheme.lower()
+    if scheme not in ("ws", "wss"):
         raise ValidationError(f"CDP endpoint must use ws:// or wss://, got {parsed.scheme}://")
+    if "@" in parsed.netloc:
+        raise ValidationError("the CDP endpoint must not carry userinfo")
     host = parsed.hostname or ""
     if not (allow_loopback and _is_allowed_loopback(host)):
         try:
@@ -573,9 +580,13 @@ def _check_cdp_endpoint(endpoint: str, *, allow_loopback: bool) -> None:
             raise ValidationError(
                 "the CDP endpoint must be an IP address (or localhost with allow_loopback_base_url)"
             ) from None
-    validate_base_url(
-        f"{'https' if parsed.scheme == 'wss' else 'http'}://{parsed.netloc}", allow_loopback=allow_loopback
-    )
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValidationError("the CDP endpoint has an invalid port") from None
+    authority = (f"[{host}]" if ":" in host else host) + (f":{port}" if port is not None else "")
+    validate_base_url(f"{'https' if scheme == 'wss' else 'http'}://{authority}", allow_loopback=allow_loopback)
+    return urlunparse((scheme, authority, parsed.path, parsed.params, parsed.query, ""))
 
 
 def _get_browser_config(conn: sqlite3.Connection) -> dict | None:
@@ -602,11 +613,10 @@ def _get_browser_config(conn: sqlite3.Connection) -> dict | None:
         endpoint = config_map.get("browser_endpoint")
         if endpoint:
             try:
-                _check_cdp_endpoint(endpoint, allow_loopback=loopback_opt_in(conn))
+                config["endpoint"] = _check_cdp_endpoint(endpoint, allow_loopback=loopback_opt_in(conn))
             except ValidationError as exc:
                 logger.warning("Stored CDP endpoint refused, browser fallback disabled: %s", exc)
                 return None
-            config["endpoint"] = endpoint
 
     return config
 
@@ -655,7 +665,7 @@ def configure_browser(
 
     # Determine mode
     if cdp_endpoint:
-        _check_cdp_endpoint(cdp_endpoint, allow_loopback=loopback_opt_in(conn))
+        cdp_endpoint = _check_cdp_endpoint(cdp_endpoint, allow_loopback=loopback_opt_in(conn))
         mode = "cdp"
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('browser_endpoint', ?)",
