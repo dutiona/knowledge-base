@@ -4,6 +4,7 @@ import argparse
 import json
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from knowledge_base.db import get_connection, init_schema
@@ -55,14 +56,6 @@ convolutional neural networks that include an encoder and a decoder.</p>
 </article>
 </body></html>
 """
-
-
-def _mock_httpx_get(url, **kwargs):
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.text = FAKE_HTML
-    resp.raise_for_status = MagicMock()
-    return resp
 
 
 def _setup(tmp_path):
@@ -322,8 +315,9 @@ def test_cmd_reingest_auto_relate(mock_drain, mock_worker, tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.httpx.get", _mock_httpx_get)
-def test_cmd_ingest_url(tmp_path):
+def test_cmd_ingest_url(tmp_path, http_requests, fake_dns, public_net):
+    fake_dns["example.com"] = ["203.0.113.10"]
+    http_requests.handlers["example.com"] = lambda request: httpx.Response(200, html=FAKE_HTML)
     conn, db_path = _setup(tmp_path)
     conn.close()
 
@@ -568,8 +562,6 @@ _MOVED = {
 
 
 def _ollama_embedder(fail_after: int | None = None):
-    import httpx
-
     calls = {"n": 0}
 
     def _handler(request):

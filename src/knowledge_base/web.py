@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html.parser
+import ipaddress
 import json
 import logging
 import re
@@ -11,7 +12,7 @@ import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 import trafilatura
@@ -25,7 +26,7 @@ from .db import (
 )
 from .exceptions import ValidationError
 from .settings import BROWSER_VAR, switch_on
-from .utils import is_private_ip
+from .utils import _is_allowed_loopback, egress_client, is_private_ip, loopback_opt_in, validate_base_url
 from .chunking import chunk_text as _chunk_text
 from .ingest import (
     _cleanup_conclusion_refs,
@@ -367,7 +368,6 @@ def _extract_html_images(
     except Exception:
         return 0
 
-    vis_base_url = vision_config["base_url"]
     vis_model = vision_config["model"]
 
     # --- Parse <img> tags ---
@@ -405,80 +405,76 @@ def _extract_html_images(
     # --- Download, convert, describe ---
     collected: list[tuple[str, dict]] = []  # (description, metadata_dict)
 
-    for image_url, alt_text in candidates:
-        try:
-            with httpx.stream("GET", image_url, timeout=15.0, follow_redirects=True) as resp:
-                resp.raise_for_status()
+    # Every request and redirect hop is floored and pinned by the client (#572).
+    with egress_client(floor=True, follow_redirects=True, timeout=15.0) as image_client:
+        for image_url, alt_text in candidates:
+            try:
+                with image_client.stream("GET", image_url) as resp:
+                    resp.raise_for_status()
 
-                # Post-redirect SSRF check
-                final_url = str(resp.url)
-                if not _validate_image_url(final_url):
-                    logger.warning("SSRF: image redirected to private address %s", final_url)
-                    continue
+                    # Stream with byte counter
+                    chunks: list[bytes] = []
+                    total = 0
+                    for chunk in resp.iter_bytes(chunk_size=65536):
+                        total += len(chunk)
+                        if total > _MAX_IMAGE_DOWNLOAD_BYTES:
+                            logger.warning(
+                                "Image too large (>%d bytes): %s",
+                                _MAX_IMAGE_DOWNLOAD_BYTES,
+                                image_url,
+                            )
+                            break
+                        chunks.append(chunk)
 
-                # Stream with byte counter
-                chunks: list[bytes] = []
-                total = 0
-                for chunk in resp.iter_bytes(chunk_size=65536):
-                    total += len(chunk)
                     if total > _MAX_IMAGE_DOWNLOAD_BYTES:
-                        logger.warning(
-                            "Image too large (>%d bytes): %s",
-                            _MAX_IMAGE_DOWNLOAD_BYTES,
-                            image_url,
-                        )
-                        break
-                    chunks.append(chunk)
+                        continue
 
-                if total > _MAX_IMAGE_DOWNLOAD_BYTES:
+                    image_bytes = b"".join(chunks)
+            except Exception:
+                logger.warning("Image download failed: %s", image_url, exc_info=True)
+                continue
+
+            # Open with Pillow, check dimensions, convert to PNG
+            try:
+                img_obj = Image.open(io.BytesIO(image_bytes))
+                w, h = img_obj.size
+                if w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION:
                     continue
 
-                image_bytes = b"".join(chunks)
-        except Exception:
-            logger.warning("Image download failed: %s", image_url, exc_info=True)
-            continue
-
-        # Open with Pillow, check dimensions, convert to PNG
-        try:
-            img_obj = Image.open(io.BytesIO(image_bytes))
-            w, h = img_obj.size
-            if w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION:
+                buf = io.BytesIO()
+                img_obj.convert("RGB").save(buf, format="PNG")
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            except Exception:
+                logger.warning("Image decode failed: %s", image_url, exc_info=True)
                 continue
 
-            buf = io.BytesIO()
-            img_obj.convert("RGB").save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        except Exception:
-            logger.warning("Image decode failed: %s", image_url, exc_info=True)
-            continue
-
-        # Vision call
-        prompt = (
-            "Describe this image from a web page. Identify what it shows — "
-            "diagrams, charts, schematics, photographs, or other visual content. "
-            "Respond with a JSON list of objects with keys: "
-            '"description", "figure_type", "title".'
-        )
-        try:
-            figures = _vision_call(b64, prompt, base_url=vis_base_url, model=vis_model)
-        except Exception:
-            logger.warning("Vision call failed for image %s", image_url, exc_info=True)
-            continue
-
-        for fig in figures:
-            desc = fig.get("description", "")
-            if not desc:
+            # Vision call
+            prompt = (
+                "Describe this image from a web page. Identify what it shows — "
+                "diagrams, charts, schematics, photographs, or other visual content. "
+                "Respond with a JSON list of objects with keys: "
+                '"description", "figure_type", "title".'
+            )
+            try:
+                figures = _vision_call(b64, prompt, **vision_config)
+            except Exception:
+                logger.warning("Vision call failed for image %s", image_url, exc_info=True)
                 continue
-            meta = {
-                "figure_type": "web_image",
-                "image_url": image_url,
-                "alt_text": alt_text,
-                "original_source_type": "web",
-                "source_url": source_url,
-                "vision_model": vis_model,
-                "title": fig.get("title", ""),
-            }
-            collected.append((desc, meta))
+
+            for fig in figures:
+                desc = fig.get("description", "")
+                if not desc:
+                    continue
+                meta = {
+                    "figure_type": "web_image",
+                    "image_url": image_url,
+                    "alt_text": alt_text,
+                    "original_source_type": "web",
+                    "source_url": source_url,
+                    "vision_model": vis_model,
+                    "title": fig.get("title", ""),
+                }
+                collected.append((desc, meta))
 
     if not collected:
         return 0
@@ -560,6 +556,41 @@ def _find_venv_python(venv_path: str | Path) -> Path | None:
     return None
 
 
+def _check_cdp_endpoint(endpoint: str, *, allow_loopback: bool) -> str:
+    """The CDP endpoint keeps the SSRF floor (#572); returns the canonical form to store and use.
+
+    Playwright connects to it out of process and would resolve a name again after this check, so the host
+    must be an IP literal, or ``localhost`` under the loopback opt-in: there is then no lookup to rebind.
+    The browser also parses the URL itself (WHATWG rules), so any form two parsers could read differently
+    (userinfo, a backslash, whitespace) is refused, and the endpoint is rebuilt from the checked parts.
+    """
+    if "\\" in endpoint or any(c.isspace() or not c.isprintable() for c in endpoint):
+        raise ValidationError("the CDP endpoint must not contain backslashes, whitespace or control characters")
+    parsed = urlparse(endpoint)
+    scheme = parsed.scheme.lower()
+    if scheme not in ("ws", "wss"):
+        raise ValidationError(f"CDP endpoint must use ws:// or wss://, got {parsed.scheme}://")
+    if "@" in parsed.netloc:
+        raise ValidationError("the CDP endpoint must not carry userinfo")
+    host = parsed.hostname or ""
+    if "%" in host:  # an IPv6 zone id: Python accepts it, a browser's URL parser does not
+        raise ValidationError("the CDP endpoint must not carry an IPv6 zone id")
+    if not (allow_loopback and _is_allowed_loopback(host)):
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            raise ValidationError(
+                "the CDP endpoint must be an IP address (or localhost with allow_loopback_base_url)"
+            ) from None
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValidationError("the CDP endpoint has an invalid port") from None
+    authority = (f"[{host}]" if ":" in host else host) + (f":{port}" if port is not None else "")
+    validate_base_url(f"{'https' if scheme == 'wss' else 'http'}://{authority}", allow_loopback=allow_loopback)
+    return urlunparse((scheme, authority, parsed.path, parsed.params, parsed.query, ""))
+
+
 def _get_browser_config(conn: sqlite3.Connection) -> dict | None:
     """Read browser rendering configuration from config table.
 
@@ -583,7 +614,11 @@ def _get_browser_config(conn: sqlite3.Connection) -> dict | None:
     if mode == "cdp":
         endpoint = config_map.get("browser_endpoint")
         if endpoint:
-            config["endpoint"] = endpoint
+            try:
+                config["endpoint"] = _check_cdp_endpoint(endpoint, allow_loopback=loopback_opt_in(conn))
+            except ValidationError as exc:
+                logger.warning("Stored CDP endpoint refused, browser fallback disabled: %s", exc)
+                return None
 
     return config
 
@@ -632,9 +667,7 @@ def configure_browser(
 
     # Determine mode
     if cdp_endpoint:
-        parsed = urlparse(cdp_endpoint)
-        if parsed.scheme not in ("ws", "wss"):
-            raise ValidationError(f"CDP endpoint must use ws:// or wss://, got {parsed.scheme}://")
+        cdp_endpoint = _check_cdp_endpoint(cdp_endpoint, allow_loopback=loopback_opt_in(conn))
         mode = "cdp"
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('browser_endpoint', ?)",
@@ -776,7 +809,6 @@ def _extract_web_figures(
     except Exception:
         return 0  # Vision not configured or misconfigured
 
-    base_url = vision_config["base_url"]
     model = vision_config["model"]
 
     # Describe the screenshot via the vision model
@@ -790,7 +822,7 @@ def _extract_web_figures(
     )
 
     try:
-        figures = _vision_call(b64, prompt, base_url=base_url, model=model)
+        figures = _vision_call(b64, prompt, **vision_config)
     except Exception:
         logger.warning("Vision call failed for web screenshot %s", source_url, exc_info=True)
         return 0
@@ -802,8 +834,8 @@ def _extract_web_figures(
     omniparser_path = _get_omniparser_config(conn)
     omni_elements: list[dict] | None = None
     if omniparser_path:
-        server_url = _resolve_omniparser_server_url(conn, omniparser_path)
-        omni_result = _run_omniparser(screenshot_path, omniparser_path, server_url=server_url)
+        server = _resolve_omniparser_server_url(conn, omniparser_path)
+        omni_result = _run_omniparser(screenshot_path, omniparser_path, server=server)
         if omni_result and omni_result.get("elements"):
             omni_elements = omni_result["elements"]
 
@@ -918,7 +950,6 @@ def _extract_element_captures(
     except Exception:
         return 0
 
-    base_url = vision_config["base_url"]
     model = vision_config["model"]
 
     # --- Phase 1: Collect descriptions (fallible: vision calls) ---
@@ -937,7 +968,7 @@ def _extract_element_captures(
         )
 
         try:
-            figures = _vision_call(b64, prompt, base_url=base_url, model=model)
+            figures = _vision_call(b64, prompt, **vision_config)
         except Exception:
             logger.warning(
                 "Vision call failed for element capture %s/%s",
@@ -1086,23 +1117,14 @@ def ingest_url(
         raise ValidationError(f"URL scheme must be http or https, got: {parsed.scheme!r}")
     if not parsed.hostname:
         raise ValidationError("URL must include a hostname")
-    if is_private_ip(parsed.hostname):
-        raise ValidationError(f"URL points to a private/internal address: {parsed.hostname}")
-
-    # SSRF defense: pre-fetch check blocks direct requests to private IPs.
-    # Post-redirect check below prevents processing data from redirect-based SSRF.
-    # Note: httpx still follows the redirect (the request reaches the target).
-    # Full per-hop validation requires a custom transport — tracked in #232.
+    # The client floors and pins the first request and every redirect hop, so a refused hop is never sent and
+    # raises ValidationError (#572).
     try:
-        response = httpx.get(url, follow_redirects=True, timeout=30.0)
-        response.raise_for_status()
+        with egress_client(floor=True, follow_redirects=True, timeout=30.0) as client:
+            response = client.get(url)
+            response.raise_for_status()
     except httpx.HTTPError as e:
         raise ValidationError(f"Failed to fetch {url}: {e}") from e
-
-    # Validate post-redirect URL — prevents processing data from internal hosts
-    final_host = urlparse(str(response.url)).hostname
-    if final_host and is_private_ip(final_host):
-        raise ValidationError(f"URL redirected to a private/internal address: {final_host}")
 
     html = response.text
     text = trafilatura.extract(html, include_links=False, include_tables=True) or ""

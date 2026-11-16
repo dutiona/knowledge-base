@@ -294,7 +294,7 @@ class TestMultiFigureIntegration:
         # Track vision calls
         vision_calls = []
 
-        def fake_vision_call(image_b64, prompt, *, base_url, model):
+        def fake_vision_call(image_b64, prompt, *, base_url, model, **_config):
             vision_calls.append(image_b64)
             return [
                 {
@@ -340,7 +340,7 @@ class TestMultiFigureIntegration:
 
         vision_calls = []
 
-        def fake_vision_call(image_b64, prompt, *, base_url, model):
+        def fake_vision_call(image_b64, prompt, *, base_url, model, **_config):
             vision_calls.append(image_b64)
             return [
                 {
@@ -382,7 +382,7 @@ class TestMultiFigureIntegration:
 
         vision_calls = []
 
-        def fake_vision_call(image_b64, prompt, *, base_url, model):
+        def fake_vision_call(image_b64, prompt, *, base_url, model, **_config):
             vision_calls.append(image_b64)
             return [
                 {
@@ -415,7 +415,7 @@ class TestMultiFigureIntegration:
 
         vision_calls = []
 
-        def fake_vision_call(image_b64, prompt, *, base_url, model):
+        def fake_vision_call(image_b64, prompt, *, base_url, model, **_config):
             vision_calls.append(1)
             return [
                 {

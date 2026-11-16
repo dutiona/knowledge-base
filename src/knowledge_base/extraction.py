@@ -16,6 +16,7 @@ import httpx
 
 from .exceptions import ExtractionError, NotFoundError
 from .llm import _get_llm_config, _llm_call
+from .utils import egress_client
 
 logger = logging.getLogger(__name__)
 
@@ -874,7 +875,7 @@ def _extract_map_reduce(
 
     Uses ``ThreadPoolExecutor`` for both sequential and parallel modes —
     ``max_workers=1`` has negligible overhead compared to 4s+ LLM calls.
-    A shared ``httpx.Client`` is used for connection pooling across workers.
+    One shared client (``egress_client``) serves all workers.
     """
     cfg = _get_llm_config(conn)
     effective_workers = min(max(max_workers, 1), len(chunks), _MAX_WORKERS_LIMIT)
@@ -891,12 +892,9 @@ def _extract_map_reduce(
         effective_workers,
     )
     with (
-        httpx.Client(
-            limits=httpx.Limits(
-                max_connections=effective_workers,
-                max_keepalive_connections=effective_workers,
-            ),
-        ) as client,
+        # Floors and pins a stored URL (#572). The executor bounds concurrency; a floored client keeps no
+        # connection alive, so each in-flight call holds exactly one.
+        egress_client(floor=cfg["floor"], allow_loopback=cfg["allow_loopback"]) as client,
         ThreadPoolExecutor(max_workers=effective_workers) as executor,
     ):
         submit_times: dict[int, float] = {}

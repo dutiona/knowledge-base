@@ -45,7 +45,33 @@ from knowledge_base.conclusions import (
 from knowledge_base.exceptions import NotFoundError, ValidationError
 from knowledge_base.extraction import record_method, record_dataset, record_metric
 from tests.declared_env import TEST_EMBED_DIM
+import httpx
 import pytest
+
+# Every host name the tests below fetch from: answered with a documentation address the SSRF floor accepts.
+_PUBLIC_HOSTS = (
+    "example.com",
+    "other.com",
+    "page.example.test",
+    "img.example.test",
+    "vision.example.test",
+)
+
+
+@pytest.fixture(autouse=True)
+def _public_names(fake_dns, public_net):
+    for host in _PUBLIC_HOSTS:
+        fake_dns[host] = ["203.0.113.10"]
+
+
+def _respond(status=200, **kwargs):
+    """A handler answering every request with a fresh ``httpx.Response``."""
+    return lambda request: httpx.Response(status, **kwargs)
+
+
+def _by_path(routes):
+    """A handler answering by request path; ``routes`` maps a path to a handler."""
+    return lambda request: routes.get(request.url.path, _respond(404))(request)
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
@@ -906,17 +932,14 @@ convolutional neural networks that include an encoder and a decoder.</p>
 """
 
 
-def _mock_httpx_get(url, **kwargs):
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.text = FAKE_HTML
-    resp.raise_for_status = MagicMock()
-    return resp
+@pytest.fixture
+def fake_page(http_requests):
+    http_requests.handlers["example.com"] = _respond(html=FAKE_HTML)
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.httpx.get", _mock_httpx_get)
+@pytest.mark.usefixtures("fake_page")
 def test_ingest_url_basic(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -935,7 +958,7 @@ def test_ingest_url_basic(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-def test_ingest_url_multichunk_chunk_count_matches_per_row(tmp_path):
+def test_ingest_url_multichunk_chunk_count_matches_per_row(http_requests, tmp_path):
     """#392: the batched chunk_count bump on the web-text path must equal the per-row result.
 
     Ingesting a multi-chunk web page now fires ONE bump_chunk_count(delta=N) instead
@@ -946,20 +969,13 @@ def test_ingest_url_multichunk_chunk_count_matches_per_row(tmp_path):
     long_body = " ".join(f"paragraph{i} about transformers and attention" for i in range(400))
     long_html = f"<html><head><title>Long Page</title></head><body><article><p>{long_body}</p></article></body></html>"
 
-    def _mock_long_get(url, **kwargs):
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.text = long_html
-        resp.raise_for_status = MagicMock()
-        return resp
-
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
     start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
 
-    with patch("knowledge_base.web.httpx.get", _mock_long_get):
-        result = ingest_url(conn, "https://example.com/long")
+    http_requests.handlers["example.com"] = _respond(html=long_html)
+    result = ingest_url(conn, "https://example.com/long")
     added = result["chunks_added"]
     assert added > 1, "fixture must produce multiple web-text chunks to exercise the batched bump"
 
@@ -972,7 +988,7 @@ def test_ingest_url_multichunk_chunk_count_matches_per_row(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.httpx.get", _mock_httpx_get)
+@pytest.mark.usefixtures("fake_page")
 def test_ingest_url_dedup(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -988,7 +1004,7 @@ def test_ingest_url_dedup(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.httpx.get", _mock_httpx_get)
+@pytest.mark.usefixtures("fake_page")
 def test_ingest_url_stores_title_in_metadata(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -1003,20 +1019,17 @@ def test_ingest_url_stores_title_in_metadata(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-def test_ingest_url_http_error(tmp_path):
+def test_ingest_url_http_error(http_requests, tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
 
-    def _mock_get_error(url, **kwargs):
-        import httpx
+    def _refuse(request):
+        raise httpx.ConnectError("Connection refused", request=request)
 
-        raise httpx.HTTPError("Connection refused")
+    http_requests.handlers["example.com"] = _refuse
 
-    with (
-        patch("knowledge_base.web.httpx.get", _mock_get_error),
-        pytest.raises(ValidationError, match="Failed to fetch"),
-    ):
+    with pytest.raises(ValidationError, match="Failed to fetch"):
         ingest_url(conn, "https://example.com/down")
 
 
@@ -1034,20 +1047,14 @@ def test_ingest_url_rejects_non_http_schemes(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-def test_ingest_url_no_content(tmp_path):
+def test_ingest_url_no_content(http_requests, tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
 
-    def _mock_get_empty(url, **kwargs):
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.text = "<html><body></body></html>"
-        resp.raise_for_status = MagicMock()
-        return resp
+    http_requests.handlers["example.com"] = _respond(html="<html><body></body></html>")
 
-    with patch("knowledge_base.web.httpx.get", _mock_get_empty):
-        result = ingest_url(conn, "https://example.com/empty")
+    result = ingest_url(conn, "https://example.com/empty")
     assert result["chunks_added"] == 0
 
 
@@ -1251,6 +1258,7 @@ def test_configure_browser_cdp(tmp_path):
     """CDP mode stores mode, endpoint, and venv."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
+    conn.execute("INSERT INTO config (key, value) VALUES ('allow_loopback_base_url', 'true')")  # #572
 
     venv = tmp_path / "fakevenv"
     (venv / "bin").mkdir(parents=True)
@@ -1314,6 +1322,7 @@ def test_configure_browser_disable(tmp_path):
     """Empty strings clear all browser config."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
+    conn.execute("INSERT INTO config (key, value) VALUES ('allow_loopback_base_url', 'true')")  # #572
 
     venv = tmp_path / "fakevenv"
     (venv / "bin").mkdir(parents=True)
@@ -1325,6 +1334,98 @@ def test_configure_browser_disable(tmp_path):
     result = configure_browser(conn, cdp_endpoint="", venv_path="")
     assert result["browser"] is None
     assert _get_browser_config(conn) is None
+
+
+def _fake_venv(tmp_path):
+    venv = tmp_path / "fakevenv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+    return venv
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "match"),
+    [
+        ("ws://100.64.0.7:3000", "private"),
+        ("ws://203.0.113.7:3000", "private"),
+        ("ws://localhost:3000", "IP address"),
+        ("wss://cdp.example.test", "IP address"),
+    ],
+)
+def test_configure_browser_keeps_the_floor(tmp_path, monkeypatch, endpoint, match):
+    """#572: the CDP endpoint keeps the SSRF floor, and a name (which Playwright would resolve again) is refused."""
+    monkeypatch.setenv("KNOWLEDGE_BASE_HOST_ADDRESSES", "203.0.113.7")
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    with pytest.raises(ValidationError, match=match):
+        configure_browser(conn, cdp_endpoint=endpoint, venv_path=str(_fake_venv(tmp_path)))
+    assert conn.execute("SELECT 1 FROM config WHERE key = 'browser_endpoint'").fetchone() is None
+
+
+def test_configure_browser_accepts_a_public_literal(tmp_path):
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    result = configure_browser(conn, cdp_endpoint="ws://203.0.113.10:3000", venv_path=str(_fake_venv(tmp_path)))
+    assert result["browser"]["endpoint"] == "ws://203.0.113.10:3000"
+
+
+def test_a_refused_stored_cdp_endpoint_disables_the_fallback(tmp_path, caplog):
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    conn.executemany(
+        "INSERT INTO config (key, value) VALUES (?, ?)",
+        [
+            ("browser_mode", "cdp"),
+            ("browser_venv", str(_fake_venv(tmp_path))),
+            ("browser_endpoint", "ws://169.254.169.254/"),
+        ],
+    )
+    conn.commit()
+    assert _get_browser_config(conn) is None
+    assert "CDP endpoint" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "ws://100.64.0.7:3000\\@203.0.113.10:3000/",  # Python reads 203.0.113.10, a browser 100.64.0.7
+        "ws://user@203.0.113.10:3000/",
+        "ws://203.0.113.10:3000/\tx",
+        "ws://[2001:db8::10%25eth0]:3000/",  # a zone id: accepted by Python, invalid for a browser
+    ],
+)
+def test_a_cdp_endpoint_that_parsers_could_read_differently_is_refused(tmp_path, endpoint):
+    """#572 review: the floor must check the host the browser will connect to, so ambiguous forms are refused."""
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    with pytest.raises(ValidationError, match="CDP endpoint"):
+        configure_browser(conn, cdp_endpoint=endpoint, venv_path=str(_fake_venv(tmp_path)))
+    assert conn.execute("SELECT 1 FROM config WHERE key = 'browser_endpoint'").fetchone() is None
+
+
+def test_a_stored_cdp_endpoint_with_a_parser_differential_is_refused_at_use(tmp_path):
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    conn.executemany(
+        "INSERT INTO config (key, value) VALUES (?, ?)",
+        [
+            ("browser_mode", "cdp"),
+            ("browser_venv", str(_fake_venv(tmp_path))),
+            ("browser_endpoint", "ws://100.64.0.7:3000\\@203.0.113.10:3000/"),
+        ],
+    )
+    conn.commit()
+    assert _get_browser_config(conn) is None
+
+
+def test_the_stored_cdp_endpoint_is_the_canonical_checked_form(tmp_path):
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    configure_browser(
+        conn, cdp_endpoint="WS://203.0.113.10:3000/devtools/browser/x?t=1#frag", venv_path=str(_fake_venv(tmp_path))
+    )
+    stored = conn.execute("SELECT value FROM config WHERE key = 'browser_endpoint'").fetchone()["value"]
+    assert stored == "ws://203.0.113.10:3000/devtools/browser/x?t=1"
 
 
 def test_configure_browser_query_mode(tmp_path):
@@ -1465,18 +1566,15 @@ _RENDERED_HTML = (
 )
 
 
-def _mock_httpx_js_only(url, **kwargs):
-    """Simulates a JS-only page that trafilatura can't extract from."""
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.text = _JS_ONLY_HTML
-    resp.raise_for_status = MagicMock()
-    return resp
+@pytest.fixture
+def js_only_page(http_requests):
+    """A JS-only page that trafilatura can't extract from."""
+    http_requests.handlers["example.com"] = _respond(html=_JS_ONLY_HTML)
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.httpx.get", _mock_httpx_js_only)
+@pytest.mark.usefixtures("js_only_page")
 @patch("knowledge_base.web._render_with_browser")
 def test_ingest_url_browser_rendered(mock_render, tmp_path):
     """Browser fallback fires and produces chunks when trafilatura fails."""
@@ -1504,7 +1602,7 @@ def test_ingest_url_browser_rendered(mock_render, tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.httpx.get", _mock_httpx_js_only)
+@pytest.mark.usefixtures("js_only_page")
 def test_ingest_url_no_browser_configured(tmp_path):
     """No browser config → 0 chunks, browser_rendered False."""
     conn = get_connection(tmp_path / "test.db")
@@ -1517,7 +1615,7 @@ def test_ingest_url_no_browser_configured(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.httpx.get", _mock_httpx_js_only)
+@pytest.mark.usefixtures("js_only_page")
 @patch("knowledge_base.web._render_with_browser")
 def test_ingest_url_browser_fallback_also_empty(mock_render, tmp_path):
     """Browser renders but trafilatura still extracts nothing → 0 chunks."""
@@ -1543,7 +1641,7 @@ def test_ingest_url_browser_fallback_also_empty(mock_render, tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.httpx.get", _mock_httpx_get)
+@pytest.mark.usefixtures("fake_page")
 @patch("knowledge_base.web._render_with_browser")
 def test_ingest_url_no_fallback_when_trafilatura_succeeds(mock_render, tmp_path):
     """When trafilatura extracts >= 200 chars, browser fallback is not called."""
@@ -1558,7 +1656,7 @@ def test_ingest_url_no_fallback_when_trafilatura_succeeds(mock_render, tmp_path)
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.httpx.get", _mock_httpx_js_only)
+@pytest.mark.usefixtures("js_only_page")
 @patch("knowledge_base.web._render_with_browser")
 def test_ingest_url_browser_fallback_near_empty(mock_render, tmp_path):
     """Trafilatura < 200 chars, browser renders better content → fallback used."""
@@ -1585,7 +1683,7 @@ def test_ingest_url_browser_fallback_near_empty(mock_render, tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.httpx.get", _mock_httpx_js_only)
+@pytest.mark.usefixtures("js_only_page")
 @patch("knowledge_base.web._render_with_browser")
 def test_ingest_url_browser_fallback_tmpdir_cleanup(mock_render, tmp_path):
     """Tmpdir is cleaned up after browser fallback (both success and exception)."""
@@ -1779,18 +1877,6 @@ def _make_test_jpeg(width=200, height=200):
     buf = io.BytesIO()
     img.save(buf, format="JPEG")
     return buf.getvalue()
-
-
-def _mock_image_stream(image_bytes, url="https://example.com/img.png"):
-    """Create a mock httpx streaming response for image download."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.url = url
-    mock_response.headers = {"content-length": str(len(image_bytes))}
-    mock_response.iter_bytes = MagicMock(return_value=iter([image_bytes]))
-    mock_response.__enter__ = MagicMock(return_value=mock_response)
-    mock_response.__exit__ = MagicMock(return_value=False)
-    return mock_response
 
 
 # --- Candidate parsing ---
@@ -2044,8 +2130,7 @@ def test_parse_image_candidates_img_srcset_without_src():
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_srcset_end_to_end(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_extract_html_images_srcset_end_to_end(_mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path):
     """Full pipeline: <picture> + srcset HTML -> vision -> figure chunks."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2054,7 +2139,7 @@ def test_extract_html_images_srcset_end_to_end(mock_stream, _mock_ip, mock_visio
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
     png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
 
     html = """<html><body>
     <picture>
@@ -2081,8 +2166,7 @@ def test_extract_html_images_srcset_end_to_end(mock_stream, _mock_ip, mock_visio
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_basic(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_extract_html_images_basic(_mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path):
     """Extracts one qualifying <img> and stores as figure chunk."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2091,7 +2175,7 @@ def test_extract_html_images_basic(mock_stream, _mock_ip, mock_vision_cfg, mock_
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
     png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
 
     html = '<html><body><img src="https://example.com/diagram.png"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
@@ -2114,8 +2198,7 @@ def test_extract_html_images_basic(mock_stream, _mock_ip, mock_vision_cfg, mock_
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_multiple(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_extract_html_images_multiple(_mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path):
     """Extracts multiple qualifying images."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2135,7 +2218,7 @@ def test_extract_html_images_multiple(mock_stream, _mock_ip, mock_vision_cfg, mo
 
     png_bytes = _make_test_png()
     # Each call needs a fresh stream mock (streams get consumed)
-    mock_stream.side_effect = [_mock_image_stream(png_bytes) for _ in range(3)]
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
 
     html = (
         "<html><body>"
@@ -2152,9 +2235,8 @@ def test_extract_html_images_multiple(mock_stream, _mock_ip, mock_vision_cfg, mo
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_chunk_count_matches_per_row(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path
 ):
     """#392: _extract_html_images batches the chunk_count bump (one per N figures).
 
@@ -2168,7 +2250,7 @@ def test_extract_html_images_chunk_count_matches_per_row(
         [{"description": f"Figure {i} description.", "figure_type": "diagram", "title": f"Fig {i}"}] for i in range(3)
     ]
     png_bytes = _make_test_png()
-    mock_stream.side_effect = [_mock_image_stream(png_bytes) for _ in range(3)]
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
 
     start = conn.execute("SELECT chunk_count FROM embed_spaces WHERE status = 'active'").fetchone()["chunk_count"]
 
@@ -2194,8 +2276,7 @@ def test_extract_html_images_chunk_count_matches_per_row(
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_small_html_attrs(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
+def test_extract_html_images_filters_small_html_attrs(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
     """Skips images with HTML width/height < 100px without downloading."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2204,21 +2285,20 @@ def test_extract_html_images_filters_small_html_attrs(mock_stream, _mock_ip, moc
     html = '<html><body><img src="https://example.com/small.png" width="50" height="50"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 0
-    mock_stream.assert_not_called()
+    assert http_requests == []
 
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_small_pixels(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
+def test_extract_html_images_filters_small_pixels(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
     """Skips images whose downloaded pixels are < 100px."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
     mock_vision_cfg.return_value = _VISION_CFG
 
     small_png = _make_test_png(width=50, height=50)
-    mock_stream.return_value = _mock_image_stream(small_png)
+    http_requests.handlers["example.com"] = _respond(content=small_png)
 
     html = '<html><body><img src="https://example.com/small.png"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
@@ -2228,8 +2308,7 @@ def test_extract_html_images_filters_small_pixels(mock_stream, _mock_ip, mock_vi
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_decorative_url(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
+def test_extract_html_images_filters_decorative_url(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
     """Skips images with decorative URL patterns (logo, icon, etc.)."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2238,14 +2317,13 @@ def test_extract_html_images_filters_decorative_url(mock_stream, _mock_ip, mock_
     html = '<html><body><img src="https://example.com/logo.png"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 0
-    mock_stream.assert_not_called()
+    assert http_requests == []
 
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_decorative_alt(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
+def test_extract_html_images_filters_decorative_alt(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
     """Skips images with decorative alt text (word boundary match)."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2254,14 +2332,13 @@ def test_extract_html_images_filters_decorative_alt(mock_stream, _mock_ip, mock_
     html = '<html><body><img src="https://example.com/img.png" alt="Company logo"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 0
-    mock_stream.assert_not_called()
+    assert http_requests == []
 
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_svg(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
+def test_extract_html_images_filters_svg(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
     """Skips SVG images."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2270,14 +2347,13 @@ def test_extract_html_images_filters_svg(mock_stream, _mock_ip, mock_vision_cfg,
     html = '<html><body><img src="https://example.com/diagram.svg"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 0
-    mock_stream.assert_not_called()
+    assert http_requests == []
 
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_filters_data_uri(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
+def test_extract_html_images_filters_data_uri(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
     """Skips data URI images."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2286,7 +2362,7 @@ def test_extract_html_images_filters_data_uri(mock_stream, _mock_ip, mock_vision
     html = '<html><body><img src="data:image/png;base64,iVBOR..."></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 0
-    mock_stream.assert_not_called()
+    assert http_requests == []
 
 
 # --- URL handling ---
@@ -2296,8 +2372,9 @@ def test_extract_html_images_filters_data_uri(mock_stream, _mock_ip, mock_vision
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_resolves_relative_urls(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_extract_html_images_resolves_relative_urls(
+    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path
+):
     """Resolves relative <img> src against base URL."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2305,22 +2382,18 @@ def test_extract_html_images_resolves_relative_urls(mock_stream, _mock_ip, mock_
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
     png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
 
     html = '<html><body><img src="/images/fig1.png"></body></html>'
     _extract_html_images(conn, html, "https://example.com/papers/page")
 
-    # Verify the stream call used the resolved absolute URL
-    call_args = mock_stream.call_args
-    assert call_args[1].get(
-        "url", call_args[0][1] if len(call_args[0]) > 1 else None
-    ) == "https://example.com/images/fig1.png" or "https://example.com/images/fig1.png" in str(call_args)
+    # The download used the resolved absolute URL
+    assert http_requests.urls() == ["https://example.com/images/fig1.png"]
 
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_rejects_private_ip(mock_stream, mock_vision_cfg, tmp_path):
+def test_extract_html_images_rejects_private_ip(mock_vision_cfg, http_requests, tmp_path):
     """SSRF guard: rejects private IP image URLs."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2329,7 +2402,7 @@ def test_extract_html_images_rejects_private_ip(mock_stream, mock_vision_cfg, tm
     html = '<html><body><img src="http://192.168.1.1/secret.png"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 0
-    mock_stream.assert_not_called()
+    assert http_requests == []
 
 
 def test_is_private_ip_literals():
@@ -2391,22 +2464,17 @@ def test_validate_image_url():
     "knowledge_base.web.is_private_ip",
     side_effect=lambda h: h in ("169.254.169.254",),
 )
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_rejects_redirect_to_private(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
+def test_extract_html_images_rejects_redirect_to_private(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
     """SSRF guard: rejects images that redirect to private IPs."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
     mock_vision_cfg.return_value = _VISION_CFG
 
-    # Mock a response whose final URL is a private IP
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.url = "http://169.254.169.254/latest/meta-data"
-    mock_resp.headers = {"content-length": "100"}
-    mock_resp.iter_bytes = MagicMock(return_value=iter([_make_test_png()]))
-    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-    mock_resp.__exit__ = MagicMock(return_value=False)
-    mock_stream.return_value = mock_resp
+    # The image redirects to a private address that would serve a valid PNG
+    http_requests.handlers["example.com"] = _respond(
+        302, headers={"Location": "http://169.254.169.254/latest/meta-data"}
+    )
+    http_requests.handlers["169.254.169.254"] = _respond(content=_make_test_png())
 
     html = '<html><body><img src="https://example.com/redirect-img.png"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
@@ -2420,8 +2488,7 @@ def test_extract_html_images_rejects_redirect_to_private(mock_stream, _mock_ip, 
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_dedup_by_url(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_extract_html_images_dedup_by_url(_mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path):
     """Two <img> with same src → only one download."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2429,20 +2496,21 @@ def test_extract_html_images_dedup_by_url(mock_stream, _mock_ip, mock_vision_cfg
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
     png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
 
     html = '<html><body><img src="https://example.com/same.png"><img src="https://example.com/same.png"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
     assert count == 1
-    assert mock_stream.call_count == 1
+    assert len(http_requests) == 1
 
 
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_dedup_by_content_hash(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_extract_html_images_dedup_by_content_hash(
+    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path
+):
     """Two different images with identical vision description → one chunk."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2451,7 +2519,7 @@ def test_extract_html_images_dedup_by_content_hash(mock_stream, _mock_ip, mock_v
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
     png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
 
     html = '<html><body><img src="https://example.com/img1.png"><img src="https://example.com/img2.png"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
@@ -2463,9 +2531,8 @@ def test_extract_html_images_dedup_by_content_hash(mock_stream, _mock_ip, mock_v
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_cross_page_content_hash(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path
 ):
     """Global content_hash uniqueness: same description from different pages → second skipped."""
     conn = get_connection(tmp_path / "test.db")
@@ -2474,14 +2541,14 @@ def test_extract_html_images_cross_page_content_hash(
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
     png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
+    http_requests.handlers["other.com"] = _respond(content=png_bytes)
 
     html = '<html><body><img src="https://example.com/fig.png"></body></html>'
     count1 = _extract_html_images(conn, html, "https://page1.com/a")
     assert count1 == 1
 
     # Different page, different image URL, same vision description
-    mock_stream.return_value = _mock_image_stream(png_bytes)
     html2 = '<html><body><img src="https://other.com/fig.png"></body></html>'
     count2 = _extract_html_images(conn, html2, "https://page2.com/b")
     assert count2 == 0  # global dedup
@@ -2494,8 +2561,7 @@ def test_extract_html_images_cross_page_content_hash(
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_download_failure(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_extract_html_images_download_failure(_mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path):
     """Download failure on one image doesn't block others."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2503,13 +2569,11 @@ def test_extract_html_images_download_failure(mock_stream, _mock_ip, mock_vision
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
     png_bytes = _make_test_png()
-    # First call fails, second succeeds
-    fail_resp = MagicMock()
-    fail_resp.__enter__ = MagicMock(side_effect=Exception("connection refused"))
-    fail_resp.__exit__ = MagicMock(return_value=False)
 
-    ok_resp = _mock_image_stream(png_bytes)
-    mock_stream.side_effect = [fail_resp, ok_resp]
+    def _refuse(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    http_requests.handlers["example.com"] = _by_path({"/broken.png": _refuse, "/good.png": _respond(content=png_bytes)})
 
     html = (
         '<html><body><img src="https://example.com/broken.png"><img src="https://example.com/good.png"></body></html>'
@@ -2522,8 +2586,7 @@ def test_extract_html_images_download_failure(mock_stream, _mock_ip, mock_vision
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_non_png_conversion(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_extract_html_images_non_png_conversion(_mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path):
     """JPEG images are converted to PNG before vision call."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2531,7 +2594,7 @@ def test_extract_html_images_non_png_conversion(mock_stream, _mock_ip, mock_visi
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
     jpeg_bytes = _make_test_jpeg()
-    mock_stream.return_value = _mock_image_stream(jpeg_bytes)
+    http_requests.handlers["example.com"] = _respond(content=jpeg_bytes)
 
     html = '<html><body><img src="https://example.com/photo.jpg"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
@@ -2548,23 +2611,15 @@ def test_extract_html_images_non_png_conversion(mock_stream, _mock_ip, mock_visi
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_oversized_download(mock_stream, _mock_ip, mock_vision_cfg, tmp_path):
+def test_extract_html_images_oversized_download(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
     """Skips images that exceed _MAX_IMAGE_DOWNLOAD_BYTES."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
     mock_vision_cfg.return_value = _VISION_CFG
 
-    # Simulate a stream that yields more than 10MB
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.url = "https://example.com/huge.png"
-    mock_resp.headers = {}  # no content-length — relies on byte counter
-    chunk = b"\x00" * (1024 * 1024)  # 1MB chunks
-    mock_resp.iter_bytes = MagicMock(return_value=iter([chunk] * 12))  # 12MB
-    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-    mock_resp.__exit__ = MagicMock(return_value=False)
-    mock_stream.return_value = mock_resp
+    # A streamed body of 12MB with no content-length: only the byte counter can catch it
+    chunk = b"\x00" * (1024 * 1024)
+    http_requests.handlers["example.com"] = lambda request: httpx.Response(200, content=iter([chunk] * 12))
 
     html = '<html><body><img src="https://example.com/huge.png"></body></html>'
     count = _extract_html_images(conn, html, "https://example.com/page")
@@ -2578,8 +2633,7 @@ def test_extract_html_images_oversized_download(mock_stream, _mock_ip, mock_visi
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_stale_cleanup(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_extract_html_images_stale_cleanup(_mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path):
     """Re-extraction replaces old inline image chunks."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2596,7 +2650,7 @@ def test_extract_html_images_stale_cleanup(mock_stream, _mock_ip, mock_vision_cf
             "title": "Old",
         }
     ]
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
     html = '<html><body><img src="https://example.com/fig.png"></body></html>'
     count1 = _extract_html_images(conn, html, source_url)
     assert count1 == 1
@@ -2609,7 +2663,7 @@ def test_extract_html_images_stale_cleanup(mock_stream, _mock_ip, mock_vision_cf
             "title": "New",
         }
     ]
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
     count2 = _extract_html_images(conn, html, source_url)
     assert count2 == 1
 
@@ -2631,9 +2685,8 @@ def test_extract_html_images_stale_cleanup(mock_stream, _mock_ip, mock_vision_cf
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_reingest_same_description(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path
 ):
     """Re-ingest with identical vision output leaves exactly 1 chunk (regression)."""
     conn = get_connection(tmp_path / "test.db")
@@ -2645,12 +2698,12 @@ def test_extract_html_images_reingest_same_description(
     source_url = "https://example.com/page"
     html = '<html><body><img src="https://example.com/fig.png"></body></html>'
 
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
     count1 = _extract_html_images(conn, html, source_url)
     assert count1 == 1
 
     # Re-ingest with same description — stale cleanup first, then dedup should still insert
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
     count2 = _extract_html_images(conn, html, source_url)
     assert count2 == 1
 
@@ -2664,9 +2717,8 @@ def test_extract_html_images_reingest_same_description(
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_embed_failure_preserves_old(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path
 ):
     """If embedding fails, old chunks are preserved (no data loss)."""
     conn = get_connection(tmp_path / "test.db")
@@ -2680,13 +2732,13 @@ def test_extract_html_images_embed_failure_preserves_old(
 
     # First extraction with real embed mock
     with patch("knowledge_base.ingest.embed", _fake_embed):
-        mock_stream.return_value = _mock_image_stream(png_bytes)
+        http_requests.handlers["example.com"] = _respond(content=png_bytes)
         count1 = _extract_html_images(conn, html, source_url)
         assert count1 == 1
 
     # Second extraction: embed raises → should preserve old chunks
     with patch("knowledge_base.ingest.embed", side_effect=Exception("embed failed")):
-        mock_stream.return_value = _mock_image_stream(png_bytes)
+        http_requests.handlers["example.com"] = _respond(content=png_bytes)
         mock_vision_call.return_value = [
             {
                 "description": "Different description.",
@@ -2709,8 +2761,7 @@ def test_extract_html_images_embed_failure_preserves_old(
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_cleanup_stale_inline_images_on_zero_new(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_cleanup_stale_inline_images_on_zero_new(_mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path):
     """Stale inline image chunks are deleted when page loses all images (#152)."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2721,7 +2772,7 @@ def test_cleanup_stale_inline_images_on_zero_new(mock_stream, _mock_ip, mock_vis
     source_url = "https://example.com/page"
 
     # First ingestion: page has one image → 1 figure chunk created
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
     html_with_img = '<html><body><img src="https://example.com/fig.png"></body></html>'
     count = _extract_html_images(conn, html_with_img, source_url)
     assert count == 1
@@ -2758,8 +2809,7 @@ def test_cleanup_stale_inline_images_noop_when_none(tmp_path):
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-def test_extract_html_images_rendered_dom_dedup(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_extract_html_images_rendered_dom_dedup(_mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path):
     """Rendered DOM adds JS-injected images but deduplicates shared ones."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -2768,7 +2818,7 @@ def test_extract_html_images_rendered_dom_dedup(mock_stream, _mock_ip, mock_visi
         [{"description": f"Fig {i}.", "figure_type": "diagram", "title": f"F{i}"}] for i in range(3)
     ]
     png_bytes = _make_test_png()
-    mock_stream.side_effect = [_mock_image_stream(png_bytes) for _ in range(3)]
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
 
     static_html = (
         "<html><body>"
@@ -2805,9 +2855,8 @@ def test_extract_html_images_rendered_dom_dedup(mock_stream, _mock_ip, mock_visi
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_rendered_only_when_static_empty(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path
 ):
     """When static HTML has no images, rendered DOM images are still extracted."""
     conn = get_connection(tmp_path / "test.db")
@@ -2815,7 +2864,7 @@ def test_extract_html_images_rendered_only_when_static_empty(
     mock_vision_cfg.return_value = _VISION_CFG
     mock_vision_call.return_value = _FIGURE_RESPONSE
     png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
 
     static_html = "<html><body>No images here.</body></html>"
     rendered_html = '<html><body><img src="https://example.com/lazy.png"></body></html>'
@@ -2833,9 +2882,8 @@ def test_extract_html_images_rendered_only_when_static_empty(
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
 def test_extract_html_images_aborts_on_extra_source_parse_failure(
-    mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path
 ):
     """When an extra HTML source fails to parse, abort to avoid data loss.
 
@@ -2847,7 +2895,7 @@ def test_extract_html_images_aborts_on_extra_source_parse_failure(
     mock_vision_cfg.return_value = _VISION_CFG
     mock_vision_call.return_value = _FIGURE_RESPONSE
     png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
 
     # Pre-seed a figure chunk to verify it survives
     conn.execute(
@@ -2890,10 +2938,8 @@ def test_extract_html_images_aborts_on_extra_source_parse_failure(
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-@patch("knowledge_base.web.httpx.get")
 def test_ingest_url_preserves_figures_on_extraction_failure(
-    mock_get, mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path
 ):
     """ingest_url must NOT delete stale figures when _extract_html_images raises."""
     conn = get_connection(tmp_path / "test.db")
@@ -2911,13 +2957,9 @@ def test_ingest_url_preserves_figures_on_extraction_failure(
 
     # First ingest: create a figure chunk via _extract_html_images
     png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.text = html_with_img
-    resp.url = source_url
-    resp.raise_for_status = MagicMock()
-    mock_get.return_value = resp
+    http_requests.handlers["example.com"] = _by_path(
+        {"/article": _respond(html=html_with_img), "/fig.png": _respond(content=png_bytes)}
+    )
     result = ingest_url(conn, source_url)
     assert result.get("figures_extracted", 0) >= 1
 
@@ -2932,7 +2974,6 @@ def test_ingest_url_preserves_figures_on_extraction_failure(
         "knowledge_base.web._extract_html_images",
         side_effect=Exception("vision unavailable"),
     ):
-        mock_get.return_value = resp
         ingest_url(conn, source_url)
 
     after = conn.execute(
@@ -2957,30 +2998,20 @@ here to ensure we get well past the minimum. More filler text for the threshold.
 </html>"""
 
 
-def _mock_httpx_get_with_images(url, **kwargs):
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.text = _RICH_HTML
-    resp.url = url  # post-redirect URL
-    resp.raise_for_status = MagicMock()
-    return resp
-
-
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-@patch("knowledge_base.web.httpx.get", _mock_httpx_get_with_images)
-def test_ingest_url_extracts_inline_images(mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path):
+def test_ingest_url_extracts_inline_images(_mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path):
     """ingest_url with <img> tags extracts inline images when no browser fallback."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
     mock_vision_cfg.return_value = _VISION_CFG
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
-    png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _by_path(
+        {"/article": _respond(html=_RICH_HTML), "/results-chart.png": _respond(content=_make_test_png())}
+    )
 
     result = ingest_url(conn, "https://example.com/article")
     assert result.get("figures_extracted", 0) >= 1
@@ -2991,25 +3022,19 @@ def test_ingest_url_extracts_inline_images(mock_stream, _mock_ip, mock_vision_cf
 @patch("knowledge_base.web._extract_web_figures")
 @patch("knowledge_base.web._render_with_browser")
 @patch("knowledge_base.web._get_browser_config")
-@patch("knowledge_base.web.httpx.get")
 def test_ingest_url_runs_inline_even_with_screenshot_figures(
-    mock_get,
     mock_browser_cfg,
     mock_render,
     mock_web_figures,
     mock_html_images,
+    http_requests,
     tmp_path,
 ):
     """Phase 1 inline extraction runs even when screenshot figures were extracted."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.text = "<html><body>Short</body></html>"
-    resp.url = "https://example.com/page"
-    resp.raise_for_status = MagicMock()
-    mock_get.return_value = resp
+    http_requests.handlers["example.com"] = _respond(html="<html><body>Short</body></html>")
 
     mock_browser_cfg.return_value = {"mode": "local", "venv": "/tmp/venv"}
     mock_render.return_value = {
@@ -3035,25 +3060,19 @@ def test_ingest_url_runs_inline_even_with_screenshot_figures(
 @patch("knowledge_base.web._extract_web_figures")
 @patch("knowledge_base.web._render_with_browser")
 @patch("knowledge_base.web._get_browser_config")
-@patch("knowledge_base.web.httpx.get")
 def test_ingest_url_passes_rendered_html_to_extract_images(
-    mock_get,
     mock_browser_cfg,
     mock_render,
     mock_web_figures,
     mock_html_images,
+    http_requests,
     tmp_path,
 ):
     """When browser fallback fires, rendered HTML is passed as extra_html_sources."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.text = "<html><body>Short</body></html>"
-    resp.url = "https://example.com/spa"
-    resp.raise_for_status = MagicMock()
-    mock_get.return_value = resp
+    http_requests.handlers["example.com"] = _respond(html="<html><body>Short</body></html>")
 
     rendered_html = "<html><body>Rendered with lots of content for the page</body></html>"
     mock_browser_cfg.return_value = {"mode": "local", "venv": "/tmp/venv"}
@@ -3088,10 +3107,8 @@ _EMPTY_HTML_WITH_IMG = """<html>
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-@patch("knowledge_base.web.httpx.get")
 def test_ingest_url_extracts_images_even_when_no_text(
-    mock_get, mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
+    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path
 ):
     """Inline image extraction runs even when trafilatura returns no text."""
     conn = get_connection(tmp_path / "test.db")
@@ -3099,15 +3116,9 @@ def test_ingest_url_extracts_images_even_when_no_text(
     mock_vision_cfg.return_value = _VISION_CFG
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.text = _EMPTY_HTML_WITH_IMG
-    resp.url = "https://example.com/page"
-    resp.raise_for_status = MagicMock()
-    mock_get.return_value = resp
-
-    png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    http_requests.handlers["example.com"] = _by_path(
+        {"/page": _respond(html=_EMPTY_HTML_WITH_IMG), "/diagram.png": _respond(content=_make_test_png())}
+    )
 
     # trafilatura returns empty for this HTML
     with (
@@ -3123,36 +3134,27 @@ def test_ingest_url_extracts_images_even_when_no_text(
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-@patch("knowledge_base.web.httpx.stream")
-@patch("knowledge_base.web.httpx.get")
-def test_ingest_url_uses_response_url_for_base(
-    mock_get, mock_stream, _mock_ip, mock_vision_cfg, mock_vision_call, tmp_path
-):
+def test_ingest_url_uses_response_url_for_base(_mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path):
     """Relative <img> src resolved against response.url (post-redirect), not original URL."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
     mock_vision_cfg.return_value = _VISION_CFG
     mock_vision_call.return_value = _FIGURE_RESPONSE
 
-    html = (
-        "<html><head><title>Redirected</title></head><body><p>" + "x" * 300 + '</p><img src="/fig.png"></body></html>'
+    html = "<html><head><title>Redirected</title></head><body><p>" + "x" * 300 + '</p><img src="fig.png"></body></html>'
+    # Original URL was example.com/old/page, redirected to example.com/new/page
+    http_requests.handlers["example.com"] = _by_path(
+        {
+            "/old/page": _respond(301, headers={"Location": "https://example.com/new/page"}),
+            "/new/page": _respond(html=html),
+            "/new/fig.png": _respond(content=_make_test_png()),
+        }
     )
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.text = html
-    # Original URL was example.com/old, redirected to example.com/new
-    resp.url = "https://example.com/new"
-    resp.raise_for_status = MagicMock()
-    mock_get.return_value = resp
 
-    png_bytes = _make_test_png()
-    mock_stream.return_value = _mock_image_stream(png_bytes)
+    ingest_url(conn, "https://example.com/old/page")
 
-    ingest_url(conn, "https://example.com/old")
-
-    # The stream should have been called with the resolved URL using response.url
-    call_args = mock_stream.call_args
-    assert "example.com/fig.png" in str(call_args), f"Expected resolved URL with example.com/fig.png, got {call_args}"
+    # The image was fetched at the URL resolved against the post-redirect URL
+    assert "https://example.com/new/fig.png" in http_requests.urls()
 
 
 # --- duplicate detection by content hash (issue #59, task 10) ---
@@ -3518,7 +3520,7 @@ def test_ingest_file_dedup_records_session(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.httpx.get", _mock_httpx_get)
+@pytest.mark.usefixtures("fake_page")
 def test_ingest_url_dedup_records_session(tmp_path):
     """When URL chunks are deduped, the new session is still recorded."""
     db_path = tmp_path / "test.db"
@@ -3917,15 +3919,14 @@ class TestElementCapture:
     @patch("knowledge_base.web.is_private_ip", return_value=False)
     @patch("knowledge_base.web._render_with_browser")
     @patch("knowledge_base.web._get_browser_config")
-    @patch("knowledge_base.web.httpx")
     def test_ingest_url_extracts_element_captures(
         self,
-        mock_httpx,
         mock_browser_cfg,
         mock_render,
         _mock_ip,
         mock_vision_cfg,
         mock_vision_call,
+        http_requests,
         tmp_path,
     ):
         """ingest_url processes element captures from browser rendering."""
@@ -3941,13 +3942,8 @@ class TestElementCapture:
             }
         ]
 
-        # httpx returns minimal content (triggers browser fallback)
-        mock_resp = MagicMock()
-        mock_resp.text = "<html><body>short</body></html>"
-        mock_resp.url = "https://example.com/viz"
-        mock_resp.status_code = 200
-        mock_resp.raise_for_status = MagicMock()
-        mock_httpx.get.return_value = mock_resp
+        # The page has minimal content (triggers browser fallback)
+        http_requests.handlers["example.com"] = _respond(html="<html><body>short</body></html>")
 
         mock_browser_cfg.return_value = {"venv": "/fake", "mode": "local"}
 
@@ -4263,16 +4259,13 @@ _ARTICLE = "<p>" + ("Attention mechanisms let a model weigh every token of its i
 
 
 def _page(body: str):
-    import httpx
-
     html = f"<html><head><title>T</title></head><body><article><h1>Article</h1>{body}</article></body></html>"
-    return lambda request: httpx.Response(200, html=html)
+    return _respond(html=html)
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.is_private_ip", return_value=False)
-def test_ingest_url_with_vision_off_makes_no_vision_request(_public, kb_conn, http_requests, monkeypatch):
+def test_ingest_url_with_vision_off_makes_no_vision_request(kb_conn, http_requests, monkeypatch):
     monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
     kb_conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('vision_base_url', 'https://vision.example.test')"
@@ -4291,8 +4284,7 @@ def test_ingest_url_with_vision_off_makes_no_vision_request(_public, kb_conn, ht
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.web.is_private_ip", return_value=False)
-def test_ingest_url_with_the_browser_off_launches_nothing(_public, kb_conn, http_requests, monkeypatch, tmp_path):
+def test_ingest_url_with_the_browser_off_launches_nothing(kb_conn, http_requests, monkeypatch, tmp_path):
     from knowledge_base.web import configure_browser
 
     monkeypatch.delenv("KNOWLEDGE_BASE_BROWSER")

@@ -161,8 +161,10 @@ def configure_browser_tool(
     optional feature. Each render uses an ephemeral browser context (no shared state).
 
     Two modes (both require a venv with ``playwright`` Python client installed):
-    - **CDP (recommended for Docker):** Connect to a running Playwright container.
-      Provide both cdp_endpoint and venv_path.
+    - **CDP:** Connect to a running Playwright browser. Provide both cdp_endpoint and venv_path.
+      The endpoint keeps the SSRF floor: a public IP address, or ``ws://localhost:<port>`` with
+      ``allow_loopback_base_url`` (set through configure_llm_tool). A host name is refused, since
+      the browser would resolve it again after KB's check.
     - **Local:** Launch headless Chromium from the venv.
       Provide venv_path only.
 
@@ -178,7 +180,7 @@ def configure_browser_tool(
         /path/to/venv/bin/pip install playwright
 
     Args:
-        cdp_endpoint: WebSocket CDP endpoint (ws:// or wss://). Requires venv_path too.
+        cdp_endpoint: WebSocket CDP endpoint (ws:// or wss://, an IP address or localhost). Requires venv_path too.
         venv_path: Absolute path to Python venv with playwright installed.
             Pass both as empty string to disable browser rendering.
     """

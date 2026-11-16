@@ -1,4 +1,4 @@
-"""The operator's embedding declaration and egress switches, read from the environment (#569).
+"""The operator's embedding declaration, egress switches and host addresses, read from the environment (#569, #572).
 
 The environment is authoritative for the embedding configuration: KB starts only with an
 explicit declaration, and the database records it (``db.bind_embed_config``). Every reader
@@ -8,6 +8,7 @@ exceptions, so any module may depend on it.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ __all__ = [
     "API_KEY_VAR",
     "BROWSER_VAR",
     "EMBED_PROVIDERS",
+    "HOST_ADDRESSES_VAR",
     "LLM_API_KEY_VAR",
     "LLM_VAR",
     "VARIABLES",
@@ -27,6 +29,7 @@ __all__ = [
     "EmbedSettings",
     "check_environment",
     "declared_embed_host",
+    "host_networks",
     "load_embed_settings",
     "normalize_embed_url",
     "switch_on",
@@ -44,6 +47,7 @@ LLM_API_KEY_VAR = "KNOWLEDGE_BASE_LLM_API_KEY"
 VISION_VAR = "KNOWLEDGE_BASE_VISION"
 BROWSER_VAR = "KNOWLEDGE_BASE_BROWSER"
 LLM_VAR = "KNOWLEDGE_BASE_LLM"
+HOST_ADDRESSES_VAR = "KNOWLEDGE_BASE_HOST_ADDRESSES"
 _ONNX_MODEL_VAR = "ONNX_EMBED_MODEL_PATH"
 _DEPRECATED_VAR = "EMBED_PROVIDER"
 
@@ -141,9 +145,33 @@ def switch_on(var: str) -> bool:
     raise ValidationError(f"{var} must be on or off, got {value!r}")
 
 
+def host_networks() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """This host's own addresses or networks, which the SSRF floor refuses though they are public (#572).
+
+    Comma-separated, strict: a name, an empty entry or host bits set is refused rather than silently matching
+    nothing. An IPv4-mapped entry is refused too, because the floor judges mapped answers as their IPv4 form.
+    """
+    value = _get(HOST_ADDRESSES_VAR)
+    if value is None:
+        return ()
+    networks = []
+    for entry in (part.strip() for part in value.split(",")):
+        try:
+            network = ipaddress.ip_network(entry, strict=True)
+        except ValueError:
+            raise ValidationError(
+                f"{HOST_ADDRESSES_VAR} must list IP addresses or networks separated by commas, got {entry!r}"
+            ) from None
+        if isinstance(network, ipaddress.IPv6Network) and network.network_address.ipv4_mapped is not None:
+            raise ValidationError(f"{HOST_ADDRESSES_VAR}: write the IPv4-mapped entry {entry!r} in its IPv4 form")
+        networks.append(network)
+    return tuple(networks)
+
+
 def check_environment() -> EmbedSettings:
-    """The whole startup check: the declaration and the three switches. Touches nothing on disk."""
+    """The whole startup check: the declaration, the three switches and the host addresses. Touches nothing on disk."""
     settings = load_embed_settings()
     for var in (VISION_VAR, BROWSER_VAR, LLM_VAR):
         switch_on(var)
+    host_networks()
     return settings

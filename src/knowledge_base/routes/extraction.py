@@ -185,13 +185,14 @@ def configure_llm_tool(
     """Configure the LLM used for structured extraction.
 
     Args:
-        provider: 'ollama' (native API) or 'openai_compat' (OpenAI-compatible API).
-        base_url: Base URL (e.g. 'http://192.168.1.41:1234'). Required for openai_compat;
-            SSRF-validated before persisting.
+        provider: 'ollama' (native API), 'openai_compat' or 'anthropic_compat'.
+        base_url: Base URL (e.g. 'https://llm.example.test'). Required for the HTTP families; for
+            ollama, omit it to use the auto-detected endpoint (OLLAMA_HOST, else localhost). Every
+            given URL keeps the SSRF floor, checked before persisting and on every request.
         model: Model name (e.g. 'qwen3.5:27b', 'qwen/qwen3.5-35b-a3b').
         api_key: Inline key, or exactly 'env:KNOWLEDGE_BASE_LLM_API_KEY' (preferred). Optional.
         allow_loopback_base_url: Opt-in to a loopback/localhost base_url (for a local
-            openai_compat server). Shared with the embedding path; omit to preserve.
+            server). Shared by every stored service URL; omit to preserve.
     """
     conn = _get_conn()
     try:
@@ -275,7 +276,9 @@ def configure_vision_tool(
 
     Args:
         model: Vision model name (e.g. 'gemma3:27b', 'llava:13b').
-        base_url: Base URL for the vision API (e.g. 'http://localhost:11434').
+        base_url: Base URL for the vision API (e.g. 'https://vision.example.test'); omit it to use the
+            auto-detected Ollama, or pass '' to clear a stored one. A given URL keeps the SSRF floor;
+            a localhost URL needs allow_loopback_base_url (set through configure_llm_tool).
     """
     conn = _get_conn()
     try:
@@ -295,7 +298,8 @@ def configure_omniparser_tool(path: str | None = None, server_url: str | None = 
         path: Absolute path to OmniParser directory (None to query, empty string to disable).
         server_url: Optional HTTP server URL for persistent OmniParser server mode.
             None to leave unchanged, empty string to clear (reverts to auto-start),
-            or a URL like "http://gpu-node:7862" for a remote server.
+            or a server URL, which keeps the SSRF floor (a public host, or localhost with
+            allow_loopback_base_url).
     """
     conn = _get_conn()
     try:

@@ -44,15 +44,14 @@ Vision is off unless the server runs with `KNOWLEDGE_BASE_VISION=on`: until then
 {
   "name": "configure_vision_tool",
   "arguments": {
-    "model": "gemma3:27b",
-    "base_url": "http://localhost:11434"
+    "model": "gemma3:27b"
   }
 }
 ```
 
 The vision API must support the OpenAI-compatible `/v1/chat/completions` endpoint with image inputs. Default model is `gemma3:27b`; default base URL is the auto-detected Ollama (OLLAMA_HOST, WSL2 gateway, localhost); it lies outside the declared embedding endpoint, so turning vision on sends page and PDF images there.
 
-Call with no arguments to query the current configuration.
+Call with no arguments to query the current configuration. A `base_url` you give keeps the SSRF floor, checked before it is stored and on every request: a public host, or `localhost` with the `allow_loopback_base_url` opt-in (set through `configure_llm_tool`). A LAN or tailnet Ollama is declared with `OLLAMA_HOST` instead. `"base_url": ""` clears a stored URL, back to the default.
 
 ## OmniParser Enrichment
 
@@ -86,6 +85,8 @@ To query the current configuration:
 ```
 
 When OmniParser is configured, ETA estimates increase from ~4 seconds/page to ~44 seconds/page.
+
+KB starts its own OmniParser server on `127.0.0.1:7862`. A `server_url` you give instead keeps the SSRF floor: a public host, or `localhost` with the loopback opt-in. A refused server counts as unhealthy, so extraction falls back to the subprocess. `"server_url": ""` clears it.
 
 ## Page Selection
 
@@ -155,14 +156,14 @@ When ingesting web pages via `ingest_url`, inline `<img>` tags are extracted fro
 
 **Why this exists:** Text-rich pages (>= 200 chars from trafilatura) never trigger the browser fallback, so their images were completely lost — even pages with dozens of meaningful diagrams and charts. Even when the browser fallback fires, the single 1280x8000px screenshot approach misses images below the fold and asks one vision call to enumerate all figures from a dense composite image. Inline extraction solves both gaps by parsing `<img>` tags directly from the fetched HTML (see [#82](https://github.com/dutiona/knowledge-base/issues/82) for the full analysis).
 
-**When it runs:** Inline image extraction runs automatically when `KNOWLEDGE_BASE_VISION=on`, a vision model is configured, and the browser-based screenshot extraction did not already fire. If the browser fallback produced figures from a full-page screenshot, inline extraction is skipped to avoid duplicate descriptions of the same visual content.
+**When it runs:** Inline image extraction runs on every `ingest_url` when `KNOWLEDGE_BASE_VISION=on` and a vision model is configured, whether or not the browser fallback also produced figures from a full-page screenshot.
 
 **Filtering:** Not all images on a page are meaningful. The following are skipped:
 
 - Decorative images (URL or alt text matching patterns like logo, icon, avatar, banner, sprite, tracking pixel, or badge)
 - Small images (width or height below 100px — checked first from HTML attributes to avoid unnecessary downloads, then from actual pixel dimensions after download)
 - SVG and data URI images (cannot be processed by the vision pipeline without rasterization)
-- Images from private/loopback IP ranges (SSRF protection)
+- Images from private/loopback IP ranges or the host's own addresses, checked on every request and redirect hop (SSRF protection)
 - Duplicate URLs on the same page
 
 Up to 10 images per page are processed. Each image download is capped at 10 MB (streamed). Non-PNG images (JPEG, WebP, GIF) are converted to PNG before being sent to the vision model.
@@ -181,7 +182,7 @@ This uses a separate range from PDF figure chunks (1,000,000+) and browser scree
 - `image_url`: The resolved absolute URL the image was downloaded from
 - `alt_text`: The `alt` attribute from the `<img>` tag (if present)
 - `original_source_type`: `"web"`
-- `source_url`: The page URL (post-redirect)
+- `source_url`: The requested page URL (the `source_uri` of the page's text chunks, not the post-redirect URL)
 - `vision_model`: The model used for description
 
 **Re-ingestion:** When the same URL is ingested again, old inline image chunks (chunk_index >= 2,000,000) are deleted and replaced. Foreign key references (entity mentions, methods, datasets, metrics, papers, relationships, conclusions) are cleaned up before deletion.

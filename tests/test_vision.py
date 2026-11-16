@@ -4,6 +4,7 @@ import json
 import subprocess
 
 import fitz as _fitz
+import httpx
 import pytest
 import sqlite3
 from pathlib import Path
@@ -322,6 +323,7 @@ def test_configure_vision_roundtrip(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
+    conn.execute("INSERT INTO config (key, value) VALUES ('allow_loopback_base_url', 'true')")  # #572
     result = configure_vision(conn, model="llava:13b", base_url="http://localhost:11434")
     assert result["model"] == "llava:13b"
     assert result["base_url"] == "http://localhost:11434"
@@ -632,18 +634,23 @@ def test_get_paper_source_uri_not_found(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _mock_httpx_response(content: str, status_code: int = 200) -> MagicMock:
-    """Build a mock httpx response with the given content string."""
-    resp = MagicMock()
-    resp.status_code = status_code
-    resp.json.return_value = {
-        "choices": [{"message": {"content": content}}],
-    }
-    resp.raise_for_status = MagicMock()
-    return resp
+VISION_HOST = "vision.example.test"
+VISION_URL = f"http://{VISION_HOST}:11434"
 
 
-def test_vision_call_parses_valid_response():
+@pytest.fixture
+def vision_server(http_requests, fake_dns, public_net):
+    """A public vision endpoint at ``VISION_URL``; set ``vision_server.handlers[VISION_HOST]`` to answer."""
+    fake_dns[VISION_HOST] = ["203.0.113.20"]
+    return http_requests
+
+
+def _chat_reply(content: str):
+    """A handler answering a chat completion with the given content string."""
+    return lambda request: httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+
+def test_vision_call_parses_valid_response(vision_server):
     """Valid JSON array response is parsed and validated."""
     from knowledge_base.vision import _vision_call
 
@@ -655,29 +662,24 @@ def test_vision_call_parses_valid_response():
             "entities_mentioned": ["BERT"],
         }
     ]
-    mock_resp = _mock_httpx_response(json.dumps(figures))
+    vision_server.handlers[VISION_HOST] = _chat_reply(json.dumps(figures))
 
-    with patch("knowledge_base.vision.httpx.post", return_value=mock_resp) as mock_post:
-        result = _vision_call(
-            "base64data",
-            "prompt",
-            base_url="http://localhost:11434",
-            model="gemma3:27b",
-        )
+    result = _vision_call(
+        "base64data",
+        "prompt",
+        base_url=VISION_URL,
+        model="gemma3:27b",
+        floor=True,
+        allow_loopback=False,
+    )
 
     assert len(result) == 1
     assert result[0]["figure_type"] == "diagram"
     assert result[0]["description"] == "Architecture overview"
-    mock_post.assert_called_once()
-    call_kwargs = mock_post.call_args
-    assert (
-        "http://localhost:11434/v1/chat/completions" in call_kwargs.args
-        or call_kwargs.kwargs.get("url", call_kwargs.args[0] if call_kwargs.args else "")
-        == "http://localhost:11434/v1/chat/completions"
-    )
+    assert vision_server.urls() == [f"{VISION_URL}/v1/chat/completions"]
 
 
-def test_vision_call_strips_markdown_fences():
+def test_vision_call_strips_markdown_fences(vision_server):
     """Response wrapped in ```json ... ``` is parsed correctly."""
     from knowledge_base.vision import _vision_call
 
@@ -690,16 +692,15 @@ def test_vision_call_strips_markdown_fences():
         }
     ]
     content = f"```json\n{json.dumps(figures)}\n```"
-    mock_resp = _mock_httpx_response(content)
+    vision_server.handlers[VISION_HOST] = _chat_reply(content)
 
-    with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
-        result = _vision_call("base64data", "prompt", base_url="http://localhost:11434", model="test")
+    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert len(result) == 1
     assert result[0]["figure_type"] == "chart"
 
 
-def test_vision_call_filters_invalid_figures():
+def test_vision_call_filters_invalid_figures(vision_server):
     """Mix of valid and invalid objects: only valid ones returned."""
     from knowledge_base.vision import _vision_call
 
@@ -709,53 +710,47 @@ def test_vision_call_filters_invalid_figures():
         {"description": "No type field"},  # invalid: no figure_type
         {"figure_type": "table", "description": "Another valid one"},
     ]
-    mock_resp = _mock_httpx_response(json.dumps(figures))
+    vision_server.handlers[VISION_HOST] = _chat_reply(json.dumps(figures))
 
-    with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
-        result = _vision_call("base64data", "prompt", base_url="http://localhost:11434", model="test")
+    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert len(result) == 2
     assert result[0]["figure_type"] == "diagram"
     assert result[1]["figure_type"] == "table"
 
 
-def test_vision_call_unwraps_dict_wrapper():
+def test_vision_call_unwraps_dict_wrapper(vision_server):
     """Response as {"figures": [...]} is unwrapped."""
     from knowledge_base.vision import _vision_call
 
     figures = [{"figure_type": "photo", "description": "A photograph"}]
     wrapper = {"figures": figures}
-    mock_resp = _mock_httpx_response(json.dumps(wrapper))
+    vision_server.handlers[VISION_HOST] = _chat_reply(json.dumps(wrapper))
 
-    with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
-        result = _vision_call("base64data", "prompt", base_url="http://localhost:11434", model="test")
+    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert len(result) == 1
     assert result[0]["figure_type"] == "photo"
 
 
-def test_vision_call_malformed_response():
+def test_vision_call_malformed_response(vision_server):
     """Malformed API response (missing choices key) raises ValueError."""
     from knowledge_base.vision import _vision_call
 
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json.return_value = {"error": "something went wrong"}
-    resp.raise_for_status = MagicMock()
+    vision_server.handlers[VISION_HOST] = lambda request: httpx.Response(200, json={"error": "something went wrong"})
 
-    with (
-        patch("knowledge_base.vision.httpx.post", return_value=resp),
-        pytest.raises(ValueError, match="Malformed vision API response"),
-    ):
+    with pytest.raises(ValueError, match="Malformed vision API response"):
         _vision_call(
             "base64data",
             "prompt",
-            base_url="http://localhost:11434",
+            base_url=VISION_URL,
             model="test",
+            floor=True,
+            allow_loopback=False,
         )
 
 
-def test_vision_call_skips_non_dict_items():
+def test_vision_call_skips_non_dict_items(vision_server):
     """Non-dict items in the response list are silently skipped."""
     from knowledge_base.vision import _vision_call
 
@@ -766,10 +761,9 @@ def test_vision_call_skips_non_dict_items():
         42,
         {"figure_type": "table", "description": "Another valid one"},
     ]
-    mock_resp = _mock_httpx_response(json.dumps(mixed))
+    vision_server.handlers[VISION_HOST] = _chat_reply(json.dumps(mixed))
 
-    with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
-        result = _vision_call("base64data", "prompt", base_url="http://localhost:11434", model="test")
+    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert len(result) == 2
     assert result[0]["figure_type"] == "diagram"
@@ -1313,7 +1307,7 @@ def test_extract_figures_per_page_error(mock_vision, mock_embed, tmp_path):
     """One page fails, others succeed."""
     from knowledge_base.vision import extract_figures
 
-    def side_effect(b64, prompt, *, base_url, model):
+    def side_effect(b64, prompt, *, base_url, model, **_config):
         # We can't easily tell which page from b64, so fail on second call
         if mock_vision.call_count <= 1:
             return [
@@ -2137,7 +2131,7 @@ def test_extract_figures_timing_with_omniparser(mock_vision, mock_embed, tmp_pat
     assert result["timing"]["total_secs"] >= result["timing"]["vision_secs"]
 
 
-def test_vision_call_logs_timing(caplog):
+def test_vision_call_logs_timing(caplog, vision_server):
     """_vision_call logs elapsed time at INFO level."""
     from knowledge_base.vision import _vision_call
 
@@ -2160,20 +2154,17 @@ def test_vision_call_logs_timing(caplog):
         ]
     }
 
-    with patch("knowledge_base.vision.httpx.post") as mock_post:
-        mock_resp = mock_post.return_value
-        mock_resp.raise_for_status = lambda: None
-        mock_resp.json.return_value = mock_response
+    vision_server.handlers[VISION_HOST] = lambda request: httpx.Response(200, json=mock_response)
 
-        import logging
+    import logging
 
-        with caplog.at_level(logging.INFO, logger="knowledge_base.vision"):
-            _vision_call("fakebase64", "prompt", base_url="http://localhost", model="test")
+    with caplog.at_level(logging.INFO, logger="knowledge_base.vision"):
+        _vision_call("fakebase64", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert any("Vision call completed in" in msg for msg in caplog.messages)
 
 
-def test_vision_call_warns_on_slow_response(caplog):
+def test_vision_call_warns_on_slow_response(caplog, vision_server):
     """_vision_call emits WARNING when elapsed exceeds drift threshold."""
     from knowledge_base.vision import (
         _ETA_SECS_PER_PAGE_BASE,
@@ -2200,28 +2191,24 @@ def test_vision_call_warns_on_slow_response(caplog):
         ]
     }
 
-    # Simulate a slow response by patching time.monotonic
+    # Simulate a slow response: the clock stands still until the server answers, then jumps
     slow_duration = _ETA_SECS_PER_PAGE_BASE * _TIMING_DRIFT_FACTOR + 1
-    call_count = 0
+    now = 0.0
 
-    def fake_monotonic():
-        nonlocal call_count
-        call_count += 1
-        # First call returns 0 (start), second call returns slow_duration (end)
-        return 0.0 if call_count % 2 == 1 else slow_duration
+    def slow_server(request):
+        nonlocal now
+        now = slow_duration
+        return httpx.Response(200, json=mock_response)
+
+    vision_server.handlers[VISION_HOST] = slow_server
+
+    import logging
 
     with (
-        patch("knowledge_base.vision.httpx.post") as mock_post,
-        patch("knowledge_base.vision.time.monotonic", side_effect=fake_monotonic),
+        patch("knowledge_base.vision.time.monotonic", side_effect=lambda: now),
+        caplog.at_level(logging.WARNING, logger="knowledge_base.vision"),
     ):
-        mock_resp = mock_post.return_value
-        mock_resp.raise_for_status = lambda: None
-        mock_resp.json.return_value = mock_response
-
-        import logging
-
-        with caplog.at_level(logging.WARNING, logger="knowledge_base.vision"):
-            _vision_call("fakebase64", "prompt", base_url="http://localhost", model="test")
+        _vision_call("fakebase64", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert any("consider raising" in msg for msg in caplog.messages)
 
@@ -2264,7 +2251,7 @@ def test_run_omniparser_uses_timeout_constant():
     assert sig.parameters["timeout"].default == _OMNIPARSER_SUBPROCESS_TIMEOUT
 
 
-def test_vision_call_uses_timeout_constant():
+def test_vision_call_uses_timeout_constant(vision_server):
     """_vision_call uses _VISION_CALL_TIMEOUT for the httpx request."""
     from knowledge_base.vision import _VISION_CALL_TIMEOUT, _vision_call
 
@@ -2287,15 +2274,11 @@ def test_vision_call_uses_timeout_constant():
         ]
     }
 
-    with patch("knowledge_base.vision.httpx.post") as mock_post:
-        mock_resp = mock_post.return_value
-        mock_resp.raise_for_status = lambda: None
-        mock_resp.json.return_value = mock_response
+    vision_server.handlers[VISION_HOST] = lambda request: httpx.Response(200, json=mock_response)
 
-        _vision_call("fakebase64", "prompt", base_url="http://localhost", model="test")
+    _vision_call("fakebase64", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
-    _, kwargs = mock_post.call_args
-    assert kwargs["timeout"] == _VISION_CALL_TIMEOUT
+    assert vision_server[0].extensions["timeout"]["read"] == _VISION_CALL_TIMEOUT
 
 
 def test_constants_are_consistent():
@@ -3699,103 +3682,85 @@ def test_estimate_figures_time_includes_mixed_regions(mock_collect, mock_image_d
 class TestOmniParserServerHealth:
     """Tests for _check_omniparser_server health endpoint."""
 
-    def test_healthy_server(self):
+    def test_healthy_server(self, http_requests):
         from knowledge_base.vision import _check_omniparser_server
 
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"status": "omniparser", "models_loaded": True}
+        http_requests.handlers["127.0.0.1"] = lambda request: httpx.Response(
+            200, json={"status": "omniparser", "models_loaded": True}
+        )
 
-        with patch("knowledge_base.vision.httpx.get", return_value=mock_resp):
-            assert _check_omniparser_server("http://127.0.0.1:7862") is True
+        assert _check_omniparser_server("http://127.0.0.1:7862", floor=False, allow_loopback=False) is True
+        assert http_requests.urls() == ["http://127.0.0.1:7862/health"]
 
-    def test_unreachable_server(self):
-        import httpx
-
+    def test_unreachable_server(self, http_requests):
         from knowledge_base.vision import _check_omniparser_server
 
-        with patch(
-            "knowledge_base.vision.httpx.get",
-            side_effect=httpx.ConnectError("refused"),
-        ):
-            assert _check_omniparser_server("http://127.0.0.1:7862") is False
+        def refuse(request):
+            raise httpx.ConnectError("refused", request=request)
 
-    def test_wrong_service_on_port(self):
+        http_requests.handlers["127.0.0.1"] = refuse
+
+        assert _check_omniparser_server("http://127.0.0.1:7862", floor=False, allow_loopback=False) is False
+
+    def test_wrong_service_on_port(self, http_requests):
         from knowledge_base.vision import _check_omniparser_server
 
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"status": "nginx"}
+        http_requests.handlers["127.0.0.1"] = lambda request: httpx.Response(200, json={"status": "nginx"})
 
-        with patch("knowledge_base.vision.httpx.get", return_value=mock_resp):
-            assert _check_omniparser_server("http://127.0.0.1:7862") is False
+        assert _check_omniparser_server("http://127.0.0.1:7862", floor=False, allow_loopback=False) is False
 
     @pytest.mark.parametrize("body", [["ok"], "ok", 1, None])
-    def test_foreign_service_non_dict_json(self, body):
+    def test_foreign_service_non_dict_json(self, http_requests, body):
         # A foreign service on the same port may return 200 with a non-object
         # JSON body — this must read as "not our server" (False), not raise.
         from knowledge_base.vision import _check_omniparser_server
 
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = body
+        http_requests.handlers["127.0.0.1"] = lambda request: httpx.Response(200, content=json.dumps(body).encode())
 
-        with patch("knowledge_base.vision.httpx.get", return_value=mock_resp):
-            assert _check_omniparser_server("http://127.0.0.1:7862") is False
+        assert _check_omniparser_server("http://127.0.0.1:7862", floor=False, allow_loopback=False) is False
 
 
 class TestOmniParserHTTP:
     """Tests for _run_omniparser_http client."""
 
-    def test_success(self, tmp_path):
+    def test_success(self, tmp_path, http_requests):
         from knowledge_base.vision import _run_omniparser_http
 
         png = tmp_path / "test.png"
         png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
         expected = {"elements": [{"text": "hello"}], "image_size": {"w": 100, "h": 100}}
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = expected
-        mock_resp.raise_for_status = MagicMock()
+        http_requests.handlers["127.0.0.1"] = lambda request: httpx.Response(200, json=expected)
 
-        with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
-            result = _run_omniparser_http(png, "http://127.0.0.1:7862", timeout=30)
+        result = _run_omniparser_http(png, "http://127.0.0.1:7862", floor=False, allow_loopback=False, timeout=30)
 
         assert result == expected
+        assert http_requests.urls() == ["http://127.0.0.1:7862/parse"]
 
-    def test_timeout(self, tmp_path):
-        import httpx
-
+    def test_timeout(self, tmp_path, http_requests):
         from knowledge_base.vision import _run_omniparser_http
 
         png = tmp_path / "test.png"
         png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
-        with patch(
-            "knowledge_base.vision.httpx.post",
-            side_effect=httpx.TimeoutException("timed out"),
-        ):
-            result = _run_omniparser_http(png, "http://127.0.0.1:7862", timeout=30)
+        def time_out(request):
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        http_requests.handlers["127.0.0.1"] = time_out
+
+        result = _run_omniparser_http(png, "http://127.0.0.1:7862", floor=False, allow_loopback=False, timeout=30)
 
         assert result is None
 
-    def test_server_error(self, tmp_path):
-        import httpx
-
+    def test_server_error(self, tmp_path, http_requests):
         from knowledge_base.vision import _run_omniparser_http
 
         png = tmp_path / "test.png"
         png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
-        mock_resp = MagicMock()
-        mock_resp.status_code = 500
-        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "server error", request=MagicMock(), response=mock_resp
-        )
+        http_requests.handlers["127.0.0.1"] = lambda request: httpx.Response(500)
 
-        with patch("knowledge_base.vision.httpx.post", return_value=mock_resp):
-            result = _run_omniparser_http(png, "http://127.0.0.1:7862", timeout=30)
+        result = _run_omniparser_http(png, "http://127.0.0.1:7862", floor=False, allow_loopback=False, timeout=30)
 
         assert result is None
 
@@ -3815,7 +3780,11 @@ class TestOmniParserFallback:
             patch("knowledge_base.vision._run_omniparser_http", return_value=http_result) as mock_http,
             patch("knowledge_base.vision.subprocess") as mock_subprocess,
         ):
-            result = _run_omniparser(png, "/fake/omniparser", server_url="http://127.0.0.1:7862")
+            result = _run_omniparser(
+                png,
+                "/fake/omniparser",
+                server={"base_url": "http://127.0.0.1:7862", "floor": False, "allow_loopback": False},
+            )
 
         assert result == http_result
         mock_http.assert_called_once()
@@ -3844,7 +3813,11 @@ class TestOmniParserFallback:
             patch("knowledge_base.vision.subprocess.run"),
             patch("knowledge_base.vision.json.load", return_value=subprocess_result),
         ):
-            result = _run_omniparser(png, str(omni_dir), server_url="http://127.0.0.1:7862")
+            result = _run_omniparser(
+                png,
+                str(omni_dir),
+                server={"base_url": "http://127.0.0.1:7862", "floor": False, "allow_loopback": False},
+            )
 
         assert result == subprocess_result
 
@@ -3852,7 +3825,7 @@ class TestOmniParserFallback:
 class TestOmniParserConfig:
     """Tests for configure_omniparser with server_url."""
 
-    def test_configure_with_server_url(self, vision_conn):
+    def test_configure_with_server_url(self, vision_conn, fake_dns, public_net):
         from knowledge_base.vision import configure_omniparser
 
         # First set a path (required for omniparser to be "configured")
@@ -3861,9 +3834,10 @@ class TestOmniParserConfig:
             mock_val.return_value = Path("/fake/omniparser")
             configure_omniparser(vision_conn, path="/fake/omniparser")
 
-        result = configure_omniparser(vision_conn, server_url="http://gpu-node:7862")
+        fake_dns["gpu-node.example.test"] = ["203.0.113.30"]
+        result = configure_omniparser(vision_conn, server_url="http://gpu-node.example.test:7862")
 
-        assert result["omniparser_server_url"] == "http://gpu-node:7862"
+        assert result["omniparser_server_url"] == "http://gpu-node.example.test:7862"
 
     def test_query_server_url(self, vision_conn):
         from knowledge_base.vision import configure_omniparser
@@ -3942,7 +3916,7 @@ class TestOmniParserAutoStart:
         with (
             patch(
                 "knowledge_base.vision._check_omniparser_server",
-                side_effect=lambda _url: next(health_calls),
+                side_effect=lambda _url, **_trust: next(health_calls),
             ),
             patch("knowledge_base.vision.subprocess.Popen", return_value=mock_proc) as mock_popen,
             patch("atexit.register"),
@@ -4225,3 +4199,144 @@ def test_vision_off_refuses_before_any_work(kb_conn, http_requests, monkeypatch)
             call()
     assert dict(kb_conn.execute("SELECT key, value FROM config").fetchall()) == before
     assert http_requests == []
+
+
+# --- #572: stored vision and OmniParser URLs keep the SSRF floor and are pinned ---
+
+
+def _opt_in(conn) -> None:
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('allow_loopback_base_url', 'true')")
+    conn.commit()
+
+
+@pytest.mark.parametrize("url", ["http://localhost:11434", "http://tailnet.example.test:11434"])
+def test_configure_vision_keeps_the_floor(vision_conn, fake_dns, url):
+    from knowledge_base.vision import configure_vision
+
+    fake_dns["tailnet.example.test"] = ["100.64.0.7"]
+    with pytest.raises(ValidationError, match="private"):
+        configure_vision(vision_conn, model="m", base_url=url)
+    rows = vision_conn.execute("SELECT key FROM config WHERE key IN ('vision_base_url', 'vision_model')").fetchall()
+    assert rows == []
+
+
+def test_configure_vision_accepts_loopback_with_the_opt_in(vision_conn):
+    from knowledge_base.vision import configure_vision
+
+    _opt_in(vision_conn)
+    assert configure_vision(vision_conn, base_url="http://localhost:11434")["base_url"] == "http://localhost:11434"
+
+
+def test_configure_vision_empty_clears_the_stored_url(vision_conn, operator_ollama):
+    from knowledge_base.vision import _get_vision_config, configure_vision
+
+    _opt_in(vision_conn)
+    configure_vision(vision_conn, base_url="http://localhost:11434")
+    result = configure_vision(vision_conn, base_url="")
+    assert result["base_url"] == f"http://{operator_ollama}:11434"
+    assert _get_vision_config(vision_conn)["floor"] is False
+
+
+def test_a_stored_vision_row_is_refused_at_use(vision_conn, http_requests, fake_dns):
+    from knowledge_base.vision import _get_vision_config, _vision_call
+
+    fake_dns["tailnet.example.test"] = ["100.64.0.7"]
+    vision_conn.execute(
+        "INSERT INTO config (key, value) VALUES ('vision_base_url', 'http://tailnet.example.test:11434')"
+    )
+    vision_conn.commit()
+    with pytest.raises(ValidationError, match="private"):
+        _vision_call("aGk=", "p", **_get_vision_config(vision_conn))
+    assert http_requests == []
+
+
+def test_a_stored_vision_url_is_pinned(vision_conn, vision_server):
+    from knowledge_base.vision import _get_vision_config, _vision_call
+
+    vision_conn.execute("INSERT INTO config (key, value) VALUES ('vision_base_url', ?)", (VISION_URL,))
+    vision_conn.commit()
+    vision_server.handlers[VISION_HOST] = _chat_reply("[]")
+    _vision_call("aGk=", "p", **_get_vision_config(vision_conn))
+    assert vision_server.targets() == ["203.0.113.20"]
+
+
+def test_the_auto_detected_vision_endpoint_is_not_floored(vision_conn, http_requests, fake_dns, operator_ollama):
+    from knowledge_base.vision import _get_vision_config, _vision_call
+
+    http_requests.handlers[operator_ollama] = _chat_reply("[]")
+    _vision_call("aGk=", "p", **_get_vision_config(vision_conn))
+    assert fake_dns.lookups == []
+    assert http_requests.targets() == [operator_ollama]
+
+
+@pytest.mark.parametrize("url", ["http://100.64.0.7:7862", "http://127.0.0.1:7862"])
+def test_configure_omniparser_keeps_the_floor(vision_conn, url):
+    from knowledge_base.vision import configure_omniparser
+
+    with pytest.raises(ValidationError, match="private"):
+        configure_omniparser(vision_conn, server_url=url)
+    assert vision_conn.execute("SELECT 1 FROM config WHERE key = 'omniparser_server_url'").fetchone() is None
+
+
+def test_a_refused_omniparser_row_falls_back(vision_conn, http_requests, fake_dns, caplog):
+    from knowledge_base.vision import _check_omniparser_server, _omniparser_endpoint
+
+    fake_dns["gpu.example.test"] = ["100.64.0.7"]
+    vision_conn.execute(
+        "INSERT INTO config (key, value) VALUES ('omniparser_server_url', 'http://gpu.example.test:7862')"
+    )
+    vision_conn.commit()
+    assert _check_omniparser_server(**_omniparser_endpoint(vision_conn)) is False
+    assert http_requests == []
+    assert "gpu.example.test" in caplog.text
+
+
+def test_a_stored_row_equal_to_the_auto_url_is_floored(vision_conn, http_requests):
+    from knowledge_base.vision import _check_omniparser_server, _omniparser_endpoint
+
+    vision_conn.execute("INSERT INTO config (key, value) VALUES ('omniparser_server_url', 'http://127.0.0.1:7862')")
+    vision_conn.commit()
+    http_requests.handlers["127.0.0.1"] = lambda _r: httpx.Response(200, json={"status": "omniparser"})
+    assert _check_omniparser_server(**_omniparser_endpoint(vision_conn)) is False
+    assert http_requests == []
+
+
+def test_the_auto_started_omniparser_is_not_floored(vision_conn, http_requests, fake_dns):
+    from knowledge_base.vision import _check_omniparser_server, _omniparser_endpoint
+
+    http_requests.handlers["127.0.0.1"] = lambda _r: httpx.Response(200, json={"status": "omniparser"})
+    assert _check_omniparser_server(**_omniparser_endpoint(vision_conn)) is True
+    assert fake_dns.lookups == []
+
+
+def test_an_opted_in_loopback_omniparser_row_reaches_parse(vision_conn, http_requests, tmp_path):
+    from knowledge_base.vision import _resolve_omniparser_server_url, _run_omniparser
+
+    _opt_in(vision_conn)
+    vision_conn.execute("INSERT INTO config (key, value) VALUES ('omniparser_server_url', 'http://127.0.0.1:7863')")
+    vision_conn.commit()
+
+    def _serve(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "omniparser"})
+        return httpx.Response(200, json={"elements": [], "image_size": {}})
+
+    http_requests.handlers["127.0.0.1"] = _serve
+    png = tmp_path / "p.png"
+    png.write_bytes(b"\x89PNG")
+    server = _resolve_omniparser_server_url(vision_conn, "/fake/omniparser")
+    assert server is not None
+    assert _run_omniparser(png, "/fake/omniparser", server=server) == {"elements": [], "image_size": {}}
+    assert [r.url.path for r in http_requests] == ["/health", "/parse"]
+
+
+def test_a_refused_omniparser_server_url_writes_nothing(vision_conn, tmp_path):
+    """#572 review: a call with a valid path and a refused server_url must not save the path either."""
+    from knowledge_base.vision import configure_omniparser
+
+    with (
+        patch("knowledge_base.vision._validate_omniparser_path", return_value=tmp_path),
+        pytest.raises(ValidationError, match="private"),
+    ):
+        configure_omniparser(vision_conn, path=str(tmp_path), server_url="http://100.64.0.7:7862")
+    assert vision_conn.execute("SELECT 1 FROM config WHERE key LIKE 'omniparser_%'").fetchone() is None

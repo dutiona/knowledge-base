@@ -6,11 +6,15 @@ import hashlib
 import ipaddress
 import os
 import socket
+import sqlite3
 import struct
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
+import httpx
+
 from knowledge_base.exceptions import ValidationError
+from knowledge_base.settings import host_networks
 
 __all__ = [
     "ELEMENT_INSERT_EXPR",
@@ -20,7 +24,9 @@ __all__ = [
     "VALID_ELEMENT_TYPES",
     "compute_file_hash",
     "content_hash",
+    "egress_client",
     "is_private_ip",
+    "loopback_opt_in",
     "serialize_f32",
     "validate_base_url",
 ]
@@ -31,29 +37,60 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def is_private_ip(hostname: str) -> bool:
-    """Return True if *hostname* resolves to a non-global IP.
+_IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
-    Uses ``not is_global`` to block private, loopback, link-local, multicast,
-    reserved, and unspecified addresses.  Resolves hostnames to ALL IPs via
-    getaddrinfo to catch DNS rebinding (e.g., 127.0.0.1.nip.io) and
-    multi-homed hosts with mixed public/private addresses.
+
+def _refusal_message(host: str) -> str:
+    return f"URL points to a private, reserved or this host's own address ({host}). Use a public IP or hostname."
+
+
+def _is_public(ip: _IPAddress) -> bool:
+    return ip.is_global
+
+
+def _refused(ip: _IPAddress) -> bool:
+    """The floor on one address: not global, or one of this host's own (``KNOWLEDGE_BASE_HOST_ADDRESSES``)."""
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return not _is_public(ip) or any(ip in network for network in host_networks())
+
+
+def _accepted_addresses(host: str) -> list[_IPAddress]:
+    """Every address *host* resolves to, in resolver order, or ``ValidationError`` if any of them is refused.
+
+    A literal answers for itself. All answers are checked, so a name with one private answer among public
+    ones (a multi-homed host, a rebinding name such as ``127.0.0.1.nip.io``) is refused as a whole.
     """
     try:
-        addr = ipaddress.ip_address(hostname)
-        return not addr.is_global
+        answers: list[_IPAddress] = [ipaddress.ip_address(host)]
     except ValueError:
-        pass  # Not an IP literal — fall through to DNS resolution
-    # Resolve hostname to ALL IPs — reject if any is non-global
+        try:
+            infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        except (OSError, UnicodeError):
+            raise ValidationError(f"cannot resolve {host}") from None
+        try:
+            answers = list(dict.fromkeys(ipaddress.ip_address(info[4][0]) for info in infos))
+        except ValueError:
+            raise ValidationError(_refusal_message(host)) from None
+    if not answers:
+        raise ValidationError(f"cannot resolve {host}")
+    if any(_refused(ip) for ip in answers):
+        raise ValidationError(_refusal_message(host))
+    return answers
+
+
+def is_private_ip(hostname: str) -> bool:
+    """Return True if *hostname* is, or resolves to, any address the SSRF floor refuses.
+
+    The floor refuses every non-global address (private, loopback, link-local, ``100.64.0.0/10``, ULA,
+    reserved, unspecified) and this host's own addresses. All of a name's answers are checked, and a
+    failed lookup is refused too.
+    """
     try:
-        infos = socket.getaddrinfo(hostname, None)
-        for _family, _type, _proto, _canonname, sockaddr in infos:
-            addr = ipaddress.ip_address(sockaddr[0])
-            if not addr.is_global:
-                return True
-        return False
-    except (OSError, ValueError):
-        return True  # Can't resolve → reject
+        _accepted_addresses(hostname)
+    except ValidationError:
+        return True
+    return False
 
 
 def _is_allowed_loopback(host: str) -> bool:
@@ -100,9 +137,84 @@ def validate_base_url(url: str, *, allow_loopback: bool = False, exempt_host: st
     if exempt_host is not None and parsed.hostname.rstrip(".").lower() == exempt_host.rstrip(".").lower():
         return  # the declared embedding endpoint (#569)
     if is_private_ip(parsed.hostname):
-        raise ValidationError(
-            f"URL points to a private/reserved address ({parsed.hostname}). Use a public IP or hostname."
-        )
+        raise ValidationError(_refusal_message(parsed.hostname))
+
+
+def _pinned(request: httpx.Request, name: str, address: _IPAddress) -> httpx.Request:
+    """A copy of *request* sent to *address*; ``Host`` and ``sni_hostname`` keep *name*."""
+    return httpx.Request(
+        request.method,
+        request.url.copy_with(host=str(address)),
+        headers=request.headers,
+        content=request.read(),
+        extensions={**request.extensions, "sni_hostname": name},
+    )
+
+
+class _PinnedTransport(httpx.BaseTransport):
+    """Floor every request at the transport and send it to an address the floor accepted (#572, ADR-0018 §4).
+
+    Each request (a redirect hop included, since the client sends every hop through here) resolves its host
+    once. It is refused unless every answer passes the floor, then sent to an accepted answer: the URL carries
+    the address, while ``Host`` and ``sni_hostname`` keep the name for the server and for TLS verification.
+    A second DNS answer therefore cannot swap the target. Wraps rather than subclasses ``HTTPTransport``.
+    """
+
+    def __init__(self, *, allow_loopback: bool) -> None:
+        self._allow_loopback = allow_loopback
+        # The inner pool is keyed by address: a kept-alive connection could carry one name's request over a
+        # TLS session verified for another name on the same address, so no connection is ever reused.
+        self._inner = httpx.HTTPTransport(limits=httpx.Limits(max_keepalive_connections=0))
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        if request.url.scheme not in ("http", "https"):
+            raise ValidationError(f"Invalid URL scheme: {request.url.scheme!r}. Use http or https.")
+        # The IDNA 2008 form httpx connects to; a Unicode str would be IDNA 2003-encoded by ssl.
+        name = request.url.raw_host.decode("ascii")
+        if self._allow_loopback and _is_allowed_loopback(name):
+            return self._inner.handle_request(request)
+        *earlier, final = _accepted_addresses(name)
+        for address in earlier:
+            try:
+                return self._inner.handle_request(_pinned(request, name, address))
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                continue  # nothing was sent: try the next accepted answer
+        return self._inner.handle_request(_pinned(request, name, final))
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+def egress_client(
+    *,
+    floor: bool,
+    allow_loopback: bool = False,
+    timeout: float | httpx.Timeout = 5.0,
+    follow_redirects: bool = False,
+    headers: dict[str, str] | None = None,
+) -> httpx.Client:
+    """An HTTP client for KB's outbound requests; ``floor`` states whether the URL is tool-supplied.
+
+    ``floor=True`` (a URL a tool supplied or stored) floors and pins every request, redirect hops included.
+    It takes no other client option on purpose: a client given a transport silently drops ``limits``,
+    ``verify`` and the like, and ``proxy``/``mounts`` would add routes around the guard. Environment proxies
+    are not used, since a proxy resolves the name itself. ``floor=False`` is a plain client for an endpoint
+    the operator's environment declared.
+    """
+    if not floor:
+        return httpx.Client(timeout=timeout, follow_redirects=follow_redirects, headers=headers)
+    return httpx.Client(
+        transport=_PinnedTransport(allow_loopback=allow_loopback),
+        timeout=timeout,
+        follow_redirects=follow_redirects,
+        headers=headers,
+    )
+
+
+def loopback_opt_in(conn: sqlite3.Connection) -> bool:
+    """The shared ``allow_loopback_base_url`` opt-in (ADR-0018 §4) for every URL a tool stored."""
+    row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
+    return bool(row) and row["value"].strip().lower() == "true"
 
 
 def _sanitize_url(url: str) -> str:

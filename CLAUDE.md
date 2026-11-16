@@ -68,6 +68,7 @@ Read these when the task touches the corresponding area:
 | Chunking (text, markdown, Python AST)                           | `src/knowledge_base/chunking.py`          | `docs/usage/ingesting-documents.md`       |
 | Ingestion (PDF, code, markdown)                                 | `src/knowledge_base/ingest.py`            | `docs/usage/ingesting-documents.md`       |
 | Web ingestion (URL, SSRF, browser)                              | `src/knowledge_base/web.py`               | `docs/usage/ingesting-documents.md`       |
+| SSRF floor and pinned client (`egress_client`)                  | `src/knowledge_base/utils.py`             | `docs/usage/ingesting-documents.md`       |
 | Hybrid search (FTS5 + vec + RRF)                                | `src/knowledge_base/search.py`            | `docs/usage/searching.md`                 |
 | Keyword intent extraction                                       | `src/knowledge_base/keywords.py`          | `docs/usage/searching.md`                 |
 | LLM config, calling & connectivity                              | `src/knowledge_base/llm.py`               | `docs/usage/structured-extraction.md`     |

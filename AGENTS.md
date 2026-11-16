@@ -58,7 +58,7 @@ docs/              # Sphinx-compatible documentation
 3. **Conventional Commits** — `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`
 4. **Atomic commits** — one logical change per commit
 5. **Thread safety** — all SQLite access via thread-local connections (`threading.local()`). Never share a connection across threads.
-6. **Mock external services** — tests must not call Ollama or any LLM. Use `unittest.mock.patch` on `knowledge_base.embeddings.embed` (or the caller's `embed` name), or the `http_requests` fixture, which records every httpx request at the transport.
+6. **Mock external services** — tests must not call Ollama or any LLM. Use `unittest.mock.patch` on `knowledge_base.embeddings.embed` (or the caller's `embed` name), or the `http_requests` fixture, which records every httpx request at the transport. Fake outbound HTTP with `http_requests`, names with `fake_dns` and public hosts with `public_net`; never patch `httpx` inside a module, since a floored call builds its own pinned client (`utils.egress_client`) and the patch would miss it.
 7. **Content-hash dedup** — ingestion uses SHA-256 hashes. If adding new content types, maintain this pattern.
 8. **Batched SQL** — use `_batched_execute`/`_batched_select` from `db.py` for any IN-clause query to stay under SQLite's 999 variable limit.
 

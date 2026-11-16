@@ -214,6 +214,7 @@ def test_configure_llm_tool_openai_compat_missing_base_url(kb_conn):
 
 
 def test_configure_vision_tool_writes_config(kb_conn):
+    kb_conn.execute("INSERT INTO config (key, value) VALUES ('allow_loopback_base_url', 'true')")  # #572
     with _patch_conn(kb_conn):
         result = json.loads(configure_vision_tool(model="llava:13b", base_url="http://localhost:11434"))
 

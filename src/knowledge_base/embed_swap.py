@@ -21,7 +21,7 @@ from .db import (
 from .embeddings import EmbeddingProvider, ProviderConfig, get_provider, truncate_embedding
 from .exceptions import KnowledgeBaseError, ValidationError
 from .settings import load_embed_settings
-from .utils import ELEMENT_INSERT_EXPR, VALID_ELEMENT_TYPES
+from .utils import ELEMENT_INSERT_EXPR, VALID_ELEMENT_TYPES, loopback_opt_in
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +40,10 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     provider_row = conn.execute("SELECT value FROM config WHERE key = 'embed_provider'").fetchone()
     base_url_row = conn.execute("SELECT value FROM config WHERE key = 'embed_base_url'").fetchone()
     api_key_row = conn.execute("SELECT value FROM config WHERE key = 'embed_api_key'").fetchone()
-    loopback_row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
 
     base_url = base_url_row["value"] if base_url_row else None
     api_key = api_key_row["value"] if api_key_row else None
-    allow_loopback = bool(loopback_row) and loopback_row["value"].strip().lower() == "true"
+    allow_loopback = loopback_opt_in(conn)
 
     provider = provider_row["value"]
 
