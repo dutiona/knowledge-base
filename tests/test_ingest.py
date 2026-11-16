@@ -1258,6 +1258,7 @@ def test_configure_browser_cdp(tmp_path):
     """CDP mode stores mode, endpoint, and venv."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
+    conn.execute("INSERT INTO config (key, value) VALUES ('allow_loopback_base_url', 'true')")  # #572
 
     venv = tmp_path / "fakevenv"
     (venv / "bin").mkdir(parents=True)
@@ -1321,6 +1322,7 @@ def test_configure_browser_disable(tmp_path):
     """Empty strings clear all browser config."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
+    conn.execute("INSERT INTO config (key, value) VALUES ('allow_loopback_base_url', 'true')")  # #572
 
     venv = tmp_path / "fakevenv"
     (venv / "bin").mkdir(parents=True)
@@ -1332,6 +1334,55 @@ def test_configure_browser_disable(tmp_path):
     result = configure_browser(conn, cdp_endpoint="", venv_path="")
     assert result["browser"] is None
     assert _get_browser_config(conn) is None
+
+
+def _fake_venv(tmp_path):
+    venv = tmp_path / "fakevenv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+    return venv
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "match"),
+    [
+        ("ws://100.64.0.7:3000", "private"),
+        ("ws://203.0.113.7:3000", "private"),
+        ("ws://localhost:3000", "IP address"),
+        ("wss://cdp.example.test", "IP address"),
+    ],
+)
+def test_configure_browser_keeps_the_floor(tmp_path, monkeypatch, endpoint, match):
+    """#572: the CDP endpoint keeps the SSRF floor, and a name (which Playwright would resolve again) is refused."""
+    monkeypatch.setenv("KNOWLEDGE_BASE_HOST_ADDRESSES", "203.0.113.7")
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    with pytest.raises(ValidationError, match=match):
+        configure_browser(conn, cdp_endpoint=endpoint, venv_path=str(_fake_venv(tmp_path)))
+    assert conn.execute("SELECT 1 FROM config WHERE key = 'browser_endpoint'").fetchone() is None
+
+
+def test_configure_browser_accepts_a_public_literal(tmp_path):
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    result = configure_browser(conn, cdp_endpoint="ws://203.0.113.10:3000", venv_path=str(_fake_venv(tmp_path)))
+    assert result["browser"]["endpoint"] == "ws://203.0.113.10:3000"
+
+
+def test_a_refused_stored_cdp_endpoint_disables_the_fallback(tmp_path, caplog):
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    conn.executemany(
+        "INSERT INTO config (key, value) VALUES (?, ?)",
+        [
+            ("browser_mode", "cdp"),
+            ("browser_venv", str(_fake_venv(tmp_path))),
+            ("browser_endpoint", "ws://169.254.169.254/"),
+        ],
+    )
+    conn.commit()
+    assert _get_browser_config(conn) is None
+    assert "CDP endpoint" in caplog.text
 
 
 def test_configure_browser_query_mode(tmp_path):

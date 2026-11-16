@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html.parser
+import ipaddress
 import json
 import logging
 import re
@@ -25,7 +26,7 @@ from .db import (
 )
 from .exceptions import ValidationError
 from .settings import BROWSER_VAR, switch_on
-from .utils import egress_client, is_private_ip
+from .utils import _is_allowed_loopback, egress_client, is_private_ip, loopback_opt_in, validate_base_url
 from .chunking import chunk_text as _chunk_text
 from .ingest import (
     _cleanup_conclusion_refs,
@@ -555,6 +556,28 @@ def _find_venv_python(venv_path: str | Path) -> Path | None:
     return None
 
 
+def _check_cdp_endpoint(endpoint: str, *, allow_loopback: bool) -> None:
+    """The CDP endpoint keeps the SSRF floor (#572).
+
+    Playwright connects to it out of process and would resolve a name again after this check, so the host
+    must be an IP literal, or ``localhost`` under the loopback opt-in: there is then no lookup to rebind.
+    """
+    parsed = urlparse(endpoint)
+    if parsed.scheme not in ("ws", "wss"):
+        raise ValidationError(f"CDP endpoint must use ws:// or wss://, got {parsed.scheme}://")
+    host = parsed.hostname or ""
+    if not (allow_loopback and _is_allowed_loopback(host)):
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            raise ValidationError(
+                "the CDP endpoint must be an IP address (or localhost with allow_loopback_base_url)"
+            ) from None
+    validate_base_url(
+        f"{'https' if parsed.scheme == 'wss' else 'http'}://{parsed.netloc}", allow_loopback=allow_loopback
+    )
+
+
 def _get_browser_config(conn: sqlite3.Connection) -> dict | None:
     """Read browser rendering configuration from config table.
 
@@ -578,6 +601,11 @@ def _get_browser_config(conn: sqlite3.Connection) -> dict | None:
     if mode == "cdp":
         endpoint = config_map.get("browser_endpoint")
         if endpoint:
+            try:
+                _check_cdp_endpoint(endpoint, allow_loopback=loopback_opt_in(conn))
+            except ValidationError as exc:
+                logger.warning("Stored CDP endpoint refused, browser fallback disabled: %s", exc)
+                return None
             config["endpoint"] = endpoint
 
     return config
@@ -627,9 +655,7 @@ def configure_browser(
 
     # Determine mode
     if cdp_endpoint:
-        parsed = urlparse(cdp_endpoint)
-        if parsed.scheme not in ("ws", "wss"):
-            raise ValidationError(f"CDP endpoint must use ws:// or wss://, got {parsed.scheme}://")
+        _check_cdp_endpoint(cdp_endpoint, allow_loopback=loopback_opt_in(conn))
         mode = "cdp"
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('browser_endpoint', ?)",
