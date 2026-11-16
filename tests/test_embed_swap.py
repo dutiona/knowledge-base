@@ -407,3 +407,22 @@ def test_failed_re_embed_leaves_no_orphan_space(kb_conn):
     ):
         re_embed(kb_conn, TEST_EMBED_MODEL, TEST_EMBED_DIM)
     assert _space_rows(kb_conn) == before
+
+
+def test_a_running_process_embeds_only_at_its_own_declaration(kb_conn, http_requests):
+    """Another process rewriting the endpoint rows (a rebind with the server up) cannot redirect this one."""
+    import httpx
+
+    from knowledge_base.ingest import _embed_with_config
+
+    kb_conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES "
+        "('embed_base_url', 'http://elsewhere.example.test:11434'), ('embed_api_key', 'env:HOME')"
+    )
+    kb_conn.commit()
+    http_requests.handlers["embedder.example.test"] = lambda request: httpx.Response(
+        200, json={"embeddings": [[1.0] + [0.0] * (TEST_EMBED_DIM - 1)]}
+    )
+    _embed_with_config(kb_conn, ["hello"])
+    assert http_requests.hosts() == ["embedder.example.test"]
+    assert "Authorization" not in http_requests[0].headers

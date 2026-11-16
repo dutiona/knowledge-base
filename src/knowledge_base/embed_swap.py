@@ -61,22 +61,23 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
 def declared_provider_config(conn: sqlite3.Connection, family: str) -> ProviderConfig:
     """The provider for embedding with a space of *family*: always the declared endpoint (#569).
 
-    Connection details come from the recorded rows, which the startup gate binds to the
-    declaration. A space of another family than the declared provider is refused, so no
-    tool-created or deprecated space is embedded with the wrong wire format, or against an
-    auto-detected Ollama.
+    The URL and key source come from this process's own declaration, not from the
+    ``config`` rows, so another process rewriting those rows (a ``rebind`` run while the
+    server is up) cannot redirect it. A space of another family than the declared provider
+    is refused, so no tool-created or deprecated space is embedded with the wrong wire
+    format, or against an auto-detected Ollama.
     """
-    declared = load_embed_settings().provider
-    if family != declared:
+    declared = load_embed_settings()
+    if family != declared.provider:
         raise ValidationError(
-            f"the space's provider {family!r} is not the declared provider {declared!r}; re-embed under the declaration"
+            f"the space's provider {family!r} is not the declared provider {declared.provider!r}; "
+            "re-embed under the declaration"
         )
-    cfg = get_embed_config(conn)
     return ProviderConfig(
         family=family,
-        base_url=cfg["base_url"],
-        api_key=cfg["api_key"],
-        allow_loopback=cfg["allow_loopback"],
+        base_url=declared.base_url,
+        api_key=declared.api_key_source,
+        allow_loopback=get_embed_config(conn)["allow_loopback"],
     )
 
 
