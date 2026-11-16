@@ -111,20 +111,21 @@ there is no silent fallback to the default.
 
 ## Container image
 
-The repository's `Containerfile` builds a server image from git alone. Build it from a release tag that contains the
-`Containerfile` (the first release after it landed, or any later one). Feed podman that tag's tracked files, so nothing
-untracked in a working tree can reach the build, and let it re-pull the base so a cached one never hides OS security
-updates:
+The repository's `Containerfile` builds a server image from git alone, and only from a `git archive` of a release tag
+that contains archive-only builds (the first release after they landed, or any later one). The archive holds the tag's
+tracked files and nothing else, so no untracked or git-ignored file in a working tree can reach the image. Let podman
+re-pull the base so a cached one never hides OS security updates:
 
 ```bash
 git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -
 ```
 
-`podman build .` from a fresh clone of the tag works too. Prefer the archive: a working tree can hold untracked or
-git-ignored files under `src/`, which the package would ship. A working-tree build therefore refuses when `src/` holds
-anything but Python sources (an untracked `.env` or credentials file, for example) and names them, though by then the
-file sits in a cached builder layer. It cannot tell an untracked `.py` file from a tracked one, and `git status` hides
-a git-ignored one (under `tmp/` or `build/`, say), so build from the archive or a fresh clone.
+Any other context is refused with that command, including `podman build .` from a checkout, clean or dirty. The
+refusal comes before any source is copied. `git archive` writes the commit into `.archive-commit` (`export-subst` in
+`.gitattributes`), a checkout keeps its placeholder, and the build checks it first. This catches mistakes, not a
+deliberately edited marker. An older tag's own `Containerfile` predates the check. Podman unpacks the whole archive,
+and `.containerignore` lets the build copy only `pyproject.toml`, `uv.lock`, `.python-version`, the licences, `src/`
+and the marker.
 
 The image installs exactly `uv.lock` with `uv sync --locked --no-dev --group reranker`: no dev tools, no uv, and a
 build that stops when the lock no longer matches `pyproject.toml` (run `uv lock` and commit it). The
