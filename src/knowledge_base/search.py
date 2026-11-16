@@ -274,11 +274,9 @@ def search(
     else:
         active = get_active_space(conn)
         if active is not None:
-            # Use the ACTIVE SPACE's recorded identity for the query embedding — NOT the
-            # mutable config. After a configure_embeddings() drift (config changed but not
-            # yet re_embed'd), the stored vectors are still the space's model; querying with
-            # the config's (new) model would mix spaces. Connection details still come from
-            # config (the space row stores no base_url/api_key).
+            # Query with the ACTIVE SPACE's recorded identity: the stored vectors are that
+            # space's model, whatever the config rows say. Connection details come from the
+            # bound config (the space row stores no base_url/api_key).
             space_cfg = {"model": active["model"], "dim": active["dim"], "provider": active["provider"]}
         else:
             space_cfg = get_embed_config(conn)  # fresh DB / no active space

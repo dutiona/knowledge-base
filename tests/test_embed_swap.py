@@ -139,134 +139,6 @@ def test_re_embed_includes_folder_summaries(mock_provider, tmp_path):
     assert conn.execute("SELECT count(*) FROM folder_summaries_vec").fetchone()[0] == 1
 
 
-# --- Slice C: configure_embeddings + env→config migration + env:VAR secrets (#516) ---
-
-
-def _ok_get(*_args, **_kwargs):
-    class FakeResp:
-        status_code = 200
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"data": []}
-
-    return FakeResp()
-
-
-def test_configure_embeddings_validates_and_redacts(tmp_path):
-    from knowledge_base.embed_swap import configure_embeddings
-
-    conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        result = configure_embeddings(
-            conn,
-            provider="openai_compat",
-            base_url="https://vllm.example.com/v1",
-            model="bge-m3",
-            api_key="sk-secret-123",
-        )
-    assert result["provider"] == "openai_compat"
-    assert "api_key" not in result  # redacted
-    assert result["base_url"] == "https://vllm.example.com"  # normalized (/v1 stripped)
-    # persisted
-    cfg = get_embed_config(conn)
-    assert cfg["provider"] == "openai_compat"
-    assert cfg["base_url"] == "https://vllm.example.com"
-    assert cfg["api_key"] == "sk-secret-123"
-
-
-def test_configure_embeddings_rejects_anthropic_compat(tmp_path):
-    from knowledge_base.embed_swap import configure_embeddings
-    from knowledge_base.exceptions import ValidationError
-
-    conn = _setup(tmp_path)
-    with pytest.raises(ValidationError, match="anthropic_compat"):
-        configure_embeddings(conn, provider="anthropic_compat", base_url="https://x.example.com")
-
-
-def test_configure_embeddings_loopback_requires_flag(tmp_path):
-    from knowledge_base.embed_swap import configure_embeddings
-    from knowledge_base.exceptions import ValidationError
-
-    conn = _setup(tmp_path)
-    # Without the opt-in, a localhost base_url is hard-rejected at config-write.
-    with pytest.raises(ValidationError, match="private"):
-        configure_embeddings(conn, provider="openai_compat", base_url="http://localhost:11434")
-    # With the opt-in, it is accepted (connectivity is advisory).
-    with patch("knowledge_base.embed_swap.httpx.get", _ok_get):
-        result = configure_embeddings(
-            conn,
-            provider="openai_compat",
-            base_url="http://localhost:11434/v1",
-            allow_loopback_base_url=True,
-        )
-    assert result["provider"] == "openai_compat"
-    assert get_embed_config(conn)["base_url"] == "http://localhost:11434"
-
-
-def test_configure_embeddings_env_indirection_not_persisted(tmp_path, monkeypatch):
-    from knowledge_base.embed_swap import configure_embeddings
-
-    conn = _setup(tmp_path)
-    monkeypatch.setenv("KB_EMBED_SECRET", "sk-resolved-at-call-time")
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        configure_embeddings(
-            conn,
-            provider="openai_compat",
-            base_url="https://vllm.example.com",
-            api_key="env:KB_EMBED_SECRET",
-        )
-    # The raw indirection spec is stored verbatim — never the resolved secret.
-    stored = conn.execute("SELECT value FROM config WHERE key = 'embed_api_key'").fetchone()["value"]
-    assert stored == "env:KB_EMBED_SECRET"
-    all_values = " ".join(r["value"] for r in conn.execute("SELECT value FROM config").fetchall())
-    assert "sk-resolved-at-call-time" not in all_values
-
-
-def test_configure_embeddings_clears_stale_keys_for_ollama(tmp_path):
-    from knowledge_base.embed_swap import configure_embeddings
-
-    conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com", api_key="sk-1")
-    with patch("knowledge_base.embed_swap.httpx.get", _ok_get):
-        configure_embeddings(conn, provider="ollama", model="bge-m3")
-    cfg = get_embed_config(conn)
-    assert cfg["provider"] == "ollama"
-    assert cfg["base_url"] is None
-    assert cfg["api_key"] is None
-
-
-def test_configure_embeddings_no_key_in_logs(tmp_path, caplog):
-    from knowledge_base.embed_swap import configure_embeddings
-
-    conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-        caplog.at_level("DEBUG"),
-    ):
-        configure_embeddings(
-            conn,
-            provider="openai_compat",
-            base_url="https://user:hunter2@vllm.example.com",
-            api_key="sk-topsecret",
-        )
-    assert "sk-topsecret" not in caplog.text
-    assert "hunter2" not in caplog.text
-
-
 # --- Slice D: producer-side identity hard-reject (AC6, #516) ---
 
 
@@ -278,15 +150,12 @@ def test_assert_identity_match_passes_when_aligned(tmp_path):
 
 
 def test_assert_identity_match_rejects_family_change(tmp_path):
-    from knowledge_base.embed_swap import assert_embed_identity_match, configure_embeddings
+    from knowledge_base.embed_swap import assert_embed_identity_match
     from knowledge_base.exceptions import ValidationError
 
     conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com", model="bge-m3")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.commit()
     # active space still (ollama, bge-m3); config now openai_compat → mismatch
     with pytest.raises(ValidationError, match="identity"):
         assert_embed_identity_match(conn)
@@ -325,31 +194,15 @@ def test_assert_identity_match_noop_without_active_space(tmp_path):
 
 
 def test_embed_with_config_rejects_identity_mismatch(tmp_path):
-    from knowledge_base.embed_swap import configure_embeddings
     from knowledge_base.exceptions import ValidationError
     from knowledge_base.ingest import _embed_with_config
 
     conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com", model="bge-m3")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.commit()
     # active space (ollama, bge-m3) vs configured openai_compat → reject before any HTTP call
     with pytest.raises(ValidationError, match="identity"):
         _embed_with_config(conn, ["hello"])
-
-
-def test_configure_embeddings_remote_ollama_base_url(tmp_path):
-    """A LAN/remote Ollama base_url is accepted (family-trusted, not SSRF-validated) and honored."""
-    from knowledge_base.embed_swap import configure_embeddings
-
-    conn = _setup(tmp_path)
-    # 192.168.x is private — would be SSRF-rejected for openai_compat, but ollama is trusted.
-    with patch("knowledge_base.embed_swap.httpx.get", _ok_get):
-        result = configure_embeddings(conn, provider="ollama", base_url="http://192.168.1.5:11434", model="bge-m3")
-    assert result["provider"] == "ollama"
-    assert get_embed_config(conn)["base_url"] == "http://192.168.1.5:11434"
 
 
 def test_openai_key_not_injected_into_generic_backend(tmp_path, monkeypatch):

@@ -13,7 +13,6 @@ import sqlite3
 import time
 from urllib.parse import urlparse
 
-import httpx
 
 from .db import (
     SPACE_NAME_RE,
@@ -21,16 +20,13 @@ from .db import (
     get_active_space,
     space_table_name,
 )
-from .embeddings import EmbeddingProvider, ProviderConfig, _get_ollama_url, get_provider, truncate_embedding
+from .embeddings import EmbeddingProvider, ProviderConfig, get_provider, truncate_embedding
 from .exceptions import ValidationError
 from .settings import load_embed_settings
-from .utils import ELEMENT_INSERT_EXPR, VALID_ELEMENT_TYPES, _resolve_api_key, _sanitize_url, validate_base_url
+from .utils import ELEMENT_INSERT_EXPR, VALID_ELEMENT_TYPES
 
 logger = logging.getLogger(__name__)
 
-# Provider families valid for the embedding capability (anthropic_compat is chat-only).
-_EMBED_FAMILIES = ("ollama", "openai_compat", "onnx")
-_LOCAL_EMBED_FAMILIES = ("ollama", "onnx")  # no base_url/api_key — stale keys are cleared
 
 _embed_env_deprecation_warned = False
 
@@ -144,115 +140,6 @@ def assert_embed_identity_match(conn: sqlite3.Connection) -> None:
             "change requires a new space — run re_embed() rather than corrupting the active space "
             "(ADR-0015 mismatch rule). A base_url change within the same family is allowed."
         )
-
-
-_EMBED_CONNECTIVITY_TIMEOUT = 3
-
-
-def _test_embedding_connectivity(
-    provider: str, base_url: str | None, api_key: str | None = None, *, allow_loopback: bool = False
-) -> dict:
-    """Probe embedding endpoint reachability. Advisory — never raises (mirrors LLM probe)."""
-    if provider == "onnx":
-        return {"reachable": True}  # local inference, no network endpoint
-    target = base_url or _get_ollama_url()
-    safe_url = _sanitize_url(target)
-    try:
-        if provider == "ollama":
-            resp = httpx.get(f"{target}/api/tags", timeout=_EMBED_CONNECTIVITY_TIMEOUT, follow_redirects=False)
-            resp.raise_for_status()
-        else:  # openai_compat
-            validate_base_url(target, allow_loopback=allow_loopback)
-            headers: dict[str, str] = {}
-            resolved = _resolve_api_key(api_key)
-            if resolved:
-                headers["Authorization"] = f"Bearer {resolved}"
-            resp = httpx.get(
-                f"{target}/v1/models", headers=headers, timeout=_EMBED_CONNECTIVITY_TIMEOUT, follow_redirects=False
-            )
-            resp.raise_for_status()
-        return {"reachable": True}
-    except httpx.ConnectError:
-        warning = f"Cannot connect to {safe_url}"
-    except httpx.TimeoutException:
-        warning = f"Connection timed out to {safe_url} ({_EMBED_CONNECTIVITY_TIMEOUT}s)"
-    except httpx.HTTPStatusError as exc:
-        warning = (
-            "Authentication failed — check api_key"
-            if exc.response.status_code in (401, 403)
-            else (f"Server returned HTTP {exc.response.status_code}")
-        )
-    except Exception as exc:
-        warning = f"Connectivity test failed: {type(exc).__name__}"
-    logger.warning("Embedding connectivity test failed for %s at %s: %s", provider, safe_url, warning)
-    return {"reachable": False, "warning": warning}
-
-
-def configure_embeddings(
-    conn: sqlite3.Connection,
-    provider: str = "ollama",
-    base_url: str | None = None,
-    model: str = "bge-m3",
-    api_key: str | None = None,
-    allow_loopback_base_url: bool | None = None,
-) -> dict:
-    """Configure the embedding provider (mirrors :func:`llm.configure_llm`).
-
-    Moves embedding-provider selection out of the ``EMBED_PROVIDER``/``OPENAI_API_KEY``
-    env vars into the ``config`` table (ADR-0018 §3). ``base_url`` is normalized then
-    SSRF-validated **before** it is persisted (the primary gate, ADR-0018 §4); a private
-    or loopback host without ``allow_loopback_base_url`` is hard-rejected, never stored.
-
-    Note: ``api_key`` is stored as plain text in the SQLite config table (or as an
-    ``env:VARNAME`` indirection, which is preferred and never resolves to the secret on
-    disk). Acceptable for local-only use; keyring hardening is deferred.
-    """
-    if provider not in _EMBED_FAMILIES:
-        if provider == "anthropic_compat":
-            raise ValidationError("anthropic_compat has no embeddings endpoint; it is a chat-only family.")
-        raise ValidationError(f"Unknown embedding provider: {provider!r}. Use one of {_EMBED_FAMILIES}.")
-    if provider == "openai_compat" and not base_url:
-        raise ValidationError("base_url is required for openai_compat provider")
-    # Preserve the shared loopback flag unless the caller set it explicitly (avoids the
-    # LLM/embed configure_* calls clobbering each other's opt-in).
-    if allow_loopback_base_url is None:
-        row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
-        loopback = bool(row) and row["value"].strip().lower() == "true"
-    else:
-        loopback = allow_loopback_base_url
-    if base_url and provider == "openai_compat":
-        # Normalize FIRST, then validate the normalized value (close the suffix-strip gap).
-        base_url = base_url.rstrip("/").removesuffix("/v1")
-        validate_base_url(base_url, allow_loopback=loopback)
-    elif base_url:
-        # ollama remote (e.g. LAN OLLAMA_HOST) — family-trusted, not SSRF-validated; Ollama
-        # uses /api/embed, so do not strip a /v1 suffix.
-        base_url = base_url.rstrip("/")
-
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', ?)", (provider,))
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_model', ?)", (model,))
-    if base_url:
-        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', ?)", (base_url,))
-    elif provider in _LOCAL_EMBED_FAMILIES:
-        conn.execute("DELETE FROM config WHERE key = 'embed_base_url'")
-    if api_key:
-        # Stored verbatim — for env:VARNAME this is the indirection spec, never the secret.
-        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_api_key', ?)", (api_key,))
-    elif provider in _LOCAL_EMBED_FAMILIES:
-        conn.execute("DELETE FROM config WHERE key = 'embed_api_key'")
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('allow_loopback_base_url', ?)",
-        ("true" if loopback else "false",),
-    )
-    conn.commit()
-
-    cfg = get_embed_config(conn)
-    connectivity = _test_embedding_connectivity(
-        cfg["provider"], cfg["base_url"], cfg["api_key"], allow_loopback=cfg["allow_loopback"]
-    )
-    cfg.pop("api_key", None)  # redact from the returned dict
-    cfg.update(connectivity)
-    return cfg
 
 
 # ---------------------------------------------------------------------------

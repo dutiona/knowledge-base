@@ -69,7 +69,7 @@ def _get(name: str) -> str | None:
 
 
 def normalize_embed_url(provider: str, url: str) -> str:
-    """The stored form of a base URL: the rule ``configure_embeddings`` applied, so legacy rows compare equal."""
+    """The stored form of a base URL: the pre-#569 ``configure_embeddings`` rule, so legacy rows compare equal."""
     url = url.rstrip("/")
     return url.removesuffix("/v1") if provider in _OPENAI_FAMILIES else url
 
