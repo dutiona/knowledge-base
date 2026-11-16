@@ -1,0 +1,10 @@
+# Allowlist: only what the image build reads reaches the context, so .env, databases,
+# virtualenvs and worktrees never do.
+*
+!pyproject.toml
+!uv.lock
+!.python-version
+!LICENSE-MIT
+!LICENSE-APACHE
+!src/
+src/**/__pycache__
