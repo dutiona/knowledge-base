@@ -133,7 +133,8 @@ only; every URL a tool supplies keeps the floor.
   values, run `knowledge-base-ingest re-embed`, start the server. A failed run removes the
   space it created and can be rerun; a killed one leaves a `populating` space to remove with
   `deprecate_embed_space_tool` then `cleanup_embed_space_tool`. Rolling back a model is a
-  re-embed too.
+  re-embed too. A failed or killed run has already recorded the new URL: to go back to the
+  previous declaration instead of rerunning, restore it and run `knowledge-base-ingest rebind`.
 - **Moving the embedder** (server stopped): set the new `KNOWLEDGE_BASE_EMBED_URL`, run
   `knowledge-base-ingest rebind`, start the server.
 - These two commands assume the server is stopped; nothing enforces it.
