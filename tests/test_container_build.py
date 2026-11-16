@@ -26,9 +26,11 @@ def _run(argv: list[str | None], cwd: Path) -> subprocess.CompletedProcess[bytes
 def _archive_check() -> str:
     """The Containerfile's RUN command that refuses a context without an expanded marker."""
     lines = (REPO / "Containerfile").read_text().splitlines()
-    checks = [line.removeprefix("RUN ") for line in lines if line.startswith("RUN ") and MARKER in line]
+    checks = [i for i, line in enumerate(lines) if line.startswith("RUN ") and MARKER in line]
     assert len(checks) == 1, checks
-    return checks[0]
+    # Refusing before any source is copied keeps a dirty src/ out of every builder layer.
+    assert checks[0] < lines.index("COPY src ./src")
+    return lines[checks[0]].removeprefix("RUN ")
 
 
 def _run_check(marker: bytes, tmp_path: Path) -> subprocess.CompletedProcess[bytes]:
