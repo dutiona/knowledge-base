@@ -657,3 +657,31 @@ class TestDeclaredEndpointExemption:
         with pytest.raises(ValidationError, match="private"):
             configure_llm(declared, "openai_compat", "https://embedder.example.test")
         assert http_requests == []
+
+
+def test_the_key_comes_from_the_declaration_not_the_config_row(monkeypatch, fake_dns, tmp_path, http_requests):
+    """#569: a foreign key row written by another process never reaches the request."""
+    import httpx
+
+    from knowledge_base.db import open_declared_db
+    from knowledge_base.ingest import _embed_with_config
+
+    fake_dns["embedder.example.test"] = ["100.64.0.10"]
+    for name, value in {
+        "KNOWLEDGE_BASE_EMBED_PROVIDER": "openai_compat",
+        "KNOWLEDGE_BASE_EMBED_MODEL": "qwen3-embedding",
+        "KNOWLEDGE_BASE_EMBED_DIM": "8",
+        "KNOWLEDGE_BASE_EMBED_URL": "https://embedder.example.test",
+        "KNOWLEDGE_BASE_EMBED_API_KEY": "sk-test-only",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("OTHER_SECRET", "sk-foreign")
+    conn = open_declared_db(tmp_path / "kb.db")
+    conn.execute("UPDATE config SET value = 'env:OTHER_SECRET' WHERE key LIKE 'embed_api%'")
+    conn.commit()
+    http_requests.handlers["embedder.example.test"] = lambda request: httpx.Response(
+        200, json={"data": [{"index": 0, "embedding": [1.0] + [0.0] * 7}]}
+    )
+    _embed_with_config(conn, ["hello"])
+    conn.close()
+    assert http_requests[0].headers["Authorization"] == "Bearer sk-test-only"
