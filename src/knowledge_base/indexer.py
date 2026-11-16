@@ -175,6 +175,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     jobs = {row["status"]: row["n"] for row in job_rows}
 
     config = get_embed_config(conn)
+    config.pop("api_key", None)
 
     _print(
         {

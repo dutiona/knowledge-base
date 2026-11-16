@@ -407,6 +407,19 @@ def test_cmd_status(tmp_path, capsys):
     assert data["chunks"] >= 1
 
 
+def test_cmd_status_never_prints_the_embedding_key(tmp_path, capsys):
+    conn, _db_path = _setup(tmp_path)
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_api_key', 'sk-test-only')")
+    conn.commit()
+    conn.close()
+
+    cmd_status(_make_args(tmp_path, quiet=False))
+
+    out = capsys.readouterr().out
+    assert "sk-test-only" not in out
+    assert "api_key" not in json.loads(out)["embedding"]
+
+
 # ---------------------------------------------------------------------------
 # _drain_jobs
 # ---------------------------------------------------------------------------
