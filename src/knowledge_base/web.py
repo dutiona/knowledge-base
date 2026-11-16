@@ -367,7 +367,6 @@ def _extract_html_images(
     except Exception:
         return 0
 
-    vis_base_url = vision_config["base_url"]
     vis_model = vision_config["model"]
 
     # --- Parse <img> tags ---
@@ -456,7 +455,7 @@ def _extract_html_images(
                 '"description", "figure_type", "title".'
             )
             try:
-                figures = _vision_call(b64, prompt, base_url=vis_base_url, model=vis_model)
+                figures = _vision_call(b64, prompt, **vision_config)
             except Exception:
                 logger.warning("Vision call failed for image %s", image_url, exc_info=True)
                 continue
@@ -772,7 +771,6 @@ def _extract_web_figures(
     except Exception:
         return 0  # Vision not configured or misconfigured
 
-    base_url = vision_config["base_url"]
     model = vision_config["model"]
 
     # Describe the screenshot via the vision model
@@ -786,7 +784,7 @@ def _extract_web_figures(
     )
 
     try:
-        figures = _vision_call(b64, prompt, base_url=base_url, model=model)
+        figures = _vision_call(b64, prompt, **vision_config)
     except Exception:
         logger.warning("Vision call failed for web screenshot %s", source_url, exc_info=True)
         return 0
@@ -798,8 +796,8 @@ def _extract_web_figures(
     omniparser_path = _get_omniparser_config(conn)
     omni_elements: list[dict] | None = None
     if omniparser_path:
-        server_url = _resolve_omniparser_server_url(conn, omniparser_path)
-        omni_result = _run_omniparser(screenshot_path, omniparser_path, server_url=server_url)
+        server = _resolve_omniparser_server_url(conn, omniparser_path)
+        omni_result = _run_omniparser(screenshot_path, omniparser_path, server=server)
         if omni_result and omni_result.get("elements"):
             omni_elements = omni_result["elements"]
 
@@ -914,7 +912,6 @@ def _extract_element_captures(
     except Exception:
         return 0
 
-    base_url = vision_config["base_url"]
     model = vision_config["model"]
 
     # --- Phase 1: Collect descriptions (fallible: vision calls) ---
@@ -933,7 +930,7 @@ def _extract_element_captures(
         )
 
         try:
-            figures = _vision_call(b64, prompt, base_url=base_url, model=model)
+            figures = _vision_call(b64, prompt, **vision_config)
         except Exception:
             logger.warning(
                 "Vision call failed for element capture %s/%s",

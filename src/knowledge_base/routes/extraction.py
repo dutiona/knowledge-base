@@ -276,7 +276,9 @@ def configure_vision_tool(
 
     Args:
         model: Vision model name (e.g. 'gemma3:27b', 'llava:13b').
-        base_url: Base URL for the vision API (e.g. 'http://localhost:11434').
+        base_url: Base URL for the vision API (e.g. 'https://vision.example.test'); omit it to use the
+            auto-detected Ollama, or pass '' to clear a stored one. A given URL keeps the SSRF floor;
+            a localhost URL needs allow_loopback_base_url (set through configure_llm_tool).
     """
     conn = _get_conn()
     try:
@@ -296,7 +298,8 @@ def configure_omniparser_tool(path: str | None = None, server_url: str | None = 
         path: Absolute path to OmniParser directory (None to query, empty string to disable).
         server_url: Optional HTTP server URL for persistent OmniParser server mode.
             None to leave unchanged, empty string to clear (reverts to auto-start),
-            or a URL like "http://gpu-node:7862" for a remote server.
+            or a server URL, which keeps the SSRF floor (a public host, or localhost with
+            allow_loopback_base_url).
     """
     conn = _get_conn()
     try:

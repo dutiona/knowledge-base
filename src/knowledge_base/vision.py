@@ -20,7 +20,6 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import cast
-from urllib.parse import urlparse
 
 import fitz
 import httpx
@@ -30,6 +29,7 @@ from .embeddings import _get_ollama_url
 from .db import bump_chunk_count, delete_chunks_cascade, get_vec_table_name
 from .exceptions import NotFoundError, ValidationError
 from .settings import VISION_VAR, switch_on
+from .utils import _sanitize_url, egress_client, loopback_opt_in, validate_base_url
 from .ingest import (
     _content_hash,
     _embed_with_config,
@@ -128,6 +128,9 @@ def _get_vision_config(conn: sqlite3.Connection) -> dict:
     return {
         "model": model_row["value"] if model_row else "gemma3:27b",
         "base_url": base_url.rstrip("/").removesuffix("/v1"),
+        # A stored URL came from a tool and keeps the SSRF floor; the auto-detected Ollama is the operator's (#572).
+        "floor": base_url_row is not None,
+        "allow_loopback": loopback_opt_in(conn),
     }
 
 
@@ -136,21 +139,26 @@ def configure_vision(
     model: str | None = None,
     base_url: str | None = None,
 ) -> dict:
-    """Configure vision model settings. Refuses while vision is off."""
+    """Configure vision model settings. Refuses while vision is off.
+
+    A ``base_url`` keeps the SSRF floor (loopback only with ``allow_loopback_base_url``) and is
+    checked before anything is written; ``""`` clears it, back to the auto-detected Ollama.
+    """
     _require_vision()
+    if base_url:
+        validate_base_url(base_url.rstrip("/").removesuffix("/v1"), allow_loopback=loopback_opt_in(conn))
     if model:
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('vision_model', ?)",
             (model,),
         )
     if base_url:
-        parsed = urlparse(base_url)
-        if parsed.scheme not in ("http", "https"):
-            raise ValidationError(f"Invalid URL scheme: {parsed.scheme!r}. Use http or https.")
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('vision_base_url', ?)",
             (base_url,),
         )
+    elif base_url == "":
+        conn.execute("DELETE FROM config WHERE key = 'vision_base_url'")
     conn.commit()
     return _get_vision_config(conn)
 
@@ -206,8 +214,8 @@ def configure_omniparser(
         path: None to query, "" to disable, otherwise absolute path to set.
         server_url: Optional HTTP server URL.  ``None`` leaves unchanged,
             ``""`` clears (reverts to auto-start on localhost:7862),
-            any other string sets a custom server URL (e.g. for a remote
-            GPU node).
+            any other string sets a custom server URL, which keeps the SSRF
+            floor (#572) and is checked before it is stored.
 
     The path is resolved (symlinks and ``..`` flattened) and validated before
     storage.  At execution time, ``_run_omniparser`` re-validates that the
@@ -243,6 +251,8 @@ def configure_omniparser(
             conn.commit()
             result["omniparser_server_url"] = None
         else:
+            server_url = server_url.rstrip("/")
+            validate_base_url(server_url, allow_loopback=loopback_opt_in(conn))
             conn.execute(
                 "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_server_url', ?)",
                 (server_url,),
@@ -288,7 +298,22 @@ def _get_omniparser_server_url(conn: sqlite3.Connection) -> str | None:
     return row["value"] if row else None
 
 
-def _check_omniparser_server(base_url: str, *, require_models: bool = False) -> bool:
+_OMNIPARSER_AUTO_URL = f"http://127.0.0.1:{_OMNIPARSER_DEFAULT_PORT}"
+
+
+def _omniparser_endpoint(conn: sqlite3.Connection) -> dict:
+    """The OmniParser server to use, with its provenance (#572).
+
+    A stored ``omniparser_server_url`` came from a tool and keeps the SSRF floor (loopback only with the
+    shared opt-in), whatever its value; KB's own auto-started server on localhost is not floored.
+    """
+    configured = _get_omniparser_server_url(conn)
+    if configured:
+        return {"base_url": configured, "floor": True, "allow_loopback": loopback_opt_in(conn)}
+    return {"base_url": _OMNIPARSER_AUTO_URL, "floor": False, "allow_loopback": False}
+
+
+def _check_omniparser_server(base_url: str, *, floor: bool, allow_loopback: bool, require_models: bool = False) -> bool:
     """Check whether an OmniParser server is healthy at *base_url*.
 
     Validates that the response contains ``"status": "omniparser"`` to
@@ -297,9 +322,11 @@ def _check_omniparser_server(base_url: str, *, require_models: bool = False) -> 
     When *require_models* is True, also checks that ``models_loaded`` is
     True — the server may be running but in subprocess-fallback mode
     (models failed to import), which is not faster than direct subprocess.
+    A URL the SSRF floor refuses counts as unhealthy, with a warning.
     """
     try:
-        resp = httpx.get(f"{base_url}/health", timeout=_OMNIPARSER_HEALTH_TIMEOUT)
+        with egress_client(floor=floor, allow_loopback=allow_loopback, timeout=_OMNIPARSER_HEALTH_TIMEOUT) as client:
+            resp = client.get(f"{base_url}/health")
         if resp.status_code != 200:
             return False
         data = resp.json()
@@ -310,24 +337,34 @@ def _check_omniparser_server(base_url: str, *, require_models: bool = False) -> 
         if data.get("status") != "omniparser":
             return False
         return not (require_models and not data.get("models_loaded"))
+    except ValidationError as exc:
+        logger.warning("OmniParser server %s refused by the SSRF floor: %s", _sanitize_url(base_url), exc)
+        return False
     except (httpx.HTTPError, json.JSONDecodeError, ValueError):
         return False
 
 
-def _run_omniparser_http(png_path: Path, base_url: str, timeout: int = _OMNIPARSER_SERVER_TIMEOUT) -> dict | None:
+def _run_omniparser_http(
+    png_path: Path,
+    base_url: str,
+    *,
+    floor: bool,
+    allow_loopback: bool,
+    timeout: int = _OMNIPARSER_SERVER_TIMEOUT,
+) -> dict | None:
     """Send a PNG to the OmniParser HTTP server and return parsed JSON.
 
-    Returns None on any failure (timeout, connection error, server error).
+    Returns None on any failure (timeout, connection error, server error, a URL the floor refuses).
     """
     try:
         image_b64 = base64.b64encode(png_path.read_bytes()).decode()
-        resp = httpx.post(
-            f"{base_url}/parse",
-            json={"image_base64": image_b64},
-            timeout=timeout,
-        )
+        with egress_client(floor=floor, allow_loopback=allow_loopback, timeout=timeout) as client:
+            resp = client.post(f"{base_url}/parse", json={"image_base64": image_b64})
         resp.raise_for_status()
         return resp.json()
+    except ValidationError as exc:
+        logger.warning("OmniParser server %s refused by the SSRF floor: %s", _sanitize_url(base_url), exc)
+        return None
     except (
         httpx.ConnectError,
         httpx.TimeoutException,
@@ -390,14 +427,14 @@ def _ensure_omniparser_server(omniparser_path: str, port: int) -> str | None:
     base_url = f"http://127.0.0.1:{port}"
 
     # Fast path: server already running
-    if _check_omniparser_server(base_url):
+    if _check_omniparser_server(base_url, floor=False, allow_loopback=False):  # KB's own child on localhost
         return base_url
 
     with _omniparser_lock:
         global _omniparser_process
 
         # Double-checked locking: another thread may have started it
-        if _check_omniparser_server(base_url):
+        if _check_omniparser_server(base_url, floor=False, allow_loopback=False):
             return base_url
 
         # Locate the server script
@@ -482,20 +519,20 @@ def _run_omniparser(
     omniparser_path: str,
     timeout: int = _OMNIPARSER_SUBPROCESS_TIMEOUT,
     *,
-    server_url: str | None = None,
+    server: dict | None = None,
 ) -> dict | None:
     """Invoke OmniParser via HTTP server or subprocess fallback.
 
-    When *server_url* is provided, tries the HTTP server first.  On any
-    HTTP failure, falls back to the subprocess path.  When *server_url*
-    is ``None``, uses the subprocess path directly (backward compatible).
+    When *server* (an endpoint from ``_resolve_omniparser_server_url``) is provided, tries the HTTP
+    server first.  On any HTTP failure, falls back to the subprocess path.  When *server* is
+    ``None``, uses the subprocess path directly (backward compatible).
 
     Re-validates that the configured python binary and parse script still
     exist and are accessible before spawning the subprocess.
     """
     # --- Try HTTP server first ---
-    if server_url is not None:
-        result = _run_omniparser_http(png_path, server_url, timeout=_OMNIPARSER_SERVER_TIMEOUT)
+    if server is not None:
+        result = _run_omniparser_http(png_path, **server, timeout=_OMNIPARSER_SERVER_TIMEOUT)
         if result is not None:
             return result
         logger.info(
@@ -982,11 +1019,13 @@ _VISION_PROMPT = _build_page_vision_prompt()
 _FIGURE_VISION_PROMPT = _build_figure_vision_prompt()
 
 
-def _vision_call(image_b64: str, prompt: str, *, base_url: str, model: str) -> list[dict]:
+def _vision_call(
+    image_b64: str, prompt: str, *, base_url: str, model: str, floor: bool, allow_loopback: bool
+) -> list[dict]:
     """Send an image to a vision model and return validated figure dicts.
 
-    Takes base_url and model as plain strings (not conn) for thread safety
-    with ThreadPoolExecutor.
+    Takes the ``_get_vision_config`` values as plain arguments (not conn) for thread safety
+    with ThreadPoolExecutor. A stored URL (``floor``) is floored and pinned on the request (#572).
     """
     messages = [
         {
@@ -1002,11 +1041,11 @@ def _vision_call(image_b64: str, prompt: str, *, base_url: str, model: str) -> l
     ]
 
     t0 = time.monotonic()
-    resp = httpx.post(
-        f"{base_url}/v1/chat/completions",
-        json={"model": model, "messages": messages, "temperature": 0.1},
-        timeout=_VISION_CALL_TIMEOUT,
-    )
+    with egress_client(floor=floor, allow_loopback=allow_loopback, timeout=_VISION_CALL_TIMEOUT) as client:
+        resp = client.post(
+            f"{base_url}/v1/chat/completions",
+            json={"model": model, "messages": messages, "temperature": 0.1},
+        )
     resp.raise_for_status()
     elapsed = time.monotonic() - t0
     logger.info("Vision call completed in %.1fs", elapsed)
@@ -1589,22 +1628,23 @@ def _render_vector_pages(
     return rendered, mixed_rendered
 
 
-def _resolve_omniparser_server_url(conn: sqlite3.Connection, omniparser_path: str) -> str | None:
-    """Resolve the OmniParser server URL to use.
+def _resolve_omniparser_server_url(conn: sqlite3.Connection, omniparser_path: str) -> dict | None:
+    """Resolve the OmniParser server endpoint to use (``{base_url, floor, allow_loopback}``), or None.
 
     Priority:
-    1. Explicitly configured ``omniparser_server_url`` (e.g. remote GPU).
+    1. Explicitly configured ``omniparser_server_url``, floored (#572).
     2. Auto-start on localhost (if no explicit URL configured).
     """
-    configured = _get_omniparser_server_url(conn)
-    if configured:
+    endpoint = _omniparser_endpoint(conn)
+    if endpoint["floor"]:
         # User configured an explicit URL — use it directly, no auto-start
-        if _check_omniparser_server(configured):
-            return configured
-        logger.warning("Configured OmniParser server at %s is not reachable", configured)
+        if _check_omniparser_server(**endpoint):
+            return endpoint
+        logger.warning("Configured OmniParser server at %s is not reachable", _sanitize_url(endpoint["base_url"]))
         return None
     # No explicit URL — try auto-start on localhost
-    return _ensure_omniparser_server(omniparser_path, _OMNIPARSER_DEFAULT_PORT)
+    url = _ensure_omniparser_server(omniparser_path, _OMNIPARSER_DEFAULT_PORT)
+    return {**endpoint, "base_url": url} if url else None
 
 
 def _run_omniparser_pipeline(
@@ -1613,7 +1653,7 @@ def _run_omniparser_pipeline(
     rendered: dict[int, bytes],
     on_progress: Callable[[str], None] | None,
     *,
-    server_url: str | None = None,
+    server: dict | None = None,
 ) -> OmniParserResults:
     """Run OmniParser on extracted images and rendered vector pages."""
     page_data: dict[
@@ -1635,7 +1675,7 @@ def _run_omniparser_pipeline(
 
     # OmniParser on extracted images (already PNGs on disk)
     for img_path, _page_num in extracted_images:
-        omni_result = _run_omniparser(img_path, omniparser_path, server_url=server_url)
+        omni_result = _run_omniparser(img_path, omniparser_path, server=server)
         image_data[img_path.name] = (
             omni_result,
             [(0.0, 0.0, 1.0, 1.0)],
@@ -1648,7 +1688,7 @@ def _run_omniparser_pipeline(
         try:
             os.close(png_fd)
             Path(png_tmp).write_bytes(png_bytes)
-            omni_result = _run_omniparser(Path(png_tmp), omniparser_path, server_url=server_url)
+            omni_result = _run_omniparser(Path(png_tmp), omniparser_path, server=server)
         finally:
             Path(png_tmp).unlink(missing_ok=True)
 
@@ -1684,8 +1724,7 @@ def _dispatch_vision_calls(
         tuple[dict | None, list[tuple[float, float, float, float]], list[bytes]],
     ],
     caption_map: CaptionMap,
-    base_url: str,
-    model: str,
+    vision_config: dict,
     on_progress: Callable[[str], None] | None,
 ) -> VisionResults:
     """Dispatch vision API calls in a thread pool, collect results."""
@@ -1714,8 +1753,7 @@ def _dispatch_vision_calls(
                 _vision_call,
                 b64,
                 prompt,
-                base_url=base_url,
-                model=model,
+                **vision_config,
             )
             future_to_key[future] = (page_0idx, local_idx, img_path.name)
 
@@ -1733,8 +1771,7 @@ def _dispatch_vision_calls(
                         _vision_call,
                         b64,
                         page_prompt,
-                        base_url=base_url,
-                        model=model,
+                        **vision_config,
                     )
                     future_to_key[future] = (page_num, region_idx, None)
             else:
@@ -1743,8 +1780,7 @@ def _dispatch_vision_calls(
                     _vision_call,
                     b64,
                     page_prompt,
-                    base_url=base_url,
-                    model=model,
+                    **vision_config,
                 )
                 future_to_key[future] = (page_num, None, None)
 
@@ -1756,8 +1792,7 @@ def _dispatch_vision_calls(
                     _vision_call,
                     b64,
                     _VISION_PROMPT,
-                    base_url=base_url,
-                    model=model,
+                    **vision_config,
                 )
                 future_to_key[future] = (
                     page_num,
@@ -2089,9 +2124,7 @@ def estimate_figures_time(
     # Use faster ETA when OmniParser server is confirmed healthy (#334)
     server_healthy = False
     if omniparser_path:
-        configured_url = _get_omniparser_server_url(conn)
-        check_url = configured_url or f"http://127.0.0.1:{_OMNIPARSER_DEFAULT_PORT}"
-        server_healthy = _check_omniparser_server(check_url, require_models=True)
+        server_healthy = _check_omniparser_server(**_omniparser_endpoint(conn), require_models=True)
     if omniparser_path:
         omni_per_page = _ETA_SECS_PER_PAGE_OMNIPARSER_SERVER if server_healthy else _ETA_SECS_PER_PAGE_OMNIPARSER
     else:
@@ -2145,9 +2178,7 @@ def extract_figures(
     # Check if OmniParser server is already healthy for a more accurate ETA
     server_healthy = False
     if omniparser_path:
-        configured_url = _get_omniparser_server_url(conn)
-        check_url = configured_url or f"http://127.0.0.1:{_OMNIPARSER_DEFAULT_PORT}"
-        server_healthy = _check_omniparser_server(check_url, require_models=True)
+        server_healthy = _check_omniparser_server(**_omniparser_endpoint(conn), require_models=True)
     n_mixed_regions = sum(len(v) for v in inputs.mixed_page_regions.values())
     n_items = len(inputs.extracted_images) + len(inputs.vector_pages)
     gate, estimated = _check_eta_gate(
@@ -2168,14 +2199,12 @@ def extract_figures(
         ctx.pdf_path, inputs.vector_pages, inputs.mixed_page_regions, on_progress
     )
 
-    # 6. Vision config, read once on the main thread at the top
-    base_url = config["base_url"]
-    model = config["model"]
+    # 6. Vision config, read once on the main thread at the top (``config``)
 
     # 6b. Resolve OmniParser server URL (uses config or auto-start)
-    omni_server_url = None
+    omni_server = None
     if omniparser_path:
-        omni_server_url = _resolve_omniparser_server_url(conn, omniparser_path)
+        omni_server = _resolve_omniparser_server_url(conn, omniparser_path)
 
     # 6c. Run OmniParser BEFORE vision calls
     omni = _run_omniparser_pipeline(
@@ -2183,7 +2212,7 @@ def extract_figures(
         inputs.extracted_images,
         rendered,
         on_progress,
-        server_url=omni_server_url,
+        server=omni_server,
     )
 
     caption_map = inputs.caption_map or CaptionMap(by_image={}, by_page={})
@@ -2195,8 +2224,7 @@ def extract_figures(
         mixed_rendered,
         omni.page_data,
         caption_map,
-        base_url,
-        model,
+        config,
         on_progress,
     )
 
@@ -2212,7 +2240,7 @@ def extract_figures(
         pages,
         vision.page_results,
         caption_map,
-        model,
+        config["model"],
         on_progress,
     )
 

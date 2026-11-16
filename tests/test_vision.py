@@ -323,6 +323,7 @@ def test_configure_vision_roundtrip(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
+    conn.execute("INSERT INTO config (key, value) VALUES ('allow_loopback_base_url', 'true')")  # #572
     result = configure_vision(conn, model="llava:13b", base_url="http://localhost:11434")
     assert result["model"] == "llava:13b"
     assert result["base_url"] == "http://localhost:11434"
@@ -668,6 +669,8 @@ def test_vision_call_parses_valid_response(vision_server):
         "prompt",
         base_url=VISION_URL,
         model="gemma3:27b",
+        floor=True,
+        allow_loopback=False,
     )
 
     assert len(result) == 1
@@ -691,7 +694,7 @@ def test_vision_call_strips_markdown_fences(vision_server):
     content = f"```json\n{json.dumps(figures)}\n```"
     vision_server.handlers[VISION_HOST] = _chat_reply(content)
 
-    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test")
+    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert len(result) == 1
     assert result[0]["figure_type"] == "chart"
@@ -709,7 +712,7 @@ def test_vision_call_filters_invalid_figures(vision_server):
     ]
     vision_server.handlers[VISION_HOST] = _chat_reply(json.dumps(figures))
 
-    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test")
+    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert len(result) == 2
     assert result[0]["figure_type"] == "diagram"
@@ -724,7 +727,7 @@ def test_vision_call_unwraps_dict_wrapper(vision_server):
     wrapper = {"figures": figures}
     vision_server.handlers[VISION_HOST] = _chat_reply(json.dumps(wrapper))
 
-    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test")
+    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert len(result) == 1
     assert result[0]["figure_type"] == "photo"
@@ -742,6 +745,8 @@ def test_vision_call_malformed_response(vision_server):
             "prompt",
             base_url=VISION_URL,
             model="test",
+            floor=True,
+            allow_loopback=False,
         )
 
 
@@ -758,7 +763,7 @@ def test_vision_call_skips_non_dict_items(vision_server):
     ]
     vision_server.handlers[VISION_HOST] = _chat_reply(json.dumps(mixed))
 
-    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test")
+    result = _vision_call("base64data", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert len(result) == 2
     assert result[0]["figure_type"] == "diagram"
@@ -1302,7 +1307,7 @@ def test_extract_figures_per_page_error(mock_vision, mock_embed, tmp_path):
     """One page fails, others succeed."""
     from knowledge_base.vision import extract_figures
 
-    def side_effect(b64, prompt, *, base_url, model):
+    def side_effect(b64, prompt, *, base_url, model, **_config):
         # We can't easily tell which page from b64, so fail on second call
         if mock_vision.call_count <= 1:
             return [
@@ -2154,7 +2159,7 @@ def test_vision_call_logs_timing(caplog, vision_server):
     import logging
 
     with caplog.at_level(logging.INFO, logger="knowledge_base.vision"):
-        _vision_call("fakebase64", "prompt", base_url=VISION_URL, model="test")
+        _vision_call("fakebase64", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert any("Vision call completed in" in msg for msg in caplog.messages)
 
@@ -2203,7 +2208,7 @@ def test_vision_call_warns_on_slow_response(caplog, vision_server):
         patch("knowledge_base.vision.time.monotonic", side_effect=lambda: now),
         caplog.at_level(logging.WARNING, logger="knowledge_base.vision"),
     ):
-        _vision_call("fakebase64", "prompt", base_url=VISION_URL, model="test")
+        _vision_call("fakebase64", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert any("consider raising" in msg for msg in caplog.messages)
 
@@ -2271,7 +2276,7 @@ def test_vision_call_uses_timeout_constant(vision_server):
 
     vision_server.handlers[VISION_HOST] = lambda request: httpx.Response(200, json=mock_response)
 
-    _vision_call("fakebase64", "prompt", base_url=VISION_URL, model="test")
+    _vision_call("fakebase64", "prompt", base_url=VISION_URL, model="test", floor=True, allow_loopback=False)
 
     assert vision_server[0].extensions["timeout"]["read"] == _VISION_CALL_TIMEOUT
 
@@ -3684,7 +3689,7 @@ class TestOmniParserServerHealth:
             200, json={"status": "omniparser", "models_loaded": True}
         )
 
-        assert _check_omniparser_server("http://127.0.0.1:7862") is True
+        assert _check_omniparser_server("http://127.0.0.1:7862", floor=False, allow_loopback=False) is True
         assert http_requests.urls() == ["http://127.0.0.1:7862/health"]
 
     def test_unreachable_server(self, http_requests):
@@ -3695,14 +3700,14 @@ class TestOmniParserServerHealth:
 
         http_requests.handlers["127.0.0.1"] = refuse
 
-        assert _check_omniparser_server("http://127.0.0.1:7862") is False
+        assert _check_omniparser_server("http://127.0.0.1:7862", floor=False, allow_loopback=False) is False
 
     def test_wrong_service_on_port(self, http_requests):
         from knowledge_base.vision import _check_omniparser_server
 
         http_requests.handlers["127.0.0.1"] = lambda request: httpx.Response(200, json={"status": "nginx"})
 
-        assert _check_omniparser_server("http://127.0.0.1:7862") is False
+        assert _check_omniparser_server("http://127.0.0.1:7862", floor=False, allow_loopback=False) is False
 
     @pytest.mark.parametrize("body", [["ok"], "ok", 1, None])
     def test_foreign_service_non_dict_json(self, http_requests, body):
@@ -3712,7 +3717,7 @@ class TestOmniParserServerHealth:
 
         http_requests.handlers["127.0.0.1"] = lambda request: httpx.Response(200, content=json.dumps(body).encode())
 
-        assert _check_omniparser_server("http://127.0.0.1:7862") is False
+        assert _check_omniparser_server("http://127.0.0.1:7862", floor=False, allow_loopback=False) is False
 
 
 class TestOmniParserHTTP:
@@ -3727,7 +3732,7 @@ class TestOmniParserHTTP:
         expected = {"elements": [{"text": "hello"}], "image_size": {"w": 100, "h": 100}}
         http_requests.handlers["127.0.0.1"] = lambda request: httpx.Response(200, json=expected)
 
-        result = _run_omniparser_http(png, "http://127.0.0.1:7862", timeout=30)
+        result = _run_omniparser_http(png, "http://127.0.0.1:7862", floor=False, allow_loopback=False, timeout=30)
 
         assert result == expected
         assert http_requests.urls() == ["http://127.0.0.1:7862/parse"]
@@ -3743,7 +3748,7 @@ class TestOmniParserHTTP:
 
         http_requests.handlers["127.0.0.1"] = time_out
 
-        result = _run_omniparser_http(png, "http://127.0.0.1:7862", timeout=30)
+        result = _run_omniparser_http(png, "http://127.0.0.1:7862", floor=False, allow_loopback=False, timeout=30)
 
         assert result is None
 
@@ -3755,7 +3760,7 @@ class TestOmniParserHTTP:
 
         http_requests.handlers["127.0.0.1"] = lambda request: httpx.Response(500)
 
-        result = _run_omniparser_http(png, "http://127.0.0.1:7862", timeout=30)
+        result = _run_omniparser_http(png, "http://127.0.0.1:7862", floor=False, allow_loopback=False, timeout=30)
 
         assert result is None
 
@@ -3775,7 +3780,11 @@ class TestOmniParserFallback:
             patch("knowledge_base.vision._run_omniparser_http", return_value=http_result) as mock_http,
             patch("knowledge_base.vision.subprocess") as mock_subprocess,
         ):
-            result = _run_omniparser(png, "/fake/omniparser", server_url="http://127.0.0.1:7862")
+            result = _run_omniparser(
+                png,
+                "/fake/omniparser",
+                server={"base_url": "http://127.0.0.1:7862", "floor": False, "allow_loopback": False},
+            )
 
         assert result == http_result
         mock_http.assert_called_once()
@@ -3804,7 +3813,11 @@ class TestOmniParserFallback:
             patch("knowledge_base.vision.subprocess.run"),
             patch("knowledge_base.vision.json.load", return_value=subprocess_result),
         ):
-            result = _run_omniparser(png, str(omni_dir), server_url="http://127.0.0.1:7862")
+            result = _run_omniparser(
+                png,
+                str(omni_dir),
+                server={"base_url": "http://127.0.0.1:7862", "floor": False, "allow_loopback": False},
+            )
 
         assert result == subprocess_result
 
@@ -3812,7 +3825,7 @@ class TestOmniParserFallback:
 class TestOmniParserConfig:
     """Tests for configure_omniparser with server_url."""
 
-    def test_configure_with_server_url(self, vision_conn):
+    def test_configure_with_server_url(self, vision_conn, fake_dns, public_net):
         from knowledge_base.vision import configure_omniparser
 
         # First set a path (required for omniparser to be "configured")
@@ -3821,9 +3834,10 @@ class TestOmniParserConfig:
             mock_val.return_value = Path("/fake/omniparser")
             configure_omniparser(vision_conn, path="/fake/omniparser")
 
-        result = configure_omniparser(vision_conn, server_url="http://gpu-node:7862")
+        fake_dns["gpu-node.example.test"] = ["203.0.113.30"]
+        result = configure_omniparser(vision_conn, server_url="http://gpu-node.example.test:7862")
 
-        assert result["omniparser_server_url"] == "http://gpu-node:7862"
+        assert result["omniparser_server_url"] == "http://gpu-node.example.test:7862"
 
     def test_query_server_url(self, vision_conn):
         from knowledge_base.vision import configure_omniparser
@@ -3902,7 +3916,7 @@ class TestOmniParserAutoStart:
         with (
             patch(
                 "knowledge_base.vision._check_omniparser_server",
-                side_effect=lambda _url: next(health_calls),
+                side_effect=lambda _url, **_trust: next(health_calls),
             ),
             patch("knowledge_base.vision.subprocess.Popen", return_value=mock_proc) as mock_popen,
             patch("atexit.register"),
@@ -4185,3 +4199,132 @@ def test_vision_off_refuses_before_any_work(kb_conn, http_requests, monkeypatch)
             call()
     assert dict(kb_conn.execute("SELECT key, value FROM config").fetchall()) == before
     assert http_requests == []
+
+
+# --- #572: stored vision and OmniParser URLs keep the SSRF floor and are pinned ---
+
+
+def _opt_in(conn) -> None:
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('allow_loopback_base_url', 'true')")
+    conn.commit()
+
+
+@pytest.mark.parametrize("url", ["http://localhost:11434", "http://tailnet.example.test:11434"])
+def test_configure_vision_keeps_the_floor(vision_conn, fake_dns, url):
+    from knowledge_base.vision import configure_vision
+
+    fake_dns["tailnet.example.test"] = ["100.64.0.7"]
+    with pytest.raises(ValidationError, match="private"):
+        configure_vision(vision_conn, model="m", base_url=url)
+    rows = vision_conn.execute("SELECT key FROM config WHERE key IN ('vision_base_url', 'vision_model')").fetchall()
+    assert rows == []
+
+
+def test_configure_vision_accepts_loopback_with_the_opt_in(vision_conn):
+    from knowledge_base.vision import configure_vision
+
+    _opt_in(vision_conn)
+    assert configure_vision(vision_conn, base_url="http://localhost:11434")["base_url"] == "http://localhost:11434"
+
+
+def test_configure_vision_empty_clears_the_stored_url(vision_conn, operator_ollama):
+    from knowledge_base.vision import _get_vision_config, configure_vision
+
+    _opt_in(vision_conn)
+    configure_vision(vision_conn, base_url="http://localhost:11434")
+    result = configure_vision(vision_conn, base_url="")
+    assert result["base_url"] == f"http://{operator_ollama}:11434"
+    assert _get_vision_config(vision_conn)["floor"] is False
+
+
+def test_a_stored_vision_row_is_refused_at_use(vision_conn, http_requests, fake_dns):
+    from knowledge_base.vision import _get_vision_config, _vision_call
+
+    fake_dns["tailnet.example.test"] = ["100.64.0.7"]
+    vision_conn.execute(
+        "INSERT INTO config (key, value) VALUES ('vision_base_url', 'http://tailnet.example.test:11434')"
+    )
+    vision_conn.commit()
+    with pytest.raises(ValidationError, match="private"):
+        _vision_call("aGk=", "p", **_get_vision_config(vision_conn))
+    assert http_requests == []
+
+
+def test_a_stored_vision_url_is_pinned(vision_conn, vision_server):
+    from knowledge_base.vision import _get_vision_config, _vision_call
+
+    vision_conn.execute("INSERT INTO config (key, value) VALUES ('vision_base_url', ?)", (VISION_URL,))
+    vision_conn.commit()
+    vision_server.handlers[VISION_HOST] = _chat_reply("[]")
+    _vision_call("aGk=", "p", **_get_vision_config(vision_conn))
+    assert vision_server.targets() == ["203.0.113.20"]
+
+
+def test_the_auto_detected_vision_endpoint_is_not_floored(vision_conn, http_requests, fake_dns, operator_ollama):
+    from knowledge_base.vision import _get_vision_config, _vision_call
+
+    http_requests.handlers[operator_ollama] = _chat_reply("[]")
+    _vision_call("aGk=", "p", **_get_vision_config(vision_conn))
+    assert fake_dns.lookups == []
+    assert http_requests.targets() == [operator_ollama]
+
+
+@pytest.mark.parametrize("url", ["http://100.64.0.7:7862", "http://127.0.0.1:7862"])
+def test_configure_omniparser_keeps_the_floor(vision_conn, url):
+    from knowledge_base.vision import configure_omniparser
+
+    with pytest.raises(ValidationError, match="private"):
+        configure_omniparser(vision_conn, server_url=url)
+    assert vision_conn.execute("SELECT 1 FROM config WHERE key = 'omniparser_server_url'").fetchone() is None
+
+
+def test_a_refused_omniparser_row_falls_back(vision_conn, http_requests, fake_dns, caplog):
+    from knowledge_base.vision import _check_omniparser_server, _omniparser_endpoint
+
+    fake_dns["gpu.example.test"] = ["100.64.0.7"]
+    vision_conn.execute(
+        "INSERT INTO config (key, value) VALUES ('omniparser_server_url', 'http://gpu.example.test:7862')"
+    )
+    vision_conn.commit()
+    assert _check_omniparser_server(**_omniparser_endpoint(vision_conn)) is False
+    assert http_requests == []
+    assert "gpu.example.test" in caplog.text
+
+
+def test_a_stored_row_equal_to_the_auto_url_is_floored(vision_conn, http_requests):
+    from knowledge_base.vision import _check_omniparser_server, _omniparser_endpoint
+
+    vision_conn.execute("INSERT INTO config (key, value) VALUES ('omniparser_server_url', 'http://127.0.0.1:7862')")
+    vision_conn.commit()
+    http_requests.handlers["127.0.0.1"] = lambda _r: httpx.Response(200, json={"status": "omniparser"})
+    assert _check_omniparser_server(**_omniparser_endpoint(vision_conn)) is False
+    assert http_requests == []
+
+
+def test_the_auto_started_omniparser_is_not_floored(vision_conn, http_requests, fake_dns):
+    from knowledge_base.vision import _check_omniparser_server, _omniparser_endpoint
+
+    http_requests.handlers["127.0.0.1"] = lambda _r: httpx.Response(200, json={"status": "omniparser"})
+    assert _check_omniparser_server(**_omniparser_endpoint(vision_conn)) is True
+    assert fake_dns.lookups == []
+
+
+def test_an_opted_in_loopback_omniparser_row_reaches_parse(vision_conn, http_requests, tmp_path):
+    from knowledge_base.vision import _resolve_omniparser_server_url, _run_omniparser
+
+    _opt_in(vision_conn)
+    vision_conn.execute("INSERT INTO config (key, value) VALUES ('omniparser_server_url', 'http://127.0.0.1:7863')")
+    vision_conn.commit()
+
+    def _serve(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "omniparser"})
+        return httpx.Response(200, json={"elements": [], "image_size": {}})
+
+    http_requests.handlers["127.0.0.1"] = _serve
+    png = tmp_path / "p.png"
+    png.write_bytes(b"\x89PNG")
+    server = _resolve_omniparser_server_url(vision_conn, "/fake/omniparser")
+    assert server is not None
+    assert _run_omniparser(png, "/fake/omniparser", server=server) == {"elements": [], "image_size": {}}
+    assert [r.url.path for r in http_requests] == ["/health", "/parse"]
