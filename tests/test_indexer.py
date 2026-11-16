@@ -522,3 +522,41 @@ def test_main_env_var_resolves(tmp_path, monkeypatch):
         assert count >= 1
     finally:
         conn.close()
+
+
+# --- #569: the CLI's embedding commands run through the startup gate ---
+
+
+def test_cli_ingest_without_a_declaration_exits_naming_it(tmp_path, monkeypatch, capsys):
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Test\n\nContent.\n")
+    monkeypatch.delenv("KNOWLEDGE_BASE_EMBED_PROVIDER")
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--db", str(tmp_path / "kb.db"), "ingest", str(md_file)])
+    assert exit_info.value.code == 1
+    assert "KNOWLEDGE_BASE_EMBED_PROVIDER" in capsys.readouterr().err
+
+
+def test_cli_ingest_on_a_disagreeing_database_exits_naming_the_field(tmp_path, monkeypatch, capsys):
+    conn, db_path = _setup(tmp_path)
+    conn.close()
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Test\n\nContent.\n")
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--db", str(db_path), "ingest", str(md_file)])
+    assert exit_info.value.code == 1
+    assert "embed_model" in capsys.readouterr().err
+
+
+def test_cli_maintenance_commands_need_no_declaration(tmp_path, monkeypatch):
+    """Guard: status, schema and migrate --check work on an existing database with nothing declared."""
+    conn, db_path = _setup(tmp_path)
+    conn.close()
+    for name in ("PROVIDER", "MODEL", "DIM", "URL"):
+        monkeypatch.delenv(f"KNOWLEDGE_BASE_EMBED_{name}")
+    main(["--db", str(db_path), "--quiet", "status"])
+    for argv in (["schema"], ["migrate", "--check"]):
+        with pytest.raises(SystemExit) as exit_info:
+            main(["--db", str(db_path), "--quiet", *argv])
+        assert exit_info.value.code == 0

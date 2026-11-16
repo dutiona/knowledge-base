@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from . import migrate as _mig
-from .db import get_connection, init_schema, resolve_db_path
+from .db import get_connection, init_schema, open_declared_db, resolve_db_path
 from .exceptions import KnowledgeBaseError
 
 logger = logging.getLogger(__name__)
@@ -28,9 +28,8 @@ logger = logging.getLogger(__name__)
 
 
 def _get_conn(db_path: Path) -> sqlite3.Connection:
-    conn = get_connection(db_path)
-    init_schema(conn)
-    return conn
+    """The embedding commands' connection: through the startup gate (#569)."""
+    return open_declared_db(db_path)
 
 
 def _drain_jobs(
@@ -165,7 +164,8 @@ def cmd_re_embed(args: argparse.Namespace) -> None:
 def cmd_status(args: argparse.Namespace) -> None:
     from .embed_swap import get_embed_config
 
-    conn = _get_conn(args.db)
+    conn = get_connection(args.db)  # read-only report: no declaration needed
+    init_schema(conn)
 
     chunks = conn.execute("SELECT COUNT(*) AS n FROM chunks").fetchone()["n"]
     sources = conn.execute("SELECT COUNT(DISTINCT source_uri) AS n FROM chunks").fetchone()["n"]

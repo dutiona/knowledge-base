@@ -9,8 +9,12 @@ call), the tool set shrinks and the assertions below catch it.
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+import sys
 from unittest.mock import patch
 
+import pytest
 from fastmcp import FastMCP
 
 from knowledge_base import server
@@ -132,3 +136,99 @@ def test_main_runs_stdio_transport():
     with patch.object(server.mcp, "run") as mock_run:
         server.main()
     mock_run.assert_called_once_with(transport="stdio")
+
+
+# --- #569: the startup gate ---
+
+_OPENAI_COMPAT = {
+    "KNOWLEDGE_BASE_EMBED_PROVIDER": "openai_compat",
+    "KNOWLEDGE_BASE_EMBED_MODEL": "qwen3-embedding",
+    "KNOWLEDGE_BASE_EMBED_DIM": "8",
+    "KNOWLEDGE_BASE_EMBED_URL": "https://embedder.example.test",
+}
+
+
+@pytest.mark.parametrize("missing", list(_OPENAI_COMPAT))
+def test_main_exits_before_serving_when_a_variable_is_missing(missing, monkeypatch, capsys, http_requests, tmp_path):
+    db = tmp_path / "kb.db"
+    monkeypatch.setenv("KNOWLEDGE_BASE_DB", str(db))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-only")
+    for name, value in _OPENAI_COMPAT.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv(missing)
+    with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exit_info:
+        server.main()
+    assert exit_info.value.code == 78
+    assert missing in capsys.readouterr().err
+    run.assert_not_called()
+    assert http_requests == []
+    assert not db.exists()
+
+
+def test_main_refuses_a_database_that_disagrees(monkeypatch, capsys):
+    from knowledge_base.db import open_declared_db
+
+    open_declared_db().close()
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
+    with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exit_info:
+        server.main()
+    assert exit_info.value.code == 78
+    err = capsys.readouterr().err
+    assert "embed_model" in err
+    assert "KNOWLEDGE_BASE_EMBED_MODEL" in err
+    run.assert_not_called()
+
+
+def test_main_records_a_legacy_endpoint_and_serves(monkeypatch):
+    from knowledge_base.db import get_connection, init_schema
+
+    conn = get_connection()
+    init_schema(conn)
+    conn.execute("DELETE FROM config WHERE key = 'embed_base_url'")
+    conn.commit()
+    conn.close()
+    with patch.object(server.mcp, "run") as run:
+        server.main()
+    run.assert_called_once_with(transport="stdio")
+    conn = get_connection()
+    url = conn.execute("SELECT value FROM config WHERE key = 'embed_base_url'").fetchone()["value"]
+    conn.close()
+    assert url == "http://embedder.example.test:11434"
+
+
+def test_main_refuses_a_bad_switch(monkeypatch, capsys):
+    monkeypatch.setenv("KNOWLEDGE_BASE_VISION", "yes")
+    with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exit_info:
+        server.main()
+    assert exit_info.value.code == 78
+    assert "KNOWLEDGE_BASE_VISION" in capsys.readouterr().err
+    run.assert_not_called()
+
+
+def _run_server(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603  # trusted argv: this interpreter and our own module
+        [sys.executable, "-m", "knowledge_base.server"],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def test_server_process_exits_78_without_a_declaration(tmp_path):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("KNOWLEDGE_BASE_EMBED_")}
+    env["KNOWLEDGE_BASE_DB"] = str(tmp_path / "kb.db")
+    proc = _run_server(env)
+    assert proc.returncode == 78
+    assert "KNOWLEDGE_BASE_EMBED_PROVIDER" in proc.stderr
+    assert not (tmp_path / "kb.db").exists()
+
+
+def test_server_process_serves_under_a_declaration(tmp_path):
+    env = dict(os.environ)
+    env["KNOWLEDGE_BASE_DB"] = str(tmp_path / "kb.db")
+    proc = _run_server(env)
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "kb.db").exists()
