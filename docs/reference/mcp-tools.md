@@ -605,12 +605,13 @@ With no arguments, returns the current strategy. Non-PDF content always uses mec
 
 Configure the LLM used for structured extraction. Runs a connectivity test after saving. Refuses unless the server runs with `KNOWLEDGE_BASE_LLM=on`; `api_key` is an inline value or exactly `env:KNOWLEDGE_BASE_LLM_API_KEY`.
 
-| Parameter  | Type          | Required | Default         | Description                                                              |
-| ---------- | ------------- | -------- | --------------- | ------------------------------------------------------------------------ |
-| `provider` | `str`         | no       | `"ollama"`      | `ollama` (native API) or `openai_compat` (OpenAI-compatible API)         |
-| `base_url` | `str \| None` | no       | `None`          | Base URL (e.g. `http://192.168.1.41:1234`). Required for `openai_compat` |
-| `model`    | `str`         | no       | `"qwen3.5:27b"` | Model name                                                               |
-| `api_key`  | `str \| None` | no       | `None`          | Optional API key for authenticated endpoints                             |
+| Parameter                 | Type           | Required | Default         | Description                                                                                       |
+| ------------------------- | -------------- | -------- | --------------- | ------------------------------------------------------------------------------------------------- |
+| `provider`                | `str`          | no       | `"ollama"`      | `ollama` (native API), `openai_compat` or `anthropic_compat`                                      |
+| `base_url`                | `str \| None`  | no       | `None`          | Base URL (e.g. `https://llm.example.test`). Required for `openai_compat` and `anthropic_compat`   |
+| `model`                   | `str`          | no       | `"qwen3.5:27b"` | Model name                                                                                        |
+| `api_key`                 | `str \| None`  | no       | `None`          | Optional API key for authenticated endpoints                                                      |
+| `allow_loopback_base_url` | `bool \| None` | no       | `None`          | The shared opt-in for a loopback/`localhost` URL; `None` preserves the stored value               |
 
 **Returns:** Saved config (api_key redacted) plus connectivity test result.
 
@@ -637,9 +638,10 @@ needs `allow_loopback_base_url`, set through `configure_llm_tool`).
 
 Configure {term}`OmniParser` for figure enrichment. OmniParser adds OCR text and icon detection to figure descriptions. Refuses, even a query, unless the server runs with `KNOWLEDGE_BASE_VISION=on`.
 
-| Parameter | Type          | Required | Default | Description                                                                     |
-| --------- | ------------- | -------- | ------- | ------------------------------------------------------------------------------- |
-| `path`    | `str \| None` | no       | `None`  | Absolute path to OmniParser directory. `None` to query, empty string to disable |
+| Parameter    | Type          | Required | Default | Description                                                                         |
+| ------------ | ------------- | -------- | ------- | ----------------------------------------------------------------------------------- |
+| `path`       | `str \| None` | no       | `None`  | Absolute path to OmniParser directory. `None` to query, empty string to disable     |
+| `server_url` | `str \| None` | no       | `None`  | OmniParser HTTP server URL. `None` leaves it, `""` clears it (back to the auto-start) |
 
 Requires a local OmniParser installation with `parse.py` and a `.venv/bin/python` in the specified directory. KB
 auto-starts its own server on `127.0.0.1:7862`; a `server_url` given instead keeps the SSRF floor when stored and on
@@ -648,7 +650,7 @@ every request, and a refused server falls back to the subprocess.
 **Returns:**
 
 ```json
-{ "omniparser_path": "/path/to/OmniParser" }
+{ "omniparser_path": "/path/to/OmniParser", "omniparser_server_url": null }
 ```
 
 ### configure_browser_tool

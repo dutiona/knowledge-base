@@ -218,7 +218,7 @@ with these defaults:
 | `auto_relate_propose_threshold` | `0.82`        |
 | `auto_relate_accept_threshold`  | `0.95`        |
 
-Additional keys set via configure tools: `llm_base_url`, `llm_api_key`, `vision_model`, `vision_base_url`, `omniparser_path`, `browser_mode`, `browser_endpoint`, `browser_venv`.
+Additional keys set via configure tools: `llm_base_url`, `llm_api_key`, `vision_model`, `vision_base_url`, `omniparser_path`, `omniparser_server_url`, `browser_mode`, `browser_endpoint`, `browser_venv`.
 
 **Provider keys** (`embed_*` recorded from the declaration, `llm_*` set via `configure_llm`, per
 [ADR-0018](../design/adr/0018-provider-abstraction.md) and its #569 amendment):
