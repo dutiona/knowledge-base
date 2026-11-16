@@ -206,7 +206,7 @@ def test_main_refuses_a_bad_switch(monkeypatch, capsys):
 
 
 def _run_server(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603  # trusted argv: this interpreter and our own module
+    return subprocess.run(  # noqa: S603, RUF100 -- trusted argv (this interpreter, our module); ruff versions disagree
         [sys.executable, "-m", "knowledge_base.server"],
         env=env,
         stdin=subprocess.DEVNULL,
