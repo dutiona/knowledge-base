@@ -141,6 +141,11 @@ its grace period and then kills the server. The state lives on two volumes:
 | `KNOWLEDGE_BASE_DB`       | `/var/lib/knowledge-base/db`   | `knowledge.db` and its WAL files    |
 | `KNOWLEDGE_BASE_DATA_DIR` | `/var/lib/knowledge-base/data` | figures and other on-disk artifacts |
 
+The image carries no embedding declaration: pass the `KNOWLEDGE_BASE_EMBED_*` variables (and any
+`KNOWLEDGE_BASE_{VISION,BROWSER,LLM}` switch) with `--env` (`Environment=` in a quadlet), and the key
+`KNOWLEDGE_BASE_EMBED_API_KEY` through `--env-file` or a secret, never in the unit file. Without them the server
+exits 78 at start (see the README's Configuration section).
+
 ### Snapshotting a running server
 
 Until the server gains an HTTP transport (#571), `knowledge-base` speaks MCP over stdio and exits when its standard
