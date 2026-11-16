@@ -15,12 +15,19 @@ uv sync                          # install all deps (never use pip)
 ## Verify
 
 ```bash
-uv run pytest tests/ -q          # must pass before any PR
-ruff check src/ tests/           # must pass — zero warnings
-ruff format --check src/ tests/  # must pass — no reformats
+sudo apt-get install -y tesseract-ocr  # once per host: without it the OCR tests skip instead of running
+uv lock --check                        # uv.lock matches pyproject.toml; first, because uv sync rewrites a drifted lock
+uv sync
+uv run ruff check src/ tests/          # zero warnings
+uv run ruff format --check src/ tests/ # no reformats
+uv run pytest tests/ -q -m "not slow"
+uv sync --all-groups                   # the type-check resolves the optional groups' imports
+uv run basedpyright src/ tests/
 ```
 
-Run all three commands after every change. Do not skip any.
+This list is the merge gate: run every command, in this order, at the PR's final head, and
+quote the results in the PR. It mirrors `.github/workflows/ci.yml`, which no longer runs, so
+CI is not relied on and a CI status is never evidence.
 
 ## Project Layout
 
