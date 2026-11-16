@@ -4,6 +4,8 @@ import hashlib
 import sqlite3
 import struct
 
+import pytest
+
 from knowledge_base.db import (
     DEFAULT_EMBED_DIM,
     DEFAULT_EMBED_MODEL,
@@ -1659,3 +1661,40 @@ def test_get_index_stats_counts_and_structure(tmp_path):
     assert recent[0]["chunks"] == 1
     assert recent[1]["source_uri"] == "/tmp/a.pdf"
     assert recent[1]["chunks"] == 2
+
+
+def test_read_only_vacuum_into_snapshots_live_vec0_database(tmp_path):
+    """#570: the container backup recipe — a read-only ``VACUUM INTO`` through plain ``sqlite3``,
+    sqlite-vec not loaded — snapshots a live WAL database with vec0 tables and cannot write to it,
+    so it can never reset running jobs the way the job worker's crash recovery does."""
+    import sqlite_vec
+
+    src = tmp_path / "knowledge.db"
+    snap = tmp_path / "snapshot.db"
+    writer = get_connection(src)
+    # Without this, the 4 MiB vec0 chunk allocation passes the autocheckpoint and the commit
+    # copies everything into the main file, so a plain file copy would pass too.
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    init_schema(writer)
+    chunk_id = _char_add_chunk(writer, "live snapshot", 0)
+    insert_chunk_vec(writer, chunk_id, [0.1] * DEFAULT_EMBED_DIM)
+    writer.commit()
+    assert src.with_name(src.name + "-wal").stat().st_size > 0  # the data lives only in the WAL
+
+    ro = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30, autocommit=True)
+    ro.execute("VACUUM INTO ?", (str(snap),))
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        ro.execute("UPDATE chunks SET content = ''")
+    ro.close()
+
+    check = sqlite3.connect(f"file:{snap}?mode=ro", uri=True)
+    assert check.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+    check.enable_load_extension(True)
+    sqlite_vec.load(check)
+    hits = check.execute(
+        "SELECT chunk_id FROM chunks_vec WHERE embedding MATCH ? ORDER BY distance LIMIT 1",
+        (_serialize_f32([0.1] * DEFAULT_EMBED_DIM),),
+    ).fetchall()
+    assert hits == [(chunk_id,)]
+    check.close()
+    writer.close()
