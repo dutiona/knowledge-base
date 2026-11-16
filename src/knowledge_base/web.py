@@ -24,6 +24,7 @@ from .db import (
     get_vec_table_name,
 )
 from .exceptions import ValidationError
+from .settings import BROWSER_VAR, switch_on
 from .utils import is_private_ip
 from .chunking import chunk_text as _chunk_text
 from .ingest import (
@@ -562,8 +563,12 @@ def _find_venv_python(venv_path: str | Path) -> Path | None:
 def _get_browser_config(conn: sqlite3.Connection) -> dict | None:
     """Read browser rendering configuration from config table.
 
-    Returns a dict with mode/endpoint/venv keys, or None when unconfigured.
+    Returns a dict with mode/endpoint/venv keys, or None when unconfigured or while the
+    browser fallback is off: Playwright runs page JavaScript, so it runs only when switched
+    on (#569).
     """
+    if not switch_on(BROWSER_VAR):
+        return None
     rows = conn.execute(
         "SELECT key, value FROM config WHERE key IN ('browser_mode', 'browser_venv', 'browser_endpoint')"
     ).fetchall()
@@ -595,7 +600,11 @@ def configure_browser(
                       Requires venv_path too.
         venv_path: Absolute path to Python venv with playwright installed.
         Pass both as empty string to disable.  Both None to query.
+
+    Refuses while the browser fallback is off.
     """
+    if not switch_on(BROWSER_VAR):
+        raise ValidationError(f"the browser fallback is off; set {BROWSER_VAR}=on to enable it")
     # Query mode
     if cdp_endpoint is None and venv_path is None:
         cfg = _get_browser_config(conn)

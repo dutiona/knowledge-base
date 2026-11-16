@@ -4287,3 +4287,32 @@ def test_ingest_url_with_vision_off_makes_no_vision_request(_public, kb_conn, ht
     assert result["figures_extracted"] == 0
     assert result["chunks_added"] >= 1
     assert http_requests.hosts() == ["page.example.test"]
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
+def test_ingest_url_with_the_browser_off_launches_nothing(_public, kb_conn, http_requests, monkeypatch, tmp_path):
+    from knowledge_base.web import configure_browser
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_BROWSER")
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+    (venv / "bin" / "python").chmod(0o755)
+    kb_conn.execute(
+        "INSERT INTO config (key, value) VALUES ('browser_mode', 'local'), ('browser_venv', ?)", (str(venv),)
+    )
+    kb_conn.commit()
+    http_requests.handlers["page.example.test"] = _page("<div id='app'></div><script>render()</script>")
+
+    with patch("knowledge_base.web.subprocess.run") as run:
+        result = ingest_url(kb_conn, "https://page.example.test/app")
+
+    run.assert_not_called()
+    assert result["browser_rendered"] is False
+    assert http_requests.hosts() == ["page.example.test"]
+    with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_BROWSER"):
+        configure_browser(kb_conn, venv_path=str(venv))
+    with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_BROWSER"):
+        configure_browser(kb_conn)
