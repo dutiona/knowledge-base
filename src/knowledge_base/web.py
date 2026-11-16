@@ -25,7 +25,7 @@ from .db import (
 )
 from .exceptions import ValidationError
 from .settings import BROWSER_VAR, switch_on
-from .utils import is_private_ip
+from .utils import egress_client, is_private_ip
 from .chunking import chunk_text as _chunk_text
 from .ingest import (
     _cleanup_conclusion_refs,
@@ -405,80 +405,76 @@ def _extract_html_images(
     # --- Download, convert, describe ---
     collected: list[tuple[str, dict]] = []  # (description, metadata_dict)
 
-    for image_url, alt_text in candidates:
-        try:
-            with httpx.stream("GET", image_url, timeout=15.0, follow_redirects=True) as resp:
-                resp.raise_for_status()
+    # Every request and redirect hop is floored and pinned by the client (#572).
+    with egress_client(floor=True, follow_redirects=True, timeout=15.0) as image_client:
+        for image_url, alt_text in candidates:
+            try:
+                with image_client.stream("GET", image_url) as resp:
+                    resp.raise_for_status()
 
-                # Post-redirect SSRF check
-                final_url = str(resp.url)
-                if not _validate_image_url(final_url):
-                    logger.warning("SSRF: image redirected to private address %s", final_url)
-                    continue
+                    # Stream with byte counter
+                    chunks: list[bytes] = []
+                    total = 0
+                    for chunk in resp.iter_bytes(chunk_size=65536):
+                        total += len(chunk)
+                        if total > _MAX_IMAGE_DOWNLOAD_BYTES:
+                            logger.warning(
+                                "Image too large (>%d bytes): %s",
+                                _MAX_IMAGE_DOWNLOAD_BYTES,
+                                image_url,
+                            )
+                            break
+                        chunks.append(chunk)
 
-                # Stream with byte counter
-                chunks: list[bytes] = []
-                total = 0
-                for chunk in resp.iter_bytes(chunk_size=65536):
-                    total += len(chunk)
                     if total > _MAX_IMAGE_DOWNLOAD_BYTES:
-                        logger.warning(
-                            "Image too large (>%d bytes): %s",
-                            _MAX_IMAGE_DOWNLOAD_BYTES,
-                            image_url,
-                        )
-                        break
-                    chunks.append(chunk)
+                        continue
 
-                if total > _MAX_IMAGE_DOWNLOAD_BYTES:
+                    image_bytes = b"".join(chunks)
+            except Exception:
+                logger.warning("Image download failed: %s", image_url, exc_info=True)
+                continue
+
+            # Open with Pillow, check dimensions, convert to PNG
+            try:
+                img_obj = Image.open(io.BytesIO(image_bytes))
+                w, h = img_obj.size
+                if w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION:
                     continue
 
-                image_bytes = b"".join(chunks)
-        except Exception:
-            logger.warning("Image download failed: %s", image_url, exc_info=True)
-            continue
-
-        # Open with Pillow, check dimensions, convert to PNG
-        try:
-            img_obj = Image.open(io.BytesIO(image_bytes))
-            w, h = img_obj.size
-            if w < _MIN_IMAGE_DIMENSION or h < _MIN_IMAGE_DIMENSION:
+                buf = io.BytesIO()
+                img_obj.convert("RGB").save(buf, format="PNG")
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            except Exception:
+                logger.warning("Image decode failed: %s", image_url, exc_info=True)
                 continue
 
-            buf = io.BytesIO()
-            img_obj.convert("RGB").save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        except Exception:
-            logger.warning("Image decode failed: %s", image_url, exc_info=True)
-            continue
-
-        # Vision call
-        prompt = (
-            "Describe this image from a web page. Identify what it shows — "
-            "diagrams, charts, schematics, photographs, or other visual content. "
-            "Respond with a JSON list of objects with keys: "
-            '"description", "figure_type", "title".'
-        )
-        try:
-            figures = _vision_call(b64, prompt, base_url=vis_base_url, model=vis_model)
-        except Exception:
-            logger.warning("Vision call failed for image %s", image_url, exc_info=True)
-            continue
-
-        for fig in figures:
-            desc = fig.get("description", "")
-            if not desc:
+            # Vision call
+            prompt = (
+                "Describe this image from a web page. Identify what it shows — "
+                "diagrams, charts, schematics, photographs, or other visual content. "
+                "Respond with a JSON list of objects with keys: "
+                '"description", "figure_type", "title".'
+            )
+            try:
+                figures = _vision_call(b64, prompt, base_url=vis_base_url, model=vis_model)
+            except Exception:
+                logger.warning("Vision call failed for image %s", image_url, exc_info=True)
                 continue
-            meta = {
-                "figure_type": "web_image",
-                "image_url": image_url,
-                "alt_text": alt_text,
-                "original_source_type": "web",
-                "source_url": source_url,
-                "vision_model": vis_model,
-                "title": fig.get("title", ""),
-            }
-            collected.append((desc, meta))
+
+            for fig in figures:
+                desc = fig.get("description", "")
+                if not desc:
+                    continue
+                meta = {
+                    "figure_type": "web_image",
+                    "image_url": image_url,
+                    "alt_text": alt_text,
+                    "original_source_type": "web",
+                    "source_url": source_url,
+                    "vision_model": vis_model,
+                    "title": fig.get("title", ""),
+                }
+                collected.append((desc, meta))
 
     if not collected:
         return 0
@@ -1086,23 +1082,14 @@ def ingest_url(
         raise ValidationError(f"URL scheme must be http or https, got: {parsed.scheme!r}")
     if not parsed.hostname:
         raise ValidationError("URL must include a hostname")
-    if is_private_ip(parsed.hostname):
-        raise ValidationError(f"URL points to a private/internal address: {parsed.hostname}")
-
-    # SSRF defense: pre-fetch check blocks direct requests to private IPs.
-    # Post-redirect check below prevents processing data from redirect-based SSRF.
-    # Note: httpx still follows the redirect (the request reaches the target).
-    # Full per-hop validation requires a custom transport — tracked in #232.
+    # The client floors and pins the first request and every redirect hop, so a refused hop is never sent and
+    # raises ValidationError (#572).
     try:
-        response = httpx.get(url, follow_redirects=True, timeout=30.0)
-        response.raise_for_status()
+        with egress_client(floor=True, follow_redirects=True, timeout=30.0) as client:
+            response = client.get(url)
+            response.raise_for_status()
     except httpx.HTTPError as e:
         raise ValidationError(f"Failed to fetch {url}: {e}") from e
-
-    # Validate post-redirect URL — prevents processing data from internal hosts
-    final_host = urlparse(str(response.url)).hostname
-    if final_host and is_private_ip(final_host):
-        raise ValidationError(f"URL redirected to a private/internal address: {final_host}")
 
     html = response.text
     text = trafilatura.extract(html, include_links=False, include_tables=True) or ""
