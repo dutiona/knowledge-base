@@ -516,7 +516,7 @@ Tools for vision-based figure extraction from PDFs.
 
 ### extract_figures_tool
 
-Extract figures from a paper's PDF using a vision model. Renders candidate pages as images, sends them to the configured vision model, and stores figure descriptions as searchable `figure` chunks.
+Extract figures from a paper's PDF using a vision model. Renders candidate pages as images, sends them to the configured vision model, and stores figure descriptions as searchable `figure` chunks. Refuses, and queues nothing, unless the server runs with `KNOWLEDGE_BASE_VISION=on`.
 
 Always queues a background job (figure extraction involves PDF rendering + vision API calls). Returns an ETA warning first; call with `confirmed=True` to submit the job.
 
@@ -571,12 +571,12 @@ Get current embedding model configuration (model name and dimension).
 
 ### re_embed_tool
 
-Re-embed all chunks with a new embedding model. Drops and recreates the vector table with new dimensions, then re-embeds all existing chunks. This is expensive -- use only when switching models.
+Rebuild the active space for the declared embedding model: creates a new space, re-embeds all chunks and promotes it. `model` and `dim` must be the declared `KNOWLEDGE_BASE_EMBED_MODEL`/`_DIM` (changing the model is `knowledge-base-ingest re-embed` with the server stopped); its use is rebuilding with another `matryoshka_base_dim`. Expensive.
 
 | Parameter             | Type          | Required | Default | Description                                                                                                                                                                                                      |
 | --------------------- | ------------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`               | `str`         | yes      | --      | Ollama model name (e.g. `mxbai-embed-large`, `nomic-embed-text`)                                                                                                                                                 |
-| `dim`                 | `int`         | yes      | --      | Embedding dimension for the new model                                                                                                                                                                            |
+| `model`               | `str`         | yes      | --      | The declared embedding model (`KNOWLEDGE_BASE_EMBED_MODEL`)                                                                                                                                                      |
+| `dim`                 | `int`         | yes      | --      | The declared dimension (`KNOWLEDGE_BASE_EMBED_DIM`)                                                                                                                                                              |
 | `matryoshka_base_dim` | `int \| None` | no       | `None`  | Native model dimension for Matryoshka truncation. Embeds at this dim, truncates to `dim`, L2 re-normalizes. Must be > `dim`. MRL models only (e.g. Qwen3-Embedding, nomic-embed-text-v2-moe, mxbai-embed-large). |
 
 **Returns:** Summary with chunk count and timing.
@@ -599,7 +599,7 @@ With no arguments, returns the current strategy. Non-PDF content always uses mec
 
 ### configure_llm_tool
 
-Configure the LLM used for structured extraction. Runs a connectivity test after saving.
+Configure the LLM used for structured extraction. Runs a connectivity test after saving. Refuses unless the server runs with `KNOWLEDGE_BASE_LLM=on`; `api_key` is an inline value or exactly `env:KNOWLEDGE_BASE_LLM_API_KEY`.
 
 | Parameter  | Type          | Required | Default         | Description                                                              |
 | ---------- | ------------- | -------- | --------------- | ------------------------------------------------------------------------ |
@@ -612,7 +612,7 @@ Configure the LLM used for structured extraction. Runs a connectivity test after
 
 ### configure_vision_tool
 
-Configure the vision model used for figure extraction.
+Configure the vision model used for figure extraction. Refuses, even a query, unless the server runs with `KNOWLEDGE_BASE_VISION=on`.
 
 | Parameter  | Type          | Required | Default | Description                                                 |
 | ---------- | ------------- | -------- | ------- | ----------------------------------------------------------- |
@@ -629,7 +629,7 @@ With no arguments, returns current configuration. Default vision model is `gemma
 
 ### configure_omniparser_tool
 
-Configure {term}`OmniParser` for figure enrichment. OmniParser adds OCR text and icon detection to figure descriptions.
+Configure {term}`OmniParser` for figure enrichment. OmniParser adds OCR text and icon detection to figure descriptions. Refuses, even a query, unless the server runs with `KNOWLEDGE_BASE_VISION=on`.
 
 | Parameter | Type          | Required | Default | Description                                                                     |
 | --------- | ------------- | -------- | ------- | ------------------------------------------------------------------------------- |
@@ -645,7 +645,7 @@ Requires a local OmniParser installation with `parse.py` and a `.venv/bin/python
 
 ### configure_browser_tool
 
-Configure browser rendering for JS-heavy web pages. Enables fallback rendering when trafilatura extracts insufficient content from a URL (< 200 chars).
+Configure browser rendering for JS-heavy web pages. Enables fallback rendering when trafilatura extracts insufficient content from a URL (< 200 chars). Refuses, even a query, unless the server runs with `KNOWLEDGE_BASE_BROWSER=on`, without which no browser is launched.
 
 | Parameter      | Type          | Required | Default | Description                                                                                  |
 | -------------- | ------------- | -------- | ------- | -------------------------------------------------------------------------------------------- |
@@ -713,7 +713,7 @@ Create a new embedding space in `populating` status.
 
 ### backfill_embed_space_tool
 
-Backfill an embedding space with chunk embeddings. Resumable -- interrupted backfills pick up where they left off.
+Backfill an embedding space with chunk embeddings. Resumable -- interrupted backfills pick up where they left off. Only a space of the declared provider can be backfilled.
 
 | Parameter    | Type  | Required | Default | Description                                             |
 | ------------ | ----- | -------- | ------- | ------------------------------------------------------- |
@@ -728,7 +728,7 @@ Backfill an embedding space with chunk embeddings. Resumable -- interrupted back
 
 ### promote_embed_space_tool
 
-Promote an embedding space to active. Deprecates the current active space and syncs config.
+Promote an embedding space to active. Deprecates the current active space and syncs config, all or nothing. Only a space of the declared identity (`KNOWLEDGE_BASE_EMBED_*`) can be promoted.
 
 | Parameter | Type  | Required | Default | Description                  |
 | --------- | ----- | -------- | ------- | ---------------------------- |

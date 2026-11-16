@@ -56,9 +56,18 @@ DB=$OPT/data/knowledge.db
 BACKUPS=$OPT/data/backups
 TS=$TS
 BACKUP=$OPT/data/backups/knowledge.$TS.pre-release.db
+export KNOWLEDGE_BASE_EMBED_PROVIDER=${KNOWLEDGE_BASE_EMBED_PROVIDER:?declare the embedding endpoint first}
+export KNOWLEDGE_BASE_EMBED_MODEL=${KNOWLEDGE_BASE_EMBED_MODEL:?}
+export KNOWLEDGE_BASE_EMBED_DIM=${KNOWLEDGE_BASE_EMBED_DIM:?}
+export KNOWLEDGE_BASE_EMBED_URL=${KNOWLEDGE_BASE_EMBED_URL:-}
 EOF
 cat "$OPT/.release-env"
 ```
+
+The `KNOWLEDGE_BASE_EMBED_*` declaration (#569) must be set in this shell first, with the
+values the harness's MCP registration uses (the key, `KNOWLEDGE_BASE_EMBED_API_KEY`, stays out
+of the file): a first release's `migrate` creates, and so seeds, the database from it, and the
+server and the CLI's embedding commands check the database against it.
 
 ## Step 1 — Build the pinned runtime (a wheel)
 
@@ -147,6 +156,9 @@ Only a clean `schema` exit `0` clears this gate.
 ## Step 5 — Promote the runtime atomically — IRREVERSIBLE (requires explicit "go")
 
 > **STOP. Ask the user to confirm "go" before promoting.** The DB is already migrated (Step 4).
+> Before the go, the harness's MCP registration (its `env` block) must carry the same
+> `KNOWLEDGE_BASE_EMBED_*` declaration as `.release-env`, plus the key: from #569 on, the server
+> exits 78 without it and the knowledge base disappears from every session.
 
 ```bash
 source ~/.local/opt/knowledge-base/.release-env

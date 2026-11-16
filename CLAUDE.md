@@ -8,14 +8,15 @@ Single SQLite database with FTS5 (BM25) + sqlite-vec (cosine) merged via Recipro
 - Python 3.12+, hatchling build, uv (never pip)
 - FastMCP server (`src/knowledge_base/server.py` entry point)
 - SQLite with FTS5, sqlite-vec, WAL mode — DB at `~/.local/share/knowledge-base/knowledge.db`
-- Ollama for embeddings (bge-m3) and LLM extraction (qwen3.5:27b)
+- Embeddings from the endpoint declared by `KNOWLEDGE_BASE_EMBED_*` (required to start; e.g. Ollama bge-m3); LLM
+  extraction, vision and the browser fallback are off unless `KNOWLEDGE_BASE_{LLM,VISION,BROWSER}=on`
 - pymupdf4llm for PDF ingestion, trafilatura for web content
 
 ## Commands
 
 ```bash
 uv sync                          # install deps
-uv run knowledge-base            # start MCP server
+uv run knowledge-base            # start MCP server (needs the KNOWLEDGE_BASE_EMBED_* declaration)
 uv run pytest tests/ -q          # run all tests
 uv run pytest tests/test_X.py -v # run one test file
 ruff check src/ tests/           # lint (strict select: E,F,W,B,SIM,UP,C4,PTH,RUF,S)

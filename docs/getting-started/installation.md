@@ -26,12 +26,15 @@ Any Ollama-compatible model works. Configure it at runtime with `configure_llm_t
 
 ### WSL2 note
 
-Ollama typically runs on the Windows host, not inside WSL. The server auto-detects
-the Windows host IP via the default gateway. Override with `OLLAMA_HOST` if needed:
+Ollama typically runs on the Windows host, not inside WSL. Embeddings use the declared
+`KNOWLEDGE_BASE_EMBED_URL`, so declare the Windows host's address there:
 
 ```bash
-export OLLAMA_HOST=http://192.168.1.100:11434
+export KNOWLEDGE_BASE_EMBED_URL=http://192.168.1.100:11434
 ```
+
+`OLLAMA_HOST` (and the default-gateway auto-detection) now steers only the LLM and vision
+defaults, when those are switched on.
 
 ## Clone and install
 
@@ -68,11 +71,21 @@ or project-level `.mcp.json`):
         "/path/to/knowledge-base",
         "knowledge-base"
       ],
-      "env": {}
+      "env": {
+        "KNOWLEDGE_BASE_EMBED_PROVIDER": "ollama",
+        "KNOWLEDGE_BASE_EMBED_MODEL": "bge-m3",
+        "KNOWLEDGE_BASE_EMBED_DIM": "1024",
+        "KNOWLEDGE_BASE_EMBED_URL": "http://localhost:11434"
+      }
     }
   }
 }
 ```
+
+The `env` block is required: the server refuses to start without an explicit embedding
+declaration, and a blank database is created from it (see the README's Configuration
+section). Vision, the browser fallback and LLM extraction stay off unless you add
+`KNOWLEDGE_BASE_VISION`, `KNOWLEDGE_BASE_BROWSER` or `KNOWLEDGE_BASE_LLM` set to `"on"`.
 
 The server uses FastMCP's stdio transport. The `knowledge-base` entry point is
 defined in `pyproject.toml` and maps to `knowledge_base.server:main`.

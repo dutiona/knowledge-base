@@ -38,7 +38,7 @@ Some figures are vector-drawn (plots, diagrams composed of PDF drawing primitive
 
 ## Vision Model Configuration
 
-Configure the vision model before running figure extraction:
+Vision is off unless the server runs with `KNOWLEDGE_BASE_VISION=on`: until then figure extraction, its ETA and `configure_vision_tool`/`configure_omniparser_tool` refuse, and `ingest_url` downloads no image. With it on, configure the vision model before running figure extraction:
 
 ```json
 {
@@ -50,7 +50,7 @@ Configure the vision model before running figure extraction:
 }
 ```
 
-The vision API must support the OpenAI-compatible `/v1/chat/completions` endpoint with image inputs. Default model is `gemma3:27b`; default base URL is auto-detected like the embedding client (OLLAMA_HOST, WSL2 gateway, localhost).
+The vision API must support the OpenAI-compatible `/v1/chat/completions` endpoint with image inputs. Default model is `gemma3:27b`; default base URL is the auto-detected Ollama (OLLAMA_HOST, WSL2 gateway, localhost); it lies outside the declared embedding endpoint, so turning vision on sends page and PDF images there.
 
 Call with no arguments to query the current configuration.
 
@@ -155,7 +155,7 @@ When ingesting web pages via `ingest_url`, inline `<img>` tags are extracted fro
 
 **Why this exists:** Text-rich pages (>= 200 chars from trafilatura) never trigger the browser fallback, so their images were completely lost — even pages with dozens of meaningful diagrams and charts. Even when the browser fallback fires, the single 1280x8000px screenshot approach misses images below the fold and asks one vision call to enumerate all figures from a dense composite image. Inline extraction solves both gaps by parsing `<img>` tags directly from the fetched HTML (see [#82](https://github.com/dutiona/knowledge-base/issues/82) for the full analysis).
 
-**When it runs:** Inline image extraction runs automatically when a vision model is configured and the browser-based screenshot extraction did not already fire. If the browser fallback produced figures from a full-page screenshot, inline extraction is skipped to avoid duplicate descriptions of the same visual content.
+**When it runs:** Inline image extraction runs automatically when `KNOWLEDGE_BASE_VISION=on`, a vision model is configured, and the browser-based screenshot extraction did not already fire. If the browser fallback produced figures from a full-page screenshot, inline extraction is skipped to avoid duplicate descriptions of the same visual content.
 
 **Filtering:** Not all images on a page are meaningful. The following are skipped:
 

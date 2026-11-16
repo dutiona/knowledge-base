@@ -6,8 +6,7 @@
 | -------------------------------- | ---------- | ------------------------------------------------------ |
 | Python                           | >= 3.12    | Runtime                                                |
 | [uv](https://docs.astral.sh/uv/) | latest     | Package management (replaces pip)                      |
-| [Ollama](https://ollama.com/)    | latest     | Embedding model host                                   |
-| bge-m3 model                     | via Ollama | Default embedding model (1024 dimensions)              |
+| An embedding endpoint            | --         | Declared via `KNOWLEDGE_BASE_EMBED_*` (e.g. Ollama with bge-m3, or any OpenAI-compatible server) |
 | SQLite with FTS5                 | stdlib     | Full-text search (included in Python's sqlite3 module) |
 
 ### Python packages (installed automatically)
@@ -77,4 +76,4 @@ Configure with `configure_browser_tool`.
 
 - **Disk**: Database grows with ingested content. Embeddings (1024-dim float32) add ~4 KB per chunk.
 - **Memory**: Ollama models require GPU or sufficient RAM (bge-m3: ~2 GB, qwen3.5:27b: ~16 GB, gemma3:27b: ~16 GB).
-- **Network**: Ollama API must be reachable (default `http://localhost:11434`, override via `OLLAMA_HOST` environment variable).
+- **Network**: the declared embedding endpoint (`KNOWLEDGE_BASE_EMBED_URL`) must be reachable; KB sends embedding requests nowhere else. Ollama for LLM extraction and vision (when switched on) defaults to `http://localhost:11434`, overridden by `OLLAMA_HOST`.

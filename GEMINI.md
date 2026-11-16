@@ -10,7 +10,7 @@ Hybrid semantic search MCP server. Python 3.12+, FastMCP, single SQLite database
 
 ```bash
 uv sync                          # install deps (never pip)
-uv run knowledge-base            # start MCP server
+uv run knowledge-base            # start MCP server (needs the KNOWLEDGE_BASE_EMBED_* declaration)
 uv run pytest tests/ -q          # run tests
 ruff check src/ tests/           # lint
 ruff format src/ tests/          # format
