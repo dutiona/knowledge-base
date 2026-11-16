@@ -205,55 +205,16 @@ def test_embed_with_config_rejects_identity_mismatch(tmp_path):
         _embed_with_config(conn, ["hello"])
 
 
-def test_openai_key_not_injected_into_generic_backend(tmp_path, monkeypatch):
-    """OPENAI_API_KEY must NOT be injected into a generic openai_compat backend (#524 review P1).
-
-    Injecting it would leak the user's OpenAI key to a third-party/local endpoint as the
-    Authorization header.
-    """
+@pytest.mark.parametrize("provider", ["openai_compat", "openai"])
+def test_openai_api_key_is_never_an_embedding_key_source(tmp_path, monkeypatch, provider):
+    """#569: the declared KNOWLEDGE_BASE_EMBED_API_KEY source is the only embedding key source."""
     conn = _setup(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-must-not-leak")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://my-vllm.example.com')")
-    conn.commit()
-    assert get_embed_config(conn)["api_key"] is None  # generic backend → no env-key injection
-
-
-def test_openai_key_injected_for_openai_literal(tmp_path, monkeypatch):
-    """OPENAI_API_KEY IS still used for the OpenAI literal endpoint (api.openai.com) — back-compat."""
-    conn = _setup(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-only")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', ?)", (provider,))
     conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://api.openai.com')")
+    conn.execute("DELETE FROM config WHERE key = 'embed_api_key'")
     conn.commit()
-    assert get_embed_config(conn)["api_key"] == "sk-openai-real"
-
-
-def test_openai_key_not_injected_for_lookalike_host(tmp_path, monkeypatch):
-    """A look-alike host merely CONTAINING 'api.openai.com' must NOT be treated as the OpenAI
-    literal — exact hostname match only, else OPENAI_API_KEY leaks (#524 security review, HIGH)."""
-    conn = _setup(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-must-not-leak")
-    for bad in (
-        "https://api.openai.com.evil.com",  # suffix attack
-        "https://evil.com/?x=api.openai.com",  # query-string substring
-        "https://notapi.openai.com",  # prefix substring (old `in` check matched this)
-        "https://api-openai-com.evil.com",
-    ):
-        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
-        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', ?)", (bad,))
-        conn.commit()
-        assert get_embed_config(conn)["api_key"] is None, f"OPENAI_API_KEY leaked for look-alike {bad!r}"
-
-
-def test_openai_key_injected_for_trailing_dot_fqdn(tmp_path, monkeypatch):
-    """The canonical trailing-dot FQDN 'api.openai.com.' normalizes to the literal (still injects)."""
-    conn = _setup(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://API.OpenAI.com.')")
-    conn.commit()
-    assert get_embed_config(conn)["api_key"] == "sk-openai-real"  # case-insensitive + trailing-dot normalized
+    assert get_embed_config(conn)["api_key"] is None
 
 
 # --- #569: every embedding provider comes from the declaration ---

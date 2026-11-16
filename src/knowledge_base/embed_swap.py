@@ -7,11 +7,9 @@ for zero-downtime model migration, A/B comparison, and rollback.
 from __future__ import annotations
 
 import logging
-import os
 import re
 import sqlite3
 import time
-from urllib.parse import urlparse
 
 
 from .db import (
@@ -28,21 +26,6 @@ from .utils import ELEMENT_INSERT_EXPR, VALID_ELEMENT_TYPES
 logger = logging.getLogger(__name__)
 
 
-_embed_env_deprecation_warned = False
-
-
-def _warn_embed_env_deprecated() -> None:
-    """One-time deprecation notice for the legacy EMBED_PROVIDER/OPENAI_API_KEY env vars."""
-    global _embed_env_deprecation_warned
-    if not _embed_env_deprecation_warned:
-        logger.warning(
-            "EMBED_PROVIDER/OPENAI_API_KEY env-var selection is deprecated; configure embeddings "
-            "via configure_embeddings() (the config table). Env back-compat will be removed in a "
-            "future release."
-        )
-        _embed_env_deprecation_warned = True
-
-
 def get_embed_config(conn: sqlite3.Connection) -> dict:
     """Get current embedding provider configuration from the config table.
 
@@ -50,8 +33,7 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     ``api_key`` is the **raw** spec (inline or ``env:VARNAME``) — resolved only at call
     time, never returned by tools. The rows record the ``KNOWLEDGE_BASE_EMBED_*``
     declaration: seeded on a blank database (``db._seed_default_config``) and bound to it at
-    every start (#569). ``OPENAI_API_KEY`` remains a secret-value fallback (it does not
-    affect identity).
+    every start (#569); the key spec is only ever the declared ``env:`` source.
     """
     model = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
     dim = conn.execute("SELECT value FROM config WHERE key = 'embed_dim'").fetchone()
@@ -65,19 +47,6 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     allow_loopback = bool(loopback_row) and loopback_row["value"].strip().lower() == "true"
 
     provider = provider_row["value"]
-    # OPENAI_API_KEY back-compat fallback — secret-value only (does not affect identity).
-    # SCOPED to the OpenAI *literal* endpoint: the legacy `openai` alias, or an `openai_compat`
-    # config whose base_url is api.openai.com. NEVER inject it into a generic openai_compat
-    # backend (vLLM/TEI/OpenRouter/localhost) — that would leak the user's OpenAI key to a
-    # third-party/local endpoint as the Authorization header (#524 review, P1). Generic
-    # backends must use an explicit inline or `env:VARNAME` key.
-    _host = (urlparse(base_url or "").hostname or "").rstrip(".").lower()
-    is_openai_literal = provider == "openai" or (provider == "openai_compat" and _host == "api.openai.com")
-    if api_key is None and is_openai_literal:
-        env_key = os.environ.get("OPENAI_API_KEY")
-        if env_key:
-            api_key = env_key
-            _warn_embed_env_deprecated()
 
     return {
         "model": model["value"],

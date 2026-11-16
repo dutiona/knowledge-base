@@ -99,16 +99,11 @@ class TestGetProvider:
         with pytest.raises(ValueError, match="Unknown embedding provider"):
             get_provider("nonexistent")
 
-    def test_env_var_override(self, monkeypatch):
-        monkeypatch.setenv("EMBED_PROVIDER", "ollama")
-        provider = get_provider("nonexistent_ignored")
-        assert isinstance(provider, OllamaProvider)
-
-    def test_env_var_override_disabled(self, monkeypatch):
-        """allow_env_override=False ignores EMBED_PROVIDER."""
+    def test_embed_provider_env_no_longer_selects(self, monkeypatch):
+        """#569: the deprecated EMBED_PROVIDER is refused at startup and never read here."""
         monkeypatch.setenv("EMBED_PROVIDER", "ollama")
         with pytest.raises(ValueError, match="Unknown embedding provider 'nonexistent'"):
-            get_provider("nonexistent", allow_env_override=False)
+            get_provider("nonexistent")
 
     def test_provider_caching(self):
         """get_provider returns the same instance for the same name."""

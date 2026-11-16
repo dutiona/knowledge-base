@@ -359,16 +359,12 @@ def get_provider(
     name: str | None = None,
     *,
     cfg: ProviderConfig | None = None,
-    allow_env_override: bool = True,
 ) -> EmbeddingProvider:
     """Get an embedding provider, by config (preferred) or by bare name (legacy).
 
     When *cfg* is given, the provider is built from the resolved identity tuple and
     cached by it — two ``openai_compat`` configs with different ``base_url`` never
-    collide. When *cfg* is None, the legacy bare-name path applies: with
-    *allow_env_override* True (default) ``EMBED_PROVIDER`` takes precedence over
-    *name*; callers that already resolved an explicit choice pass
-    ``allow_env_override=False`` so the env-var cannot silently redirect the backend.
+    collide. When *cfg* is None, the legacy bare-name path applies (no production caller).
     """
     if cfg is not None:
         cached = _provider_cache.get(cfg)
@@ -378,10 +374,7 @@ def get_provider(
         _provider_cache[cfg] = instance
         return instance
 
-    resolved = name or "ollama"
-    if allow_env_override:
-        resolved = os.environ.get("EMBED_PROVIDER", resolved)
-    resolved = resolved.lower()
+    resolved = (name or "ollama").lower()
     if resolved in _provider_cache:
         return _provider_cache[resolved]
     factory = _PROVIDERS.get(resolved)
