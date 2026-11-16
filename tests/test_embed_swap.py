@@ -1,5 +1,6 @@
 """Tests for embedding model swap and re-embed."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,7 +8,8 @@ import pytest
 from knowledge_base.db import get_connection, init_schema
 from knowledge_base.embed_swap import backfill_space, create_space, get_embed_config, re_embed
 from knowledge_base.ingest import ingest_file
-from tests.declared_env import TEST_EMBED_DIM
+from knowledge_base.utils import serialize_f32 as _serialize_f32
+from tests.declared_env import TEST_EMBED_DIM, TEST_EMBED_MODEL
 
 
 NEW_DIM = 384
@@ -46,13 +48,19 @@ def test_get_embed_config(tmp_path):
     assert config["dim"] == TEST_EMBED_DIM
 
 
+def _declare_new_model(monkeypatch) -> None:
+    """re_embed moves the active identity only to the declaration (#569)."""
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "mxbai-embed-large")
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_DIM", str(NEW_DIM))
+
+
 @patch(
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-def test_re_embed_changes_model(mock_provider, tmp_path):
+def test_re_embed_changes_model(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
     # Ingest a file with old model
@@ -64,6 +72,7 @@ def test_re_embed_changes_model(mock_provider, tmp_path):
     assert old_count >= 1
 
     # Re-embed with new model
+    _declare_new_model(monkeypatch)
     result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     assert result["chunks_processed"] == old_count
@@ -83,7 +92,7 @@ def test_re_embed_changes_model(mock_provider, tmp_path):
 )
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path):
+def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
     md = tmp_path / "doc.md"
@@ -92,6 +101,7 @@ def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path):
 
     chunk_ids_before = [r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()]
 
+    _declare_new_model(monkeypatch)
     re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     chunk_ids_after = [r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()]
@@ -103,9 +113,10 @@ def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path):
     return_value=_mock_provider(_fake_embed_new),
 )
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
-def test_re_embed_empty_db(mock_provider, tmp_path):
+def test_re_embed_empty_db(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
+    _declare_new_model(monkeypatch)
     result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     assert result["chunks_processed"] == 0
@@ -119,7 +130,7 @@ def test_re_embed_empty_db(mock_provider, tmp_path):
 )
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-def test_re_embed_includes_folder_summaries(mock_provider, tmp_path):
+def test_re_embed_includes_folder_summaries(mock_provider, tmp_path, monkeypatch):
     """re_embed re-creates folder_summaries_vec with the new model."""
     conn = _setup(tmp_path)
 
@@ -132,6 +143,7 @@ def test_re_embed_includes_folder_summaries(mock_provider, tmp_path):
     assert conn.execute("SELECT count(*) FROM folder_summaries").fetchone()[0] == 1
     assert conn.execute("SELECT count(*) FROM folder_summaries_vec").fetchone()[0] == 1
 
+    _declare_new_model(monkeypatch)
     result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     assert result["folders_processed"] == 1
@@ -253,3 +265,145 @@ def test_folder_summary_refuses_an_active_space_of_another_provider(kb_conn, htt
     with pytest.raises(ValidationError, match="not the declared provider 'ollama'"):
         update_folder_summary(kb_conn, "/docs")
     assert http_requests == []
+
+
+# --- #569: the embedding identity changes only through the declaration ---
+
+
+def _space_rows(conn) -> list[tuple]:
+    return [tuple(r) for r in conn.execute("SELECT name, status, model FROM embed_spaces ORDER BY name").fetchall()]
+
+
+def _config_rows(conn) -> dict:
+    return dict(conn.execute("SELECT key, value FROM config").fetchall())
+
+
+def test_promote_refuses_an_undeclared_identity(kb_conn, http_requests):
+    import json
+
+    import knowledge_base.routes.embeddings as emb
+
+    create_space(kb_conn, "other", "other-model", TEST_EMBED_DIM, "ollama")
+    before = (_config_rows(kb_conn), _space_rows(kb_conn))
+    with patch("knowledge_base.routes.embeddings._get_conn", return_value=kb_conn):
+        promoted = json.loads(emb.promote_embed_space_tool("other"))
+        re_embedded = json.loads(emb.re_embed_tool(model="other-model", dim=8))
+    assert "embed_model" in promoted["error"]
+    assert "embed_model" in re_embedded["error"]
+    assert (_config_rows(kb_conn), _space_rows(kb_conn)) == before
+    assert http_requests == []
+
+
+def _two_folders(conn) -> None:
+    conn.execute(
+        "INSERT INTO folder_summaries (folder_path, summary, content_hash) VALUES "
+        "('/docs/a', 'alpha text', 'h1'), ('/docs/b', 'beta text', 'h2')"
+    )
+    for path in ("/docs/a", "/docs/b"):
+        conn.execute(
+            "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
+            (_serialize_f32([0.5] * TEST_EMBED_DIM), path),
+        )
+    conn.commit()
+
+
+def _vec_state(conn) -> list:
+    return sorted(
+        (r["folder_path"], bytes(r["embedding"]))
+        for r in conn.execute("SELECT folder_path, embedding FROM folder_summaries_vec").fetchall()
+    )
+
+
+def _provider(vector: float = 0.25) -> MagicMock:
+    provider = MagicMock()
+    provider.embed.side_effect = lambda texts, model=None, expected_dim=TEST_EMBED_DIM: [
+        [vector] * expected_dim for _ in texts
+    ]
+    return provider
+
+
+@pytest.mark.parametrize("failure", ["embed", "insert", "interrupt"])
+def test_promote_is_all_or_nothing(kb_conn, failure):
+    from knowledge_base.embed_swap import promote_space
+
+    _two_folders(kb_conn)
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    before = (_config_rows(kb_conn), _space_rows(kb_conn), _vec_state(kb_conn))
+    provider = _provider()
+    calls = {"n": 0}
+    real_serialize = _serialize_f32
+
+    def _serialize(vec):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyboardInterrupt if failure == "interrupt" else RuntimeError("insert failed")
+        return real_serialize(vec)
+
+    if failure == "embed":
+        provider.embed.side_effect = RuntimeError("embed failed")
+    with (
+        patch("knowledge_base.embed_swap.get_provider", return_value=provider),
+        patch("knowledge_base.embed_swap._serialize_f32", _serialize),
+        pytest.raises((RuntimeError, KeyboardInterrupt)),
+    ):
+        promote_space(kb_conn, "same")
+
+    assert kb_conn.isolation_level == ""
+    assert (_config_rows(kb_conn), _space_rows(kb_conn), _vec_state(kb_conn)) == before
+    fresh = get_connection(Path(kb_conn.execute("PRAGMA database_list").fetchone()["file"]))
+    assert (_config_rows(fresh), _space_rows(fresh), _vec_state(fresh)) == before
+    fresh.close()
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_provider()):
+        promote_space(kb_conn, "same")  # a retry succeeds
+    assert ("same", "active", TEST_EMBED_MODEL) in _space_rows(kb_conn)
+
+
+def test_promote_refuses_a_pending_transaction(kb_conn):
+    from knowledge_base.embed_swap import promote_space
+    from knowledge_base.exceptions import KnowledgeBaseError
+
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    kb_conn.execute("INSERT INTO papers (title) VALUES ('pending')")
+    assert kb_conn.in_transaction
+    with pytest.raises(KnowledgeBaseError, match="open transaction"):
+        promote_space(kb_conn, "same")
+    assert kb_conn.in_transaction
+    assert kb_conn.execute("SELECT COUNT(*) FROM papers WHERE title = 'pending'").fetchone()[0] == 1
+    kb_conn.rollback()
+
+
+def test_promote_re_embeds_a_summary_changed_after_the_snapshot(kb_conn):
+    from knowledge_base.embed_swap import promote_space
+
+    _two_folders(kb_conn)
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    path = Path(kb_conn.execute("PRAGMA database_list").fetchone()["file"])
+    seen: list[list[str]] = []
+
+    def _embed(texts, model=None, expected_dim=TEST_EMBED_DIM):
+        seen.append(list(texts))
+        if len(seen) == 1:  # between the snapshot and the lock, another writer edits a summary
+            other = get_connection(path)
+            other.execute("UPDATE folder_summaries SET summary = 'alpha revised' WHERE folder_path = '/docs/a'")
+            other.commit()
+            other.close()
+        return [[0.1 if t == "alpha revised" else 0.25] * expected_dim for t in texts]
+
+    provider = MagicMock()
+    provider.embed.side_effect = _embed
+    with patch("knowledge_base.embed_swap.get_provider", return_value=provider):
+        promote_space(kb_conn, "same")
+    assert seen == [["alpha text", "beta text"], ["alpha revised"]]
+    stored = dict(_vec_state(kb_conn))
+    assert stored["/docs/a"] == _serialize_f32([0.1] * TEST_EMBED_DIM)
+    assert stored["/docs/b"] == _serialize_f32([0.25] * TEST_EMBED_DIM)
+
+
+def test_failed_re_embed_leaves_no_orphan_space(kb_conn):
+    before = _space_rows(kb_conn)
+    with (
+        patch("knowledge_base.embed_swap.backfill_space", side_effect=RuntimeError("embedder down")),
+        pytest.raises(RuntimeError, match="embedder down"),
+    ):
+        re_embed(kb_conn, TEST_EMBED_MODEL, TEST_EMBED_DIM)
+    assert _space_rows(kb_conn) == before

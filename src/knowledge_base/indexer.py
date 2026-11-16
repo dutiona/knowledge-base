@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+import httpx
+
 from . import migrate as _mig
 from .db import get_connection, init_schema, open_declared_db, resolve_db_path
 from .exceptions import KnowledgeBaseError
@@ -142,23 +144,27 @@ def cmd_ingest_url(args: argparse.Namespace) -> None:
 
 
 def cmd_re_embed(args: argparse.Namespace) -> None:
+    """Re-embed to the declared identity (#569): set the new KNOWLEDGE_BASE_EMBED_* first, unit stopped."""
     from .embed_swap import re_embed
+    from .settings import load_embed_settings
 
-    conn = _get_conn(args.db)
+    conn = open_declared_db(args.db, transition="re-embed")
+    declared = load_embed_settings()
     result = re_embed(
         conn,
-        args.model,
-        args.dim,
+        declared.model,
+        declared.dim,
         batch_size=args.batch_size,
-        provider=args.provider,
+        provider=declared.provider,
         matryoshka_base_dim=args.matryoshka_base_dim,
     )
-
-    # Delete stale similarity relationships (mirrors routes/embeddings.py:59).
-    conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
-    conn.commit()
-
     _print(result, quiet=args.quiet)
+
+
+def cmd_rebind(args: argparse.Namespace) -> None:
+    """Record a moved endpoint, or repair drifted config identity rows (#569); unit stopped."""
+    open_declared_db(args.db, transition="rebind").close()
+    _print({"rebound": str(args.db)}, quiet=args.quiet)
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -293,16 +299,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_url.add_argument("--session-id", dest="session_id", default=None)
 
     # -- re-embed -------------------------------------------------------------
-    p_embed = sub.add_parser("re-embed", help="Re-embed all chunks with a new model.")
-    p_embed.add_argument("--model", required=True, help="Embedding model name.")
-    p_embed.add_argument("--dim", required=True, type=int, help="Embedding dimension.")
+    p_embed = sub.add_parser(
+        "re-embed",
+        help="Re-embed all chunks to the declared KNOWLEDGE_BASE_EMBED_* identity (server stopped).",
+    )
     p_embed.add_argument("--batch-size", type=int, default=32)
-    p_embed.add_argument("--provider", default=None)
     p_embed.add_argument(
         "--matryoshka-base-dim",
         dest="matryoshka_base_dim",
         type=int,
         default=None,
+    )
+
+    # -- rebind ---------------------------------------------------------------
+    sub.add_parser(
+        "rebind",
+        help="Adopt a moved KNOWLEDGE_BASE_EMBED_URL for the same identity (server stopped).",
     )
 
     # -- status ---------------------------------------------------------------
@@ -360,6 +372,7 @@ def main(argv: list[str] | None = None) -> None:
         "reingest": cmd_reingest,
         "ingest-url": cmd_ingest_url,
         "re-embed": cmd_re_embed,
+        "rebind": cmd_rebind,
         "status": cmd_status,
         "migrate": cmd_migrate,
         "schema": cmd_schema,
@@ -369,6 +382,9 @@ def main(argv: list[str] | None = None) -> None:
         dispatch[args.command](args)
     except (KnowledgeBaseError, ValueError) as exc:
         _print_error({"error": str(exc)})
+        sys.exit(1)
+    except httpx.HTTPError as exc:
+        _print_error({"error": f"{args.command} failed: {exc}; rerun it"})
         sys.exit(1)
 
 

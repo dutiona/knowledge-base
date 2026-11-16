@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 from .._conn import _get_conn
 from ..comparison import batch_compare_spaces, compare_spaces
 from ..db import get_active_space
+from ..exceptions import KnowledgeBaseError
 from ..embed_swap import (
     backfill_space,
     cleanup_space,
@@ -41,13 +42,15 @@ def embed_config() -> str:
 
 @mcp.tool()
 def re_embed_tool(model: str, dim: int, matryoshka_base_dim: int | None = None) -> str:
-    """Re-embed all chunks with a new embedding model.
+    """Rebuild the active space for the declared embedding model.
 
-    Drops and recreates the vector table with new dimensions, then re-embeds
-    all existing chunks. This is expensive — use only when switching models.
+    Creates a new space, re-embeds every chunk and promotes it. The model and dim must
+    be the declared ones (``KNOWLEDGE_BASE_EMBED_MODEL``/``_DIM``): changing the model is
+    a maintenance step (``knowledge-base-ingest re-embed`` with the server stopped). Use
+    this to rebuild with another ``matryoshka_base_dim``. This is expensive.
 
     Args:
-        model: Ollama model name (e.g. 'mxbai-embed-large', 'nomic-embed-text').
+        model: The declared embedding model.
         dim: Embedding dimension for the new model. For Matryoshka models,
             this is the truncated storage dimension.
         matryoshka_base_dim: Native embedding dimension when using Matryoshka
@@ -55,11 +58,10 @@ def re_embed_tool(model: str, dim: int, matryoshka_base_dim: int | None = None) 
             ``create_embed_space_tool`` for details.
     """
     conn = _get_conn()
-    result = re_embed(conn, model, dim, matryoshka_base_dim=matryoshka_base_dim)
-
-    # All "similar" relationships are invalid after embedding space change
-    conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
-    conn.commit()
+    try:
+        result = re_embed(conn, model, dim, matryoshka_base_dim=matryoshka_base_dim)
+    except (KnowledgeBaseError, ValueError) as e:
+        return json.dumps({"error": str(e)})
     result["note"] = (
         "All 'similar' relationships removed (embedding space changed). "
         "Run scan_relationships() to recompute. "
@@ -133,7 +135,7 @@ def backfill_embed_space_tool(name: str, batch_size: int = 32) -> str:
     try:
         result = backfill_space(conn, name, batch_size)
         return json.dumps(result)
-    except ValueError as e:
+    except (KnowledgeBaseError, ValueError) as e:
         return json.dumps({"error": str(e)})
 
 
@@ -142,7 +144,8 @@ def promote_embed_space_tool(name: str) -> str:
     """Promote an embedding space to active. Deprecates the current active space.
 
     Also updates config (embed_model, embed_dim, embed_provider, chunk_strategy)
-    and invalidates all 'similar' relationships.
+    and invalidates all 'similar' relationships. Only a space of the declared
+    identity can be promoted.
 
     Args:
         name: Name of the space to promote.
@@ -150,14 +153,11 @@ def promote_embed_space_tool(name: str) -> str:
     conn = _get_conn()
     try:
         result = promote_space(conn, name)
-        # Invalidate similarity relationships (same as re_embed)
-        conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
-        conn.commit()
         result["note"] = (
             "All 'similar' relationships removed (embedding space changed). Run scan_relationships() to recompute."
         )
         return json.dumps(result)
-    except ValueError as e:
+    except (KnowledgeBaseError, ValueError) as e:
         return json.dumps({"error": str(e)})
 
 

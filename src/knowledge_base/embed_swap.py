@@ -19,7 +19,7 @@ from .db import (
     space_table_name,
 )
 from .embeddings import EmbeddingProvider, ProviderConfig, get_provider, truncate_embedding
-from .exceptions import ValidationError
+from .exceptions import KnowledgeBaseError, ValidationError
 from .settings import load_embed_settings
 from .utils import ELEMENT_INSERT_EXPR, VALID_ELEMENT_TYPES
 
@@ -279,17 +279,110 @@ def backfill_space(
     }
 
 
+def _assert_declared_identity(provider: str, model: str, dim: int) -> None:
+    """Refuse an active identity other than the declaration (#569): only re-embed moves it."""
+    declared = load_embed_settings()
+    for key, value, wanted in (
+        ("embed_provider", provider, declared.provider),
+        ("embed_model", model, declared.model),
+        ("embed_dim", dim, declared.dim),
+    ):
+        if value != wanted:
+            raise ValidationError(
+                f"{key} {value!r} is not the declared {wanted!r}; only the declared identity can be "
+                "active (change the declaration, then run `knowledge-base-ingest re-embed`)"
+            )
+
+
+_FolderVectors = dict[tuple[str, str], "list[float] | None"]
+
+
+def _folder_rows(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    return [(r["folder_path"], r["summary"]) for r in conn.execute("SELECT folder_path, summary FROM folder_summaries")]
+
+
+def _embed_folder_summaries(
+    provider: EmbeddingProvider,
+    rows: list[tuple[str, str]],
+    model: str,
+    dim: int,
+    matryoshka_base_dim: int | None,
+) -> _FolderVectors:
+    if not rows:
+        return {}
+    vectors = provider.embed([text for _path, text in rows], model=model, expected_dim=matryoshka_base_dim or dim)
+    if matryoshka_base_dim:
+        vectors = [truncate_embedding(v, dim) if v is not None else None for v in vectors]
+    return dict(zip(rows, vectors, strict=True))
+
+
+def _write_folder_summaries_vec(conn: sqlite3.Connection, dim: int, vectors: _FolderVectors) -> None:
+    """Recreate folder_summaries_vec at *dim* and fill it. Commits nothing: the caller owns the transaction."""
+    conn.execute("DROP TABLE IF EXISTS folder_summaries_vec")
+    conn.execute(f"""
+        CREATE VIRTUAL TABLE folder_summaries_vec USING vec0(
+            embedding float[{dim}],
+            +folder_path TEXT
+        )
+    """)
+    for (path, _text), vec in vectors.items():
+        if vec is not None:
+            conn.execute(
+                "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
+                (_serialize_f32(vec), path),
+            )
+
+
 def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
     """Promote a space to active, deprecating the current active space.
 
-    Atomically updates status and syncs config table (embed_model,
-    embed_dim, embed_provider, chunk_strategy).
+    All or nothing (#569): the folder summaries are embedded first, outside the write lock,
+    then one ``BEGIN IMMEDIATE`` transaction rechecks completeness, re-embeds only the
+    summaries that changed meanwhile, swaps the statuses, syncs the config identity rows,
+    drops the ``similar`` relationships and rebuilds ``folder_summaries_vec``. A failure,
+    Ctrl-C included, changes nothing. Only a space of the declared identity can be promoted.
     """
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = ?", (space_name,)).fetchone()
     if space is None:
         raise ValueError(f"Embedding space {space_name!r} not found")
     if space["status"] not in ("populating", "deprecated"):
         raise ValueError(f"Can only promote spaces in 'populating' or 'deprecated' status, got: {space['status']!r}")
+    _assert_declared_identity(space["provider"], space["model"], space["dim"])
+    if conn.in_transaction:
+        raise KnowledgeBaseError("promote_space needs a connection with no open transaction; commit or roll back first")
+    _check_promotable(conn, space)  # fail fast; rechecked under the lock
+    provider = get_provider(cfg=declared_provider_config(conn, space["provider"]))
+    shape = (space["model"], space["dim"], space["matryoshka_base_dim"])
+    snapshot = _embed_folder_summaries(provider, _folder_rows(conn), *shape)
+
+    level = conn.isolation_level
+    conn.isolation_level = None  # explicit BEGIN: Python's sqlite3 opens no transaction before DDL
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            stale_warning = _check_promotable(conn, space)
+            current = _folder_rows(conn)
+            changed = [row for row in current if row not in snapshot]
+            vectors = {row: snapshot[row] for row in current if row in snapshot}
+            vectors.update(_embed_folder_summaries(provider, changed, *shape))
+            old_name = _swap_active(conn, space)
+            _write_folder_summaries_vec(conn, space["dim"], vectors)
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.isolation_level = level
+
+    result: dict = {"promoted": space_name, "deprecated": old_name}
+    if stale_warning:
+        result["warning"] = stale_warning
+    return result
+
+
+def _check_promotable(conn: sqlite3.Connection, space: sqlite3.Row) -> str | None:
+    """Refuse an incompletely backfilled space; return a staleness warning for a deprecated one."""
+    space_name = space["name"]
     # Block promotion of incompletely backfilled spaces.
     # Recount live corpus to catch chunks ingested after backfill.
     count = space["chunk_count"] or 0
@@ -323,7 +416,12 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
                 f"Space {space_name!r} has {count} embeddings but corpus now "
                 f"has {current_total} chunks. Run backfill_space() to sync."
             )
+    return stale_warning
 
+
+def _swap_active(conn: sqlite3.Connection, space: sqlite3.Row) -> str | None:
+    """Make *space* active and sync the config identity rows; commits nothing. Returns the old active name."""
+    space_name = space["name"]
     old_active = get_active_space(conn)
     old_name = old_active["name"] if old_active else None
 
@@ -365,22 +463,7 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
     )
     # Invalidate similarity relationships (embedding space changed)
     conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
-    conn.commit()
-
-    # Always rebuild folder summaries on promotion (model/dim may differ)
-    embed_provider = get_provider(cfg=declared_provider_config(conn, space["provider"]))
-    _re_embed_folder_summaries(
-        conn,
-        embed_provider,
-        space["model"],
-        space["dim"],
-        matryoshka_base_dim=space["matryoshka_base_dim"],
-    )
-
-    result: dict = {"promoted": space_name, "deprecated": old_name}
-    if stale_warning:
-        result["warning"] = stale_warning
-    return result
+    return old_name
 
 
 def deprecate_space(conn: sqlite3.Connection, space_name: str) -> dict:
@@ -447,14 +530,15 @@ def re_embed(
     """Re-embed all chunks with a new model via the space lifecycle.
 
     Creates a new space, backfills it, promotes it, and re-embeds folder
-    summaries. The old space is left as 'deprecated' (not auto-cleaned).
+    summaries. The old space is left as 'deprecated' (not auto-cleaned). The target must be
+    the declared identity (#569), checked before anything is created; if the backfill or
+    the promotion fails, the new space is removed again and the error re-raised.
     """
     if matryoshka_base_dim is not None and matryoshka_base_dim <= new_dim:
         raise ValueError(f"matryoshka_base_dim ({matryoshka_base_dim}) must be greater than new_dim ({new_dim})")
 
-    # Resolve provider
-    cfg = get_embed_config(conn)
-    resolved_provider = provider or cfg["provider"]
+    resolved_provider = provider or load_embed_settings().provider
+    _assert_declared_identity(resolved_provider, new_model, new_dim)
 
     # Inherit chunk_strategy from current active space
     active = get_active_space(conn)
@@ -478,8 +562,16 @@ def re_embed(
         strategy,
         matryoshka_base_dim=matryoshka_base_dim,
     )
-    result = backfill_space(conn, space_name, batch_size)
-    promote_space(conn, space_name)
+    try:
+        result = backfill_space(conn, space_name, batch_size)
+        promote_space(conn, space_name)
+    except BaseException:
+        try:
+            deprecate_space(conn, space_name)
+            cleanup_space(conn, space_name)
+        except Exception:
+            logger.exception("could not remove the failed re-embed's space %r", space_name)
+        raise
 
     # Count folder summaries re-embedded (done inside promote_space)
     folders_count = conn.execute("SELECT COUNT(*) FROM folder_summaries_vec").fetchone()[0]
@@ -491,43 +583,3 @@ def re_embed(
         "dim": new_dim,
         "space": space_name,
     }
-
-
-def _re_embed_folder_summaries(
-    conn: sqlite3.Connection,
-    embed_provider: EmbeddingProvider,
-    model: str,
-    dim: int,
-    matryoshka_base_dim: int | None = None,
-) -> int:
-    """Recreate folder_summaries_vec with new dimensions and re-embed."""
-    conn.execute("DROP TABLE IF EXISTS folder_summaries_vec")
-    conn.execute(f"""
-        CREATE VIRTUAL TABLE folder_summaries_vec USING vec0(
-            embedding float[{dim}],
-            +folder_path TEXT
-        )
-    """)
-    folder_rows = conn.execute("SELECT folder_path, summary FROM folder_summaries").fetchall()
-    if not folder_rows:
-        conn.commit()
-        return 0
-
-    embed_dim = matryoshka_base_dim or dim
-    texts = [row["summary"] for row in folder_rows]
-    embeddings = embed_provider.embed(texts, model=model, expected_dim=embed_dim)  # type: ignore[union-attr]
-
-    if matryoshka_base_dim:
-        from .embeddings import truncate_embedding
-
-        embeddings = [truncate_embedding(e, dim) if e is not None else None for e in embeddings]
-
-    for row, emb in zip(folder_rows, embeddings, strict=True):
-        if emb is None:
-            continue
-        conn.execute(
-            "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
-            (_serialize_f32(emb), row["folder_path"]),
-        )
-    conn.commit()
-    return len(folder_rows)

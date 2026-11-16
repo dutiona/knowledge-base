@@ -92,7 +92,8 @@ def test_build_parser_subcommands():
         "ingest": ["ingest", "/tmp/x"],
         "reingest": ["reingest", "/tmp/x"],
         "ingest-url": ["ingest-url", "https://example.com"],
-        "re-embed": ["re-embed", "--model", "x", "--dim", "8"],
+        "re-embed": ["re-embed"],
+        "rebind": ["rebind"],
         "status": ["status"],
         "migrate": ["migrate", "--check"],
         "schema": ["schema"],
@@ -184,10 +185,11 @@ def test_cli_migrate_backs_up_legacy_unversioned(tmp_path):
     assert mm.peek_schema_version(db) == 1  # re-stamped
 
 
-def test_build_parser_re_embed_requires_model_and_dim():
+def test_build_parser_re_embed_takes_its_identity_from_the_declaration():
+    """#569: --model/--dim/--provider are gone; the declaration supplies them."""
     parser = build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(["re-embed"])
+        parser.parse_args(["re-embed", "--model", "x"])
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +346,7 @@ def test_cmd_ingest_url(tmp_path):
 )
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-def test_cmd_re_embed(mock_provider, tmp_path):
+def test_cmd_re_embed(mock_provider, tmp_path, monkeypatch):
     conn, db_path = _setup(tmp_path)
 
     # Ingest a file first
@@ -361,15 +363,9 @@ def test_cmd_re_embed(mock_provider, tmp_path):
     conn.commit()
     conn.close()
 
-    args = _make_args(
-        tmp_path,
-        model="mxbai-embed-large",
-        dim=NEW_DIM,
-        batch_size=32,
-        provider=None,
-        matryoshka_base_dim=None,
-    )
-    cmd_re_embed(args)
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "mxbai-embed-large")
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_DIM", str(NEW_DIM))
+    cmd_re_embed(_make_args(tmp_path, batch_size=32, matryoshka_base_dim=None))
 
     conn = get_connection(db_path)
     rels = conn.execute("SELECT COUNT(*) AS n FROM relationships WHERE relation_type = 'similar'").fetchone()["n"]
@@ -560,3 +556,128 @@ def test_cli_maintenance_commands_need_no_declaration(tmp_path, monkeypatch):
         with pytest.raises(SystemExit) as exit_info:
             main(["--db", str(db_path), "--quiet", *argv])
         assert exit_info.value.code == 0
+
+
+# --- #569: re-embed and rebind are the two sanctioned transitions ---
+
+_MOVED = {
+    "KNOWLEDGE_BASE_EMBED_MODEL": "other-embed",
+    "KNOWLEDGE_BASE_EMBED_DIM": "8",
+    "KNOWLEDGE_BASE_EMBED_URL": "http://embedder-b.example.test:11434",
+}
+
+
+def _ollama_embedder(fail_after: int | None = None):
+    import httpx
+
+    calls = {"n": 0}
+
+    def _handler(request):
+        calls["n"] += 1
+        if fail_after is not None and calls["n"] > fail_after:
+            return httpx.Response(503, json={"error": "down"})
+        texts = json.loads(request.content)["input"]
+        return httpx.Response(200, json={"embeddings": [[0.5] * 8 for _ in texts]})
+
+    return _handler
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def _seed_corpus(tmp_path, n_files: int = 1):
+    conn, db_path = _setup(tmp_path)
+    from knowledge_base.ingest import ingest_file
+
+    for i in range(n_files):
+        doc = tmp_path / "docs" / f"doc{i}.md"
+        doc.parent.mkdir(exist_ok=True)
+        doc.write_text(f"# Doc {i}\n\nContent number {i} for re-embedding.\n")
+        ingest_file(conn, doc)
+    conn.close()
+    return db_path
+
+
+def _plain_open(db_path):
+    from knowledge_base.db import open_declared_db
+
+    open_declared_db(db_path).close()
+
+
+def test_cli_re_embed_moves_to_the_declaration(tmp_path, monkeypatch, http_requests, capsys):
+    from knowledge_base.exceptions import KnowledgeBaseError
+
+    db_path = _seed_corpus(tmp_path)
+    for name, value in _MOVED.items():
+        monkeypatch.setenv(name, value)
+    http_requests.handlers["embedder-b.example.test"] = _ollama_embedder()
+
+    main(["--db", str(db_path), "--quiet", "re-embed"])
+
+    assert set(http_requests.hosts()) == {"embedder-b.example.test"}
+    assert all(r.url.path == "/api/embed" for r in http_requests)
+    _plain_open(db_path)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--db", str(db_path), "--quiet", "re-embed"])
+    assert exit_info.value.code == 1
+    assert "use rebind" in capsys.readouterr().err
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "http://embedder-c.example.test:11434")
+    with pytest.raises(SystemExit):
+        main(["--db", str(db_path), "--quiet", "re-embed"])
+    with pytest.raises(KnowledgeBaseError, match="embed_base_url"):
+        _plain_open(db_path)  # the refused re-embed recorded nothing
+
+
+def test_cli_re_embed_interrupted_never_serves_and_reruns(tmp_path, monkeypatch, http_requests, capsys):
+    from knowledge_base.exceptions import KnowledgeBaseError
+
+    db_path = _seed_corpus(tmp_path, n_files=3)
+    for name, value in _MOVED.items():
+        monkeypatch.setenv(name, value)
+    http_requests.handlers["embedder-b.example.test"] = _ollama_embedder(fail_after=1)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--db", str(db_path), "--quiet", "re-embed", "--batch-size", "1"])
+    assert exit_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "re-embed failed" in err
+    assert "Traceback" not in err
+    with pytest.raises(KnowledgeBaseError, match="re-embed"):
+        _plain_open(db_path)
+    conn = get_connection(db_path)
+    assert [r["name"] for r in conn.execute("SELECT name FROM embed_spaces")] == ["default"]
+    conn.close()
+
+    http_requests.handlers["embedder-b.example.test"] = _ollama_embedder()
+    main(["--db", str(db_path), "--quiet", "re-embed", "--batch-size", "1"])
+    _plain_open(db_path)
+
+
+def test_cli_rebind_adopts_a_moved_endpoint(tmp_path, monkeypatch, capsys):
+    from knowledge_base.exceptions import KnowledgeBaseError
+
+    conn, db_path = _setup(tmp_path)
+    conn.close()
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "http://embedder-b.example.test:11434")
+    with pytest.raises(KnowledgeBaseError, match="embed_base_url"):
+        _plain_open(db_path)
+    main(["--db", str(db_path), "--quiet", "rebind"])
+    _plain_open(db_path)
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--db", str(db_path), "--quiet", "rebind"])
+    assert exit_info.value.code == 1
+    assert "embed_model" in capsys.readouterr().err
+
+
+def test_cli_rebind_repairs_drifted_config_identity(tmp_path):
+    conn, db_path = _setup(tmp_path)
+    conn.execute("UPDATE config SET value = 'drifted-model' WHERE key = 'embed_model'")
+    conn.commit()
+    conn.close()
+    main(["--db", str(db_path), "--quiet", "rebind"])
+    conn = get_connection(db_path)
+    assert conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()["value"] == "bge-m3"
+    conn.close()
+    _plain_open(db_path)
