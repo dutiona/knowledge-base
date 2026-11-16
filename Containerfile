@@ -1,5 +1,5 @@
 # The knowledge-base MCP server, built from git alone: the committed uv.lock, no registry.
-# Build from the tag's tracked files alone:
+# Build from the tag's tracked files alone (a clean checkout's "podman build ." also works):
 #   git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -
 
 FROM docker.io/library/python:3.12-slim-trixie AS build

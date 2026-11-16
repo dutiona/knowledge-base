@@ -107,8 +107,10 @@ updates:
 git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -
 ```
 
-A build from a working tree (`podman build .`) refuses to run when `src/` holds anything but Python sources, such as an
-untracked `.env` or credentials file, because the package would otherwise ship it.
+`podman build .` from a clean checkout of the tag works too. Prefer the archive: a working tree can hold untracked
+files under `src/`, which the package would ship. A working-tree build therefore refuses when `src/` holds anything but
+Python sources (an untracked `.env` or credentials file, for example) and names them. It cannot tell an untracked `.py`
+file from a tracked one, so build from the archive or a clean checkout.
 
 The image installs exactly `uv.lock` with `uv sync --locked --no-dev --group reranker`: no dev tools, no uv, and a
 build that stops when the lock no longer matches `pyproject.toml` (run `uv lock` and commit it). The
