@@ -111,20 +111,23 @@ there is no silent fallback to the default.
 
 ## Container image
 
-The repository's `Containerfile` builds a server image from git alone. Build it from a release tag that contains the
-`Containerfile` (the first release after it landed, or any later one). Feed podman that tag's tracked files, so nothing
-untracked in a working tree can reach the build, and let it re-pull the base so a cached one never hides OS security
-updates:
+The repository's `Containerfile` builds a server image from git alone, from a `git archive` of a release tag that
+contains it (the first release after it landed, or any later one). The archive holds the tag's tracked files and
+nothing else, so no untracked or git-ignored file in a working tree can reach the image. Let podman re-pull the base so
+a cached one never hides OS security updates:
 
 ```bash
 git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -
 ```
 
-`podman build .` from a fresh clone of the tag works too. Prefer the archive: a working tree can hold untracked or
-git-ignored files under `src/`, which the package would ship. A working-tree build therefore refuses when `src/` holds
-anything but Python sources (an untracked `.env` or credentials file, for example) and names them, though by then the
-file sits in a cached builder layer. It cannot tell an untracked `.py` file from a tracked one, and `git status` hides
-a git-ignored one (under `tmp/` or `build/`, say), so build from the archive or a fresh clone.
+A build from a checkout, clean or dirty, `podman build .` included, is refused before any source is copied, and the
+error gives the archive command above. `git archive` writes the commit into `.archive-commit` (`export-subst` in
+`.gitattributes`), a checkout keeps its placeholder, and the build checks it first. A checkout missing the file fails
+at its `COPY` instead. The check catches mistakes, not a deliberately edited marker, and it tells an archive from a
+checkout, nothing more: an archive of any commit passes, not only a tag's, and so does a directory unpacked from an
+archive, so files added to that directory afterwards ship. Podman unpacks
+the whole archive, and `.containerignore` lets the build copy only `pyproject.toml`, `uv.lock`, `.python-version`, the
+licences, `src/` and the marker.
 
 The image installs exactly `uv.lock` with `uv sync --locked --no-dev --group reranker`: no dev tools, no uv, and a
 build that stops when the lock no longer matches `pyproject.toml` (run `uv lock` and commit it). The

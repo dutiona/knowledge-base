@@ -1,5 +1,5 @@
 # The knowledge-base MCP server, built from git alone: the committed uv.lock, no registry.
-# Build from the tag's tracked files alone (a fresh clone's "podman build ." also works):
+# Build from a git archive of a tag; a checkout is refused:
 #   git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -
 
 FROM docker.io/library/python:3.12-slim-trixie AS build
@@ -7,12 +7,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # A uv-managed interpreter would leave the venv pointing at a Python the runtime stage lacks.
 ENV UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
+# git archive writes the commit into .archive-commit (export-subst) and a checkout keeps the placeholder, so this
+# refuses a working-tree build, clean or dirty, before any source is copied.
+COPY .archive-commit ./
+RUN grep -Eqx '[0-9a-f]{40}|[0-9a-f]{64}' .archive-commit || { printf 'refusing to build: .archive-commit holds no commit id, so this is not a git archive of a commit; build with: git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -\n' >&2; exit 1; }
 COPY pyproject.toml uv.lock .python-version LICENSE-MIT LICENSE-APACHE ./
 COPY src ./src
-# Hatchling packages every file under src/, and a dirty checkout's context can carry an untracked .env or
-# credentials file, so refuse anything but Python sources. A new kind of package file is allowed here.
-RUN stray="$(find src -type f ! -name '*.py')"; \
-    if [ -n "$stray" ]; then printf 'refusing to build: non-Python files under src/:\n%s\n' "$stray" >&2; exit 1; fi
 # --locked installs exactly uv.lock and fails the build when it no longer matches pyproject.toml;
 # --no-editable installs the project as a wheel, so the runtime stage needs only the venv;
 # --compile-bytecode because the runtime user cannot write .pyc files into root-owned site-packages.

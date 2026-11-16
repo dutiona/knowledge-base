@@ -1,5 +1,5 @@
-# Allowlist: only what the image build reads reaches the context, so the root .env, databases,
-# virtualenvs and worktrees never do.
+# Allowlist: only what the image build reads can be copied, so the root .env, databases, virtualenvs and
+# worktrees never are. .archive-commit is how the build tells a git archive from a checkout.
 *
 !pyproject.toml
 !uv.lock
@@ -7,4 +7,5 @@
 !LICENSE-MIT
 !LICENSE-APACHE
 !src/
+!.archive-commit
 src/**/__pycache__
