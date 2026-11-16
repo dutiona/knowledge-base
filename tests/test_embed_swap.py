@@ -267,52 +267,6 @@ def test_configure_embeddings_no_key_in_logs(tmp_path, caplog):
     assert "hunter2" not in caplog.text
 
 
-def test_get_embed_config_env_no_longer_selects_provider(tmp_path, monkeypatch, caplog):
-    """EMBED_PROVIDER no longer SELECTS the provider at runtime — config is authoritative.
-
-    It is honored only once at DB seed time; at runtime it only warns. Acting on it would
-    diverge from the bootstrapped active-space identity and falsely trip the producer guard
-    (PR #524 round-2 review).
-    """
-    conn = _setup(tmp_path)
-    monkeypatch.setenv("EMBED_PROVIDER", "onnx")
-    with caplog.at_level("WARNING"):
-        cfg = get_embed_config(conn)
-    assert cfg["provider"] == "ollama"  # config (seeded) wins; env ignored
-    assert "deprecated" in caplog.text.lower()
-    # Even with the config key absent (a pre-provider DB), env does NOT select — DEFAULT is
-    # returned, which matches the bootstrapped active space, so the identity guard won't reject.
-    conn.execute("DELETE FROM config WHERE key = 'embed_provider'")
-    conn.commit()
-    assert get_embed_config(conn)["provider"] == "ollama"
-
-
-def test_seed_honors_embed_provider_env_on_fresh_db(tmp_path, monkeypatch):
-    """A fresh DB seeds embed_provider from EMBED_PROVIDER once, aligning config + active space."""
-    from knowledge_base.db import get_active_space
-
-    monkeypatch.setenv("EMBED_PROVIDER", "onnx")
-    conn = _setup(tmp_path)  # init_schema runs the seed + bootstrap with env set
-    assert get_embed_config(conn)["provider"] == "onnx"
-    space = get_active_space(conn)
-    assert space is not None
-    assert space["provider"] == "onnx"  # aligned — no config/space divergence, no false reject
-
-
-def test_get_embed_config_explicit_config_overrides_env(tmp_path, monkeypatch):
-    """An explicit configure_embeddings() choice wins over the legacy env var."""
-    from knowledge_base.embed_swap import configure_embeddings
-
-    conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com")
-    monkeypatch.setenv("EMBED_PROVIDER", "onnx")
-    assert get_embed_config(conn)["provider"] == "openai_compat"
-
-
 # --- Slice D: producer-side identity hard-reject (AC6, #516) ---
 
 

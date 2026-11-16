@@ -12,6 +12,7 @@ import sqlite_vec
 
 from . import migrate as _migrate  # schema-version framework (#450); read attrs live
 from .exceptions import KnowledgeBaseError
+from .settings import EmbedSettings, load_embed_settings
 from .utils import (
     ELEMENT_INSERT_EXPR,
     serialize_f32 as _serialize_f32,
@@ -20,9 +21,6 @@ from .utils import (
 __all__ = [
     "DB_PATH_ENV_VAR",
     "DEFAULT_DB_PATH",
-    "DEFAULT_EMBED_DIM",
-    "DEFAULT_EMBED_MODEL",
-    "DEFAULT_EMBED_PROVIDER",
     "RELATIONSHIP_TYPES",
     "SPACE_NAME_RE",
     "CoOccurrencePair",
@@ -68,12 +66,6 @@ def resolve_db_path(cli_path: Path | None = None) -> Path:
         return Path(env).expanduser()
     return DEFAULT_DB_PATH
 
-
-# Bootstrap defaults for fresh databases. Existing databases read from the
-# config table — these constants are only used during initial schema creation.
-DEFAULT_EMBED_MODEL = "bge-m3"
-DEFAULT_EMBED_DIM = 1024
-DEFAULT_EMBED_PROVIDER = "ollama"
 
 RELATIONSHIP_TYPES = (
     "extends",
@@ -809,11 +801,8 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     if existing:
         return
 
-    model_row = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
-    provider_row = conn.execute("SELECT value FROM config WHERE key = 'embed_provider'").fetchone()
-
-    model = model_row["value"] if model_row else DEFAULT_EMBED_MODEL
-    provider = provider_row["value"] if provider_row else DEFAULT_EMBED_PROVIDER
+    model = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()["value"]
+    provider = conn.execute("SELECT value FROM config WHERE key = 'embed_provider'").fetchone()["value"]
 
     # Count existing embeddings (0 for fresh DBs)
     try:
@@ -838,17 +827,31 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     conn.commit()
 
 
+def embed_config_rows(declared: EmbedSettings) -> list[tuple[str, str]]:
+    """The ``config`` rows recording a declaration: the one field-to-key map, shared by seed and bind."""
+    rows = [
+        ("embed_provider", declared.provider),
+        ("embed_model", declared.model),
+        ("embed_dim", str(declared.dim)),
+    ]
+    if declared.base_url is not None:
+        rows.append(("embed_base_url", declared.base_url))
+    if declared.api_key_source is not None:
+        rows.append(("embed_api_key", declared.api_key_source))
+    return rows
+
+
 def _seed_default_config(conn: sqlite3.Connection) -> int:
     """Create the config table and seed all default key/value rows.
 
-    Consolidates the two historically-split config-seeding spots: the embed_*
-    defaults (seeded only on a fresh DB, guarded by the absence of ``embed_model``)
-    and the llm_*/threshold/chunk_strategy defaults (``INSERT OR IGNORE``). The
-    config table is created first so the schema's configured dimension can be read
-    before the vec tables (which embed it) are built.
+    Consolidates the two historically-split config-seeding spots: the embed_* rows
+    (seeded only on a fresh DB, guarded by the absence of ``embed_model``, from the
+    ``KNOWLEDGE_BASE_EMBED_*`` declaration and never from defaults, #569) and the
+    llm_*/threshold/chunk_strategy defaults (``INSERT OR IGNORE``). The config table
+    is created first so the schema's configured dimension can be read before the vec
+    tables (which embed it) are built.
 
-    Returns the resolved ``embed_dim`` (configured value, or
-    :data:`DEFAULT_EMBED_DIM` when absent) for the caller to thread into the base
+    Returns the configured ``embed_dim`` for the caller to thread into the base
     schema DDL.
     """
     conn.execute("""
@@ -859,30 +862,13 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
     """)
     existing = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
     if not existing:
-        # Fresh DB: honor the (deprecated) EMBED_PROVIDER env var ONCE at seed time, so the
-        # config, the bootstrapped active space, and runtime dispatch all agree from creation
-        # (ADR-0018 §3 — env selection is migrated into config; this is the one-time bridge).
-        seed_provider = os.environ.get("EMBED_PROVIDER") or DEFAULT_EMBED_PROVIDER
-        conn.executemany(
-            "INSERT INTO config (key, value) VALUES (?, ?)",
-            [
-                ("embed_model", DEFAULT_EMBED_MODEL),
-                ("embed_dim", str(DEFAULT_EMBED_DIM)),
-                ("embed_provider", seed_provider),
-            ],
-        )
+        conn.executemany("INSERT INTO config (key, value) VALUES (?, ?)", embed_config_rows(load_embed_settings()))
         conn.commit()
     else:
-        # Upgraded pre-provider DB (embed_model present, embed_provider possibly absent):
-        # backfill embed_provider to the default so config is never absent. It matches the
-        # existing active space (which predates provider portability and is always the
-        # default), keeping the producer identity guard aligned. EMBED_PROVIDER is NOT applied
-        # here — config is authoritative for an existing DB; the env var only warns (see
-        # get_embed_config). Idempotent via INSERT OR IGNORE.
-        conn.execute(
-            "INSERT OR IGNORE INTO config (key, value) VALUES ('embed_provider', ?)",
-            (DEFAULT_EMBED_PROVIDER,),
-        )
+        # Upgraded pre-provider DB (embed_model present, embed_provider possibly absent): every
+        # such DB was embedded by Ollama, the only family before provider portability, so that is
+        # its recorded provider. Idempotent via INSERT OR IGNORE.
+        conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('embed_provider', 'ollama')")
         conn.commit()
 
     # These keys are seeded ahead of the base-schema DDL and the migration chain,
@@ -895,9 +881,10 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
     conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_accept_threshold', '0.95')")
     conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('chunk_strategy', 'mechanical')")
 
-    # Read the configured dimension (handles both fresh and existing DBs)
     dim_row = conn.execute("SELECT value FROM config WHERE key = 'embed_dim'").fetchone()
-    return int(dim_row["value"]) if dim_row else DEFAULT_EMBED_DIM
+    if dim_row is None:
+        raise KnowledgeBaseError("config has embed_model but no embed_dim; KB cannot size its vector tables")
+    return int(dim_row["value"])
 
 
 def _create_base_schema(conn: sqlite3.Connection, embed_dim: int) -> None:

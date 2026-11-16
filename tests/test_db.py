@@ -24,6 +24,7 @@ from knowledge_base.db import (
     insert_chunk_vec,
 )
 from knowledge_base.embed_swap import create_space
+from knowledge_base.exceptions import KnowledgeBaseError
 from tests.declared_env import TEST_EMBED_DIM, TEST_EMBED_MODEL, TEST_EMBED_PROVIDER
 
 
@@ -1534,23 +1535,6 @@ def test_char_bootstrap_picks_up_custom_config_model_provider(tmp_path):
     assert space["dim"] == TEST_EMBED_DIM
 
 
-def test_char_bootstrap_falls_back_to_defaults_when_config_absent(tmp_path):
-    """(b cont.) embed_model/embed_provider config rows ABSENT -> space falls
-    back to TEST_EMBED_MODEL / TEST_EMBED_PROVIDER."""
-    conn = get_connection(tmp_path / "test.db")
-    init_schema(conn)
-
-    conn.execute("DELETE FROM embed_spaces")
-    conn.execute("DELETE FROM config WHERE key IN ('embed_model', 'embed_provider')")
-    conn.commit()
-
-    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
-
-    space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
-    assert space["model"] == TEST_EMBED_MODEL
-    assert space["provider"] == TEST_EMBED_PROVIDER
-
-
 def test_char_bootstrap_count_falls_back_to_zero_without_chunks_vec(tmp_path):
     """(c) DB lacking chunks_vec -> count falls back to 0 without raising
     (_bootstrap_embed_spaces swallows the OperationalError)."""
@@ -1676,7 +1660,7 @@ def test_read_only_vacuum_into_snapshots_live_vec0_database(tmp_path):
     writer.execute("PRAGMA wal_autocheckpoint=0")
     init_schema(writer)
     chunk_id = _char_add_chunk(writer, "live snapshot", 0)
-    insert_chunk_vec(writer, chunk_id, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(writer, chunk_id, [0.1] * TEST_EMBED_DIM)
     writer.commit()
     # The premise: the main file alone does not hold the data, so only a WAL-aware snapshot can.
     main_only = tmp_path / "main-only.db"
@@ -1697,8 +1681,68 @@ def test_read_only_vacuum_into_snapshots_live_vec0_database(tmp_path):
     sqlite_vec.load(check)
     hits = check.execute(
         "SELECT chunk_id FROM chunks_vec WHERE embedding MATCH ? ORDER BY distance LIMIT 1",
-        (_serialize_f32([0.1] * DEFAULT_EMBED_DIM),),
+        (_serialize_f32([0.1] * TEST_EMBED_DIM),),
     ).fetchall()
     assert hits == [(chunk_id,)]
     check.close()
     writer.close()
+
+
+# --- #569: a blank database is seeded from the declaration, never from defaults ---
+
+
+def _declare_openai_compat(monkeypatch, *, key: str | None = "sk-test-only"):
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_PROVIDER", "openai_compat")
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "qwen3-embedding")
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_DIM", "768")
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "https://embedder.example.test/v1/")
+    if key is not None:
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_API_KEY", key)
+
+
+def test_blank_database_seeds_from_the_declaration(tmp_path, monkeypatch):
+    _declare_openai_compat(monkeypatch)
+    conn = get_connection(tmp_path / "kb.db")
+    init_schema(conn)
+
+    rows = dict(conn.execute("SELECT key, value FROM config WHERE key LIKE 'embed_%'").fetchall())
+    assert rows["embed_provider"] == "openai_compat"
+    assert rows["embed_model"] == "qwen3-embedding"
+    assert rows["embed_dim"] == "768"
+    assert rows["embed_base_url"] == "https://embedder.example.test"
+    assert rows["embed_api_key"] == "env:KNOWLEDGE_BASE_EMBED_API_KEY"
+    values = [r[0] for r in conn.execute("SELECT value FROM config").fetchall()]
+    assert not any("sk-test-only" in v for v in values)
+
+    space = get_active_space(conn)
+    assert space is not None
+    assert (space["provider"], space["model"], space["dim"]) == ("openai_compat", "qwen3-embedding", 768)
+    cid = _char_add_chunk(conn, "seeded", 0)
+    insert_chunk_vec(conn, cid, [0.1] * 768)
+    with pytest.raises(sqlite3.OperationalError):
+        insert_chunk_vec(conn, _char_add_chunk(conn, "wrong dim", 1), [0.1] * 1024)
+
+
+def test_blank_database_without_a_declaration_names_the_variable(tmp_path, monkeypatch):
+    monkeypatch.delenv("KNOWLEDGE_BASE_EMBED_PROVIDER")
+    conn = get_connection(tmp_path / "kb.db")
+    with pytest.raises(KnowledgeBaseError, match="KNOWLEDGE_BASE_EMBED_PROVIDER"):
+        init_schema(conn)
+    assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks_vec'").fetchone() is None
+
+
+def test_existing_database_initializes_without_a_declaration(tmp_path, monkeypatch):
+    """Guard: only a blank database needs the declaration; a legacy one reads its own config."""
+    conn = get_connection(tmp_path / "kb.db")
+    conn.executescript(
+        """
+        CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO config (key, value) VALUES ('embed_model', 'bge-m3'), ('embed_dim', '1024');
+        """
+    )
+    for name in ("PROVIDER", "MODEL", "DIM", "URL"):
+        monkeypatch.delenv(f"KNOWLEDGE_BASE_EMBED_{name}")
+    init_schema(conn)
+    space = get_active_space(conn)
+    assert space is not None
+    assert (space["provider"], space["model"], space["dim"]) == ("ollama", "bge-m3", 1024)

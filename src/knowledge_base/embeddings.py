@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 
 import httpx
 
-from .db import DEFAULT_EMBED_DIM
 from .utils import _resolve_api_key, _sanitize_url, validate_base_url
 
 logger = logging.getLogger(__name__)
@@ -153,7 +152,6 @@ class OllamaProvider:
         model: str = "bge-m3",
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
-        dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
         url = self._base_url or _get_ollama_url()
         results = []
         for i in range(0, len(texts), 32):
@@ -167,8 +165,8 @@ class OllamaProvider:
             data = resp.json()
             embeddings = data["embeddings"]
             for emb in embeddings:
-                if len(emb) != dim:
-                    raise ValueError(f"Expected {dim} dims, got {len(emb)}")
+                if expected_dim is not None and len(emb) != expected_dim:
+                    raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
                 results.append(_normalize_or_none(emb, "Ollama"))
         return results
 
