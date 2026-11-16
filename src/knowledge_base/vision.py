@@ -228,6 +228,11 @@ def configure_omniparser(
             "omniparser_server_url": _get_omniparser_server_url(conn),
         }
 
+    # Validate every input before writing anything, so a refused server_url leaves the path unchanged too.
+    if server_url:
+        server_url = server_url.rstrip("/")
+        validate_base_url(server_url, allow_loopback=loopback_opt_in(conn))
+
     result: dict = {}
 
     if path is not None:
@@ -251,8 +256,6 @@ def configure_omniparser(
             conn.commit()
             result["omniparser_server_url"] = None
         else:
-            server_url = server_url.rstrip("/")
-            validate_base_url(server_url, allow_loopback=loopback_opt_in(conn))
             conn.execute(
                 "INSERT OR REPLACE INTO config (key, value) VALUES ('omniparser_server_url', ?)",
                 (server_url,),

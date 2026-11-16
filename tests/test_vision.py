@@ -4328,3 +4328,15 @@ def test_an_opted_in_loopback_omniparser_row_reaches_parse(vision_conn, http_req
     assert server is not None
     assert _run_omniparser(png, "/fake/omniparser", server=server) == {"elements": [], "image_size": {}}
     assert [r.url.path for r in http_requests] == ["/health", "/parse"]
+
+
+def test_a_refused_omniparser_server_url_writes_nothing(vision_conn, tmp_path):
+    """#572 review: a call with a valid path and a refused server_url must not save the path either."""
+    from knowledge_base.vision import configure_omniparser
+
+    with (
+        patch("knowledge_base.vision._validate_omniparser_path", return_value=tmp_path),
+        pytest.raises(ValidationError, match="private"),
+    ):
+        configure_omniparser(vision_conn, path=str(tmp_path), server_url="http://100.64.0.7:7862")
+    assert vision_conn.execute("SELECT 1 FROM config WHERE key LIKE 'omniparser_%'").fetchone() is None
