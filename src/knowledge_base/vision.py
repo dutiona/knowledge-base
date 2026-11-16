@@ -29,6 +29,7 @@ from PIL import Image
 from .embeddings import _get_ollama_url
 from .db import bump_chunk_count, delete_chunks_cascade, get_vec_table_name
 from .exceptions import NotFoundError, ValidationError
+from .settings import VISION_VAR, switch_on
 from .ingest import (
     _content_hash,
     _embed_with_config,
@@ -110,8 +111,15 @@ class VisionResults:
 # ---------------------------------------------------------------------------
 
 
+def _require_vision() -> None:
+    """Vision sends page and PDF images to a model; it runs only when switched on (#569)."""
+    if not switch_on(VISION_VAR):
+        raise ValidationError(f"vision is off; set {VISION_VAR}=on to enable it")
+
+
 def _get_vision_config(conn: sqlite3.Connection) -> dict:
-    """Read vision configuration from config table."""
+    """Read vision configuration from config table. Refuses while vision is off."""
+    _require_vision()
     model_row = conn.execute("SELECT value FROM config WHERE key = 'vision_model'").fetchone()
     base_url_row = conn.execute("SELECT value FROM config WHERE key = 'vision_base_url'").fetchone()
 
@@ -128,7 +136,8 @@ def configure_vision(
     model: str | None = None,
     base_url: str | None = None,
 ) -> dict:
-    """Configure vision model settings."""
+    """Configure vision model settings. Refuses while vision is off."""
+    _require_vision()
     if model:
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('vision_model', ?)",
@@ -202,8 +211,9 @@ def configure_omniparser(
 
     The path is resolved (symlinks and ``..`` flattened) and validated before
     storage.  At execution time, ``_run_omniparser`` re-validates that the
-    resolved files still exist on disk.
+    resolved files still exist on disk.  Refuses while vision is off.
     """
+    _require_vision()
     if path is None and server_url is None:
         return {
             "omniparser_path": _get_omniparser_config(conn),
@@ -2066,6 +2076,7 @@ def estimate_figures_time(
 
     Returns {"error": ...} on validation failure.
     """
+    _require_vision()
     ctx = _resolve_paper_context(conn, paper_id)
     _validate_pages(ctx.pdf_path, pages)
 
@@ -2114,6 +2125,8 @@ def extract_figures(
     Thread-safe architecture: all SQLite access happens on the main thread.
     Vision API calls are dispatched to a thread pool.
     """
+    config = _get_vision_config(conn)  # first: refuses while vision is off
+
     # 1-2. Validate paper and resolve PDF
     ctx = _resolve_paper_context(conn, paper_id)
 
@@ -2155,8 +2168,7 @@ def extract_figures(
         ctx.pdf_path, inputs.vector_pages, inputs.mixed_page_regions, on_progress
     )
 
-    # 6. Read vision config once (main thread)
-    config = _get_vision_config(conn)
+    # 6. Vision config, read once on the main thread at the top
     base_url = config["base_url"]
     model = config["model"]
 

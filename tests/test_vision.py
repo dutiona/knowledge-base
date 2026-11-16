@@ -4202,3 +4202,26 @@ def test_pdf_image_dir_derives_from_conn_db(tmp_path, monkeypatch):
 
     assert result.is_relative_to(tmp_path / "figures")
     assert result.name == "extracted"
+
+
+# --- #569: vision is off unless KNOWLEDGE_BASE_VISION=on ---
+
+
+def test_vision_off_refuses_before_any_work(kb_conn, http_requests, monkeypatch):
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.vision import configure_omniparser, configure_vision, estimate_figures_time, extract_figures
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
+    before = dict(kb_conn.execute("SELECT key, value FROM config").fetchall())
+    for call in (
+        lambda: extract_figures(kb_conn, 1),
+        lambda: estimate_figures_time(kb_conn, 1),
+        lambda: configure_vision(kb_conn, base_url="https://vision.example.test"),
+        lambda: configure_vision(kb_conn),
+        lambda: configure_omniparser(kb_conn, server_url="http://omniparser.example.test:7862"),
+        lambda: configure_omniparser(kb_conn),
+    ):
+        with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_VISION"):
+            call()
+    assert dict(kb_conn.execute("SELECT key, value FROM config").fetchall()) == before
+    assert http_requests == []

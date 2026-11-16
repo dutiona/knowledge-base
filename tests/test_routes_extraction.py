@@ -443,3 +443,16 @@ def test_extract_structure_tool_long_doc_confirmed_single_worker_params_none(kb_
     args, kwargs = mock_submit.call_args
     passed_params = kwargs.get("params", args[3] if len(args) > 3 else None)
     assert passed_params is None
+
+
+def test_extract_figures_tool_with_vision_off_submits_no_job(kb_conn, monkeypatch):
+    """#569: with vision off the tool refuses and queues nothing."""
+    import json
+
+    import knowledge_base.routes.extraction as ext
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
+    with patch("knowledge_base.routes.extraction._get_conn", return_value=kb_conn):
+        response = json.loads(ext.extract_figures_tool(1, confirmed=True))
+    assert "KNOWLEDGE_BASE_VISION" in response["error"]
+    assert kb_conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0

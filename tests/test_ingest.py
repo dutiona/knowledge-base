@@ -4255,3 +4255,35 @@ def test_reingest_rolls_back_on_midway_failure(tmp_path, monkeypatch):
     rows = [r["content"] for r in conn.execute("SELECT content FROM chunks ORDER BY chunk_index")]
     assert rows == ["alpha body", "beta body"]
     assert conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0] == 2
+
+
+# --- #569: vision and the browser fallback are off unless switched on ---
+
+_ARTICLE = "<p>" + ("Attention mechanisms let a model weigh every token of its input. " * 6) + "</p>"
+
+
+def _page(body: str):
+    import httpx
+
+    html = f"<html><head><title>T</title></head><body><article><h1>Article</h1>{body}</article></body></html>"
+    return lambda request: httpx.Response(200, html=html)
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
+def test_ingest_url_with_vision_off_makes_no_vision_request(_public, kb_conn, http_requests, monkeypatch):
+    monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
+    kb_conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('vision_base_url', 'https://vision.example.test')"
+    )
+    kb_conn.commit()
+    http_requests.handlers["page.example.test"] = _page(
+        _ARTICLE + '<img src="https://img.example.test/fig.png" width="800" height="600" alt="Results chart">'
+    )
+
+    result = ingest_url(kb_conn, "https://page.example.test/article")
+
+    assert result["figures_extracted"] == 0
+    assert result["chunks_added"] >= 1
+    assert http_requests.hosts() == ["page.example.test"]
