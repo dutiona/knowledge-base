@@ -6,7 +6,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # A uv-managed interpreter would leave the venv pointing at a Python the runtime stage lacks.
 ENV UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
-COPY pyproject.toml uv.lock .python-version LICENSE-MIT LICENSE-APACHE ./
+COPY pyproject.toml uv.lock .python-version LICENSE-MIT LICENSE-APACHE .gitignore ./
 COPY src ./src
 # --locked installs exactly uv.lock and fails the build when it no longer matches pyproject.toml;
 # --no-editable installs the project as a wheel, so the runtime stage needs only the venv;

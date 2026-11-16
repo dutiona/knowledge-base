@@ -1,4 +1,4 @@
-# Allowlist: only what the image build reads reaches the context, so .env, databases,
+# Allowlist: only what the image build reads reaches the context, so the root .env, databases,
 # virtualenvs and worktrees never do.
 *
 !pyproject.toml
@@ -6,5 +6,7 @@
 !.python-version
 !LICENSE-MIT
 !LICENSE-APACHE
+# Hatchling reads it to keep git-ignored files under src/ (.env, databases) out of the wheel.
+!.gitignore
 !src/
 src/**/__pycache__
