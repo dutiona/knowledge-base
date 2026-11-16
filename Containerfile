@@ -1,5 +1,5 @@
 # The knowledge-base MCP server, built from git alone: the committed uv.lock, no registry.
-# Build only from a git archive of a tag; any other context is refused:
+# Build from a git archive of a tag; a checkout is refused:
 #   git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -
 
 FROM docker.io/library/python:3.12-slim-trixie AS build
@@ -10,7 +10,7 @@ WORKDIR /app
 # git archive writes the commit into .archive-commit (export-subst) and a checkout keeps the placeholder, so this
 # refuses a working-tree build, clean or dirty, before any source is copied.
 COPY .archive-commit ./
-RUN grep -Eqx '[0-9a-f]{40}|[0-9a-f]{64}' .archive-commit || { printf 'refusing to build from a working tree: git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -\n' >&2; exit 1; }
+RUN grep -Eqx '[0-9a-f]{40}|[0-9a-f]{64}' .archive-commit || { printf 'refusing to build: .archive-commit holds no commit id, so this is not a git archive; build with: git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -\n' >&2; exit 1; }
 COPY pyproject.toml uv.lock .python-version LICENSE-MIT LICENSE-APACHE ./
 COPY src ./src
 # --locked installs exactly uv.lock and fails the build when it no longer matches pyproject.toml;
