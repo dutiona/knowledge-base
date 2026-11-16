@@ -9,8 +9,9 @@ data-dir redirect (#391) and the embedding declaration (#569).
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
+import httpx
 import pytest
 
 from knowledge_base.db import get_connection, init_schema
@@ -93,3 +94,38 @@ def _declared_environment(monkeypatch):
         monkeypatch.setenv(name, value)
     for name in ("EMBED_PROVIDER", "KNOWLEDGE_BASE_EMBED_API_KEY", "KNOWLEDGE_BASE_LLM_API_KEY"):
         monkeypatch.delenv(name, raising=False)
+
+
+class HttpRecorder(list):
+    """Every httpx request a test made, in order; ``handlers`` answers by host."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.handlers: dict[str, Callable[[httpx.Request], httpx.Response]] = {}
+
+    def hosts(self) -> list[str]:
+        return [request.url.host for request in self]
+
+
+@pytest.fixture
+def http_requests(monkeypatch) -> HttpRecorder:
+    """Record every httpx request at the transport; answer registered hosts, refuse the rest.
+
+    Patched below every ``httpx.get``/``post``/``Client`` call, so a zero-request assertion
+    holds whichever call site would have fired, and nothing ever reaches the network.
+    """
+    recorder = HttpRecorder()
+
+    def _handle(request: httpx.Request) -> httpx.Response:
+        recorder.append(request)
+        handler = recorder.handlers.get(request.url.host)
+        if handler is None:
+            raise httpx.ConnectError(f"unexpected host {request.url.host}", request=request)
+        return handler(request)
+
+    async def _handle_async(_transport, request: httpx.Request) -> httpx.Response:
+        return _handle(request)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", lambda _transport, request: _handle(request))
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", _handle_async)
+    return recorder

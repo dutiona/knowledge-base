@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from knowledge_base.db import get_connection, init_schema
-from knowledge_base.embed_swap import get_embed_config, re_embed
+from knowledge_base.embed_swap import backfill_space, create_space, get_embed_config, re_embed
 from knowledge_base.ingest import ingest_file
 from tests.declared_env import TEST_EMBED_DIM
 
@@ -401,3 +401,41 @@ def test_openai_key_injected_for_trailing_dot_fqdn(tmp_path, monkeypatch):
     conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://API.OpenAI.com.')")
     conn.commit()
     assert get_embed_config(conn)["api_key"] == "sk-openai-real"  # case-insensitive + trailing-dot normalized
+
+
+# --- #569: every embedding provider comes from the declaration ---
+
+
+def test_backfill_refuses_a_space_of_another_provider(kb_conn, http_requests):
+    from knowledge_base.exceptions import ValidationError
+
+    create_space(kb_conn, "foreign", "m", 8, "openai_compat")
+    with pytest.raises(ValidationError, match="not the declared provider 'ollama'"):
+        backfill_space(kb_conn, "foreign")
+    assert http_requests == []
+
+
+def test_search_refuses_an_active_space_of_another_provider(kb_conn, http_requests):
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.search import search
+
+    kb_conn.execute("UPDATE embed_spaces SET provider = 'openai_compat' WHERE status = 'active'")
+    kb_conn.commit()
+    with pytest.raises(ValidationError, match="not the declared provider 'ollama'"):
+        search(kb_conn, "attention", mode="vec")
+    assert http_requests == []
+
+
+def test_folder_summary_refuses_an_active_space_of_another_provider(kb_conn, http_requests):
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.folder_summaries import update_folder_summary
+
+    kb_conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h1', 'some text', 'markdown', '/docs/a.md', 0)"
+    )
+    kb_conn.execute("UPDATE embed_spaces SET provider = 'onnx' WHERE status = 'active'")
+    kb_conn.commit()
+    with pytest.raises(ValidationError, match="not the declared provider 'ollama'"):
+        update_folder_summary(kb_conn, "/docs")
+    assert http_requests == []

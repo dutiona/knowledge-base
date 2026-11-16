@@ -11,9 +11,8 @@ import posixpath
 import sqlite3
 
 from .db import escape_like, get_active_space
-from .embed_swap import get_embed_config
-from .embeddings import ProviderConfig, embed, truncate_embedding
-from .exceptions import ValidationError
+from .embed_swap import declared_provider_config, get_embed_config
+from .embeddings import embed, truncate_embedding
 from .utils import serialize_f32 as _serialize_f32
 
 __all__ = ["update_folder_summary"]
@@ -113,27 +112,11 @@ def update_folder_summary(
     active = get_active_space(conn)
     base_dim = active.get("matryoshka_base_dim") if active else None
     # folder_summaries_vec is at the ACTIVE space's dim, so embed with the active space's
-    # (model, provider, dim) — NOT the mutable config — so a configure_embeddings() drift
-    # can't write a different-model vector here. Connection details (base_url/api_key) come
-    # from config (the space row stores none); the family is the space's recorded provider.
-    fam = active["provider"] if active else cfg.get("provider", "ollama")
+    # (model, provider, dim), at the declared endpoint (#569).
+    fam = active["provider"] if active else cfg["provider"]
     model = active["model"] if active else cfg["model"]
     dim = active["dim"] if active else cfg["dim"]
-    # Connection details from config only when its family matches the space's (else a
-    # configure_embeddings() drift would point the space's family at the wrong endpoint).
-    same_family = cfg.get("provider") == fam
-    if not same_family and fam in ("openai_compat", "anthropic_compat"):
-        # Fail clearly rather than let OpenAICompatProvider(None) fall back to api.openai.com.
-        raise ValidationError(
-            f"The active embedding space's provider ({fam}) requires a base_url, but the embed "
-            f"config has drifted to {cfg.get('provider')!r}. Run re_embed() to rebuild the space."
-        )
-    provider_cfg = ProviderConfig(
-        family=fam,
-        base_url=cfg.get("base_url") if same_family else None,
-        api_key=cfg.get("api_key") if same_family else None,
-        allow_loopback=cfg.get("allow_loopback", False) if same_family else False,
-    )
+    provider_cfg = declared_provider_config(conn, fam)
     if base_dim:
         embedding = embed([summary], model=model, expected_dim=base_dim, _provider_cfg=provider_cfg)[0]
         if embedding is not None:

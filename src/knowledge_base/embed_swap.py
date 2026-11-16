@@ -23,6 +23,7 @@ from .db import (
 )
 from .embeddings import EmbeddingProvider, ProviderConfig, _get_ollama_url, get_provider, truncate_embedding
 from .exceptions import ValidationError
+from .settings import load_embed_settings
 from .utils import ELEMENT_INSERT_EXPR, VALID_ELEMENT_TYPES, _resolve_api_key, _sanitize_url, validate_base_url
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,28 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
         "api_key": api_key,
         "allow_loopback": allow_loopback,
     }
+
+
+def declared_provider_config(conn: sqlite3.Connection, family: str) -> ProviderConfig:
+    """The provider for embedding with a space of *family*: always the declared endpoint (#569).
+
+    Connection details come from the recorded rows, which the startup gate binds to the
+    declaration. A space of another family than the declared provider is refused, so no
+    tool-created or deprecated space is embedded with the wrong wire format, or against an
+    auto-detected Ollama.
+    """
+    declared = load_embed_settings().provider
+    if family != declared:
+        raise ValidationError(
+            f"the space's provider {family!r} is not the declared provider {declared!r}; re-embed under the declaration"
+        )
+    cfg = get_embed_config(conn)
+    return ProviderConfig(
+        family=family,
+        base_url=cfg["base_url"],
+        api_key=cfg["api_key"],
+        allow_loopback=cfg["allow_loopback"],
+    )
 
 
 def assert_embed_identity_match(conn: sqlite3.Connection) -> None:
@@ -337,18 +360,7 @@ def backfill_space(
     element_type = space["element_type"] or "float32"
     embed_dim = matryoshka_base_dim or dim
 
-    # The space row owns (provider, model); the config owns the connection details
-    # (base_url/api_key/allow_loopback). Build the provider from both — the frozen
-    # ProviderConfig keys the cache so two openai_compat base_urls never collide.
-    embed_cfg = get_embed_config(conn)
-    embed_provider = get_provider(
-        cfg=ProviderConfig(
-            family=provider_name,
-            base_url=embed_cfg["base_url"],
-            api_key=embed_cfg["api_key"],
-            allow_loopback=embed_cfg["allow_loopback"],
-        )
-    )
+    embed_provider = get_provider(cfg=declared_provider_config(conn, provider_name))
 
     # Build chunk selection query — strategy-aware
     has_strategy = _has_chunk_strategy_column(conn)
@@ -500,15 +512,7 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
     conn.commit()
 
     # Always rebuild folder summaries on promotion (model/dim may differ)
-    embed_cfg = get_embed_config(conn)
-    embed_provider = get_provider(
-        cfg=ProviderConfig(
-            family=space["provider"],
-            base_url=embed_cfg["base_url"],
-            api_key=embed_cfg["api_key"],
-            allow_loopback=embed_cfg["allow_loopback"],
-        )
-    )
+    embed_provider = get_provider(cfg=declared_provider_config(conn, space["provider"]))
     _re_embed_folder_summaries(
         conn,
         embed_provider,

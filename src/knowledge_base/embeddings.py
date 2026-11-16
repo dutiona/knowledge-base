@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 import httpx
 
+from .exceptions import ValidationError
 from .utils import _resolve_api_key, _sanitize_url, validate_base_url
 
 logger = logging.getLogger(__name__)
@@ -185,7 +186,12 @@ class OpenAICompatProvider:
     """
 
     def __init__(self, base_url: str | None, api_key: str | None = None, *, allow_loopback: bool = False) -> None:
-        self._base_url = (base_url or "https://api.openai.com").rstrip("/").removesuffix("/v1")
+        if not base_url:
+            raise ValidationError(
+                "an openai_compat embedding provider needs a base URL (KNOWLEDGE_BASE_EMBED_URL); "
+                "KB never defaults to https://api.openai.com"
+            )
+        self._base_url = base_url.rstrip("/").removesuffix("/v1")
         self._api_key = api_key  # raw spec; never logged
         self._allow_loopback = allow_loopback
 
@@ -332,6 +338,11 @@ _provider_cache: dict[str | ProviderConfig, EmbeddingProvider] = {}
 def _build_provider(cfg: ProviderConfig) -> EmbeddingProvider:
     """Construct a provider from a resolved :class:`ProviderConfig`."""
     family = cfg.family.lower()
+    if family in ("ollama", "openai_compat", "openai") and not cfg.base_url:
+        raise ValidationError(
+            f"the {family} embedding provider needs a base URL (KNOWLEDGE_BASE_EMBED_URL); "
+            "KB has no default embedding endpoint"
+        )
     if family == "ollama":
         return OllamaProvider(cfg.base_url)
     if family in ("openai_compat", "openai"):

@@ -572,3 +572,37 @@ class TestOllamaBaseUrl:
         ):
             OllamaProvider().embed(["x"], model="bge-m3", expected_dim=3)
         assert captured["url"] == "http://auto:11434/api/embed"
+
+
+class TestNoImplicitEndpoint:
+    """#569: no embedding provider is built without an explicit base URL."""
+
+    @pytest.mark.parametrize("base_url", [None, ""])
+    def test_openai_compat_without_base_url_raises(self, base_url):
+        from knowledge_base.embeddings import OpenAICompatProvider
+        from knowledge_base.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="base URL"):
+            OpenAICompatProvider(base_url)
+
+    @pytest.mark.parametrize("family", ["openai_compat", "openai", "ollama"])
+    def test_config_path_without_base_url_reaches_nobody(self, family, http_requests):
+        from knowledge_base.embeddings import ProviderConfig
+        from knowledge_base.exceptions import ValidationError
+
+        with (
+            patch("knowledge_base.utils.is_private_ip", return_value=False),
+            patch("knowledge_base.embeddings._get_ollama_url") as ollama_url,
+            pytest.raises(ValidationError, match="base URL"),
+        ):
+            embed(["x"], model="m", expected_dim=3, _provider_cfg=ProviderConfig(family=family))
+        assert http_requests == []
+        ollama_url.assert_not_called()
+
+    def test_explicit_openai_provider_is_unchanged(self):
+        from knowledge_base.embeddings import OpenAIProvider
+
+        assert OpenAIProvider()._base_url == "https://api.openai.com"
+        bare = get_provider("openai")
+        assert isinstance(bare, OpenAIProvider)
+        assert bare._base_url == "https://api.openai.com"
