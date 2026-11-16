@@ -34,7 +34,7 @@ Part of a [four-layer cognitive architecture](https://github.com/dutiona/autonom
 └──────────────────┬──────────────────────────┘
                    │ MCP protocol
 ┌──────────────────▼──────────────────────────┐
-│              FastMCP Server (46 tools)        │
+│              FastMCP Server (47 tools)        │
 ├──────────────────────────────────────────────┤
 │  ingestion.py  │ search.py    │ papers.py    │
 │  embeddings.py │ extraction.py│ operations.py│
@@ -151,7 +151,7 @@ and moves the key from `OPENAI_API_KEY` to `KNOWLEDGE_BASE_EMBED_API_KEY`. Set
 uv run pytest tests/ -q
 ```
 
-## MCP Tools (46)
+## MCP Tools (47)
 
 ### Ingest (5)
 
@@ -201,7 +201,7 @@ uv run pytest tests/ -q
 | `supersede_conclusion_tool` | Mark a conclusion as superseded by a new one                                                                                                                   |
 | `get_conclusion_chain_tool` | Trace a conclusion's supersession chain                                                                                                                        |
 
-### Embedding Management (10)
+### Embedding Management (11)
 
 | Tool                         | Description                                                         |
 | ---------------------------- | ------------------------------------------------------------------- |
@@ -215,6 +215,7 @@ uv run pytest tests/ -q
 | `promote_embed_space_tool`   | Promote an embedding space of the declared identity to primary       |
 | `batch_compare_spaces_tool`  | Compare retrieval quality across embedding spaces                   |
 | `compare_spaces_tool`        | Compare two embedding spaces on specific queries                    |
+| `benchmark_spaces_tool`      | Benchmark non-deprecated spaces against a baseline on sampled queries |
 
 ### Operations (4)
 
@@ -229,8 +230,8 @@ uv run pytest tests/ -q
 
 | Tool             | Description                            |
 | ---------------- | -------------------------------------- |
-| `get_job_status` | Check status of a background operation |
-| `list_jobs`      | List all background jobs               |
+| `get_job_status_tool` | Check status of a background operation |
+| `list_jobs_tool`      | List all background jobs               |
 
 ### Prediction Errors (2)
 

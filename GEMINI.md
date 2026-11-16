@@ -32,7 +32,8 @@ Source lives in `src/knowledge_base/`. Each module owns its domain:
 - `conclusions.py` — evidence-chained claims with supersession tracking
 - `embed_swap.py` — atomic embedding model replacement (staging table pattern)
 - `jobs.py` — background job queue, singleton daemon thread
-- `embeddings.py` — Ollama embedding client (auto-detects host)
+- `embeddings.py` — Embedding providers (openai_compat, ollama, onnx), built only from the declared endpoint
+- `settings.py` — the `KNOWLEDGE_BASE_*` declaration and egress switches
 
 Tests in `tests/`, one file per module. Test/source ratio: 1.35x.
 

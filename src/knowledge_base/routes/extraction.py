@@ -188,7 +188,7 @@ def configure_llm_tool(
         base_url: Base URL (e.g. 'http://192.168.1.41:1234'). Required for openai_compat;
             SSRF-validated before persisting.
         model: Model name (e.g. 'qwen3.5:27b', 'qwen/qwen3.5-35b-a3b').
-        api_key: Inline key, or 'env:VARNAME' indirection (preferred). Optional.
+        api_key: Inline key, or exactly 'env:KNOWLEDGE_BASE_LLM_API_KEY' (preferred). Optional.
         allow_loopback_base_url: Opt-in to a loopback/localhost base_url (for a local
             openai_compat server). Shared with the embedding path; omit to preserve.
     """
