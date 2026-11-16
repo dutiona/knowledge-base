@@ -116,11 +116,15 @@ serves: it prints the reason (naming the variable or the `config` field) and exi
 | `KNOWLEDGE_BASE_EMBED_API_KEY` | optional | the embedder's key; `config` records only `env:KNOWLEDGE_BASE_EMBED_API_KEY` |
 | `KNOWLEDGE_BASE_VISION`, `KNOWLEDGE_BASE_BROWSER`, `KNOWLEDGE_BASE_LLM` | optional | `on` or `off` (default `off`): figure extraction, the Playwright fallback, LLM extraction |
 | `KNOWLEDGE_BASE_LLM_API_KEY` | optional | the only `env:` source an LLM key may name |
+| `KNOWLEDGE_BASE_HOST_ADDRESSES` | optional | this host's own IP addresses or CIDR networks, comma-separated (e.g. `203.0.113.7,2001:db8:7::/64`); the SSRF floor refuses them though they are public |
 
 `EMBED_PROVIDER` is no longer read and is refused when set. No embedding provider has a
 default endpoint: nothing falls back to `https://api.openai.com` or to an auto-detected
 Ollama. The declared host is the one exception to the SSRF floor, on the embedding request
-only; every URL a tool supplies keeps the floor.
+only; every URL a tool supplies keeps the floor. The floor refuses every non-global address and
+the listed host addresses. It is checked on every request, redirect hops included, and each request
+connects to the address it checked. Endpoints the operator's environment declares (the embedder,
+`OLLAMA_HOST` or the auto-detected Ollama, KB's own OmniParser server) are not floored.
 
 - **A blank database** is seeded from the declaration (its vector tables take the declared
   dimension).
@@ -145,6 +149,11 @@ address auto-detection used to find). A database created with `EMBED_PROVIDER=op
 declares `KNOWLEDGE_BASE_EMBED_PROVIDER=openai`, `KNOWLEDGE_BASE_EMBED_URL=https://api.openai.com`
 and moves the key from `OPENAI_API_KEY` to `KNOWLEDGE_BASE_EMBED_API_KEY`. Set
 `KNOWLEDGE_BASE_VISION=on` / `KNOWLEDGE_BASE_LLM=on` to keep figure or structured extraction.
+An LLM, vision, OmniParser or CDP URL a configure tool stored keeps the floor when it is used: a
+LAN or tailnet one is refused. Clear it to use the default (`configure_llm_tool` with no
+`base_url`, `configure_vision_tool(base_url="")`, `configure_omniparser_tool(server_url="")`),
+declare a LAN or tailnet Ollama with `OLLAMA_HOST`, or set `allow_loopback_base_url` (through
+`configure_llm_tool`) for a localhost server.
 
 ### Run tests
 

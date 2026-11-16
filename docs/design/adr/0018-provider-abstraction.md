@@ -370,6 +370,26 @@ KB must not let a tool call redirect its embedding traffic. For the **embedding*
 - **Egress switches.** Vision, the Playwright fallback and LLM extraction run only with
   `KNOWLEDGE_BASE_VISION`, `KNOWLEDGE_BASE_BROWSER`, `KNOWLEDGE_BASE_LLM` set to `on`.
 
+## Amendment (2026-11-16, #572): the guard binds each request's connect target
+
+§4 requires the guard to bind the actual connect target of every request. It now does, in one
+place (`utils.egress_client`):
+
+- **Each request, redirect hops included,** resolves its host once and is refused unless every
+  answer passes the floor. It is then sent to an accepted answer, while `Host` and the TLS name
+  (SNI and certificate verification) keep the host name, and it uses no proxy. URL ingest and
+  image downloads follow redirects this way; provider calls still never follow them.
+- **The floor also refuses this host's own addresses,** listed by the operator in
+  `KNOWLEDGE_BASE_HOST_ADDRESSES` (addresses or CIDR networks). An IPv4-mapped answer is judged
+  as its IPv4 form.
+- **Every URL a tool stores keeps the floor** with the shared `allow_loopback_base_url` opt-in:
+  the LLM URL of every family (`ollama` included), vision, OmniParser and the CDP endpoint, when
+  written and on every request. The trust is carried as provenance, never inferred from a
+  URL's value. Endpoints the operator's environment declares (the embedder, `OLLAMA_HOST` or
+  the auto-detected Ollama, KB's own OmniParser server) are not floored. The CDP endpoint is
+  connected by the browser out of process, so it must be an IP literal (or `localhost` under
+  the opt-in), leaving no lookup to rebind.
+
 ## References
 
 - Current code: `src/knowledge_base/embeddings.py` (`EmbeddingProvider` Protocol,

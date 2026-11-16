@@ -149,6 +149,10 @@ The image carries no embedding declaration: pass the `KNOWLEDGE_BASE_EMBED_*` va
 `KNOWLEDGE_BASE_EMBED_API_KEY` through `--env-file` or a secret, never in the unit file. Without them the server
 exits 78 at start (see the README's Configuration section).
 
+Also set `KNOWLEDGE_BASE_HOST_ADDRESSES` to the host's public IPv4 address and its IPv6 prefix (for example
+`203.0.113.7,2001:db8:7::/64`). They are global, so the SSRF floor would otherwise accept them, yet a container
+reaching them reaches the host's own services. Tailnet, bridge and gateway addresses are refused without it.
+
 ### Snapshotting a running server
 
 Until the server gains an HTTP transport (#571), `knowledge-base` speaks MCP over stdio and exits when its standard
@@ -221,7 +225,9 @@ python -m venv /path/to/playwright-venv
 /path/to/playwright-venv/bin/playwright install --with-deps chromium
 ```
 
-**CDP mode** -- connects to a running browser (e.g., Docker container):
+**CDP mode** -- connects to a running browser at an IP address, or at `localhost` with the
+`allow_loopback_base_url` opt-in (set through `configure_llm_tool`). The endpoint keeps the SSRF floor, and a host
+name is refused because the browser would resolve it again after KB's check:
 
 ```bash
 python -m venv /path/to/playwright-venv

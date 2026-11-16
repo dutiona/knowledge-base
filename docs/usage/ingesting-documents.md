@@ -46,6 +46,12 @@ You can force a file to be treated as code (or any other type) with the `source_
 
 Use the `ingest_url` tool. Content is extracted with trafilatura (strips boilerplate, extracts main text and tables).
 
+Redirects are followed, and every hop keeps the SSRF floor: its host is resolved once, refused unless every answer is
+a public address outside `KNOWLEDGE_BASE_HOST_ADDRESSES`, and the request connects to the address it checked (TLS
+still verifies the host name). A redirect into loopback, a private range, the tailnet's `100.64.0.0/10` or the host's
+own address fails the ingest before anything is sent there. Proxy variables (`HTTP(S)_PROXY`) are not used for these
+fetches, since a proxy would resolve the name itself.
+
 ```json
 {
   "name": "ingest_url",
@@ -55,7 +61,7 @@ Use the `ingest_url` tool. Content is extracted with trafilatura (strips boilerp
 
 If trafilatura extracts fewer than 200 characters (likely a JS-heavy page), `KNOWLEDGE_BASE_BROWSER=on` is set, and browser rendering is configured, the page is rendered via Playwright and re-extracted. Browser rendering also captures a screenshot that can be processed by the vision pipeline for figure extraction. See [Figure Extraction](figure-extraction.md) for vision configuration.
 
-Browser rendering is off unless `KNOWLEDGE_BASE_BROWSER=on`, and then requires explicit configuration via `configure_browser_tool`. See the tool reference for setup instructions.
+Browser rendering is off unless `KNOWLEDGE_BASE_BROWSER=on`, and then requires explicit configuration via `configure_browser_tool`. See the tool reference for setup instructions. The browser's own network is outside the floor: the page's JavaScript, its subresources and its redirects reach whatever the host reaches.
 
 ### Inline Image Extraction
 
@@ -66,7 +72,7 @@ Filtering heuristics skip non-content images:
 - **Decorative patterns** -- URLs or alt text containing logo, icon, avatar, favicon, banner, sprite, spacer, tracking pixel, or badge
 - **Small images** -- Width or height below 100px (checked first from HTML attributes to avoid unnecessary downloads, then verified from actual pixel dimensions after download)
 - **Non-raster formats** -- SVG and data URI images are excluded
-- **SSRF protection** -- Image URLs are validated against private/loopback IP ranges, including post-redirect targets
+- **SSRF protection** -- Every image request and each of its redirect hops keeps the SSRF floor and connects to the address it checked
 
 Up to 10 images per page are processed, with a 10 MB cap per image download.
 
@@ -263,6 +269,9 @@ private/link-local/metadata/DNS-rebinding rejected; cross-host redirects refused
 exception: the declared embedding host, by exact host match, so a tailnet embedder whose name
 resolves into `100.64.0.0/10` or `fd7a:` works. A URL a tool supplies (`ingest_url`, image
 fetches, `configure_llm_tool`) always keeps the floor, the declared host included.
+The floor also refuses the host's own addresses listed in `KNOWLEDGE_BASE_HOST_ADDRESSES`, and
+every URL a configure tool stores (LLM, vision, OmniParser, CDP) keeps it when written and on
+every request, which connects to the address it checked.
 
 The deprecated `EMBED_PROVIDER` variable is refused, and `OPENAI_API_KEY` is no longer an
 embedding key source (the bare-name `openai` provider still reads it).

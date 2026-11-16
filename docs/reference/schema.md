@@ -231,7 +231,7 @@ Additional keys set via configure tools: `llm_base_url`, `llm_api_key`, `vision_
 | `embed_model`                                | Embedding model slug — the `model` field of the embedding-identity tuple                 |
 | `llm_provider`                               | Chat API family: `openai_compat` \| `anthropic_compat` \| `ollama`                       |
 | `llm_base_url` / `llm_api_key` / `llm_model` | Chat counterparts (same semantics as the `embed_*` keys)                                 |
-| `allow_loopback_base_url`                    | `true`/`false` — **shared** opt-in permitting a loopback/`localhost` base_url            |
+| `allow_loopback_base_url`                    | `true`/`false` — **shared** opt-in permitting a loopback/`localhost` URL for every stored service URL (LLM, vision, OmniParser, CDP); never for ingest or image URLs |
 
 The `embed_spaces.provider` and `.model` columns carry the family name and model slug — the
 ADR-0015 embedding-identity tuple that the producer (ingest) must match before writing. An

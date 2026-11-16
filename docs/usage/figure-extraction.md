@@ -44,15 +44,14 @@ Vision is off unless the server runs with `KNOWLEDGE_BASE_VISION=on`: until then
 {
   "name": "configure_vision_tool",
   "arguments": {
-    "model": "gemma3:27b",
-    "base_url": "http://localhost:11434"
+    "model": "gemma3:27b"
   }
 }
 ```
 
 The vision API must support the OpenAI-compatible `/v1/chat/completions` endpoint with image inputs. Default model is `gemma3:27b`; default base URL is the auto-detected Ollama (OLLAMA_HOST, WSL2 gateway, localhost); it lies outside the declared embedding endpoint, so turning vision on sends page and PDF images there.
 
-Call with no arguments to query the current configuration.
+Call with no arguments to query the current configuration. A `base_url` you give keeps the SSRF floor, checked before it is stored and on every request: a public host, or `localhost` with the `allow_loopback_base_url` opt-in (set through `configure_llm_tool`). A LAN or tailnet Ollama is declared with `OLLAMA_HOST` instead. `"base_url": ""` clears a stored URL, back to the default.
 
 ## OmniParser Enrichment
 
@@ -86,6 +85,8 @@ To query the current configuration:
 ```
 
 When OmniParser is configured, ETA estimates increase from ~4 seconds/page to ~44 seconds/page.
+
+KB starts its own OmniParser server on `127.0.0.1:7862`. A `server_url` you give instead keeps the SSRF floor: a public host, or `localhost` with the loopback opt-in. A refused server counts as unhealthy, so extraction falls back to the subprocess. `"server_url": ""` clears it.
 
 ## Page Selection
 
@@ -162,7 +163,7 @@ When ingesting web pages via `ingest_url`, inline `<img>` tags are extracted fro
 - Decorative images (URL or alt text matching patterns like logo, icon, avatar, banner, sprite, tracking pixel, or badge)
 - Small images (width or height below 100px — checked first from HTML attributes to avoid unnecessary downloads, then from actual pixel dimensions after download)
 - SVG and data URI images (cannot be processed by the vision pipeline without rasterization)
-- Images from private/loopback IP ranges (SSRF protection)
+- Images from private/loopback IP ranges or the host's own addresses, checked on every request and redirect hop (SSRF protection)
 - Duplicate URLs on the same page
 
 Up to 10 images per page are processed. Each image download is capped at 10 MB (streamed). Non-PNG images (JPEG, WebP, GIF) are converted to PNG before being sent to the vision model.

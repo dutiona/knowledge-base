@@ -169,7 +169,7 @@ With it on, configure the LLM used for structured extraction:
 Three chat API families are supported (organized by family, not vendor —
 [ADR-0018](../design/adr/0018-provider-abstraction.md)):
 
-- **`ollama`** -- native Ollama `/api/generate`. Base URL auto-detected (OLLAMA_HOST env, WSL2 gateway, or localhost:11434).
+- **`ollama`** -- native Ollama `/api/generate`. Base URL auto-detected (OLLAMA_HOST env, WSL2 gateway, or localhost:11434) when none is given; that operator endpoint is not floored. A `base_url` given to the tool keeps the SSRF floor like the other families, so a LAN or tailnet Ollama is declared with `OLLAMA_HOST` instead.
 - **`openai_compat`** -- OpenAI-compatible `{base_url}/v1/chat/completions` (OpenAI, vLLM, LM Studio, OpenRouter, …). Requires `base_url`; optional `api_key`.
 - **`anthropic_compat`** -- Anthropic Messages API `{base_url}/v1/messages` (`x-api-key` + `anthropic-version` headers, `system` as a top-level field, content-block responses). Requires `base_url`; **chat-only** (Anthropic has no embeddings API, so it is no embedding provider).
 
@@ -191,8 +191,9 @@ setting rather than clobber the embedding side).
 
 Configuration is saved to the database first, then an advisory connectivity probe runs. A
 private/loopback `base_url` without the loopback opt-in is **hard-rejected before persisting**
-(SSRF primary gate); a reachable-but-down endpoint returns a warning without rolling back the
-saved settings.
+(SSRF primary gate, every family); a reachable-but-down endpoint returns a warning without rolling
+back the saved settings. Every request to a stored `base_url` keeps the floor again and connects to
+the address it checked, so a name that later resolves to a private address is refused at use.
 
 The API key, if provided inline, is stored as plain text in the SQLite config table (acceptable
 for local use, not for network-exposed deployments). Prefer the `env:VARNAME` indirection — the

@@ -59,6 +59,10 @@ Force re-ingest of a previously ingested file. Deletes old chunks and inserts ne
 
 Ingest a web page by URL. Fetches the page, extracts main content, and indexes it.
 
+Redirects are followed. Every hop keeps the SSRF floor and connects to the address it checked, so a redirect into a
+private, loopback, tailnet or host-owned address (`KNOWLEDGE_BASE_HOST_ADDRESSES`) fails the call before anything is
+sent there.
+
 Uses content-hash dedup -- unchanged pages are skipped on re-ingest.
 
 | Parameter    | Type          | Required | Default | Description                                    |
@@ -617,9 +621,11 @@ Configure the vision model used for figure extraction. Refuses, even a query, un
 | Parameter  | Type          | Required | Default | Description                                                 |
 | ---------- | ------------- | -------- | ------- | ----------------------------------------------------------- |
 | `model`    | `str \| None` | no       | `None`  | Vision model name (e.g. `gemma3:27b`, `llava:13b`)          |
-| `base_url` | `str \| None` | no       | `None`  | Base URL for the vision API (e.g. `http://localhost:11434`) |
+| `base_url` | `str \| None` | no       | `None`  | Base URL for the vision API (e.g. `https://vision.example.test`); `""` clears it |
 
-With no arguments, returns current configuration. Default vision model is `gemma3:27b`.
+With no arguments, returns current configuration. Default vision model is `gemma3:27b`; the default base URL is the
+auto-detected Ollama. A given `base_url` keeps the SSRF floor when stored and on every request (a `localhost` URL
+needs `allow_loopback_base_url`, set through `configure_llm_tool`).
 
 **Returns:**
 
@@ -635,7 +641,9 @@ Configure {term}`OmniParser` for figure enrichment. OmniParser adds OCR text and
 | --------- | ------------- | -------- | ------- | ------------------------------------------------------------------------------- |
 | `path`    | `str \| None` | no       | `None`  | Absolute path to OmniParser directory. `None` to query, empty string to disable |
 
-Requires a local OmniParser installation with `parse.py` and a `.venv/bin/python` in the specified directory.
+Requires a local OmniParser installation with `parse.py` and a `.venv/bin/python` in the specified directory. KB
+auto-starts its own server on `127.0.0.1:7862`; a `server_url` given instead keeps the SSRF floor when stored and on
+every request, and a refused server falls back to the subprocess.
 
 **Returns:**
 
@@ -654,7 +662,7 @@ Configure browser rendering for JS-heavy web pages. Enables fallback rendering w
 
 Two modes (both require a venv with `playwright` installed):
 
-- **CDP** (recommended for Docker): Connect to a running Playwright container. Provide both `cdp_endpoint` and `venv_path`.
+- **CDP**: Connect to a running Playwright browser. Provide both `cdp_endpoint` and `venv_path`. The endpoint keeps the SSRF floor: a public IP address, or `localhost` with `allow_loopback_base_url` (set through `configure_llm_tool`; the `ws://localhost:3000` example below needs it). A host name is refused, since the browser would resolve it again after KB's check.
 - **Local**: Launch headless Chromium from the venv. Provide `venv_path` only.
 
 With no arguments, returns current configuration.
