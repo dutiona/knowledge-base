@@ -1893,3 +1893,11 @@ def test_open_declared_db_returns_a_bound_connection(tmp_path, monkeypatch):
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
     with pytest.raises(KnowledgeBaseError, match="embed_model"):
         open_declared_db(tmp_path / "kb.db")
+
+
+def test_bind_refuses_a_drifted_config_row_while_the_active_space_matches(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("UPDATE config SET value = 'drifted-model' WHERE key = 'embed_model'")
+    conn.commit()
+    with pytest.raises(KnowledgeBaseError, match=r"config embed_model is 'drifted-model'.*rebind"):
+        bind_embed_config(conn, load_embed_settings())

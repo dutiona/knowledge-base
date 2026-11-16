@@ -651,9 +651,9 @@ class TestDeclaredEndpointExemption:
         from knowledge_base.llm import configure_llm
         from knowledge_base.web import _validate_image_url, ingest_url
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="private"):
             ingest_url(declared, "https://embedder.example.test/doc")
         assert _validate_image_url("https://embedder.example.test/a.png") is False
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="private"):
             configure_llm(declared, "openai_compat", "https://embedder.example.test")
         assert http_requests == []
