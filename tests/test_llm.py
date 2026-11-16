@@ -934,3 +934,71 @@ def test_llm_call_ollama_unrelated_400_propagates(tmp_path):
         _llm_call("test prompt", conn=conn)
 
     assert len(calls) == 1  # no blind retry on a non-think 400
+
+
+# --- #569: LLM extraction is off unless KNOWLEDGE_BASE_LLM=on; no embedder key for the LLM ---
+
+
+def _config_rows(conn) -> dict:
+    return dict(conn.execute("SELECT key, value FROM config").fetchall())
+
+
+def test_llm_off_refuses_before_any_request(kb_conn, http_requests, monkeypatch):
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.llm import _llm_call, configure_llm
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_LLM")
+    before = _config_rows(kb_conn)
+    with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_LLM"):
+        configure_llm(kb_conn, "ollama", "http://169.254.169.254")
+    with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_LLM"):
+        _llm_call("p", conn=kb_conn)
+    assert http_requests == []
+    assert _config_rows(kb_conn) == before
+
+
+@pytest.mark.parametrize("spec", ["env:KNOWLEDGE_BASE_EMBED_API_KEY", "env:HOME"])
+def test_llm_key_spec_allowlist_refuses_other_env_specs(kb_conn, http_requests, spec):
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.llm import configure_llm
+
+    before = _config_rows(kb_conn)
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        pytest.raises(ValidationError, match="KNOWLEDGE_BASE_LLM_API_KEY"),
+    ):
+        configure_llm(kb_conn, "openai_compat", "https://llm.example.test", api_key=spec)
+    assert http_requests == []
+    assert _config_rows(kb_conn) == before
+
+
+@pytest.mark.parametrize("spec", ["env:KNOWLEDGE_BASE_LLM_API_KEY", "sk-inline"])
+def test_llm_key_spec_allowlist_accepts_its_own_source(kb_conn, http_requests, spec):
+    from knowledge_base.llm import configure_llm
+
+    http_requests.handlers["llm.example.test"] = lambda request: httpx.Response(200, json={"data": []})
+    with patch("knowledge_base.utils.is_private_ip", return_value=False):
+        configure_llm(kb_conn, "openai_compat", "https://llm.example.test", api_key=spec)
+    assert _config_rows(kb_conn)["llm_api_key"] == spec
+
+
+def test_a_stored_foreign_key_spec_is_refused_before_any_request(kb_conn, http_requests):
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.llm import _get_llm_config, configure_llm
+
+    kb_conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES "
+        "('llm_provider', 'openai_compat'), ('llm_base_url', 'https://llm.example.test'), "
+        "('llm_api_key', 'env:KNOWLEDGE_BASE_EMBED_API_KEY')"
+    )
+    kb_conn.commit()
+    before = _config_rows(kb_conn)
+    with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_LLM_API_KEY"):
+        _get_llm_config(kb_conn)
+    with (
+        patch("knowledge_base.utils.is_private_ip", return_value=False),
+        pytest.raises(ValidationError, match="KNOWLEDGE_BASE_LLM_API_KEY"),
+    ):
+        configure_llm(kb_conn, "openai_compat", "https://attacker.example.test")
+    assert http_requests == []
+    assert _config_rows(kb_conn) == before

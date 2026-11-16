@@ -99,16 +99,11 @@ class TestGetProvider:
         with pytest.raises(ValueError, match="Unknown embedding provider"):
             get_provider("nonexistent")
 
-    def test_env_var_override(self, monkeypatch):
-        monkeypatch.setenv("EMBED_PROVIDER", "ollama")
-        provider = get_provider("nonexistent_ignored")
-        assert isinstance(provider, OllamaProvider)
-
-    def test_env_var_override_disabled(self, monkeypatch):
-        """allow_env_override=False ignores EMBED_PROVIDER."""
+    def test_embed_provider_env_no_longer_selects(self, monkeypatch):
+        """#569: the deprecated EMBED_PROVIDER is refused at startup and never read here."""
         monkeypatch.setenv("EMBED_PROVIDER", "ollama")
         with pytest.raises(ValueError, match="Unknown embedding provider 'nonexistent'"):
-            get_provider("nonexistent", allow_env_override=False)
+            get_provider("nonexistent")
 
     def test_provider_caching(self):
         """get_provider returns the same instance for the same name."""
@@ -572,3 +567,121 @@ class TestOllamaBaseUrl:
         ):
             OllamaProvider().embed(["x"], model="bge-m3", expected_dim=3)
         assert captured["url"] == "http://auto:11434/api/embed"
+
+
+class TestNoImplicitEndpoint:
+    """#569: no embedding provider is built without an explicit base URL."""
+
+    @pytest.mark.parametrize("base_url", [None, ""])
+    def test_openai_compat_without_base_url_raises(self, base_url):
+        from knowledge_base.embeddings import OpenAICompatProvider
+        from knowledge_base.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="base URL"):
+            OpenAICompatProvider(base_url)
+
+    @pytest.mark.parametrize("family", ["openai_compat", "openai", "ollama"])
+    def test_config_path_without_base_url_reaches_nobody(self, family, http_requests):
+        from knowledge_base.embeddings import ProviderConfig
+        from knowledge_base.exceptions import ValidationError
+
+        with (
+            patch("knowledge_base.utils.is_private_ip", return_value=False),
+            patch("knowledge_base.embeddings._get_ollama_url") as ollama_url,
+            pytest.raises(ValidationError, match="base URL"),
+        ):
+            embed(["x"], model="m", expected_dim=3, _provider_cfg=ProviderConfig(family=family))
+        assert http_requests == []
+        ollama_url.assert_not_called()
+
+    def test_explicit_openai_provider_is_unchanged(self):
+        from knowledge_base.embeddings import OpenAIProvider
+
+        assert OpenAIProvider()._base_url == "https://api.openai.com"
+        bare = get_provider("openai")
+        assert isinstance(bare, OpenAIProvider)
+        assert bare._base_url == "https://api.openai.com"
+
+
+class TestDeclaredEndpointExemption:
+    """#569: the declared host is exempt from the SSRF floor on the embedding path only."""
+
+    @pytest.fixture
+    def declared(self, monkeypatch, fake_dns, tmp_path):
+        from knowledge_base.db import open_declared_db
+
+        tailnet = ["100.64.0.10", "fd7a:115c:a1e0::10"]
+        fake_dns["embedder.example.test"] = tailnet
+        fake_dns["other.example.test"] = tailnet
+        for name, value in {
+            "KNOWLEDGE_BASE_EMBED_PROVIDER": "openai_compat",
+            "KNOWLEDGE_BASE_EMBED_MODEL": "qwen3-embedding",
+            "KNOWLEDGE_BASE_EMBED_DIM": "8",
+            "KNOWLEDGE_BASE_EMBED_URL": "https://embedder.example.test",
+            "KNOWLEDGE_BASE_EMBED_API_KEY": "sk-test-only",
+        }.items():
+            monkeypatch.setenv(name, value)
+        conn = open_declared_db(tmp_path / "kb.db")  # no configure_* call anywhere
+        yield conn
+        conn.close()
+
+    def test_a_blank_database_embeds_against_the_declared_endpoint(self, declared, http_requests):
+        import httpx
+
+        from knowledge_base.ingest import _embed_with_config
+
+        http_requests.handlers["embedder.example.test"] = lambda request: httpx.Response(
+            200, json={"data": [{"index": 0, "embedding": [1.0] + [0.0] * 7}]}
+        )
+        vectors = _embed_with_config(declared, ["hello"])
+        assert len(vectors) == 1
+        assert [str(r.url) for r in http_requests] == ["https://embedder.example.test/v1/embeddings"]
+        assert http_requests[0].headers["Authorization"] == "Bearer sk-test-only"
+
+    def test_another_tailnet_host_keeps_the_floor(self, declared, http_requests):
+        from knowledge_base.embeddings import OpenAICompatProvider
+        from knowledge_base.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="private"):
+            OpenAICompatProvider("https://other.example.test").embed(["x"], model="m", expected_dim=8)
+        assert http_requests == []
+
+    def test_tool_urls_on_the_declared_host_keep_the_floor(self, declared, http_requests):
+        from knowledge_base.exceptions import ValidationError
+        from knowledge_base.llm import configure_llm
+        from knowledge_base.web import _validate_image_url, ingest_url
+
+        with pytest.raises(ValidationError, match="private"):
+            ingest_url(declared, "https://embedder.example.test/doc")
+        assert _validate_image_url("https://embedder.example.test/a.png") is False
+        with pytest.raises(ValidationError, match="private"):
+            configure_llm(declared, "openai_compat", "https://embedder.example.test")
+        assert http_requests == []
+
+
+def test_the_key_comes_from_the_declaration_not_the_config_row(monkeypatch, fake_dns, tmp_path, http_requests):
+    """#569: a foreign key row written by another process never reaches the request."""
+    import httpx
+
+    from knowledge_base.db import open_declared_db
+    from knowledge_base.ingest import _embed_with_config
+
+    fake_dns["embedder.example.test"] = ["100.64.0.10"]
+    for name, value in {
+        "KNOWLEDGE_BASE_EMBED_PROVIDER": "openai_compat",
+        "KNOWLEDGE_BASE_EMBED_MODEL": "qwen3-embedding",
+        "KNOWLEDGE_BASE_EMBED_DIM": "8",
+        "KNOWLEDGE_BASE_EMBED_URL": "https://embedder.example.test",
+        "KNOWLEDGE_BASE_EMBED_API_KEY": "sk-test-only",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("OTHER_SECRET", "sk-foreign")
+    conn = open_declared_db(tmp_path / "kb.db")
+    conn.execute("UPDATE config SET value = 'env:OTHER_SECRET' WHERE key LIKE 'embed_api%'")
+    conn.commit()
+    http_requests.handlers["embedder.example.test"] = lambda request: httpx.Response(
+        200, json={"data": [{"index": 0, "embedding": [1.0] + [0.0] * 7}]}
+    )
+    _embed_with_config(conn, ["hello"])
+    conn.close()
+    assert http_requests[0].headers["Authorization"] == "Bearer sk-test-only"

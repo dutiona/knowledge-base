@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import sys
+
 from fastmcp import FastMCP
+
+from .db import open_declared_db
+from .exceptions import KnowledgeBaseError
 
 from .routes.embeddings import mcp as _embeddings
 from .routes.extraction import mcp as _extraction
@@ -34,6 +39,14 @@ mcp.mount(_operations)
 
 
 def main():
+    # The startup gate (#569): serve only with an explicit embedding declaration the
+    # database agrees with. 78 is EX_CONFIG, so a unit can set RestartPreventExitStatus=78
+    # instead of restart-looping on a configuration error.
+    try:
+        open_declared_db().close()
+    except KnowledgeBaseError as exc:
+        print(f"knowledge-base: {exc}", file=sys.stderr)
+        sys.exit(78)
     mcp.run(transport="stdio")
 
 

@@ -55,15 +55,15 @@ def test_search_index_chunk_strategy_passthrough(tmp_path):
     """search_index passes chunk_strategy to search()."""
     from unittest.mock import patch
 
-    from knowledge_base.db import DEFAULT_EMBED_DIM
     from knowledge_base.search import search
+    from tests.declared_env import TEST_EMBED_DIM
 
     def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kw):
-        dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+        dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
         return [[0.1] * dim for _ in texts]
 
     def _fake_embed_single(text, model="bge-m3", **_kw):
-        return [0.1] * DEFAULT_EMBED_DIM
+        return [0.1] * TEST_EMBED_DIM
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)

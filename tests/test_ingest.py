@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 
 from knowledge_base.chunking import chunk_python_ast as _chunk_python_ast
 from knowledge_base.chunking import chunk_text as _chunk_text
-from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.db import get_connection, init_schema
 from knowledge_base.ingest import (
     _cleanup_conclusion_refs,
     _extract_pdf_markdown,
@@ -44,11 +44,12 @@ from knowledge_base.conclusions import (
 )
 from knowledge_base.exceptions import NotFoundError, ValidationError
 from knowledge_base.extraction import record_method, record_dataset, record_metric
+from tests.declared_env import TEST_EMBED_DIM
 import pytest
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 
 
@@ -57,7 +58,7 @@ def _fake_embed_odd_none(texts, model="bge-m3", expected_dim=None, **_kwargs):
     None for zero-norm vectors, so some chunks get NO vec row. Used to prove the
     batched chunk_count bump counts VEC INSERTS (n_inserted), not chunk iterations.
     """
-    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
     return [None if i % 2 == 1 else [0.1] * dim for i in range(len(texts))]
 
 
@@ -3756,7 +3757,7 @@ def test_ingest_file_semantic_nonpdf(tmp_path):
 
 def _fake_embed_with_zero(texts, model="bge-m3", expected_dim=None, **_kwargs):
     """Return None for the second text to simulate a zero-norm embedding."""
-    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
     result = []
     for i, _ in enumerate(texts):
         if i == 1:
@@ -4254,3 +4255,64 @@ def test_reingest_rolls_back_on_midway_failure(tmp_path, monkeypatch):
     rows = [r["content"] for r in conn.execute("SELECT content FROM chunks ORDER BY chunk_index")]
     assert rows == ["alpha body", "beta body"]
     assert conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0] == 2
+
+
+# --- #569: vision and the browser fallback are off unless switched on ---
+
+_ARTICLE = "<p>" + ("Attention mechanisms let a model weigh every token of its input. " * 6) + "</p>"
+
+
+def _page(body: str):
+    import httpx
+
+    html = f"<html><head><title>T</title></head><body><article><h1>Article</h1>{body}</article></body></html>"
+    return lambda request: httpx.Response(200, html=html)
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
+def test_ingest_url_with_vision_off_makes_no_vision_request(_public, kb_conn, http_requests, monkeypatch):
+    monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
+    kb_conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('vision_base_url', 'https://vision.example.test')"
+    )
+    kb_conn.commit()
+    http_requests.handlers["page.example.test"] = _page(
+        _ARTICLE + '<img src="https://img.example.test/fig.png" width="800" height="600" alt="Results chart">'
+    )
+
+    result = ingest_url(kb_conn, "https://page.example.test/article")
+
+    assert result["figures_extracted"] == 0
+    assert result["chunks_added"] >= 1
+    assert http_requests.hosts() == ["page.example.test"]
+
+
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+@patch("knowledge_base.web.is_private_ip", return_value=False)
+def test_ingest_url_with_the_browser_off_launches_nothing(_public, kb_conn, http_requests, monkeypatch, tmp_path):
+    from knowledge_base.web import configure_browser
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_BROWSER")
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+    (venv / "bin" / "python").chmod(0o755)
+    kb_conn.execute(
+        "INSERT INTO config (key, value) VALUES ('browser_mode', 'local'), ('browser_venv', ?)", (str(venv),)
+    )
+    kb_conn.commit()
+    http_requests.handlers["page.example.test"] = _page("<div id='app'></div><script>render()</script>")
+
+    with patch("knowledge_base.web.subprocess.run") as run:
+        result = ingest_url(kb_conn, "https://page.example.test/app")
+
+    run.assert_not_called()
+    assert result["browser_rendered"] is False
+    assert http_requests.hosts() == ["page.example.test"]
+    with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_BROWSER"):
+        configure_browser(kb_conn, venv_path=str(venv))
+    with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_BROWSER"):
+        configure_browser(kb_conn)

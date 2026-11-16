@@ -53,9 +53,9 @@ Use the `ingest_url` tool. Content is extracted with trafilatura (strips boilerp
 }
 ```
 
-If trafilatura extracts fewer than 200 characters (likely a JS-heavy page), and browser rendering is configured, the page is rendered via Playwright and re-extracted. Browser rendering also captures a screenshot that can be processed by the vision pipeline for figure extraction. See [Figure Extraction](figure-extraction.md) for vision configuration.
+If trafilatura extracts fewer than 200 characters (likely a JS-heavy page), `KNOWLEDGE_BASE_BROWSER=on` is set, and browser rendering is configured, the page is rendered via Playwright and re-extracted. Browser rendering also captures a screenshot that can be processed by the vision pipeline for figure extraction. See [Figure Extraction](figure-extraction.md) for vision configuration.
 
-Browser rendering requires explicit configuration via `configure_browser_tool`. See the tool reference for setup instructions.
+Browser rendering is off unless `KNOWLEDGE_BASE_BROWSER=on`, and then requires explicit configuration via `configure_browser_tool`. See the tool reference for setup instructions.
 
 ### Inline Image Extraction
 
@@ -214,70 +214,55 @@ Returns document pairs ordered by number of shared sessions. Pairs that co-occur
 
 ## Embedding
 
-Chunks are embedded automatically during ingestion using the configured embedding provider and model. Embeddings are stored in the **active embedding space's** vec table (typically `chunks_vec` for the default space, or `chunks_vec_<name>` for named spaces). The model, dimension, and provider can be checked with the `embed_config` tool. To switch models, use `re_embed_tool` (convenience wrapper) or the granular space lifecycle tools -- see [Embedding Spaces](embedding-spaces.md) for the full workflow.
+Chunks are embedded automatically during ingestion using the configured embedding provider and model. Embeddings are stored in the **active embedding space's** vec table (typically `chunks_vec` for the default space, or `chunks_vec_<name>` for named spaces). The model, dimension, and provider come from the `KNOWLEDGE_BASE_EMBED_*` declaration and can be checked with the `embed_config` tool. To switch models, declare the new one and run `knowledge-base-ingest re-embed` with the server stopped -- see [Embedding Spaces](embedding-spaces.md) for the space lifecycle.
 
 ### Embedding Providers
 
 Pluggable embedding providers decouple the knowledge base from any single inference backend. This design was motivated by competitive analysis (NornicDB supports Ollama, OpenAI, and local ONNX inference) and aligns with the [four-layer cognitive architecture](../insights/four-layer-cognitive-architecture.md) — embeddings sit in the Knowledge (infrastructure) layer where swappable backends enable cost/quality/latency trade-offs without touching higher layers.
 
-By default, knowledge-base uses **Ollama** (BGE-M3, 1024 dimensions). Providers are organized
+The provider is declared in the environment (below). Providers are organized
 by **API family**, not vendor (per [ADR-0018](../design/adr/0018-provider-abstraction.md)):
 
 | Family            | Config value       | Endpoint                   | Covers (non-exhaustive)                                |
 | ----------------- | ------------------ | -------------------------- | ------------------------------------------------------ |
 | OpenAI-compatible | `openai_compat`    | `{base_url}/v1/embeddings` | OpenAI, vLLM, LM Studio, OpenRouter, Ollama-Cloud, TEI |
-| Ollama            | `ollama` (default) | `{base_url}/api/embed`     | native Ollama (auto-detected URL / `OLLAMA_HOST`)      |
+| Ollama            | `ollama`           | `{base_url}/api/embed`     | native Ollama at the declared URL                      |
 | ONNX Runtime      | `onnx`             | local `InferenceSession`   | local ONNX models (`uv sync --group onnx`)             |
 
 `openai_compat` is the workhorse: it reaches **any** OpenAI-compatible embedding endpoint by
 `base_url` — no per-vendor code. (`anthropic_compat` is chat-only; Anthropic has no embeddings
-API, so it is rejected for embeddings.) `openai` remains a deprecated alias for the OpenAI
-literal endpoint.
+API, so it is rejected for embeddings.) `openai` remains an alias for the OpenAI endpoint; it too
+needs `KNOWLEDGE_BASE_EMBED_URL=https://api.openai.com` declared.
 
-### Configuring the embedding provider
+### Declaring the embedding provider
 
-Use the **`configure_embeddings`** tool (mirrors `configure_llm`) — it validates the `base_url`,
-runs a connectivity probe, and stores the config in the DB (selection now lives in `config`,
-not env vars):
+The environment declares the embedding configuration; KB starts only with it (see the
+README's Configuration section for every variable and rule):
 
-```json
-// A hosted OpenAI-compatible embedder (e.g. vLLM / TEI / OpenRouter):
-{ "name": "configure_embeddings_tool",
-  "arguments": {
-    "provider": "openai_compat",
-    "base_url": "https://my-vllm.example.com",
-    "model": "Qwen/Qwen3-Embedding-0.6B",
-    "api_key": "env:VLLM_API_KEY"          // env:VARNAME — resolved at call time, never stored
-  } }
-
-// A LOCAL OpenAI-compatible server (vLLM/LM Studio/TEI on localhost):
-{ "name": "configure_embeddings_tool",
-  "arguments": {
-    "provider": "openai_compat",
-    "base_url": "http://localhost:11434/v1",
-    "model": "bge-m3",
-    "allow_loopback_base_url": true        // REQUIRED to permit a loopback/localhost base_url
-  } }
+```bash
+# A hosted or tailnet OpenAI-compatible embedder (vLLM, TEI, llama.cpp server, OpenRouter):
+export KNOWLEDGE_BASE_EMBED_PROVIDER=openai_compat
+export KNOWLEDGE_BASE_EMBED_MODEL=Qwen/Qwen3-Embedding-0.6B
+export KNOWLEDGE_BASE_EMBED_DIM=1024
+export KNOWLEDGE_BASE_EMBED_URL=https://embedder.example.test
+export KNOWLEDGE_BASE_EMBED_API_KEY=...   # read per request; config records only env:KNOWLEDGE_BASE_EMBED_API_KEY
 ```
 
-After switching providers or models, re-embed existing chunks with `re_embed_tool`. A provider
-swap that changes the **family** or **model** without creating a new space is hard-rejected at
-ingest (the active space's recorded identity is authoritative) — a `base_url` change within the
-same family (e.g. TEI → vLLM, both `openai_compat`, same model) is allowed.
+A blank database is seeded from the declaration; an existing one must agree with it, or the
+server exits naming the field. There is no default endpoint: nothing falls back to
+`https://api.openai.com`, and Ollama embeddings never auto-detect a host.
 
-**API keys.** Prefer the `env:VARNAME` indirection (the secret is read from the environment at
-call time and never written to the DB). An inline key is stored plaintext-at-rest in the
-`config` table — acceptable for a local single-user setup; keyring hardening is deferred.
+**Changing the model or provider** is a maintenance step with the server stopped: set the new
+`KNOWLEDGE_BASE_EMBED_*` values, run `knowledge-base-ingest re-embed`, start the server. A
+**moved embedder** (same model) is adopted with `knowledge-base-ingest rebind`. In a running
+server, `re_embed_tool` and `promote_embed_space_tool` accept only the declared identity, and
+backfilling a space of another provider than the declared one is refused.
 
-**SSRF safety.** Every `openai_compat` `base_url` is validated (scheme, private/link-local/
-metadata/DNS-rebinding rejected) before it is persisted and on each request (cross-host
-redirects are refused). A loopback IP literal or the exact name `localhost` is permitted **only**
-with `allow_loopback_base_url=true`; a hostname that merely _resolves_ to loopback
-(`127.0.0.1.nip.io`) stays rejected.
+**SSRF safety.** Every `openai_compat` `base_url` is validated on each request (scheme,
+private/link-local/metadata/DNS-rebinding rejected; cross-host redirects refused), with one
+exception: the declared embedding host, by exact host match, so a tailnet embedder whose name
+resolves into `100.64.0.0/10` or `fd7a:` works. A URL a tool supplies (`ingest_url`, image
+fetches, `configure_llm_tool`) always keeps the floor, the declared host included.
 
-### Environment Variable Override (deprecated)
-
-The legacy `EMBED_PROVIDER` / `OPENAI_API_KEY` env vars still apply **while `embed_provider` is
-at its seeded default** (an explicit `configure_embeddings` choice wins), with a one-time
-deprecation warning. Prefer `configure_embeddings`; env back-compat will be removed in a future
-release.
+The deprecated `EMBED_PROVIDER` variable is refused, and `OPENAI_API_KEY` is no longer an
+embedding key source (the bare-name `openai` provider still reads it).

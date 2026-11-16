@@ -7,13 +7,10 @@ for zero-downtime model migration, A/B comparison, and rollback.
 from __future__ import annotations
 
 import logging
-import os
 import re
 import sqlite3
 import time
-from urllib.parse import urlparse
 
-import httpx
 
 from .db import (
     SPACE_NAME_RE,
@@ -21,29 +18,12 @@ from .db import (
     get_active_space,
     space_table_name,
 )
-from .embeddings import EmbeddingProvider, ProviderConfig, _get_ollama_url, get_provider, truncate_embedding
-from .exceptions import ValidationError
-from .utils import ELEMENT_INSERT_EXPR, VALID_ELEMENT_TYPES, _resolve_api_key, _sanitize_url, validate_base_url
+from .embeddings import EmbeddingProvider, ProviderConfig, get_provider, truncate_embedding
+from .exceptions import KnowledgeBaseError, ValidationError
+from .settings import load_embed_settings
+from .utils import ELEMENT_INSERT_EXPR, VALID_ELEMENT_TYPES
 
 logger = logging.getLogger(__name__)
-
-# Provider families valid for the embedding capability (anthropic_compat is chat-only).
-_EMBED_FAMILIES = ("ollama", "openai_compat", "onnx")
-_LOCAL_EMBED_FAMILIES = ("ollama", "onnx")  # no base_url/api_key — stale keys are cleared
-
-_embed_env_deprecation_warned = False
-
-
-def _warn_embed_env_deprecated() -> None:
-    """One-time deprecation notice for the legacy EMBED_PROVIDER/OPENAI_API_KEY env vars."""
-    global _embed_env_deprecation_warned
-    if not _embed_env_deprecation_warned:
-        logger.warning(
-            "EMBED_PROVIDER/OPENAI_API_KEY env-var selection is deprecated; configure embeddings "
-            "via configure_embeddings() (the config table). Env back-compat will be removed in a "
-            "future release."
-        )
-        _embed_env_deprecation_warned = True
 
 
 def get_embed_config(conn: sqlite3.Connection) -> dict:
@@ -51,19 +31,10 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
 
     Reads the full ``(provider, model, dim, base_url, api_key, allow_loopback)`` tuple.
     ``api_key`` is the **raw** spec (inline or ``env:VARNAME``) — resolved only at call
-    time, never returned by tools. The provider comes solely from the ``config`` table
-    (authoritative). The legacy ``EMBED_PROVIDER`` env var no longer *selects* the
-    provider at runtime — it is honored only once at DB seed time
-    (``db._seed_default_config``) and otherwise only emits a deprecation warning, so the
-    env var can never make the config provider diverge from the bootstrapped active-space
-    identity. (An explicit ``configure_embeddings()`` change *can* drift config ahead of
-    ``re_embed()``/``promote_space()``; that legitimate drift is caught by the producer
-    identity guard on ingest and by the family-match guards in ``search``/
-    ``folder_summaries``.) ``OPENAI_API_KEY`` remains a secret-value fallback (it does not
-    affect identity).
+    time, never returned by tools. The rows record the ``KNOWLEDGE_BASE_EMBED_*``
+    declaration: seeded on a blank database (``db._seed_default_config``) and bound to it at
+    every start (#569); the key spec is only ever the declared ``env:`` source.
     """
-    from .db import DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL, DEFAULT_EMBED_PROVIDER
-
     model = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
     dim = conn.execute("SELECT value FROM config WHERE key = 'embed_dim'").fetchone()
     provider_row = conn.execute("SELECT value FROM config WHERE key = 'embed_provider'").fetchone()
@@ -75,32 +46,11 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     api_key = api_key_row["value"] if api_key_row else None
     allow_loopback = bool(loopback_row) and loopback_row["value"].strip().lower() == "true"
 
-    # Config is authoritative for the provider (ADR-0018 §3). EMBED_PROVIDER no longer SELECTS
-    # the provider at runtime — it is honored only once at DB seed time
-    # (db._seed_default_config), so config, the bootstrapped active space, and dispatch all
-    # agree. Acting on EMBED_PROVIDER here would diverge from the recorded active-space identity
-    # and falsely trip the producer guard, so we only WARN to steer the operator to
-    # configure_embeddings.
-    provider = provider_row["value"] if provider_row else DEFAULT_EMBED_PROVIDER
-    if os.environ.get("EMBED_PROVIDER"):
-        _warn_embed_env_deprecated()
-    # OPENAI_API_KEY back-compat fallback — secret-value only (does not affect identity).
-    # SCOPED to the OpenAI *literal* endpoint: the legacy `openai` alias, or an `openai_compat`
-    # config whose base_url is api.openai.com. NEVER inject it into a generic openai_compat
-    # backend (vLLM/TEI/OpenRouter/localhost) — that would leak the user's OpenAI key to a
-    # third-party/local endpoint as the Authorization header (#524 review, P1). Generic
-    # backends must use an explicit inline or `env:VARNAME` key.
-    _host = (urlparse(base_url or "").hostname or "").rstrip(".").lower()
-    is_openai_literal = provider == "openai" or (provider == "openai_compat" and _host == "api.openai.com")
-    if api_key is None and is_openai_literal:
-        env_key = os.environ.get("OPENAI_API_KEY")
-        if env_key:
-            api_key = env_key
-            _warn_embed_env_deprecated()
+    provider = provider_row["value"]
 
     return {
-        "model": model["value"] if model else DEFAULT_EMBED_MODEL,
-        "dim": int(dim["value"]) if dim else DEFAULT_EMBED_DIM,
+        "model": model["value"],
+        "dim": int(dim["value"]),
         "provider": provider,
         "base_url": base_url,
         "api_key": api_key,
@@ -108,14 +58,26 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     }
 
 
-def embed_provider_config(conn: sqlite3.Connection) -> ProviderConfig:
-    """Build the resolved :class:`ProviderConfig` cache key from the embed config."""
-    cfg = get_embed_config(conn)
+def declared_provider_config(conn: sqlite3.Connection, family: str) -> ProviderConfig:
+    """The provider for embedding with a space of *family*: always the declared endpoint (#569).
+
+    The URL and key source come from this process's own declaration, not from the
+    ``config`` rows, so another process rewriting those rows (a ``rebind`` run while the
+    server is up) cannot redirect it. A space of another family than the declared provider
+    is refused, so no tool-created or deprecated space is embedded with the wrong wire
+    format, or against an auto-detected Ollama.
+    """
+    declared = load_embed_settings()
+    if family != declared.provider:
+        raise ValidationError(
+            f"the space's provider {family!r} is not the declared provider {declared.provider!r}; "
+            "re-embed under the declaration"
+        )
     return ProviderConfig(
-        family=cfg["provider"],
-        base_url=cfg["base_url"],
-        api_key=cfg["api_key"],
-        allow_loopback=cfg["allow_loopback"],
+        family=family,
+        base_url=declared.base_url,
+        api_key=declared.api_key_source,
+        allow_loopback=get_embed_config(conn)["allow_loopback"],
     )
 
 
@@ -148,115 +110,6 @@ def assert_embed_identity_match(conn: sqlite3.Connection) -> None:
             "change requires a new space — run re_embed() rather than corrupting the active space "
             "(ADR-0015 mismatch rule). A base_url change within the same family is allowed."
         )
-
-
-_EMBED_CONNECTIVITY_TIMEOUT = 3
-
-
-def _test_embedding_connectivity(
-    provider: str, base_url: str | None, api_key: str | None = None, *, allow_loopback: bool = False
-) -> dict:
-    """Probe embedding endpoint reachability. Advisory — never raises (mirrors LLM probe)."""
-    if provider == "onnx":
-        return {"reachable": True}  # local inference, no network endpoint
-    target = base_url or _get_ollama_url()
-    safe_url = _sanitize_url(target)
-    try:
-        if provider == "ollama":
-            resp = httpx.get(f"{target}/api/tags", timeout=_EMBED_CONNECTIVITY_TIMEOUT, follow_redirects=False)
-            resp.raise_for_status()
-        else:  # openai_compat
-            validate_base_url(target, allow_loopback=allow_loopback)
-            headers: dict[str, str] = {}
-            resolved = _resolve_api_key(api_key)
-            if resolved:
-                headers["Authorization"] = f"Bearer {resolved}"
-            resp = httpx.get(
-                f"{target}/v1/models", headers=headers, timeout=_EMBED_CONNECTIVITY_TIMEOUT, follow_redirects=False
-            )
-            resp.raise_for_status()
-        return {"reachable": True}
-    except httpx.ConnectError:
-        warning = f"Cannot connect to {safe_url}"
-    except httpx.TimeoutException:
-        warning = f"Connection timed out to {safe_url} ({_EMBED_CONNECTIVITY_TIMEOUT}s)"
-    except httpx.HTTPStatusError as exc:
-        warning = (
-            "Authentication failed — check api_key"
-            if exc.response.status_code in (401, 403)
-            else (f"Server returned HTTP {exc.response.status_code}")
-        )
-    except Exception as exc:
-        warning = f"Connectivity test failed: {type(exc).__name__}"
-    logger.warning("Embedding connectivity test failed for %s at %s: %s", provider, safe_url, warning)
-    return {"reachable": False, "warning": warning}
-
-
-def configure_embeddings(
-    conn: sqlite3.Connection,
-    provider: str = "ollama",
-    base_url: str | None = None,
-    model: str = "bge-m3",
-    api_key: str | None = None,
-    allow_loopback_base_url: bool | None = None,
-) -> dict:
-    """Configure the embedding provider (mirrors :func:`llm.configure_llm`).
-
-    Moves embedding-provider selection out of the ``EMBED_PROVIDER``/``OPENAI_API_KEY``
-    env vars into the ``config`` table (ADR-0018 §3). ``base_url`` is normalized then
-    SSRF-validated **before** it is persisted (the primary gate, ADR-0018 §4); a private
-    or loopback host without ``allow_loopback_base_url`` is hard-rejected, never stored.
-
-    Note: ``api_key`` is stored as plain text in the SQLite config table (or as an
-    ``env:VARNAME`` indirection, which is preferred and never resolves to the secret on
-    disk). Acceptable for local-only use; keyring hardening is deferred.
-    """
-    if provider not in _EMBED_FAMILIES:
-        if provider == "anthropic_compat":
-            raise ValidationError("anthropic_compat has no embeddings endpoint; it is a chat-only family.")
-        raise ValidationError(f"Unknown embedding provider: {provider!r}. Use one of {_EMBED_FAMILIES}.")
-    if provider == "openai_compat" and not base_url:
-        raise ValidationError("base_url is required for openai_compat provider")
-    # Preserve the shared loopback flag unless the caller set it explicitly (avoids the
-    # LLM/embed configure_* calls clobbering each other's opt-in).
-    if allow_loopback_base_url is None:
-        row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
-        loopback = bool(row) and row["value"].strip().lower() == "true"
-    else:
-        loopback = allow_loopback_base_url
-    if base_url and provider == "openai_compat":
-        # Normalize FIRST, then validate the normalized value (close the suffix-strip gap).
-        base_url = base_url.rstrip("/").removesuffix("/v1")
-        validate_base_url(base_url, allow_loopback=loopback)
-    elif base_url:
-        # ollama remote (e.g. LAN OLLAMA_HOST) — family-trusted, not SSRF-validated; Ollama
-        # uses /api/embed, so do not strip a /v1 suffix.
-        base_url = base_url.rstrip("/")
-
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', ?)", (provider,))
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_model', ?)", (model,))
-    if base_url:
-        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', ?)", (base_url,))
-    elif provider in _LOCAL_EMBED_FAMILIES:
-        conn.execute("DELETE FROM config WHERE key = 'embed_base_url'")
-    if api_key:
-        # Stored verbatim — for env:VARNAME this is the indirection spec, never the secret.
-        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_api_key', ?)", (api_key,))
-    elif provider in _LOCAL_EMBED_FAMILIES:
-        conn.execute("DELETE FROM config WHERE key = 'embed_api_key'")
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('allow_loopback_base_url', ?)",
-        ("true" if loopback else "false",),
-    )
-    conn.commit()
-
-    cfg = get_embed_config(conn)
-    connectivity = _test_embedding_connectivity(
-        cfg["provider"], cfg["base_url"], cfg["api_key"], allow_loopback=cfg["allow_loopback"]
-    )
-    cfg.pop("api_key", None)  # redact from the returned dict
-    cfg.update(connectivity)
-    return cfg
 
 
 # ---------------------------------------------------------------------------
@@ -364,18 +217,7 @@ def backfill_space(
     element_type = space["element_type"] or "float32"
     embed_dim = matryoshka_base_dim or dim
 
-    # The space row owns (provider, model); the config owns the connection details
-    # (base_url/api_key/allow_loopback). Build the provider from both — the frozen
-    # ProviderConfig keys the cache so two openai_compat base_urls never collide.
-    embed_cfg = get_embed_config(conn)
-    embed_provider = get_provider(
-        cfg=ProviderConfig(
-            family=provider_name,
-            base_url=embed_cfg["base_url"],
-            api_key=embed_cfg["api_key"],
-            allow_loopback=embed_cfg["allow_loopback"],
-        )
-    )
+    embed_provider = get_provider(cfg=declared_provider_config(conn, provider_name))
 
     # Build chunk selection query — strategy-aware
     has_strategy = _has_chunk_strategy_column(conn)
@@ -438,17 +280,114 @@ def backfill_space(
     }
 
 
+def _assert_declared_identity(provider: str, model: str, dim: int) -> None:
+    """Refuse an active identity other than the declaration (#569): only re-embed moves it."""
+    declared = load_embed_settings()
+    for key, value, wanted in (
+        ("embed_provider", provider, declared.provider),
+        ("embed_model", model, declared.model),
+        ("embed_dim", dim, declared.dim),
+    ):
+        if value != wanted:
+            raise ValidationError(
+                f"{key} {value!r} is not the declared {wanted!r}; only the declared identity can be "
+                "active (change the declaration, then run `knowledge-base-ingest re-embed`)"
+            )
+
+
+_FolderVectors = dict[tuple[str, str], "list[float] | None"]
+
+
+def _folder_rows(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    return [(r["folder_path"], r["summary"]) for r in conn.execute("SELECT folder_path, summary FROM folder_summaries")]
+
+
+def _embed_folder_summaries(
+    provider: EmbeddingProvider,
+    rows: list[tuple[str, str]],
+    model: str,
+    dim: int,
+    matryoshka_base_dim: int | None,
+) -> _FolderVectors:
+    if not rows:
+        return {}
+    vectors = provider.embed([text for _path, text in rows], model=model, expected_dim=matryoshka_base_dim or dim)
+    if matryoshka_base_dim:
+        vectors = [truncate_embedding(v, dim) if v is not None else None for v in vectors]
+    return dict(zip(rows, vectors, strict=True))
+
+
+def _write_folder_summaries_vec(conn: sqlite3.Connection, dim: int, vectors: _FolderVectors) -> None:
+    """Recreate folder_summaries_vec at *dim* and fill it. Commits nothing: the caller owns the transaction."""
+    conn.execute("DROP TABLE IF EXISTS folder_summaries_vec")
+    conn.execute(f"""
+        CREATE VIRTUAL TABLE folder_summaries_vec USING vec0(
+            embedding float[{dim}],
+            +folder_path TEXT
+        )
+    """)
+    for (path, _text), vec in vectors.items():
+        if vec is not None:
+            conn.execute(
+                "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
+                (_serialize_f32(vec), path),
+            )
+
+
 def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
     """Promote a space to active, deprecating the current active space.
 
-    Atomically updates status and syncs config table (embed_model,
-    embed_dim, embed_provider, chunk_strategy).
+    All or nothing (#569): the folder summaries are embedded first, outside the write lock,
+    then one ``BEGIN IMMEDIATE`` transaction rechecks completeness, re-embeds only the
+    summaries that changed meanwhile, swaps the statuses, syncs the config identity rows,
+    drops the ``similar`` relationships and rebuilds ``folder_summaries_vec``. A failure,
+    Ctrl-C included, changes nothing. Only a space of the declared identity can be promoted.
     """
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = ?", (space_name,)).fetchone()
     if space is None:
         raise ValueError(f"Embedding space {space_name!r} not found")
     if space["status"] not in ("populating", "deprecated"):
         raise ValueError(f"Can only promote spaces in 'populating' or 'deprecated' status, got: {space['status']!r}")
+    _assert_declared_identity(space["provider"], space["model"], space["dim"])
+    if conn.in_transaction:
+        raise KnowledgeBaseError("promote_space needs a connection with no open transaction; commit or roll back first")
+    _check_promotable(conn, space)  # fail fast; rechecked under the lock
+    provider = get_provider(cfg=declared_provider_config(conn, space["provider"]))
+    shape = (space["model"], space["dim"], space["matryoshka_base_dim"])
+    snapshot = _embed_folder_summaries(provider, _folder_rows(conn), *shape)
+
+    level = conn.isolation_level
+    conn.isolation_level = None  # explicit BEGIN: Python's sqlite3 opens no transaction before DDL
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # The target may have changed or gone while its summaries embedded unlocked.
+            current_space = conn.execute("SELECT * FROM embed_spaces WHERE name = ?", (space_name,)).fetchone()
+            if current_space is None or dict(current_space) != dict(space):
+                raise ValueError(f"Embedding space {space_name!r} changed during promotion; rerun it")
+            stale_warning = _check_promotable(conn, space)
+            current = _folder_rows(conn)
+            changed = [row for row in current if row not in snapshot]
+            vectors = {row: snapshot[row] for row in current if row in snapshot}
+            vectors.update(_embed_folder_summaries(provider, changed, *shape))
+            old_name = _swap_active(conn, space)
+            _write_folder_summaries_vec(conn, space["dim"], vectors)
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.isolation_level = level
+
+    result: dict = {"promoted": space_name, "deprecated": old_name}
+    if stale_warning:
+        result["warning"] = stale_warning
+    return result
+
+
+def _check_promotable(conn: sqlite3.Connection, space: sqlite3.Row) -> str | None:
+    """Refuse an incompletely backfilled space; return a staleness warning for a deprecated one."""
+    space_name = space["name"]
     # Block promotion of incompletely backfilled spaces.
     # Recount live corpus to catch chunks ingested after backfill.
     count = space["chunk_count"] or 0
@@ -482,7 +421,12 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
                 f"Space {space_name!r} has {count} embeddings but corpus now "
                 f"has {current_total} chunks. Run backfill_space() to sync."
             )
+    return stale_warning
 
+
+def _swap_active(conn: sqlite3.Connection, space: sqlite3.Row) -> str | None:
+    """Make *space* active and sync the config identity rows; commits nothing. Returns the old active name."""
+    space_name = space["name"]
     old_active = get_active_space(conn)
     old_name = old_active["name"] if old_active else None
 
@@ -524,30 +468,7 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
     )
     # Invalidate similarity relationships (embedding space changed)
     conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
-    conn.commit()
-
-    # Always rebuild folder summaries on promotion (model/dim may differ)
-    embed_cfg = get_embed_config(conn)
-    embed_provider = get_provider(
-        cfg=ProviderConfig(
-            family=space["provider"],
-            base_url=embed_cfg["base_url"],
-            api_key=embed_cfg["api_key"],
-            allow_loopback=embed_cfg["allow_loopback"],
-        )
-    )
-    _re_embed_folder_summaries(
-        conn,
-        embed_provider,
-        space["model"],
-        space["dim"],
-        matryoshka_base_dim=space["matryoshka_base_dim"],
-    )
-
-    result: dict = {"promoted": space_name, "deprecated": old_name}
-    if stale_warning:
-        result["warning"] = stale_warning
-    return result
+    return old_name
 
 
 def deprecate_space(conn: sqlite3.Connection, space_name: str) -> dict:
@@ -614,14 +535,15 @@ def re_embed(
     """Re-embed all chunks with a new model via the space lifecycle.
 
     Creates a new space, backfills it, promotes it, and re-embeds folder
-    summaries. The old space is left as 'deprecated' (not auto-cleaned).
+    summaries. The old space is left as 'deprecated' (not auto-cleaned). The target must be
+    the declared identity (#569), checked before anything is created; if the backfill or
+    the promotion fails, the new space is removed again and the error re-raised.
     """
     if matryoshka_base_dim is not None and matryoshka_base_dim <= new_dim:
         raise ValueError(f"matryoshka_base_dim ({matryoshka_base_dim}) must be greater than new_dim ({new_dim})")
 
-    # Resolve provider
-    cfg = get_embed_config(conn)
-    resolved_provider = provider or cfg["provider"]
+    resolved_provider = provider or load_embed_settings().provider
+    _assert_declared_identity(resolved_provider, new_model, new_dim)
 
     # Inherit chunk_strategy from current active space
     active = get_active_space(conn)
@@ -645,8 +567,16 @@ def re_embed(
         strategy,
         matryoshka_base_dim=matryoshka_base_dim,
     )
-    result = backfill_space(conn, space_name, batch_size)
-    promote_space(conn, space_name)
+    try:
+        result = backfill_space(conn, space_name, batch_size)
+        promote_space(conn, space_name)
+    except BaseException:
+        try:
+            deprecate_space(conn, space_name)
+            cleanup_space(conn, space_name)
+        except Exception:
+            logger.exception("could not remove the failed re-embed's space %r", space_name)
+        raise
 
     # Count folder summaries re-embedded (done inside promote_space)
     folders_count = conn.execute("SELECT COUNT(*) FROM folder_summaries_vec").fetchone()[0]
@@ -658,43 +588,3 @@ def re_embed(
         "dim": new_dim,
         "space": space_name,
     }
-
-
-def _re_embed_folder_summaries(
-    conn: sqlite3.Connection,
-    embed_provider: EmbeddingProvider,
-    model: str,
-    dim: int,
-    matryoshka_base_dim: int | None = None,
-) -> int:
-    """Recreate folder_summaries_vec with new dimensions and re-embed."""
-    conn.execute("DROP TABLE IF EXISTS folder_summaries_vec")
-    conn.execute(f"""
-        CREATE VIRTUAL TABLE folder_summaries_vec USING vec0(
-            embedding float[{dim}],
-            +folder_path TEXT
-        )
-    """)
-    folder_rows = conn.execute("SELECT folder_path, summary FROM folder_summaries").fetchall()
-    if not folder_rows:
-        conn.commit()
-        return 0
-
-    embed_dim = matryoshka_base_dim or dim
-    texts = [row["summary"] for row in folder_rows]
-    embeddings = embed_provider.embed(texts, model=model, expected_dim=embed_dim)  # type: ignore[union-attr]
-
-    if matryoshka_base_dim:
-        from .embeddings import truncate_embedding
-
-        embeddings = [truncate_embedding(e, dim) if e is not None else None for e in embeddings]
-
-    for row, emb in zip(folder_rows, embeddings, strict=True):
-        if emb is None:
-            continue
-        conn.execute(
-            "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
-            (_serialize_f32(emb), row["folder_path"]),
-        )
-    conn.commit()
-    return len(folder_rows)

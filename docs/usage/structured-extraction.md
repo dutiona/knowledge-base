@@ -151,7 +151,10 @@ Returns a list of entities with their canonical name, type (method/dataset/metri
 
 ## LLM Configuration
 
-Configure the LLM used for structured extraction:
+LLM extraction is off unless the server runs with `KNOWLEDGE_BASE_LLM=on`: until then `configure_llm_tool` and every
+extraction refuse. An LLM `api_key` is an inline value or exactly `env:KNOWLEDGE_BASE_LLM_API_KEY`; any other `env:`
+spec is refused, so no tool call can send another secret of the server (such as the embedder key) to a host it names.
+With it on, configure the LLM used for structured extraction:
 
 ```json
 {
@@ -168,7 +171,7 @@ Three chat API families are supported (organized by family, not vendor —
 
 - **`ollama`** -- native Ollama `/api/generate`. Base URL auto-detected (OLLAMA_HOST env, WSL2 gateway, or localhost:11434).
 - **`openai_compat`** -- OpenAI-compatible `{base_url}/v1/chat/completions` (OpenAI, vLLM, LM Studio, OpenRouter, …). Requires `base_url`; optional `api_key`.
-- **`anthropic_compat`** -- Anthropic Messages API `{base_url}/v1/messages` (`x-api-key` + `anthropic-version` headers, `system` as a top-level field, content-block responses). Requires `base_url`; **chat-only** (Anthropic has no embeddings API — rejected by `configure_embeddings`).
+- **`anthropic_compat`** -- Anthropic Messages API `{base_url}/v1/messages` (`x-api-key` + `anthropic-version` headers, `system` as a top-level field, content-block responses). Requires `base_url`; **chat-only** (Anthropic has no embeddings API, so it is no embedding provider).
 
 ```json
 {

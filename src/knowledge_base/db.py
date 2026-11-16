@@ -2,33 +2,36 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Literal, TypedDict, cast
 
 import sqlite_vec
 
 from . import migrate as _migrate  # schema-version framework (#450); read attrs live
 from .exceptions import KnowledgeBaseError
+from .settings import VARIABLES, EmbedSettings, check_environment, load_embed_settings, normalize_embed_url
 from .utils import (
     ELEMENT_INSERT_EXPR,
+    _sanitize_url,
     serialize_f32 as _serialize_f32,
 )  # shared vec serialization
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DB_PATH_ENV_VAR",
     "DEFAULT_DB_PATH",
-    "DEFAULT_EMBED_DIM",
-    "DEFAULT_EMBED_MODEL",
-    "DEFAULT_EMBED_PROVIDER",
     "RELATIONSHIP_TYPES",
     "SPACE_NAME_RE",
     "CoOccurrencePair",
     "EmbedSpace",
     "IndexStats",
     "RecentIngestion",
+    "bind_embed_config",
     "bump_chunk_count",
     "co_occurrence_pairs",
     "delete_chunk_vecs",
@@ -41,6 +44,7 @@ __all__ = [
     "get_vec_table_name",
     "init_schema",
     "insert_chunk_vec",
+    "open_declared_db",
     "resolve_db_path",
     "space_table_name",
 ]
@@ -68,12 +72,6 @@ def resolve_db_path(cli_path: Path | None = None) -> Path:
         return Path(env).expanduser()
     return DEFAULT_DB_PATH
 
-
-# Bootstrap defaults for fresh databases. Existing databases read from the
-# config table — these constants are only used during initial schema creation.
-DEFAULT_EMBED_MODEL = "bge-m3"
-DEFAULT_EMBED_DIM = 1024
-DEFAULT_EMBED_PROVIDER = "ollama"
 
 RELATIONSHIP_TYPES = (
     "extends",
@@ -809,11 +807,8 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     if existing:
         return
 
-    model_row = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
-    provider_row = conn.execute("SELECT value FROM config WHERE key = 'embed_provider'").fetchone()
-
-    model = model_row["value"] if model_row else DEFAULT_EMBED_MODEL
-    provider = provider_row["value"] if provider_row else DEFAULT_EMBED_PROVIDER
+    model = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()["value"]
+    provider = conn.execute("SELECT value FROM config WHERE key = 'embed_provider'").fetchone()["value"]
 
     # Count existing embeddings (0 for fresh DBs)
     try:
@@ -838,17 +833,31 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
     conn.commit()
 
 
+def embed_config_rows(declared: EmbedSettings) -> list[tuple[str, str]]:
+    """The ``config`` rows recording a declaration: the one field-to-key map, shared by seed and bind."""
+    rows = [
+        ("embed_provider", declared.provider),
+        ("embed_model", declared.model),
+        ("embed_dim", str(declared.dim)),
+    ]
+    if declared.base_url is not None:
+        rows.append(("embed_base_url", declared.base_url))
+    if declared.api_key_source is not None:
+        rows.append(("embed_api_key", declared.api_key_source))
+    return rows
+
+
 def _seed_default_config(conn: sqlite3.Connection) -> int:
     """Create the config table and seed all default key/value rows.
 
-    Consolidates the two historically-split config-seeding spots: the embed_*
-    defaults (seeded only on a fresh DB, guarded by the absence of ``embed_model``)
-    and the llm_*/threshold/chunk_strategy defaults (``INSERT OR IGNORE``). The
-    config table is created first so the schema's configured dimension can be read
-    before the vec tables (which embed it) are built.
+    Consolidates the two historically-split config-seeding spots: the embed_* rows
+    (seeded only on a fresh DB, guarded by the absence of ``embed_model``, from the
+    ``KNOWLEDGE_BASE_EMBED_*`` declaration and never from defaults, #569) and the
+    llm_*/threshold/chunk_strategy defaults (``INSERT OR IGNORE``). The config table
+    is created first so the schema's configured dimension can be read before the vec
+    tables (which embed it) are built.
 
-    Returns the resolved ``embed_dim`` (configured value, or
-    :data:`DEFAULT_EMBED_DIM` when absent) for the caller to thread into the base
+    Returns the configured ``embed_dim`` for the caller to thread into the base
     schema DDL.
     """
     conn.execute("""
@@ -859,30 +868,13 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
     """)
     existing = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
     if not existing:
-        # Fresh DB: honor the (deprecated) EMBED_PROVIDER env var ONCE at seed time, so the
-        # config, the bootstrapped active space, and runtime dispatch all agree from creation
-        # (ADR-0018 §3 — env selection is migrated into config; this is the one-time bridge).
-        seed_provider = os.environ.get("EMBED_PROVIDER") or DEFAULT_EMBED_PROVIDER
-        conn.executemany(
-            "INSERT INTO config (key, value) VALUES (?, ?)",
-            [
-                ("embed_model", DEFAULT_EMBED_MODEL),
-                ("embed_dim", str(DEFAULT_EMBED_DIM)),
-                ("embed_provider", seed_provider),
-            ],
-        )
+        conn.executemany("INSERT INTO config (key, value) VALUES (?, ?)", embed_config_rows(load_embed_settings()))
         conn.commit()
     else:
-        # Upgraded pre-provider DB (embed_model present, embed_provider possibly absent):
-        # backfill embed_provider to the default so config is never absent. It matches the
-        # existing active space (which predates provider portability and is always the
-        # default), keeping the producer identity guard aligned. EMBED_PROVIDER is NOT applied
-        # here — config is authoritative for an existing DB; the env var only warns (see
-        # get_embed_config). Idempotent via INSERT OR IGNORE.
-        conn.execute(
-            "INSERT OR IGNORE INTO config (key, value) VALUES ('embed_provider', ?)",
-            (DEFAULT_EMBED_PROVIDER,),
-        )
+        # Upgraded pre-provider DB (embed_model present, embed_provider possibly absent): every
+        # such DB was embedded by Ollama, the only family before provider portability, so that is
+        # its recorded provider. Idempotent via INSERT OR IGNORE.
+        conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('embed_provider', 'ollama')")
         conn.commit()
 
     # These keys are seeded ahead of the base-schema DDL and the migration chain,
@@ -895,9 +887,10 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
     conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('auto_relate_accept_threshold', '0.95')")
     conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('chunk_strategy', 'mechanical')")
 
-    # Read the configured dimension (handles both fresh and existing DBs)
     dim_row = conn.execute("SELECT value FROM config WHERE key = 'embed_dim'").fetchone()
-    return int(dim_row["value"]) if dim_row else DEFAULT_EMBED_DIM
+    if dim_row is None:
+        raise KnowledgeBaseError("config has embed_model but no embed_dim; KB cannot size its vector tables")
+    return int(dim_row["value"])
 
 
 def _create_base_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
@@ -1206,3 +1199,106 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # converged it to the v1 contract.
     _migrate.set_schema_version(conn, _migrate.CURRENT_SCHEMA_VERSION)
     conn.commit()
+
+
+_IDENTITY_KEYS = ("embed_provider", "embed_model", "embed_dim")
+_REMEDY_RE_EMBED = "re-embed under the declaration with `knowledge-base-ingest re-embed` (unit stopped)"
+_REMEDY_REBIND = "adopt the declaration with `knowledge-base-ingest rebind` (unit stopped)"
+
+
+def bind_embed_config(
+    conn: sqlite3.Connection,
+    declared: EmbedSettings,
+    *,
+    transition: Literal["rebind", "re-embed"] | None = None,
+) -> None:
+    """Make the recorded embedding configuration equal to the declaration, or refuse (#569).
+
+    A plain bind refuses any recorded identity row or URL that disagrees with the
+    declaration, and an active space whose identity differs; it only records a URL a
+    pre-#569 database never had. ``rebind`` adopts the declared URL and identity rows when
+    the active space already has the declared identity; ``re-embed`` records the declared
+    URL for a re-embed whose promotion will move the identity. Every check runs before any
+    write, and the bind commits once. The key row is derived from the declaration every time.
+    """
+    recorded = dict(conn.execute("SELECT key, value FROM config WHERE key LIKE 'embed_%'").fetchall())
+    wanted = dict(embed_config_rows(declared))
+    var = {
+        "embed_provider": VARIABLES["provider"],
+        "embed_model": VARIABLES["model"],
+        "embed_dim": VARIABLES["dim"],
+        "embed_base_url": VARIABLES["base_url"],
+    }
+
+    def _show(key: str, value: str | None) -> str:
+        return repr(_sanitize_url(value) if key == "embed_base_url" and value else value)
+
+    def _refuse(key: str, what: str, remedy: str) -> KnowledgeBaseError:
+        return KnowledgeBaseError(
+            f"config {key} {what}, but {var[key]} declares {_show(key, wanted.get(key))}; {remedy}"
+        )
+
+    active = get_active_space(conn)
+    if active is None:
+        raise KnowledgeBaseError(f"the database has no active embedding space; {_REMEDY_RE_EMBED}")
+    active_identity = {
+        "embed_provider": active["provider"],
+        "embed_model": active["model"],
+        "embed_dim": str(active["dim"]),
+    }
+    active_matches = all(active_identity[k] == wanted[k] for k in _IDENTITY_KEYS)
+
+    writes: list[tuple[str, str | None]] = []
+    if transition == "re-embed":
+        if active_matches:
+            raise KnowledgeBaseError("the active embedding space already has the declared identity; use rebind")
+    else:
+        for key in _IDENTITY_KEYS:
+            if not active_matches and active_identity[key] != wanted[key]:
+                raise KnowledgeBaseError(
+                    f"the active space records {key} {active_identity[key]!r}, but {var[key]} declares "
+                    f"{wanted[key]!r}; {_REMEDY_RE_EMBED}"
+                )
+        for key in _IDENTITY_KEYS:
+            if recorded.get(key) != wanted[key]:
+                if transition != "rebind":
+                    what = f"is {recorded[key]!r}" if key in recorded else "is missing"
+                    raise _refuse(key, what, _REMEDY_REBIND)
+                writes.append((key, wanted[key]))
+    url = recorded.get("embed_base_url")
+    if url is not None and normalize_embed_url(declared.provider, url) == wanted.get("embed_base_url"):
+        url = wanted["embed_base_url"]
+    if url != wanted.get("embed_base_url"):
+        if url is not None and transition is None:
+            raise _refuse("embed_base_url", f"is {_show('embed_base_url', url)}", _REMEDY_REBIND)
+        writes.append(("embed_base_url", wanted.get("embed_base_url")))
+    if recorded.get("embed_api_key") != wanted.get("embed_api_key"):
+        if "embed_api_key" in recorded:
+            logger.warning("config embed_api_key differed from the declared key source; rewritten from it")
+        writes.append(("embed_api_key", wanted.get("embed_api_key")))
+
+    for key, value in writes:
+        if value is None:
+            conn.execute("DELETE FROM config WHERE key = ?", (key,))
+        else:
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+
+
+def open_declared_db(
+    db_path: Path | None = None, *, transition: Literal["rebind", "re-embed"] | None = None
+) -> sqlite3.Connection:
+    """Open the database bound to the environment's declaration: the startup gate (#569).
+
+    The declaration is parsed before anything touches the disk, so a missing variable
+    leaves no database file behind.
+    """
+    declared = check_environment()
+    conn = get_connection(db_path)
+    try:
+        init_schema(conn)
+        bind_embed_config(conn, declared, transition=transition)
+    except BaseException:
+        conn.close()
+        raise
+    return conn

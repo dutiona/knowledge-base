@@ -73,7 +73,7 @@ def _is_allowed_loopback(host: str) -> bool:
         return False
 
 
-def validate_base_url(url: str, *, allow_loopback: bool = False) -> None:
+def validate_base_url(url: str, *, allow_loopback: bool = False, exempt_host: str | None = None) -> None:
     """Validate a base URL for scheme and SSRF safety.
 
     The non-loopback SSRF floor (private, link-local, metadata, DNS-rebinding) is
@@ -82,6 +82,11 @@ def validate_base_url(url: str, *, allow_loopback: bool = False) -> None:
     servers (ADR-0018 §4) — checked on the parsed host before any DNS resolution.
     Every other host (including names that merely *resolve* to loopback) still goes
     through :func:`is_private_ip`.
+
+    *exempt_host* is the operator-declared embedding host (#569): a parsed host exactly
+    equal to it (both lowercased, one trailing dot stripped; port and path ignored) is
+    accepted before any DNS lookup. Only the embedding request path passes it; every
+    tool-supplied URL keeps the floor.
 
     Raises :class:`~knowledge_base.exceptions.ValidationError` on failure.
     """
@@ -92,6 +97,8 @@ def validate_base_url(url: str, *, allow_loopback: bool = False) -> None:
         raise ValidationError("URL must include a hostname.")
     if allow_loopback and _is_allowed_loopback(parsed.hostname):
         return  # opt-in satisfied — accept without DNS resolution
+    if exempt_host is not None and parsed.hostname.rstrip(".").lower() == exempt_host.rstrip(".").lower():
+        return  # the declared embedding endpoint (#569)
     if is_private_ip(parsed.hostname):
         raise ValidationError(
             f"URL points to a private/reserved address ({parsed.hostname}). Use a public IP or hostname."

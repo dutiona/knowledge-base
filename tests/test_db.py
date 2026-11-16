@@ -8,9 +8,6 @@ import struct
 import pytest
 
 from knowledge_base.db import (
-    DEFAULT_EMBED_DIM,
-    DEFAULT_EMBED_MODEL,
-    DEFAULT_EMBED_PROVIDER,
     _bootstrap_embed_spaces,
     _migrate_extraction_source,
     _migrate_normalize_source_uri,
@@ -24,9 +21,14 @@ from knowledge_base.db import (
     get_connection,
     get_index_stats,
     init_schema,
+    bind_embed_config,
     insert_chunk_vec,
+    open_declared_db,
 )
 from knowledge_base.embed_swap import create_space
+from knowledge_base.exceptions import KnowledgeBaseError
+from knowledge_base.settings import load_embed_settings
+from tests.declared_env import TEST_EMBED_DIM, TEST_EMBED_MODEL, TEST_EMBED_PROVIDER
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
@@ -76,7 +78,7 @@ def test_vec_insert_and_query(tmp_path):
     chunk_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     # Insert embedding
-    fake_emb = [0.1] * DEFAULT_EMBED_DIM
+    fake_emb = [0.1] * TEST_EMBED_DIM
     conn.execute(
         "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
         (chunk_id, _serialize_f32(fake_emb), chunk_id),
@@ -686,7 +688,7 @@ def test_char_co_occurrence_result_ordered_by_co_sessions_desc(tmp_path):
 #
 # Module-level helpers for this bundle. create_space lives in embed_swap, not
 # db; imported at module top. The default
-# 'chunks_vec' space expects DEFAULT_EMBED_DIM (1024) vectors in this file
+# 'chunks_vec' space expects TEST_EMBED_DIM (1024) vectors in this file
 # (no embed_dim config pre-seeding, unlike tests/test_embed_spaces.py).
 # ---------------------------------------------------------------------------
 
@@ -728,7 +730,7 @@ def test_char_insert_chunk_vec_increments_active_chunk_count(tmp_path):
     start = _char_active_count(conn)
 
     cid = _char_add_chunk(conn, "vec a", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
 
     assert _char_active_count(conn) == start + 1
@@ -739,9 +741,9 @@ def test_char_insert_chunk_vec_nonactive_table_leaves_active_unchanged(tmp_path)
     init_schema(conn)
     start = _char_active_count(conn)
 
-    create_space(conn, "other", "model", DEFAULT_EMBED_DIM, "ollama")
+    create_space(conn, "other", "model", TEST_EMBED_DIM, "ollama")
     cid = _char_add_chunk(conn, "non-active vec", 0)
-    insert_chunk_vec(conn, cid, [0.2] * DEFAULT_EMBED_DIM, table_name="chunks_vec_other")
+    insert_chunk_vec(conn, cid, [0.2] * TEST_EMBED_DIM, table_name="chunks_vec_other")
     conn.commit()
 
     # Active space (default) chunk_count is untouched: status='active' gate.
@@ -758,7 +760,7 @@ def test_insert_chunk_vec_bump_count_false_skips_per_row_update(tmp_path):
     start = _char_active_count(conn)
 
     cid = _char_add_chunk(conn, "no bump", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM, bump_count=False)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM, bump_count=False)
     conn.commit()
 
     # The vec row exists...
@@ -778,7 +780,7 @@ def test_bump_chunk_count_n_equals_n_per_row_bumps(tmp_path):
     start_batch = _char_active_count(conn)
     for i in range(5):
         cid = _char_add_chunk(conn, f"batch {i}", i)
-        insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM, bump_count=False)
+        insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM, bump_count=False)
     bump_chunk_count(conn, tbl, 5)
     conn.commit()
     batched = _char_active_count(conn)
@@ -788,7 +790,7 @@ def test_bump_chunk_count_n_equals_n_per_row_bumps(tmp_path):
     start_per_row = _char_active_count(conn)
     for i in range(5):
         cid = _char_add_chunk(conn, f"perrow {i}", 100 + i)
-        insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+        insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
     assert _char_active_count(conn) == start_per_row + 5
 
@@ -799,7 +801,7 @@ def test_bump_chunk_count_only_touches_active_space(tmp_path):
     init_schema(conn)
     start = _char_active_count(conn)
 
-    create_space(conn, "pop", "model", DEFAULT_EMBED_DIM, "ollama")
+    create_space(conn, "pop", "model", TEST_EMBED_DIM, "ollama")
     # Bumping the populating space's table is a no-op (status='active' gate).
     bump_chunk_count(conn, "chunks_vec_pop", 7)
     conn.commit()
@@ -817,7 +819,7 @@ def test_char_insert_then_delete_round_trips_chunk_count(tmp_path):
     start = _char_active_count(conn)
 
     cid = _char_add_chunk(conn, "round trip", 0)
-    insert_chunk_vec(conn, cid, [0.3] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.3] * TEST_EMBED_DIM)
     conn.commit()
     assert _char_active_count(conn) == start + 1
 
@@ -834,7 +836,7 @@ def test_char_delete_chunk_vecs_empty_is_noop(tmp_path):
     init_schema(conn)
 
     cid = _char_add_chunk(conn, "present", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
     before = _char_active_count(conn)
 
@@ -857,7 +859,7 @@ def test_char_delete_chunk_vecs_dedups_duplicate_ids(tmp_path):
     init_schema(conn)
 
     cid = _char_add_chunk(conn, "dup target", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
     before = _char_active_count(conn)
 
@@ -877,7 +879,7 @@ def test_char_delete_chunk_vecs_counts_actual_rows_not_input_length(tmp_path):
     with_vec = []
     for i in range(3):
         cid = _char_add_chunk(conn, f"has vec {i}", i)
-        insert_chunk_vec(conn, cid, [0.1 * (i + 1)] * DEFAULT_EMBED_DIM)
+        insert_chunk_vec(conn, cid, [0.1 * (i + 1)] * TEST_EMBED_DIM)
         with_vec.append(cid)
     no_vec = [_char_add_chunk(conn, f"no vec {j}", 10 + j) for j in range(2)]
     conn.commit()
@@ -904,7 +906,7 @@ def test_char_delete_chunk_vecs_clamps_chunk_count_at_zero(tmp_path):
     cids = []
     for i in range(3):
         cid = _char_add_chunk(conn, f"clamp {i}", i)
-        insert_chunk_vec(conn, cid, [0.2] * DEFAULT_EMBED_DIM)
+        insert_chunk_vec(conn, cid, [0.2] * TEST_EMBED_DIM)
         cids.append(cid)
     conn.commit()
     assert _char_active_count(conn) == 3
@@ -925,9 +927,9 @@ def test_char_delete_chunk_vecs_explicit_nonactive_table(tmp_path):
     init_schema(conn)
     active_start = _char_active_count(conn)
 
-    create_space(conn, "expl", "model", DEFAULT_EMBED_DIM, "ollama")
+    create_space(conn, "expl", "model", TEST_EMBED_DIM, "ollama")
     cid = _char_add_chunk(conn, "explicit del", 0)
-    insert_chunk_vec(conn, cid, [0.4] * DEFAULT_EMBED_DIM, table_name="chunks_vec_expl")
+    insert_chunk_vec(conn, cid, [0.4] * TEST_EMBED_DIM, table_name="chunks_vec_expl")
     conn.commit()
     # Insert into a non-active table does NOT touch any chunk_count.
     assert _char_space_count(conn, "expl") == 0
@@ -962,14 +964,14 @@ def test_char_delete_chunk_vecs_int8_space(tmp_path):
     init_schema(conn)
 
     # int8 element_type space (non-active); insert + delete round-trips count.
-    create_space(conn, "i8", "model", DEFAULT_EMBED_DIM, "ollama", element_type="int8")
+    create_space(conn, "i8", "model", TEST_EMBED_DIM, "ollama", element_type="int8")
     cids = []
     for i in range(2):
         cid = _char_add_chunk(conn, f"int8 {i}", i)
         insert_chunk_vec(
             conn,
             cid,
-            [0.1 * (i + 1)] * DEFAULT_EMBED_DIM,
+            [0.1 * (i + 1)] * TEST_EMBED_DIM,
             table_name="chunks_vec_i8",
         )
         cids.append(cid)
@@ -1001,7 +1003,7 @@ def test_char_delete_chunks_cascade_empty_returns_zero(tmp_path):
     init_schema(conn)
 
     cid = _char_add_chunk(conn, "stay put", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
     before = _char_active_count(conn)
 
@@ -1018,7 +1020,7 @@ def test_char_delete_chunks_cascade_removes_chunk_vec_and_fts(tmp_path):
     init_schema(conn)
 
     cid = _char_add_chunk(conn, "transformers attention mechanism cascade", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
 
     # FTS sees the content before deletion.
@@ -1043,7 +1045,7 @@ def test_char_delete_chunks_cascade_return_counts_input_not_actual(tmp_path):
     init_schema(conn)
 
     real = _char_add_chunk(conn, "real chunk to delete", 0)
-    insert_chunk_vec(conn, real, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, real, [0.1] * TEST_EMBED_DIM)
     conn.commit()
 
     bogus = real + 9999  # an id that does not exist
@@ -1500,11 +1502,11 @@ def test_char_bootstrap_counts_existing_vecs_and_forces_mechanical(tmp_path):
         cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(
             "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
-            (cid, _serialize_f32([0.1] * DEFAULT_EMBED_DIM), cid),
+            (cid, _serialize_f32([0.1] * TEST_EMBED_DIM), cid),
         )
     conn.commit()
 
-    _bootstrap_embed_spaces(conn, DEFAULT_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space is not None
@@ -1526,31 +1528,14 @@ def test_char_bootstrap_picks_up_custom_config_model_provider(tmp_path):
     conn.execute("UPDATE config SET value = 'openai' WHERE key = 'embed_provider'")
     conn.commit()
 
-    _bootstrap_embed_spaces(conn, DEFAULT_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space["model"] == "custom-model"
     assert space["provider"] == "openai"
-    assert space["model"] != DEFAULT_EMBED_MODEL
-    assert space["provider"] != DEFAULT_EMBED_PROVIDER
-    assert space["dim"] == DEFAULT_EMBED_DIM
-
-
-def test_char_bootstrap_falls_back_to_defaults_when_config_absent(tmp_path):
-    """(b cont.) embed_model/embed_provider config rows ABSENT -> space falls
-    back to DEFAULT_EMBED_MODEL / DEFAULT_EMBED_PROVIDER."""
-    conn = get_connection(tmp_path / "test.db")
-    init_schema(conn)
-
-    conn.execute("DELETE FROM embed_spaces")
-    conn.execute("DELETE FROM config WHERE key IN ('embed_model', 'embed_provider')")
-    conn.commit()
-
-    _bootstrap_embed_spaces(conn, DEFAULT_EMBED_DIM)
-
-    space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
-    assert space["model"] == DEFAULT_EMBED_MODEL
-    assert space["provider"] == DEFAULT_EMBED_PROVIDER
+    assert space["model"] != TEST_EMBED_MODEL
+    assert space["provider"] != TEST_EMBED_PROVIDER
+    assert space["dim"] == TEST_EMBED_DIM
 
 
 def test_char_bootstrap_count_falls_back_to_zero_without_chunks_vec(tmp_path):
@@ -1580,7 +1565,7 @@ def test_char_bootstrap_count_falls_back_to_zero_without_chunks_vec(tmp_path):
     conn.commit()
 
     # No raise despite chunks_vec being absent.
-    _bootstrap_embed_spaces(conn, DEFAULT_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space is not None
@@ -1597,7 +1582,7 @@ def test_char_bootstrap_idempotent_second_call_is_noop(tmp_path):
     assert before == 1
     orig = dict(conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone())
 
-    _bootstrap_embed_spaces(conn, DEFAULT_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
 
     after = conn.execute("SELECT COUNT(*) FROM embed_spaces").fetchone()[0]
     assert after == 1
@@ -1678,7 +1663,7 @@ def test_read_only_vacuum_into_snapshots_live_vec0_database(tmp_path):
     writer.execute("PRAGMA wal_autocheckpoint=0")
     init_schema(writer)
     chunk_id = _char_add_chunk(writer, "live snapshot", 0)
-    insert_chunk_vec(writer, chunk_id, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(writer, chunk_id, [0.1] * TEST_EMBED_DIM)
     writer.commit()
     # The premise: the main file alone does not hold the data, so only a WAL-aware snapshot can.
     main_only = tmp_path / "main-only.db"
@@ -1699,8 +1684,220 @@ def test_read_only_vacuum_into_snapshots_live_vec0_database(tmp_path):
     sqlite_vec.load(check)
     hits = check.execute(
         "SELECT chunk_id FROM chunks_vec WHERE embedding MATCH ? ORDER BY distance LIMIT 1",
-        (_serialize_f32([0.1] * DEFAULT_EMBED_DIM),),
+        (_serialize_f32([0.1] * TEST_EMBED_DIM),),
     ).fetchall()
     assert hits == [(chunk_id,)]
     check.close()
     writer.close()
+
+
+# --- #569: a blank database is seeded from the declaration, never from defaults ---
+
+
+def _declare_openai_compat(monkeypatch, *, key: str | None = "sk-test-only"):
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_PROVIDER", "openai_compat")
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "qwen3-embedding")
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_DIM", "768")
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "https://embedder.example.test/v1/")
+    if key is not None:
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_API_KEY", key)
+
+
+def test_blank_database_seeds_from_the_declaration(tmp_path, monkeypatch):
+    _declare_openai_compat(monkeypatch)
+    conn = get_connection(tmp_path / "kb.db")
+    init_schema(conn)
+
+    rows = dict(conn.execute("SELECT key, value FROM config WHERE key LIKE 'embed_%'").fetchall())
+    assert rows["embed_provider"] == "openai_compat"
+    assert rows["embed_model"] == "qwen3-embedding"
+    assert rows["embed_dim"] == "768"
+    assert rows["embed_base_url"] == "https://embedder.example.test"
+    assert rows["embed_api_key"] == "env:KNOWLEDGE_BASE_EMBED_API_KEY"
+    values = [r[0] for r in conn.execute("SELECT value FROM config").fetchall()]
+    assert not any("sk-test-only" in v for v in values)
+
+    space = get_active_space(conn)
+    assert space is not None
+    assert (space["provider"], space["model"], space["dim"]) == ("openai_compat", "qwen3-embedding", 768)
+    cid = _char_add_chunk(conn, "seeded", 0)
+    insert_chunk_vec(conn, cid, [0.1] * 768)
+    with pytest.raises(sqlite3.OperationalError):
+        insert_chunk_vec(conn, _char_add_chunk(conn, "wrong dim", 1), [0.1] * 1024)
+
+
+def test_blank_database_without_a_declaration_names_the_variable(tmp_path, monkeypatch):
+    monkeypatch.delenv("KNOWLEDGE_BASE_EMBED_PROVIDER")
+    conn = get_connection(tmp_path / "kb.db")
+    with pytest.raises(KnowledgeBaseError, match="KNOWLEDGE_BASE_EMBED_PROVIDER"):
+        init_schema(conn)
+    assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks_vec'").fetchone() is None
+
+
+def test_existing_database_initializes_without_a_declaration(tmp_path, monkeypatch):
+    """Guard: only a blank database needs the declaration; a legacy one reads its own config."""
+    conn = get_connection(tmp_path / "kb.db")
+    conn.executescript(
+        """
+        CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO config (key, value) VALUES ('embed_model', 'bge-m3'), ('embed_dim', '1024');
+        """
+    )
+    for name in ("PROVIDER", "MODEL", "DIM", "URL"):
+        monkeypatch.delenv(f"KNOWLEDGE_BASE_EMBED_{name}")
+    init_schema(conn)
+    space = get_active_space(conn)
+    assert space is not None
+    assert (space["provider"], space["model"], space["dim"]) == ("ollama", "bge-m3", 1024)
+
+
+# --- #569: an existing database is bound to the declaration ---
+
+
+def _seeded(tmp_path, monkeypatch, **declared):
+    """A database seeded under an openai_compat declaration, then the given variables changed."""
+    _declare_openai_compat(monkeypatch)
+    conn = get_connection(tmp_path / "kb.db")
+    init_schema(conn)
+    for name, value in declared.items():
+        var = f"KNOWLEDGE_BASE_EMBED_{name.upper()}"
+        if value is None:
+            monkeypatch.delenv(var, raising=False)
+        else:
+            monkeypatch.setenv(var, value)
+    return conn
+
+
+def _config(conn) -> dict:
+    return dict(conn.execute("SELECT key, value FROM config").fetchall())
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "key"),
+    [
+        ("provider", "ollama", "embed_provider"),
+        ("model", "other-model", "embed_model"),
+        ("dim", "8", "embed_dim"),
+        ("url", "https://moved.example.test", "embed_base_url"),
+    ],
+)
+def test_bind_refuses_a_disagreeing_field(tmp_path, monkeypatch, variable, value, key):
+    conn = _seeded(tmp_path, monkeypatch, **{variable: value})
+    before = _config(conn)
+    with pytest.raises(KnowledgeBaseError, match=rf"{key}.*KNOWLEDGE_BASE_EMBED_{variable.upper()}"):
+        bind_embed_config(conn, load_embed_settings())
+    assert _config(conn) == before
+
+
+def test_bind_accepts_a_legacy_normalized_url(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("UPDATE config SET value = 'https://embedder.example.test/v1' WHERE key = 'embed_base_url'")
+    conn.commit()
+    bind_embed_config(conn, load_embed_settings())
+
+
+def test_bind_records_an_unrecorded_endpoint(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("DELETE FROM config WHERE key IN ('embed_base_url', 'embed_api_key')")
+    conn.commit()
+    bind_embed_config(conn, load_embed_settings())
+    rows = _config(conn)
+    assert rows["embed_base_url"] == "https://embedder.example.test"
+    assert rows["embed_api_key"] == "env:KNOWLEDGE_BASE_EMBED_API_KEY"
+
+
+def test_bind_refuses_a_missing_identity_row(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("DELETE FROM config WHERE key = 'embed_dim'")
+    conn.commit()
+    with pytest.raises(KnowledgeBaseError, match="embed_dim"):
+        bind_embed_config(conn, load_embed_settings())
+
+
+def test_bind_derives_the_key_row(tmp_path, monkeypatch, caplog):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("UPDATE config SET value = 'sk-inline-secret' WHERE key = 'embed_api_key'")
+    conn.commit()
+    with caplog.at_level("WARNING"):
+        bind_embed_config(conn, load_embed_settings())
+    assert _config(conn)["embed_api_key"] == "env:KNOWLEDGE_BASE_EMBED_API_KEY"
+    assert "embed_api_key" in caplog.text
+    assert "sk-inline-secret" not in caplog.text
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_EMBED_API_KEY")
+    bind_embed_config(conn, load_embed_settings())
+    assert "embed_api_key" not in _config(conn)
+
+
+def test_bind_refuses_a_drifted_active_space(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("UPDATE embed_spaces SET model = 'older-model' WHERE status = 'active'")
+    conn.commit()
+    with pytest.raises(KnowledgeBaseError, match=r"active space.*older-model.*re-embed"):
+        bind_embed_config(conn, load_embed_settings())
+
+
+def test_bind_refuses_a_database_without_an_active_space(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("UPDATE embed_spaces SET status = 'deprecated'")
+    conn.commit()
+    with pytest.raises(KnowledgeBaseError, match="no active embedding space"):
+        bind_embed_config(conn, load_embed_settings())
+
+
+def test_bind_transition_rebind(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch, url="https://moved.example.test")
+    conn.execute("UPDATE config SET value = 'drifted-model' WHERE key = 'embed_model'")
+    conn.commit()
+    bind_embed_config(conn, load_embed_settings(), transition="rebind")
+    rows = _config(conn)
+    assert rows["embed_base_url"] == "https://moved.example.test"
+    assert rows["embed_model"] == "qwen3-embedding"
+    bind_embed_config(conn, load_embed_settings())  # a plain bind now passes
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
+    with pytest.raises(KnowledgeBaseError, match="embed_model"):
+        bind_embed_config(conn, load_embed_settings(), transition="rebind")
+
+
+def test_bind_transition_re_embed(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch, url="https://moved.example.test")
+    before = _config(conn)
+    with pytest.raises(KnowledgeBaseError, match="use rebind"):
+        bind_embed_config(conn, load_embed_settings(), transition="re-embed")
+    assert _config(conn) == before
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
+    bind_embed_config(conn, load_embed_settings(), transition="re-embed")
+    rows = _config(conn)
+    assert rows["embed_base_url"] == "https://moved.example.test"
+    assert rows["embed_model"] == "qwen3-embedding"  # re_embed's promotion moves the identity
+
+
+def test_bind_transition_re_embed_to_onnx_drops_the_url(tmp_path, monkeypatch):
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"")
+    conn = _seeded(tmp_path, monkeypatch, provider="onnx", url=None, api_key=None)
+    monkeypatch.setenv("ONNX_EMBED_MODEL_PATH", str(model))
+    bind_embed_config(conn, load_embed_settings(), transition="re-embed")
+    rows = _config(conn)
+    assert "embed_base_url" not in rows
+    assert "embed_api_key" not in rows
+
+
+def test_open_declared_db_returns_a_bound_connection(tmp_path, monkeypatch):
+    _declare_openai_compat(monkeypatch)
+    conn = open_declared_db(tmp_path / "kb.db")
+    assert _config(conn)["embed_base_url"] == "https://embedder.example.test"
+    conn.close()
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
+    with pytest.raises(KnowledgeBaseError, match="embed_model"):
+        open_declared_db(tmp_path / "kb.db")
+
+
+def test_bind_refuses_a_drifted_config_row_while_the_active_space_matches(tmp_path, monkeypatch):
+    conn = _seeded(tmp_path, monkeypatch)
+    conn.execute("UPDATE config SET value = 'drifted-model' WHERE key = 'embed_model'")
+    conn.commit()
+    with pytest.raises(KnowledgeBaseError, match=r"config embed_model is 'drifted-model'.*rebind"):
+        bind_embed_config(conn, load_embed_settings())

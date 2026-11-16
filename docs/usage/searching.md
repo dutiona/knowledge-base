@@ -215,7 +215,7 @@ Each result contains:
 
 ## Embedding Provider
 
-Vector search uses the embedding provider configured in the database. By default, this is Ollama (BGE-M3), but OpenAI and ONNX Runtime are also supported. The query embedding is generated using the same provider and model as the indexed chunks -- mismatched providers will produce poor results. See [Ingesting Documents: Embedding Providers](ingesting-documents.md#embedding-providers) for configuration details.
+Vector search uses the embedding provider declared in the environment (`KNOWLEDGE_BASE_EMBED_*`), at the declared endpoint; OpenAI-compatible servers, Ollama and ONNX Runtime are supported. The query embedding is generated using the same provider and model as the indexed chunks -- mismatched providers will produce poor results. See [Ingesting Documents: Embedding Providers](ingesting-documents.md#embedding-providers) for configuration details.
 
 ## Status
 

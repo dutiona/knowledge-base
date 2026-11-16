@@ -2,13 +2,14 @@
 
 from unittest.mock import patch
 
-from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.db import get_connection, init_schema
 from knowledge_base.folder_summaries import compute_folder_hash, update_folder_summary
 from knowledge_base.ingest import ingest_file
+from tests.declared_env import TEST_EMBED_DIM
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 
 
@@ -172,7 +173,7 @@ def test_ingest_file_triggers_folder_summary(tmp_path):
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch(
     "knowledge_base.search.embed_single",
-    lambda text, model="bge-m3", **_kw: [0.1] * DEFAULT_EMBED_DIM,
+    lambda text, model="bge-m3", **_kw: [0.1] * TEST_EMBED_DIM,
 )
 def test_search_folder_summaries_populated(tmp_path):
     """Ingesting files into folders creates folder summaries and vec entries."""
@@ -220,7 +221,7 @@ def test_folder_boost_multiplies_scores(tmp_path):
         ("h2", "biology content", "markdown", "/papers/bio/b.md", 0),
     )
     chunk_ids = [1, 2]
-    dim = DEFAULT_EMBED_DIM
+    dim = TEST_EMBED_DIM
 
     # Insert a folder summary vec for /papers/ml (but not /papers/bio)
     conn.execute(
@@ -250,7 +251,7 @@ def test_folder_boost_zero_distance_does_not_boost_all(tmp_path):
     conn = get_connection(db_path)
     init_schema(conn)
 
-    dim = DEFAULT_EMBED_DIM
+    dim = TEST_EMBED_DIM
     # Query and matching folder share the same vector → L2 distance = 0
     exact_vec = [0.1] * dim
     # Distant folder uses a very different vector → large L2 distance
@@ -302,7 +303,7 @@ def test_folder_boost_no_folders_is_noop(tmp_path):
     init_schema(conn)
 
     scores = {1: 0.5}
-    result = _folder_boost(conn, [0.1] * DEFAULT_EMBED_DIM, [1], scores)
+    result = _folder_boost(conn, [0.1] * TEST_EMBED_DIM, [1], scores)
     assert result == scores
 
 

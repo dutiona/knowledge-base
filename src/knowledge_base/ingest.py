@@ -33,8 +33,8 @@ from .db import (
     insert_chunk_vec,
 )
 from .migrate import _main_db_path
-from .embed_swap import assert_embed_identity_match, get_embed_config
-from .embeddings import ProviderConfig, embed, truncate_embedding
+from .embed_swap import assert_embed_identity_match, declared_provider_config, get_embed_config
+from .embeddings import embed, truncate_embedding
 from .exceptions import NotFoundError
 from .folder_summaries import update_folder_summary
 from .utils import content_hash as _content_hash
@@ -120,12 +120,7 @@ def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[
     # (family, model) differs from the active space's recorded identity (ADR-0015).
     assert_embed_identity_match(conn)
     cfg = get_embed_config(conn)
-    provider_cfg = ProviderConfig(
-        family=cfg["provider"],
-        base_url=cfg["base_url"],
-        api_key=cfg["api_key"],
-        allow_loopback=cfg["allow_loopback"],
-    )
+    provider_cfg = declared_provider_config(conn, cfg["provider"])
     active = get_active_space(conn)
     base_dim = active.get("matryoshka_base_dim") if active else None
     if base_dim:

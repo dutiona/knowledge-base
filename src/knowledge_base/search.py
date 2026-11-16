@@ -14,8 +14,8 @@ from .db import (
     get_space_element_type,
     get_vec_table_name,
 )
-from .embed_swap import get_embed_config, get_space
-from .embeddings import ProviderConfig, embed_single, truncate_embedding
+from .embed_swap import declared_provider_config, get_embed_config, get_space
+from .embeddings import embed_single, truncate_embedding
 from .exceptions import ValidationError
 from .keywords import build_fts_query, extract_keywords
 from .utils import ELEMENT_QUERY_EXPR, serialize_f32 as _serialize_f32
@@ -274,11 +274,9 @@ def search(
     else:
         active = get_active_space(conn)
         if active is not None:
-            # Use the ACTIVE SPACE's recorded identity for the query embedding — NOT the
-            # mutable config. After a configure_embeddings() drift (config changed but not
-            # yet re_embed'd), the stored vectors are still the space's model; querying with
-            # the config's (new) model would mix spaces. Connection details still come from
-            # config (the space row stores no base_url/api_key).
+            # Query with the ACTIVE SPACE's recorded identity: the stored vectors are that
+            # space's model, whatever the config rows say. Connection details come from this
+            # process's declaration (declared_provider_config).
             space_cfg = {"model": active["model"], "dim": active["dim"], "provider": active["provider"]}
         else:
             space_cfg = get_embed_config(conn)  # fresh DB / no active space
@@ -305,30 +303,9 @@ def search(
                 fts_results = _fts_search(conn, fts_query, strategy_fetch_limit, chunk_strategy=chunk_strategy)
 
     if mode in ("hybrid", "vec"):
-        # Query-vector provider: family from the (possibly non-active) space. Connection
-        # details (base_url/api_key/allow_loopback) come from the current embed config ONLY
-        # when its family matches the space's — otherwise a configure_embeddings() drift to a
-        # different family would point the space's family at the wrong endpoint (e.g. an
-        # ollama space hitting an openai_compat URL). When families differ, omit the config
-        # connection (ollama auto-detects; an openai_compat space without a matching base_url
-        # fails clearly, signalling that re_embed is needed).
-        _embed_conn = get_embed_config(conn)
-        _same_family = _embed_conn["provider"] == space_cfg["provider"]
-        if not _same_family and space_cfg["provider"] in ("openai_compat", "anthropic_compat"):
-            # The space's family needs a base_url, but config has drifted to a different family
-            # so there is none to use. Fail clearly rather than let OpenAICompatProvider(None)
-            # silently fall back to https://api.openai.com (wrong backend + key exposure).
-            raise ValidationError(
-                f"The active embedding space's provider ({space_cfg['provider']}) requires a base_url, "
-                f"but the embed config has drifted to {_embed_conn['provider']!r}. Run re_embed() to "
-                "rebuild the space with the current provider, or reconfigure the provider to match the space."
-            )
-        query_provider_cfg = ProviderConfig(
-            family=space_cfg["provider"],
-            base_url=_embed_conn["base_url"] if _same_family else None,
-            api_key=_embed_conn["api_key"] if _same_family else None,
-            allow_loopback=_embed_conn["allow_loopback"] if _same_family else False,
-        )
+        # Query-vector provider: the (possibly non-active) space's family, at the declared
+        # endpoint; a space of another family than the declaration is refused (#569).
+        query_provider_cfg = declared_provider_config(conn, space_cfg["provider"])
         # Use space-specific config for query embedding
         if space_base_dim:
             query_embedding = embed_single(

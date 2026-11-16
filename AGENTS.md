@@ -35,7 +35,8 @@ src/knowledge_base/
   papers.py        # Paper CRUD, relationships, BibTeX export
   conclusions.py   # Evidence-chained conclusions with supersession
   embed_swap.py    # Atomic embedding model swap
-  embeddings.py    # Ollama embedding client
+  embeddings.py    # Embedding providers (openai_compat, ollama, onnx)
+  settings.py      # The KNOWLEDGE_BASE_* declaration and egress switches
   jobs.py          # Background job queue (singleton daemon thread)
   browser/         # Playwright page renderer (subprocess)
 tests/             # pytest suite, 1.35x source ratio
@@ -49,7 +50,7 @@ docs/              # Sphinx-compatible documentation
 3. **Conventional Commits** — `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`
 4. **Atomic commits** — one logical change per commit
 5. **Thread safety** — all SQLite access via thread-local connections (`threading.local()`). Never share a connection across threads.
-6. **Mock external services** — tests must not call Ollama or any LLM. Use `unittest.mock.patch` on `knowledge_base.embeddings.embed` and `httpx.AsyncClient.post`.
+6. **Mock external services** — tests must not call Ollama or any LLM. Use `unittest.mock.patch` on `knowledge_base.embeddings.embed` (or the caller's `embed` name), or the `http_requests` fixture, which records every httpx request at the transport.
 7. **Content-hash dedup** — ingestion uses SHA-256 hashes. If adding new content types, maintain this pattern.
 8. **Batched SQL** — use `_batched_execute`/`_batched_select` from `db.py` for any IN-clause query to stay under SQLite's 999 variable limit.
 

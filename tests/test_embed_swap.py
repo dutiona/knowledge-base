@@ -1,19 +1,22 @@
 """Tests for embedding model swap and re-embed."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
-from knowledge_base.embed_swap import get_embed_config, re_embed
+from knowledge_base.db import get_connection, init_schema
+from knowledge_base.embed_swap import backfill_space, create_space, get_embed_config, re_embed
 from knowledge_base.ingest import ingest_file
+from knowledge_base.utils import serialize_f32 as _serialize_f32
+from tests.declared_env import TEST_EMBED_DIM, TEST_EMBED_MODEL
 
 
 NEW_DIM = 384
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 
 
@@ -42,7 +45,13 @@ def test_get_embed_config(tmp_path):
     conn = _setup(tmp_path)
     config = get_embed_config(conn)
     assert config["model"] == "bge-m3"
-    assert config["dim"] == DEFAULT_EMBED_DIM
+    assert config["dim"] == TEST_EMBED_DIM
+
+
+def _declare_new_model(monkeypatch) -> None:
+    """re_embed moves the active identity only to the declaration (#569)."""
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "mxbai-embed-large")
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_DIM", str(NEW_DIM))
 
 
 @patch(
@@ -51,7 +60,7 @@ def test_get_embed_config(tmp_path):
 )
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-def test_re_embed_changes_model(mock_provider, tmp_path):
+def test_re_embed_changes_model(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
     # Ingest a file with old model
@@ -63,6 +72,7 @@ def test_re_embed_changes_model(mock_provider, tmp_path):
     assert old_count >= 1
 
     # Re-embed with new model
+    _declare_new_model(monkeypatch)
     result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     assert result["chunks_processed"] == old_count
@@ -82,7 +92,7 @@ def test_re_embed_changes_model(mock_provider, tmp_path):
 )
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path):
+def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
     md = tmp_path / "doc.md"
@@ -91,6 +101,7 @@ def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path):
 
     chunk_ids_before = [r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()]
 
+    _declare_new_model(monkeypatch)
     re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     chunk_ids_after = [r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()]
@@ -102,9 +113,10 @@ def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path):
     return_value=_mock_provider(_fake_embed_new),
 )
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
-def test_re_embed_empty_db(mock_provider, tmp_path):
+def test_re_embed_empty_db(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
+    _declare_new_model(monkeypatch)
     result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     assert result["chunks_processed"] == 0
@@ -118,7 +130,7 @@ def test_re_embed_empty_db(mock_provider, tmp_path):
 )
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-def test_re_embed_includes_folder_summaries(mock_provider, tmp_path):
+def test_re_embed_includes_folder_summaries(mock_provider, tmp_path, monkeypatch):
     """re_embed re-creates folder_summaries_vec with the new model."""
     conn = _setup(tmp_path)
 
@@ -131,185 +143,12 @@ def test_re_embed_includes_folder_summaries(mock_provider, tmp_path):
     assert conn.execute("SELECT count(*) FROM folder_summaries").fetchone()[0] == 1
     assert conn.execute("SELECT count(*) FROM folder_summaries_vec").fetchone()[0] == 1
 
+    _declare_new_model(monkeypatch)
     result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
 
     assert result["folders_processed"] == 1
     # Vec table rebuilt with new dim
     assert conn.execute("SELECT count(*) FROM folder_summaries_vec").fetchone()[0] == 1
-
-
-# --- Slice C: configure_embeddings + env→config migration + env:VAR secrets (#516) ---
-
-
-def _ok_get(*_args, **_kwargs):
-    class FakeResp:
-        status_code = 200
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"data": []}
-
-    return FakeResp()
-
-
-def test_configure_embeddings_validates_and_redacts(tmp_path):
-    from knowledge_base.embed_swap import configure_embeddings
-
-    conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        result = configure_embeddings(
-            conn,
-            provider="openai_compat",
-            base_url="https://vllm.example.com/v1",
-            model="bge-m3",
-            api_key="sk-secret-123",
-        )
-    assert result["provider"] == "openai_compat"
-    assert "api_key" not in result  # redacted
-    assert result["base_url"] == "https://vllm.example.com"  # normalized (/v1 stripped)
-    # persisted
-    cfg = get_embed_config(conn)
-    assert cfg["provider"] == "openai_compat"
-    assert cfg["base_url"] == "https://vllm.example.com"
-    assert cfg["api_key"] == "sk-secret-123"
-
-
-def test_configure_embeddings_rejects_anthropic_compat(tmp_path):
-    from knowledge_base.embed_swap import configure_embeddings
-    from knowledge_base.exceptions import ValidationError
-
-    conn = _setup(tmp_path)
-    with pytest.raises(ValidationError, match="anthropic_compat"):
-        configure_embeddings(conn, provider="anthropic_compat", base_url="https://x.example.com")
-
-
-def test_configure_embeddings_loopback_requires_flag(tmp_path):
-    from knowledge_base.embed_swap import configure_embeddings
-    from knowledge_base.exceptions import ValidationError
-
-    conn = _setup(tmp_path)
-    # Without the opt-in, a localhost base_url is hard-rejected at config-write.
-    with pytest.raises(ValidationError, match="private"):
-        configure_embeddings(conn, provider="openai_compat", base_url="http://localhost:11434")
-    # With the opt-in, it is accepted (connectivity is advisory).
-    with patch("knowledge_base.embed_swap.httpx.get", _ok_get):
-        result = configure_embeddings(
-            conn,
-            provider="openai_compat",
-            base_url="http://localhost:11434/v1",
-            allow_loopback_base_url=True,
-        )
-    assert result["provider"] == "openai_compat"
-    assert get_embed_config(conn)["base_url"] == "http://localhost:11434"
-
-
-def test_configure_embeddings_env_indirection_not_persisted(tmp_path, monkeypatch):
-    from knowledge_base.embed_swap import configure_embeddings
-
-    conn = _setup(tmp_path)
-    monkeypatch.setenv("KB_EMBED_SECRET", "sk-resolved-at-call-time")
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        configure_embeddings(
-            conn,
-            provider="openai_compat",
-            base_url="https://vllm.example.com",
-            api_key="env:KB_EMBED_SECRET",
-        )
-    # The raw indirection spec is stored verbatim — never the resolved secret.
-    stored = conn.execute("SELECT value FROM config WHERE key = 'embed_api_key'").fetchone()["value"]
-    assert stored == "env:KB_EMBED_SECRET"
-    all_values = " ".join(r["value"] for r in conn.execute("SELECT value FROM config").fetchall())
-    assert "sk-resolved-at-call-time" not in all_values
-
-
-def test_configure_embeddings_clears_stale_keys_for_ollama(tmp_path):
-    from knowledge_base.embed_swap import configure_embeddings
-
-    conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com", api_key="sk-1")
-    with patch("knowledge_base.embed_swap.httpx.get", _ok_get):
-        configure_embeddings(conn, provider="ollama", model="bge-m3")
-    cfg = get_embed_config(conn)
-    assert cfg["provider"] == "ollama"
-    assert cfg["base_url"] is None
-    assert cfg["api_key"] is None
-
-
-def test_configure_embeddings_no_key_in_logs(tmp_path, caplog):
-    from knowledge_base.embed_swap import configure_embeddings
-
-    conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-        caplog.at_level("DEBUG"),
-    ):
-        configure_embeddings(
-            conn,
-            provider="openai_compat",
-            base_url="https://user:hunter2@vllm.example.com",
-            api_key="sk-topsecret",
-        )
-    assert "sk-topsecret" not in caplog.text
-    assert "hunter2" not in caplog.text
-
-
-def test_get_embed_config_env_no_longer_selects_provider(tmp_path, monkeypatch, caplog):
-    """EMBED_PROVIDER no longer SELECTS the provider at runtime — config is authoritative.
-
-    It is honored only once at DB seed time; at runtime it only warns. Acting on it would
-    diverge from the bootstrapped active-space identity and falsely trip the producer guard
-    (PR #524 round-2 review).
-    """
-    conn = _setup(tmp_path)
-    monkeypatch.setenv("EMBED_PROVIDER", "onnx")
-    with caplog.at_level("WARNING"):
-        cfg = get_embed_config(conn)
-    assert cfg["provider"] == "ollama"  # config (seeded) wins; env ignored
-    assert "deprecated" in caplog.text.lower()
-    # Even with the config key absent (a pre-provider DB), env does NOT select — DEFAULT is
-    # returned, which matches the bootstrapped active space, so the identity guard won't reject.
-    conn.execute("DELETE FROM config WHERE key = 'embed_provider'")
-    conn.commit()
-    assert get_embed_config(conn)["provider"] == "ollama"
-
-
-def test_seed_honors_embed_provider_env_on_fresh_db(tmp_path, monkeypatch):
-    """A fresh DB seeds embed_provider from EMBED_PROVIDER once, aligning config + active space."""
-    from knowledge_base.db import get_active_space
-
-    monkeypatch.setenv("EMBED_PROVIDER", "onnx")
-    conn = _setup(tmp_path)  # init_schema runs the seed + bootstrap with env set
-    assert get_embed_config(conn)["provider"] == "onnx"
-    space = get_active_space(conn)
-    assert space is not None
-    assert space["provider"] == "onnx"  # aligned — no config/space divergence, no false reject
-
-
-def test_get_embed_config_explicit_config_overrides_env(tmp_path, monkeypatch):
-    """An explicit configure_embeddings() choice wins over the legacy env var."""
-    from knowledge_base.embed_swap import configure_embeddings
-
-    conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com")
-    monkeypatch.setenv("EMBED_PROVIDER", "onnx")
-    assert get_embed_config(conn)["provider"] == "openai_compat"
 
 
 # --- Slice D: producer-side identity hard-reject (AC6, #516) ---
@@ -323,15 +162,12 @@ def test_assert_identity_match_passes_when_aligned(tmp_path):
 
 
 def test_assert_identity_match_rejects_family_change(tmp_path):
-    from knowledge_base.embed_swap import assert_embed_identity_match, configure_embeddings
+    from knowledge_base.embed_swap import assert_embed_identity_match
     from knowledge_base.exceptions import ValidationError
 
     conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com", model="bge-m3")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.commit()
     # active space still (ollama, bge-m3); config now openai_compat → mismatch
     with pytest.raises(ValidationError, match="identity"):
         assert_embed_identity_match(conn)
@@ -370,79 +206,251 @@ def test_assert_identity_match_noop_without_active_space(tmp_path):
 
 
 def test_embed_with_config_rejects_identity_mismatch(tmp_path):
-    from knowledge_base.embed_swap import configure_embeddings
     from knowledge_base.exceptions import ValidationError
     from knowledge_base.ingest import _embed_with_config
 
     conn = _setup(tmp_path)
-    with (
-        patch("knowledge_base.utils.is_private_ip", return_value=False),
-        patch("knowledge_base.embed_swap.httpx.get", _ok_get),
-    ):
-        configure_embeddings(conn, provider="openai_compat", base_url="https://x.example.com", model="bge-m3")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    conn.commit()
     # active space (ollama, bge-m3) vs configured openai_compat → reject before any HTTP call
     with pytest.raises(ValidationError, match="identity"):
         _embed_with_config(conn, ["hello"])
 
 
-def test_configure_embeddings_remote_ollama_base_url(tmp_path):
-    """A LAN/remote Ollama base_url is accepted (family-trusted, not SSRF-validated) and honored."""
-    from knowledge_base.embed_swap import configure_embeddings
-
+@pytest.mark.parametrize("provider", ["openai_compat", "openai"])
+def test_openai_api_key_is_never_an_embedding_key_source(tmp_path, monkeypatch, provider):
+    """#569: the declared KNOWLEDGE_BASE_EMBED_API_KEY source is the only embedding key source."""
     conn = _setup(tmp_path)
-    # 192.168.x is private — would be SSRF-rejected for openai_compat, but ollama is trusted.
-    with patch("knowledge_base.embed_swap.httpx.get", _ok_get):
-        result = configure_embeddings(conn, provider="ollama", base_url="http://192.168.1.5:11434", model="bge-m3")
-    assert result["provider"] == "ollama"
-    assert get_embed_config(conn)["base_url"] == "http://192.168.1.5:11434"
-
-
-def test_openai_key_not_injected_into_generic_backend(tmp_path, monkeypatch):
-    """OPENAI_API_KEY must NOT be injected into a generic openai_compat backend (#524 review P1).
-
-    Injecting it would leak the user's OpenAI key to a third-party/local endpoint as the
-    Authorization header.
-    """
-    conn = _setup(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-must-not-leak")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://my-vllm.example.com')")
-    conn.commit()
-    assert get_embed_config(conn)["api_key"] is None  # generic backend → no env-key injection
-
-
-def test_openai_key_injected_for_openai_literal(tmp_path, monkeypatch):
-    """OPENAI_API_KEY IS still used for the OpenAI literal endpoint (api.openai.com) — back-compat."""
-    conn = _setup(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-only")
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', ?)", (provider,))
     conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://api.openai.com')")
+    conn.execute("DELETE FROM config WHERE key = 'embed_api_key'")
     conn.commit()
-    assert get_embed_config(conn)["api_key"] == "sk-openai-real"
+    assert get_embed_config(conn)["api_key"] is None
 
 
-def test_openai_key_not_injected_for_lookalike_host(tmp_path, monkeypatch):
-    """A look-alike host merely CONTAINING 'api.openai.com' must NOT be treated as the OpenAI
-    literal — exact hostname match only, else OPENAI_API_KEY leaks (#524 security review, HIGH)."""
-    conn = _setup(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-must-not-leak")
-    for bad in (
-        "https://api.openai.com.evil.com",  # suffix attack
-        "https://evil.com/?x=api.openai.com",  # query-string substring
-        "https://notapi.openai.com",  # prefix substring (old `in` check matched this)
-        "https://api-openai-com.evil.com",
+# --- #569: every embedding provider comes from the declaration ---
+
+
+def test_backfill_refuses_a_space_of_another_provider(kb_conn, http_requests):
+    from knowledge_base.exceptions import ValidationError
+
+    create_space(kb_conn, "foreign", "m", 8, "openai_compat")
+    with pytest.raises(ValidationError, match="not the declared provider 'ollama'"):
+        backfill_space(kb_conn, "foreign")
+    assert http_requests == []
+
+
+def test_search_refuses_an_active_space_of_another_provider(kb_conn, http_requests):
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.search import search
+
+    kb_conn.execute("UPDATE embed_spaces SET provider = 'openai_compat' WHERE status = 'active'")
+    kb_conn.commit()
+    with pytest.raises(ValidationError, match="not the declared provider 'ollama'"):
+        search(kb_conn, "attention", mode="vec")
+    assert http_requests == []
+
+
+def test_folder_summary_refuses_an_active_space_of_another_provider(kb_conn, http_requests):
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.folder_summaries import update_folder_summary
+
+    kb_conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h1', 'some text', 'markdown', '/docs/a.md', 0)"
+    )
+    kb_conn.execute("UPDATE embed_spaces SET provider = 'onnx' WHERE status = 'active'")
+    kb_conn.commit()
+    with pytest.raises(ValidationError, match="not the declared provider 'ollama'"):
+        update_folder_summary(kb_conn, "/docs")
+    assert http_requests == []
+
+
+# --- #569: the embedding identity changes only through the declaration ---
+
+
+def _space_rows(conn) -> list[tuple]:
+    return [tuple(r) for r in conn.execute("SELECT name, status, model FROM embed_spaces ORDER BY name").fetchall()]
+
+
+def _config_rows(conn) -> dict:
+    return dict(conn.execute("SELECT key, value FROM config").fetchall())
+
+
+def test_promote_refuses_an_undeclared_identity(kb_conn, http_requests):
+    import json
+
+    import knowledge_base.routes.embeddings as emb
+
+    create_space(kb_conn, "other", "other-model", TEST_EMBED_DIM, "ollama")
+    before = (_config_rows(kb_conn), _space_rows(kb_conn))
+    with patch("knowledge_base.routes.embeddings._get_conn", return_value=kb_conn):
+        promoted = json.loads(emb.promote_embed_space_tool("other"))
+        re_embedded = json.loads(emb.re_embed_tool(model="other-model", dim=8))
+    assert "embed_model" in promoted["error"]
+    assert "embed_model" in re_embedded["error"]
+    assert (_config_rows(kb_conn), _space_rows(kb_conn)) == before
+    assert http_requests == []
+
+
+def _two_folders(conn) -> None:
+    conn.execute(
+        "INSERT INTO folder_summaries (folder_path, summary, content_hash) VALUES "
+        "('/docs/a', 'alpha text', 'h1'), ('/docs/b', 'beta text', 'h2')"
+    )
+    for path in ("/docs/a", "/docs/b"):
+        conn.execute(
+            "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
+            (_serialize_f32([0.5] * TEST_EMBED_DIM), path),
+        )
+    conn.commit()
+
+
+def _vec_state(conn) -> list:
+    return sorted(
+        (r["folder_path"], bytes(r["embedding"]))
+        for r in conn.execute("SELECT folder_path, embedding FROM folder_summaries_vec").fetchall()
+    )
+
+
+def _provider(vector: float = 0.25) -> MagicMock:
+    provider = MagicMock()
+    provider.embed.side_effect = lambda texts, model=None, expected_dim=TEST_EMBED_DIM: [
+        [vector] * expected_dim for _ in texts
+    ]
+    return provider
+
+
+@pytest.mark.parametrize("failure", ["embed", "insert", "interrupt"])
+def test_promote_is_all_or_nothing(kb_conn, failure):
+    from knowledge_base.embed_swap import promote_space
+
+    _two_folders(kb_conn)
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    before = (_config_rows(kb_conn), _space_rows(kb_conn), _vec_state(kb_conn))
+    provider = _provider()
+    calls = {"n": 0}
+    real_serialize = _serialize_f32
+
+    def _serialize(vec):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyboardInterrupt if failure == "interrupt" else RuntimeError("insert failed")
+        return real_serialize(vec)
+
+    if failure == "embed":
+        provider.embed.side_effect = RuntimeError("embed failed")
+    with (
+        patch("knowledge_base.embed_swap.get_provider", return_value=provider),
+        patch("knowledge_base.embed_swap._serialize_f32", _serialize),
+        pytest.raises((RuntimeError, KeyboardInterrupt)),
     ):
-        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
-        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', ?)", (bad,))
-        conn.commit()
-        assert get_embed_config(conn)["api_key"] is None, f"OPENAI_API_KEY leaked for look-alike {bad!r}"
+        promote_space(kb_conn, "same")
+
+    assert kb_conn.isolation_level == ""
+    assert (_config_rows(kb_conn), _space_rows(kb_conn), _vec_state(kb_conn)) == before
+    fresh = get_connection(Path(kb_conn.execute("PRAGMA database_list").fetchone()["file"]))
+    assert (_config_rows(fresh), _space_rows(fresh), _vec_state(fresh)) == before
+    fresh.close()
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_provider()):
+        promote_space(kb_conn, "same")  # a retry succeeds
+    assert ("same", "active", TEST_EMBED_MODEL) in _space_rows(kb_conn)
 
 
-def test_openai_key_injected_for_trailing_dot_fqdn(tmp_path, monkeypatch):
-    """The canonical trailing-dot FQDN 'api.openai.com.' normalizes to the literal (still injects)."""
-    conn = _setup(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://API.OpenAI.com.')")
-    conn.commit()
-    assert get_embed_config(conn)["api_key"] == "sk-openai-real"  # case-insensitive + trailing-dot normalized
+def test_promote_refuses_a_pending_transaction(kb_conn):
+    from knowledge_base.embed_swap import promote_space
+    from knowledge_base.exceptions import KnowledgeBaseError
+
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    kb_conn.execute("INSERT INTO papers (title) VALUES ('pending')")
+    assert kb_conn.in_transaction
+    with pytest.raises(KnowledgeBaseError, match="open transaction"):
+        promote_space(kb_conn, "same")
+    assert kb_conn.in_transaction
+    assert kb_conn.execute("SELECT COUNT(*) FROM papers WHERE title = 'pending'").fetchone()[0] == 1
+    kb_conn.rollback()
+
+
+def test_promote_re_embeds_a_summary_changed_after_the_snapshot(kb_conn):
+    from knowledge_base.embed_swap import promote_space
+
+    _two_folders(kb_conn)
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    path = Path(kb_conn.execute("PRAGMA database_list").fetchone()["file"])
+    seen: list[list[str]] = []
+
+    def _embed(texts, model=None, expected_dim=TEST_EMBED_DIM):
+        seen.append(list(texts))
+        if len(seen) == 1:  # between the snapshot and the lock, another writer edits a summary
+            other = get_connection(path)
+            other.execute("UPDATE folder_summaries SET summary = 'alpha revised' WHERE folder_path = '/docs/a'")
+            other.commit()
+            other.close()
+        return [[0.1 if t == "alpha revised" else 0.25] * expected_dim for t in texts]
+
+    provider = MagicMock()
+    provider.embed.side_effect = _embed
+    with patch("knowledge_base.embed_swap.get_provider", return_value=provider):
+        promote_space(kb_conn, "same")
+    assert seen == [["alpha text", "beta text"], ["alpha revised"]]
+    stored = dict(_vec_state(kb_conn))
+    assert stored["/docs/a"] == _serialize_f32([0.1] * TEST_EMBED_DIM)
+    assert stored["/docs/b"] == _serialize_f32([0.25] * TEST_EMBED_DIM)
+
+
+def test_failed_re_embed_leaves_no_orphan_space(kb_conn):
+    before = _space_rows(kb_conn)
+    with (
+        patch("knowledge_base.embed_swap.backfill_space", side_effect=RuntimeError("embedder down")),
+        pytest.raises(RuntimeError, match="embedder down"),
+    ):
+        re_embed(kb_conn, TEST_EMBED_MODEL, TEST_EMBED_DIM)
+    assert _space_rows(kb_conn) == before
+
+
+def test_a_running_process_embeds_only_at_its_own_declaration(kb_conn, http_requests):
+    """Another process rewriting the endpoint rows (a rebind with the server up) cannot redirect this one."""
+    import httpx
+
+    from knowledge_base.ingest import _embed_with_config
+
+    kb_conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES "
+        "('embed_base_url', 'http://elsewhere.example.test:11434'), ('embed_api_key', 'env:HOME')"
+    )
+    kb_conn.commit()
+    http_requests.handlers["embedder.example.test"] = lambda request: httpx.Response(
+        200, json={"embeddings": [[1.0] + [0.0] * (TEST_EMBED_DIM - 1)]}
+    )
+    _embed_with_config(kb_conn, ["hello"])
+    assert http_requests.hosts() == ["embedder.example.test"]
+    assert "Authorization" not in http_requests[0].headers
+
+
+def test_promote_refuses_a_target_removed_while_it_embedded(kb_conn):
+    from knowledge_base.embed_swap import cleanup_space, deprecate_space, promote_space
+
+    _two_folders(kb_conn)
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    path = Path(kb_conn.execute("PRAGMA database_list").fetchone()["file"])
+    before = (_config_rows(kb_conn), _space_rows(kb_conn))
+
+    def _embed(texts, model=None, expected_dim=TEST_EMBED_DIM):
+        other = get_connection(path)  # another tool removes the target mid-promotion
+        deprecate_space(other, "same")
+        cleanup_space(other, "same")
+        other.close()
+        return [[0.25] * expected_dim for _ in texts]
+
+    provider = MagicMock()
+    provider.embed.side_effect = _embed
+    with (
+        patch("knowledge_base.embed_swap.get_provider", return_value=provider),
+        pytest.raises(ValueError, match="changed"),
+    ):
+        promote_space(kb_conn, "same")
+    after_config, after_spaces = _config_rows(kb_conn), _space_rows(kb_conn)
+    assert after_config == before[0]
+    assert after_spaces == [row for row in before[1] if row[0] != "same"]
+    assert ("default", "active", TEST_EMBED_MODEL) in after_spaces

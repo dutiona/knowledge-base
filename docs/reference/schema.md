@@ -207,13 +207,12 @@ Key-value store for server configuration (embedding model, LLM provider, vision 
 | `key`   | TEXT | PRIMARY KEY | --      | Configuration key   |
 | `value` | TEXT | NOT NULL    | --      | Configuration value |
 
-Populated on first run with:
+Populated on first run with the `KNOWLEDGE_BASE_EMBED_*` declaration (`embed_provider`, `embed_model`, `embed_dim`,
+`embed_base_url`, and the key source in `embed_api_key`), never with defaults, and checked against it at every start; and
+with these defaults:
 
 | Key                             | Default Value |
 | ------------------------------- | ------------- |
-| `embed_model`                   | `bge-m3`      |
-| `embed_dim`                     | `1024`        |
-| `embed_provider`                | `ollama`      |
 | `llm_provider`                  | `ollama`      |
 | `llm_model`                     | `qwen3.5:27b` |
 | `auto_relate_propose_threshold` | `0.82`        |
@@ -221,14 +220,14 @@ Populated on first run with:
 
 Additional keys set via configure tools: `llm_base_url`, `llm_api_key`, `vision_model`, `vision_base_url`, `omniparser_path`, `browser_mode`, `browser_endpoint`, `browser_venv`.
 
-**Provider keys** (set via `configure_embeddings` / `configure_llm`, per
-[ADR-0018](../design/adr/0018-provider-abstraction.md)):
+**Provider keys** (`embed_*` recorded from the declaration, `llm_*` set via `configure_llm`, per
+[ADR-0018](../design/adr/0018-provider-abstraction.md) and its #569 amendment):
 
 | Key                                          | Meaning                                                                                  |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `embed_provider`                             | Embedding API family: `openai_compat` \| `ollama` \| `onnx`                              |
-| `embed_base_url`                             | Embedding endpoint base URL (required for `openai_compat`; normalized + SSRF-validated)  |
-| `embed_api_key`                              | Embedding key — inline, or `env:VARNAME` indirection (stored verbatim, never the secret) |
+| `embed_provider`                             | Embedding API family: `openai_compat` \| `openai` \| `ollama` \| `onnx`                  |
+| `embed_base_url`                             | The declared `KNOWLEDGE_BASE_EMBED_URL`, normalized                                      |
+| `embed_api_key`                              | Always `env:KNOWLEDGE_BASE_EMBED_API_KEY` when a key is declared; never the secret       |
 | `embed_model`                                | Embedding model slug — the `model` field of the embedding-identity tuple                 |
 | `llm_provider`                               | Chat API family: `openai_compat` \| `anthropic_compat` \| `ollama`                       |
 | `llm_base_url` / `llm_api_key` / `llm_model` | Chat counterparts (same semantics as the `embed_*` keys)                                 |
@@ -236,8 +235,9 @@ Additional keys set via configure tools: `llm_base_url`, `llm_api_key`, `vision_
 
 The `embed_spaces.provider` and `.model` columns carry the family name and model slug — the
 ADR-0015 embedding-identity tuple that the producer (ingest) must match before writing. An
-`embed_api_key`/`llm_api_key` of the form `env:VARNAME` is resolved at call time and is **never**
-stored as the resolved secret; inline keys are stored plaintext-at-rest (local-only posture).
+`env:` key spec is resolved at call time and is **never** stored as the resolved secret. An inline
+`llm_api_key` is stored plaintext-at-rest (local-only posture); an LLM key may name only
+`env:KNOWLEDGE_BASE_LLM_API_KEY`.
 
 ---
 

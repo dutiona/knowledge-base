@@ -177,11 +177,8 @@ def test_embed_config_with_custom_active_space_augments(kb_conn):
 # --------------------------------------------------------------------------- #
 
 
-def test_re_embed_tool_deletes_similar_and_adds_note(kb_conn):
-    """re_embed mocked → wrapper DELETEs all 'similar' rels and adds 'note'."""
-    _insert_similar_relationship(kb_conn)
-    assert _count_similar(kb_conn) == 1
-
+def test_re_embed_tool_adds_note(kb_conn):
+    """re_embed mocked → wrapper adds 'note' (promote_space itself drops the 'similar' rels)."""
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(emb, "re_embed", return_value={"chunks_processed": 3, "space": "m_512"}) as mock_re_embed,
@@ -194,8 +191,6 @@ def test_re_embed_tool_deletes_similar_and_adds_note(kb_conn):
     assert result["chunks_processed"] == 3
     assert "note" in result
     assert "similar" in result["note"]
-    # Side-effect: relationships purged.
-    assert _count_similar(kb_conn) == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -293,11 +288,8 @@ def test_promote_embed_space_unknown_name_error(kb_conn):
     assert "not found" in result["error"]
 
 
-def test_promote_embed_space_happy_deletes_similar_and_adds_note(kb_conn):
-    """promote_space mocked → wrapper DELETEs 'similar' rels and adds 'note'."""
-    _insert_similar_relationship(kb_conn)
-    assert _count_similar(kb_conn) == 1
-
+def test_promote_embed_space_happy_adds_note(kb_conn):
+    """promote_space mocked → wrapper adds 'note' (promote_space itself drops the 'similar' rels)."""
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(
@@ -313,7 +305,6 @@ def test_promote_embed_space_happy_deletes_similar_and_adds_note(kb_conn):
     assert result["deprecated"] == "sp_old"
     assert "note" in result
     assert "similar" in result["note"]
-    assert _count_similar(kb_conn) == 0
 
 
 # --------------------------------------------------------------------------- #

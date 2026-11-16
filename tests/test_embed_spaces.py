@@ -30,6 +30,12 @@ from knowledge_base.embed_swap import (
 )
 
 
+def _declare(monkeypatch, model: str, dim: int) -> None:
+    """Only the declared identity can be promoted (#569)."""
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", model)
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_DIM", str(dim))
+
+
 def _fake_embed(texts, model="x", expected_dim=None, **_kw):
     dim = expected_dim or 4
     return [[0.1] * dim for _ in texts]
@@ -230,12 +236,13 @@ def test_backfill_resumable(mock_prov, tmp_path):
     "knowledge_base.embed_swap.get_provider",
     return_value=_FakeProvider(),
 )
-def test_promote_space(mock_prov, tmp_path):
+def test_promote_space(mock_prov, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
     _add_chunk(conn, "data", 0)
 
     create_space(conn, "promoted", "new_model", 4, "ollama")
     backfill_space(conn, "promoted")
+    _declare(monkeypatch, "new_model", 4)
     result = promote_space(conn, "promoted")
 
     assert result["promoted"] == "promoted"
@@ -256,12 +263,13 @@ def test_promote_space(mock_prov, tmp_path):
     "knowledge_base.embed_swap.get_provider",
     return_value=_FakeProvider(),
 )
-def test_promote_updates_config(mock_prov, tmp_path):
+def test_promote_updates_config(mock_prov, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
     _add_chunk(conn, "data", 0)
 
     create_space(conn, "cfg_test", "new_model", 4, "ollama")
     backfill_space(conn, "cfg_test")
+    _declare(monkeypatch, "new_model", 4)
     promote_space(conn, "cfg_test")
 
     config = get_embed_config(conn)
@@ -270,13 +278,14 @@ def test_promote_updates_config(mock_prov, tmp_path):
     assert config["provider"] == "ollama"
 
 
-def test_promote_empty_space_blocked(tmp_path):
+def test_promote_empty_space_blocked(tmp_path, monkeypatch):
     conn = _setup(tmp_path)
     # Add a chunk so total_chunks > 0 in the new space
     _add_chunk(conn, "data", 0)
 
     create_space(conn, "empty", "model", 4, "ollama")
     # Don't backfill — chunk_count stays 0 but total_chunks > 0
+    _declare(monkeypatch, "model", 4)
     with pytest.raises(ValueError, match="0 of"):
         promote_space(conn, "empty")
 
@@ -301,12 +310,13 @@ def test_deprecate_active_blocked(tmp_path):
     "knowledge_base.embed_swap.get_provider",
     return_value=_FakeProvider(),
 )
-def test_cleanup_space(mock_prov, tmp_path):
+def test_cleanup_space(mock_prov, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
     _add_chunk(conn, "data", 0)
 
     create_space(conn, "to_clean", "model", 4, "ollama")
     backfill_space(conn, "to_clean")
+    _declare(monkeypatch, "model", 4)
     promote_space(conn, "to_clean")
 
     # Now 'default' is deprecated — clean it up
@@ -490,12 +500,13 @@ def test_backfill_int8_space(mock_prov, tmp_path):
     "knowledge_base.embed_swap.get_provider",
     return_value=_FakeProvider(),
 )
-def test_search_int8_space(mock_prov, tmp_path):
+def test_search_int8_space(mock_prov, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
     _add_chunk(conn, "searchable int8 content", 0)
 
     create_space(conn, "search_int8", "bge-m3", 4, "ollama", element_type="int8")
     backfill_space(conn, "search_int8", batch_size=10)
+    _declare(monkeypatch, "bge-m3", 4)
     promote_space(conn, "search_int8")
 
     from knowledge_base.search import _vec_search
@@ -508,12 +519,13 @@ def test_search_int8_space(mock_prov, tmp_path):
     "knowledge_base.embed_swap.get_provider",
     return_value=_FakeProvider(),
 )
-def test_promote_int8_space_syncs_config(mock_prov, tmp_path):
+def test_promote_int8_space_syncs_config(mock_prov, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
     _add_chunk(conn, "config sync chunk", 0)
 
     create_space(conn, "cfg_int8", "bge-m3", 4, "ollama", element_type="int8")
     backfill_space(conn, "cfg_int8", batch_size=10)
+    _declare(monkeypatch, "bge-m3", 4)
     promote_space(conn, "cfg_int8")
 
     row = conn.execute("SELECT value FROM config WHERE key = 'embed_element_type'").fetchone()
@@ -543,12 +555,13 @@ def test_get_space_element_type_int8(tmp_path):
     "knowledge_base.embed_swap.get_provider",
     return_value=_FakeProvider(),
 )
-def test_insert_chunk_vec_auto_resolves_element_type(mock_prov, tmp_path):
+def test_insert_chunk_vec_auto_resolves_element_type(mock_prov, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
     _add_chunk(conn, "auto resolve chunk", 0)
 
     create_space(conn, "auto_int8", "bge-m3", 4, "ollama", element_type="int8")
     backfill_space(conn, "auto_int8", batch_size=10)
+    _declare(monkeypatch, "bge-m3", 4)
     promote_space(conn, "auto_int8")
 
     cid = _add_chunk(conn, "new chunk after promotion", 1)

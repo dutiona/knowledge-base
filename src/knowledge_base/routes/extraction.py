@@ -19,7 +19,7 @@ from ..extraction import (
     record_metric,
 )
 from ..jobs import submit_job
-from ..llm import configure_llm
+from ..llm import _require_llm, configure_llm
 from ..vision import configure_omniparser, configure_vision, estimate_figures_time
 
 mcp = FastMCP("extraction-routes")
@@ -115,6 +115,7 @@ def extract_structure_tool(
     """
     conn = _get_conn()
     try:
+        _require_llm()  # first: no inline call and no queued job while LLM extraction is off
         est = estimate_extraction_time(conn, paper_id)
     except KnowledgeBaseError as e:
         err = {"error": str(e), **e.details}
@@ -188,7 +189,7 @@ def configure_llm_tool(
         base_url: Base URL (e.g. 'http://192.168.1.41:1234'). Required for openai_compat;
             SSRF-validated before persisting.
         model: Model name (e.g. 'qwen3.5:27b', 'qwen/qwen3.5-35b-a3b').
-        api_key: Inline key, or 'env:VARNAME' indirection (preferred). Optional.
+        api_key: Inline key, or exactly 'env:KNOWLEDGE_BASE_LLM_API_KEY' (preferred). Optional.
         allow_loopback_base_url: Opt-in to a loopback/localhost base_url (for a local
             openai_compat server). Shared with the embedding path; omit to preserve.
     """
@@ -277,7 +278,10 @@ def configure_vision_tool(
         base_url: Base URL for the vision API (e.g. 'http://localhost:11434').
     """
     conn = _get_conn()
-    return json.dumps(configure_vision(conn, model=model, base_url=base_url))
+    try:
+        return json.dumps(configure_vision(conn, model=model, base_url=base_url))
+    except KnowledgeBaseError as e:
+        return json.dumps({"error": str(e), **e.details})
 
 
 @mcp.tool()

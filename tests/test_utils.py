@@ -177,3 +177,40 @@ def test_element_type_constants():
     assert set(ELEMENT_INSERT_EXPR.keys()) == set(ELEMENT_QUERY_EXPR.keys())
     assert ELEMENT_INSERT_EXPR["float32"] == "?"
     assert ELEMENT_QUERY_EXPR["float32"] == "?"
+
+
+# --- #569: the declared embedding host, and only it, is exempt from the floor ---
+
+_TAILNET = ["100.64.0.10", "fd7a:115c:a1e0::10"]
+
+
+def test_the_floor_rejects_a_tailnet_name(fake_dns):
+    fake_dns["embedder.example.test"] = _TAILNET
+    with pytest.raises(ValidationError, match="private"):
+        validate_base_url("https://embedder.example.test")
+
+
+def test_the_exact_declared_host_is_exempt_without_a_lookup(fake_dns):
+    validate_base_url("https://EMBEDDER.example.test.:8443/v1", exempt_host="embedder.example.test")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://embedder.example.test.evil.example",
+        "https://sub.embedder.example.test",
+        "https://xembedder.example.test",
+        "https://embedder.example.test@evil.example",
+        "ftp://embedder.example.test",
+    ],
+)
+def test_look_alikes_keep_the_floor(fake_dns, url):
+    for host in (
+        "embedder.example.test.evil.example",
+        "sub.embedder.example.test",
+        "xembedder.example.test",
+        "evil.example",
+    ):
+        fake_dns[host] = _TAILNET
+    with pytest.raises(ValidationError):
+        validate_base_url(url, exempt_host="embedder.example.test")

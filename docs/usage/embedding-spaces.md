@@ -97,6 +97,12 @@ Atomically:
 
 After promotion, all new ingestion and search queries use the promoted space's vec table.
 
+Only a space of the declared identity (`KNOWLEDGE_BASE_EMBED_PROVIDER`, `_MODEL`, `_DIM`) can be promoted, and only
+a space of the declared provider can be backfilled: the declaration is the active identity, and every space embeds
+against the declared endpoint. Promotion is all or nothing: the folder summaries are embedded first, then the status
+swap, the `config` rows and the folder-summary rebuild commit together, so a failure changes nothing. Spaces of another
+model (same provider) can still be created, backfilled and compared.
+
 #### 4. (Optional) Clean up deprecated spaces
 
 ```json
@@ -137,6 +143,13 @@ The existing `re_embed_tool` is a convenience wrapper. Under the hood it:
 
 The old space is left as `deprecated` (not auto-cleaned). Use `cleanup_embed_space_tool` to reclaim disk space.
 
+In a running server, `re_embed_tool` accepts only the declared model and dimension, so its use is rebuilding the
+active identity (for example with another `matryoshka_base_dim`). Changing the model is a maintenance step with the
+server stopped: set the new `KNOWLEDGE_BASE_EMBED_*` values, run `knowledge-base-ingest re-embed` (it takes the
+identity from the declaration), then start the server. A run that fails removes the space it created and can be
+rerun; a killed run leaves a `populating` space to remove with `deprecate_embed_space_tool` then
+`cleanup_embed_space_tool`.
+
 ### Deprecating without cleanup
 
 ```json
@@ -150,16 +163,9 @@ Marks a `populating` space as `deprecated` without dropping its table. Useful fo
 
 ### Rollback
 
-To roll back to a previous model:
-
-```json
-{
-  "name": "promote_embed_space_tool",
-  "arguments": { "name": "old_model_768" }
-}
-```
-
-Promotion works on both `populating` and `deprecated` spaces. The current active space becomes deprecated, and the old space becomes active again.
+Rolling back to a previous model is a re-embed: declare the previous identity and run `knowledge-base-ingest re-embed`
+with the server stopped. Promotion works on both `populating` and `deprecated` spaces, but a deprecated space of
+another identity cannot be promoted in a running server, whose declaration names the current one.
 
 ### Bootstrap behavior
 

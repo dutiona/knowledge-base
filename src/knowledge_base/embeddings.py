@@ -1,7 +1,9 @@
 """Embedding provider abstraction.
 
-Supports pluggable backends: Ollama (default), OpenAI, ONNX Runtime.
-Auto-detects Ollama URL: OLLAMA_HOST env > WSL2 Windows host > localhost.
+Pluggable backends by API family (ADR-0018): any OpenAI-compatible server, Ollama, ONNX
+Runtime. Configured embedding always goes to the declared ``KNOWLEDGE_BASE_EMBED_URL``
+(#569); the Ollama URL auto-detection below serves only the bare-name provider and the
+LLM/vision defaults.
 """
 
 from __future__ import annotations
@@ -19,7 +21,8 @@ if TYPE_CHECKING:
 
 import httpx
 
-from .db import DEFAULT_EMBED_DIM
+from .exceptions import ValidationError
+from .settings import declared_embed_host
 from .utils import _resolve_api_key, _sanitize_url, validate_base_url
 
 logger = logging.getLogger(__name__)
@@ -139,9 +142,9 @@ class ProviderConfig:
 class OllamaProvider:
     """Embedding provider using Ollama's /api/embed endpoint.
 
-    With no ``base_url`` the URL is auto-detected (``OLLAMA_HOST`` env > WSL2 Windows
-    host > localhost). A configured ``base_url`` (e.g. a remote/LAN Ollama) overrides
-    auto-detection. Ollama is localhost-trusted by family, so it is not SSRF-validated.
+    The config path always passes the declared ``base_url`` (#569); only the bare-name
+    ``OllamaProvider()`` auto-detects (``OLLAMA_HOST`` env > WSL2 Windows host >
+    localhost). Ollama is localhost-trusted by family, so it is not SSRF-validated.
     """
 
     def __init__(self, base_url: str | None = None) -> None:
@@ -153,7 +156,6 @@ class OllamaProvider:
         model: str = "bge-m3",
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
-        dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
         url = self._base_url or _get_ollama_url()
         results = []
         for i in range(0, len(texts), 32):
@@ -167,8 +169,8 @@ class OllamaProvider:
             data = resp.json()
             embeddings = data["embeddings"]
             for emb in embeddings:
-                if len(emb) != dim:
-                    raise ValueError(f"Expected {dim} dims, got {len(emb)}")
+                if expected_dim is not None and len(emb) != expected_dim:
+                    raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
                 results.append(_normalize_or_none(emb, "Ollama"))
         return results
 
@@ -187,7 +189,12 @@ class OpenAICompatProvider:
     """
 
     def __init__(self, base_url: str | None, api_key: str | None = None, *, allow_loopback: bool = False) -> None:
-        self._base_url = (base_url or "https://api.openai.com").rstrip("/").removesuffix("/v1")
+        if not base_url:
+            raise ValidationError(
+                "an openai_compat embedding provider needs a base URL (KNOWLEDGE_BASE_EMBED_URL); "
+                "KB never defaults to https://api.openai.com"
+            )
+        self._base_url = base_url.rstrip("/").removesuffix("/v1")
         self._api_key = api_key  # raw spec; never logged
         self._allow_loopback = allow_loopback
 
@@ -200,8 +207,9 @@ class OpenAICompatProvider:
         model: str = "text-embedding-3-large",
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
-        # Defense-in-depth on the embed path (AC4); the primary gate is config-write.
-        validate_base_url(self._base_url, allow_loopback=self._allow_loopback)
+        # The floor on the embed path; the declared endpoint alone is exempt (#569), so a
+        # tailnet embedder works while any other private host is still refused.
+        validate_base_url(self._base_url, allow_loopback=self._allow_loopback, exempt_host=declared_embed_host())
         api_key = _resolve_api_key(self._api_key)
         results = []
         batch_size = 512  # OpenAI supports up to 2048, 512 balances throughput/memory
@@ -334,6 +342,11 @@ _provider_cache: dict[str | ProviderConfig, EmbeddingProvider] = {}
 def _build_provider(cfg: ProviderConfig) -> EmbeddingProvider:
     """Construct a provider from a resolved :class:`ProviderConfig`."""
     family = cfg.family.lower()
+    if family in ("ollama", "openai_compat", "openai") and not cfg.base_url:
+        raise ValidationError(
+            f"the {family} embedding provider needs a base URL (KNOWLEDGE_BASE_EMBED_URL); "
+            "KB has no default embedding endpoint"
+        )
     if family == "ollama":
         return OllamaProvider(cfg.base_url)
     if family in ("openai_compat", "openai"):
@@ -350,16 +363,12 @@ def get_provider(
     name: str | None = None,
     *,
     cfg: ProviderConfig | None = None,
-    allow_env_override: bool = True,
 ) -> EmbeddingProvider:
     """Get an embedding provider, by config (preferred) or by bare name (legacy).
 
     When *cfg* is given, the provider is built from the resolved identity tuple and
     cached by it — two ``openai_compat`` configs with different ``base_url`` never
-    collide. When *cfg* is None, the legacy bare-name path applies: with
-    *allow_env_override* True (default) ``EMBED_PROVIDER`` takes precedence over
-    *name*; callers that already resolved an explicit choice pass
-    ``allow_env_override=False`` so the env-var cannot silently redirect the backend.
+    collide. When *cfg* is None, the legacy bare-name path applies (no production caller).
     """
     if cfg is not None:
         cached = _provider_cache.get(cfg)
@@ -369,10 +378,7 @@ def get_provider(
         _provider_cache[cfg] = instance
         return instance
 
-    resolved = name or "ollama"
-    if allow_env_override:
-        resolved = os.environ.get("EMBED_PROVIDER", resolved)
-    resolved = resolved.lower()
+    resolved = (name or "ollama").lower()
     if resolved in _provider_cache:
         return _provider_cache[resolved]
     factory = _PROVIDERS.get(resolved)

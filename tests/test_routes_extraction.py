@@ -443,3 +443,40 @@ def test_extract_structure_tool_long_doc_confirmed_single_worker_params_none(kb_
     args, kwargs = mock_submit.call_args
     passed_params = kwargs.get("params", args[3] if len(args) > 3 else None)
     assert passed_params is None
+
+
+def test_extract_figures_tool_with_vision_off_submits_no_job(kb_conn, monkeypatch):
+    """#569: with vision off the tool refuses and queues nothing."""
+    import json
+
+    import knowledge_base.routes.extraction as ext
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
+    with patch("knowledge_base.routes.extraction._get_conn", return_value=kb_conn):
+        response = json.loads(ext.extract_figures_tool(1, confirmed=True))
+    assert "KNOWLEDGE_BASE_VISION" in response["error"]
+    assert kb_conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+
+
+def test_extract_structure_tool_with_llm_off_refuses_and_queues_nothing(kb_conn, monkeypatch):
+    """#569: with the LLM off the tool refuses up front, for short and long papers alike."""
+    import json
+
+    import knowledge_base.routes.extraction as ext
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_LLM")
+    with patch("knowledge_base.routes.extraction._get_conn", return_value=kb_conn):
+        response = json.loads(ext.extract_structure_tool(1, confirmed=True))
+    assert "KNOWLEDGE_BASE_LLM" in response["error"]
+    assert kb_conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+
+
+def test_configure_vision_tool_with_vision_off_returns_an_error(kb_conn, monkeypatch):
+    import json
+
+    import knowledge_base.routes.extraction as ext
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
+    with patch("knowledge_base.routes.extraction._get_conn", return_value=kb_conn):
+        response = json.loads(ext.configure_vision_tool(model="m"))
+    assert "KNOWLEDGE_BASE_VISION" in response["error"]
