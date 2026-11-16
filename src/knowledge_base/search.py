@@ -275,8 +275,8 @@ def search(
         active = get_active_space(conn)
         if active is not None:
             # Query with the ACTIVE SPACE's recorded identity: the stored vectors are that
-            # space's model, whatever the config rows say. Connection details come from the
-            # bound config (the space row stores no base_url/api_key).
+            # space's model, whatever the config rows say. Connection details come from this
+            # process's declaration (declared_provider_config).
             space_cfg = {"model": active["model"], "dim": active["dim"], "provider": active["provider"]}
         else:
             space_cfg = get_embed_config(conn)  # fresh DB / no active space
