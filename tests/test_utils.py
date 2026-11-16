@@ -5,6 +5,7 @@ import ipaddress
 import socket
 import ssl
 import threading
+from typing import Any
 from unittest.mock import patch
 
 import httpx
@@ -350,8 +351,9 @@ def test_unfloored_client_is_plain(http_requests, fake_dns):
 
 @pytest.mark.parametrize("option", ["proxy", "mounts", "transport", "limits", "verify"])
 def test_floored_client_takes_no_option_that_bypasses_the_guard(option):
+    bypass: Any = {option: None}  # an option egress_client must not accept, whatever its type
     with pytest.raises(TypeError):
-        egress_client(floor=True, **{option: None})
+        egress_client(floor=True, **bypass)
 
 
 def test_floored_client_closes_its_inner_transport(monkeypatch):
