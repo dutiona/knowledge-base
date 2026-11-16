@@ -1,6 +1,7 @@
 """Smoke tests for schema and basic operations."""
 
 import hashlib
+import shutil
 import sqlite3
 import struct
 
@@ -1679,7 +1680,12 @@ def test_read_only_vacuum_into_snapshots_live_vec0_database(tmp_path):
     chunk_id = _char_add_chunk(writer, "live snapshot", 0)
     insert_chunk_vec(writer, chunk_id, [0.1] * DEFAULT_EMBED_DIM)
     writer.commit()
-    assert src.with_name(src.name + "-wal").stat().st_size > 0  # the data lives only in the WAL
+    # The premise: the main file alone does not hold the data, so only a WAL-aware snapshot can.
+    main_only = tmp_path / "main-only.db"
+    shutil.copyfile(src, main_only)
+    probe = sqlite3.connect(f"file:{main_only}?mode=ro", uri=True)
+    assert probe.execute("SELECT count(*) FROM sqlite_master WHERE name = 'chunks_vec'").fetchone() == (0,)
+    probe.close()
 
     ro = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30, autocommit=True)
     ro.execute("VACUUM INTO ?", (str(snap),))
