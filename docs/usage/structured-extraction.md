@@ -180,7 +180,7 @@ Three chat API families are supported (organized by family, not vendor —
     "provider": "anthropic_compat",
     "base_url": "https://api.anthropic.com",
     "model": "claude-...",
-    "api_key": "env:ANTHROPIC_API_KEY"
+    "api_key": "env:KNOWLEDGE_BASE_LLM_API_KEY"
   }
 }
 ```
@@ -196,6 +196,6 @@ back the saved settings. Every request to a stored `base_url` keeps the floor ag
 the address it checked, so a name that later resolves to a private address is refused at use.
 
 The API key, if provided inline, is stored as plain text in the SQLite config table (acceptable
-for local use, not for network-exposed deployments). Prefer the `env:VARNAME` indirection — the
-secret is resolved at call time and never written to the DB. No vendor SDK is added; all three
+for local use, not for network-exposed deployments). Prefer the `env:KNOWLEDGE_BASE_LLM_API_KEY` indirection, the only `env:` spec an LLM key may name —
+the secret is resolved at call time and never written to the DB. No vendor SDK is added; all three
 families use `httpx` directly. Streaming, tool-calling, and multi-turn are out of scope.
