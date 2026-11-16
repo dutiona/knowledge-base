@@ -98,12 +98,13 @@ there is no silent fallback to the default.
 
 ## Container image
 
-The repository's `Containerfile` builds a server image from a checkout alone. Build it from a release tag, and let
-podman re-pull the base so a cached one never hides OS security updates:
+The repository's `Containerfile` builds a server image from a checkout alone. Build it from a release tag that
+contains the `Containerfile` (the first release after it landed, or any later one), and let podman re-pull the base so
+a cached one never hides OS security updates:
 
 ```bash
-git checkout v0.1.0
-podman build --pull=newer -t localhost/knowledge-base:v0.1.0 .
+git checkout <tag>
+podman build --pull=newer -t localhost/knowledge-base:<tag> .
 ```
 
 The image installs exactly `uv.lock` with `uv sync --frozen --no-dev --group reranker`: no dev tools, no uv. The
@@ -111,7 +112,9 @@ reranker group ships its runtime, but not a model: mount one and set `ONNX_RERAN
 `ONNX_RERANK_TOKENIZER_PATH` as described in [searching](../usage/searching.md#cross-encoder-reranking).
 
 The server runs as UID/GID `10001`. On a rootless host, map the service user onto it so the volumes stay owned by
-that user, with `--userns keep-id:uid=10001,gid=10001` (`UserNS=` in a quadlet). The state lives on two volumes:
+that user, with `--userns keep-id:uid=10001,gid=10001` (`UserNS=` in a quadlet). Run it with `--init`
+(`RunInit=true` in a quadlet): as PID 1, Python ignores `SIGTERM`, so without an init process `podman stop` waits out
+its grace period and then kills the server. The state lives on two volumes:
 
 | Variable                  | Volume                         | Holds                               |
 | ------------------------- | ------------------------------ | ----------------------------------- |
@@ -120,18 +123,23 @@ that user, with `--userns keep-id:uid=10001,gid=10001` (`UserNS=` in a quadlet).
 
 ### Snapshotting a running server
 
+Until the server gains an HTTP transport (#571), `knowledge-base` speaks MCP over stdio and exits when its standard
+input closes, so a detached container needs `-i` to stay up.
+
 Take a backup inside the running container, read-only, through Python's `sqlite3` alone. Never use `knowledge-base`
 or `knowledge-base-ingest` for it: a KB entry point can start the job worker, whose crash recovery resets running
-jobs. `VACUUM INTO` refuses an existing target, so remove the previous snapshot (or a failed run's partial file) first:
+jobs. `VACUUM INTO` refuses an existing target, so the recipe writes a fresh temporary file, checks it, and only then
+replaces the previous snapshot; a failed run leaves the last good snapshot in place and exits non-zero:
 
 ```bash
-podman exec knowledge-base sh -c 'SNAP=/var/lib/knowledge-base/db/snapshot.db; rm -f "$SNAP"
+podman exec knowledge-base sh -c 'SNAP=/var/lib/knowledge-base/db/snapshot.db; rm -f "$SNAP.tmp"
 python -c "import sqlite3, sys
 c = sqlite3.connect(f\"file:{sys.argv[1]}?mode=ro\", uri=True, timeout=30, autocommit=True)
-c.execute(\"VACUUM INTO ?\", (sys.argv[2],))" "$KNOWLEDGE_BASE_DB" "$SNAP" &&
+c.execute(\"VACUUM INTO ?\", (sys.argv[2],))" "$KNOWLEDGE_BASE_DB" "$SNAP.tmp" &&
 python -c "import sqlite3, sys
 r = sqlite3.connect(f\"file:{sys.argv[1]}?mode=ro\", uri=True).execute(\"PRAGMA integrity_check\").fetchall()
-sys.exit(r != [(\"ok\",)])" "$SNAP"'
+sys.exit(None if r == [(\"ok\",)] else f\"integrity_check: {r}\")" "$SNAP.tmp" &&
+mv "$SNAP.tmp" "$SNAP"'
 ```
 
 The `timeout` is the busy timeout. The snapshot includes committed data still in the WAL, and needs no `sqlite-vec`:
