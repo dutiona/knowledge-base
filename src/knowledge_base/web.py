@@ -573,6 +573,8 @@ def _check_cdp_endpoint(endpoint: str, *, allow_loopback: bool) -> str:
     if "@" in parsed.netloc:
         raise ValidationError("the CDP endpoint must not carry userinfo")
     host = parsed.hostname or ""
+    if "%" in host:  # an IPv6 zone id: Python accepts it, a browser's URL parser does not
+        raise ValidationError("the CDP endpoint must not carry an IPv6 zone id")
     if not (allow_loopback and _is_allowed_loopback(host)):
         try:
             ipaddress.ip_address(host)

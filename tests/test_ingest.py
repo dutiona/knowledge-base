@@ -1391,6 +1391,7 @@ def test_a_refused_stored_cdp_endpoint_disables_the_fallback(tmp_path, caplog):
         "ws://100.64.0.7:3000\\@203.0.113.10:3000/",  # Python reads 203.0.113.10, a browser 100.64.0.7
         "ws://user@203.0.113.10:3000/",
         "ws://203.0.113.10:3000/\tx",
+        "ws://[2001:db8::10%25eth0]:3000/",  # a zone id: accepted by Python, invalid for a browser
     ],
 )
 def test_a_cdp_endpoint_that_parsers_could_read_differently_is_refused(tmp_path, endpoint):
@@ -1420,10 +1421,11 @@ def test_a_stored_cdp_endpoint_with_a_parser_differential_is_refused_at_use(tmp_
 def test_the_stored_cdp_endpoint_is_the_canonical_checked_form(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
-    result = configure_browser(
+    configure_browser(
         conn, cdp_endpoint="WS://203.0.113.10:3000/devtools/browser/x?t=1#frag", venv_path=str(_fake_venv(tmp_path))
     )
-    assert result["browser"]["endpoint"] == "ws://203.0.113.10:3000/devtools/browser/x?t=1"
+    stored = conn.execute("SELECT value FROM config WHERE key = 'browser_endpoint'").fetchone()["value"]
+    assert stored == "ws://203.0.113.10:3000/devtools/browser/x?t=1"
 
 
 def test_configure_browser_query_mode(tmp_path):
