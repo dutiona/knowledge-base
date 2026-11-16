@@ -98,14 +98,17 @@ there is no silent fallback to the default.
 
 ## Container image
 
-The repository's `Containerfile` builds a server image from a checkout alone. Build it from a release tag that
-contains the `Containerfile` (the first release after it landed, or any later one), and let podman re-pull the base so
-a cached one never hides OS security updates:
+The repository's `Containerfile` builds a server image from git alone. Build it from a release tag that contains the
+`Containerfile` (the first release after it landed, or any later one). Feed podman that tag's tracked files, so nothing
+untracked in a working tree can reach the build, and let it re-pull the base so a cached one never hides OS security
+updates:
 
 ```bash
-git checkout <tag>
-podman build --pull=newer -t localhost/knowledge-base:<tag> .
+git archive --format=tar <tag> | podman build --pull=newer -t localhost/knowledge-base:<tag> -
 ```
+
+A build from a working tree (`podman build .`) refuses to run when `src/` holds anything but Python sources, such as an
+untracked `.env` or credentials file, because the package would otherwise ship it.
 
 The image installs exactly `uv.lock` with `uv sync --locked --no-dev --group reranker`: no dev tools, no uv, and a
 build that stops when the lock no longer matches `pyproject.toml` (run `uv lock` and commit it). The

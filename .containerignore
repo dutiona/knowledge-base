@@ -6,7 +6,5 @@
 !.python-version
 !LICENSE-MIT
 !LICENSE-APACHE
-# Hatchling reads it to keep git-ignored files under src/ (.env, databases) out of the wheel.
-!.gitignore
 !src/
 src/**/__pycache__
