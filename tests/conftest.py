@@ -2,8 +2,8 @@
 
 Database fixtures are opt-in by argument name — they do not change the
 behavior of existing tests that build their own temp databases inline.
-Two autouse guards apply to every test: the job-worker reset and the
-data-dir redirect (#391).
+Three autouse guards apply to every test: the job-worker reset, the
+data-dir redirect (#391) and the embedding declaration (#569).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from collections.abc import Iterator
 import pytest
 
 from knowledge_base.db import get_connection, init_schema
+from tests.declared_env import DECLARATION
 
 
 @pytest.fixture
@@ -76,3 +77,19 @@ def _isolated_kb_data_dir(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("KNOWLEDGE_BASE_DATA_DIR", str(tmp_path / "kb-data"))
     monkeypatch.setenv("KNOWLEDGE_BASE_DB", str(tmp_path / "kb-data" / "knowledge.db"))
+
+
+@pytest.fixture(autouse=True)
+def _declared_environment(monkeypatch):
+    """Run every test under the suite's embedding declaration (#569).
+
+    KB refuses to seed a blank database or start without ``KNOWLEDGE_BASE_EMBED_*``,
+    and vision, the browser fallback and LLM extraction are off unless switched on.
+    The suite declares the pre-#569 defaults and switches all three on, so existing
+    tests keep their meaning; tests of the defaults unset what they need. A
+    developer's shell cannot leak a key or the deprecated ``EMBED_PROVIDER`` in.
+    """
+    for name, value in DECLARATION.items():
+        monkeypatch.setenv(name, value)
+    for name in ("EMBED_PROVIDER", "KNOWLEDGE_BASE_EMBED_API_KEY", "KNOWLEDGE_BASE_LLM_API_KEY"):
+        monkeypatch.delenv(name, raising=False)

@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 
 from knowledge_base.chunking import chunk_python_ast as _chunk_python_ast
 from knowledge_base.chunking import chunk_text as _chunk_text
-from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.db import get_connection, init_schema
 from knowledge_base.ingest import (
     _cleanup_conclusion_refs,
     _extract_pdf_markdown,
@@ -44,11 +44,12 @@ from knowledge_base.conclusions import (
 )
 from knowledge_base.exceptions import NotFoundError, ValidationError
 from knowledge_base.extraction import record_method, record_dataset, record_metric
+from tests.declared_env import TEST_EMBED_DIM
 import pytest
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 
 
@@ -57,7 +58,7 @@ def _fake_embed_odd_none(texts, model="bge-m3", expected_dim=None, **_kwargs):
     None for zero-norm vectors, so some chunks get NO vec row. Used to prove the
     batched chunk_count bump counts VEC INSERTS (n_inserted), not chunk iterations.
     """
-    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
     return [None if i % 2 == 1 else [0.1] * dim for i in range(len(texts))]
 
 
@@ -3756,7 +3757,7 @@ def test_ingest_file_semantic_nonpdf(tmp_path):
 
 def _fake_embed_with_zero(texts, model="bge-m3", expected_dim=None, **_kwargs):
     """Return None for the second text to simulate a zero-norm embedding."""
-    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
     result = []
     for i, _ in enumerate(texts):
         if i == 1:

@@ -4,7 +4,6 @@ import io
 import pytest
 from PIL import Image
 
-from knowledge_base.db import DEFAULT_EMBED_DIM
 from knowledge_base.vision import (
     _cluster_bboxes,
     _crop_regions,
@@ -12,6 +11,7 @@ from knowledge_base.vision import (
     _split_cluster_x,
     _CLUSTER_GAP_THRESHOLD,
 )
+from tests.declared_env import TEST_EMBED_DIM
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +309,7 @@ class TestMultiFigureIntegration:
         monkeypatch.setattr(
             vision,
             "_embed_with_config",
-            lambda conn, texts: [[0.0] * DEFAULT_EMBED_DIM] * len(texts),
+            lambda conn, texts: [[0.0] * TEST_EMBED_DIM] * len(texts),
         )
 
         result = vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
@@ -355,7 +355,7 @@ class TestMultiFigureIntegration:
         monkeypatch.setattr(
             vision,
             "_embed_with_config",
-            lambda conn, texts: [[0.0] * DEFAULT_EMBED_DIM] * len(texts),
+            lambda conn, texts: [[0.0] * TEST_EMBED_DIM] * len(texts),
         )
 
         result = vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
@@ -397,7 +397,7 @@ class TestMultiFigureIntegration:
         monkeypatch.setattr(
             vision,
             "_embed_with_config",
-            lambda conn, texts: [[0.0] * DEFAULT_EMBED_DIM] * len(texts),
+            lambda conn, texts: [[0.0] * TEST_EMBED_DIM] * len(texts),
         )
 
         vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
@@ -430,7 +430,7 @@ class TestMultiFigureIntegration:
         monkeypatch.setattr(
             vision,
             "_embed_with_config",
-            lambda conn, texts: [[0.0] * DEFAULT_EMBED_DIM] * len(texts),
+            lambda conn, texts: [[0.0] * TEST_EMBED_DIM] * len(texts),
         )
 
         result = vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)

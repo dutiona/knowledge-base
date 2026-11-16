@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.db import get_connection, init_schema
 from knowledge_base.reranker import (
     ONNXReranker,
     RerankerProvider,
@@ -16,6 +16,7 @@ from knowledge_base.reranker import (
     get_reranker,
 )
 from knowledge_base.search import search
+from tests.declared_env import TEST_EMBED_DIM
 
 
 # ---------------------------------------------------------------------------
@@ -24,12 +25,12 @@ from knowledge_base.search import search
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 
 
 def _fake_embed_single(text, model="bge-m3", **_kwargs):
-    return [0.1] * DEFAULT_EMBED_DIM
+    return [0.1] * TEST_EMBED_DIM
 
 
 def _fake_rerank(query, candidates, **_kwargs):

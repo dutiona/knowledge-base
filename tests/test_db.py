@@ -8,9 +8,6 @@ import struct
 import pytest
 
 from knowledge_base.db import (
-    DEFAULT_EMBED_DIM,
-    DEFAULT_EMBED_MODEL,
-    DEFAULT_EMBED_PROVIDER,
     _bootstrap_embed_spaces,
     _migrate_extraction_source,
     _migrate_normalize_source_uri,
@@ -27,6 +24,7 @@ from knowledge_base.db import (
     insert_chunk_vec,
 )
 from knowledge_base.embed_swap import create_space
+from tests.declared_env import TEST_EMBED_DIM, TEST_EMBED_MODEL, TEST_EMBED_PROVIDER
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
@@ -76,7 +74,7 @@ def test_vec_insert_and_query(tmp_path):
     chunk_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     # Insert embedding
-    fake_emb = [0.1] * DEFAULT_EMBED_DIM
+    fake_emb = [0.1] * TEST_EMBED_DIM
     conn.execute(
         "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
         (chunk_id, _serialize_f32(fake_emb), chunk_id),
@@ -686,7 +684,7 @@ def test_char_co_occurrence_result_ordered_by_co_sessions_desc(tmp_path):
 #
 # Module-level helpers for this bundle. create_space lives in embed_swap, not
 # db; imported at module top. The default
-# 'chunks_vec' space expects DEFAULT_EMBED_DIM (1024) vectors in this file
+# 'chunks_vec' space expects TEST_EMBED_DIM (1024) vectors in this file
 # (no embed_dim config pre-seeding, unlike tests/test_embed_spaces.py).
 # ---------------------------------------------------------------------------
 
@@ -728,7 +726,7 @@ def test_char_insert_chunk_vec_increments_active_chunk_count(tmp_path):
     start = _char_active_count(conn)
 
     cid = _char_add_chunk(conn, "vec a", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
 
     assert _char_active_count(conn) == start + 1
@@ -739,9 +737,9 @@ def test_char_insert_chunk_vec_nonactive_table_leaves_active_unchanged(tmp_path)
     init_schema(conn)
     start = _char_active_count(conn)
 
-    create_space(conn, "other", "model", DEFAULT_EMBED_DIM, "ollama")
+    create_space(conn, "other", "model", TEST_EMBED_DIM, "ollama")
     cid = _char_add_chunk(conn, "non-active vec", 0)
-    insert_chunk_vec(conn, cid, [0.2] * DEFAULT_EMBED_DIM, table_name="chunks_vec_other")
+    insert_chunk_vec(conn, cid, [0.2] * TEST_EMBED_DIM, table_name="chunks_vec_other")
     conn.commit()
 
     # Active space (default) chunk_count is untouched: status='active' gate.
@@ -758,7 +756,7 @@ def test_insert_chunk_vec_bump_count_false_skips_per_row_update(tmp_path):
     start = _char_active_count(conn)
 
     cid = _char_add_chunk(conn, "no bump", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM, bump_count=False)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM, bump_count=False)
     conn.commit()
 
     # The vec row exists...
@@ -778,7 +776,7 @@ def test_bump_chunk_count_n_equals_n_per_row_bumps(tmp_path):
     start_batch = _char_active_count(conn)
     for i in range(5):
         cid = _char_add_chunk(conn, f"batch {i}", i)
-        insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM, bump_count=False)
+        insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM, bump_count=False)
     bump_chunk_count(conn, tbl, 5)
     conn.commit()
     batched = _char_active_count(conn)
@@ -788,7 +786,7 @@ def test_bump_chunk_count_n_equals_n_per_row_bumps(tmp_path):
     start_per_row = _char_active_count(conn)
     for i in range(5):
         cid = _char_add_chunk(conn, f"perrow {i}", 100 + i)
-        insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+        insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
     assert _char_active_count(conn) == start_per_row + 5
 
@@ -799,7 +797,7 @@ def test_bump_chunk_count_only_touches_active_space(tmp_path):
     init_schema(conn)
     start = _char_active_count(conn)
 
-    create_space(conn, "pop", "model", DEFAULT_EMBED_DIM, "ollama")
+    create_space(conn, "pop", "model", TEST_EMBED_DIM, "ollama")
     # Bumping the populating space's table is a no-op (status='active' gate).
     bump_chunk_count(conn, "chunks_vec_pop", 7)
     conn.commit()
@@ -817,7 +815,7 @@ def test_char_insert_then_delete_round_trips_chunk_count(tmp_path):
     start = _char_active_count(conn)
 
     cid = _char_add_chunk(conn, "round trip", 0)
-    insert_chunk_vec(conn, cid, [0.3] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.3] * TEST_EMBED_DIM)
     conn.commit()
     assert _char_active_count(conn) == start + 1
 
@@ -834,7 +832,7 @@ def test_char_delete_chunk_vecs_empty_is_noop(tmp_path):
     init_schema(conn)
 
     cid = _char_add_chunk(conn, "present", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
     before = _char_active_count(conn)
 
@@ -857,7 +855,7 @@ def test_char_delete_chunk_vecs_dedups_duplicate_ids(tmp_path):
     init_schema(conn)
 
     cid = _char_add_chunk(conn, "dup target", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
     before = _char_active_count(conn)
 
@@ -877,7 +875,7 @@ def test_char_delete_chunk_vecs_counts_actual_rows_not_input_length(tmp_path):
     with_vec = []
     for i in range(3):
         cid = _char_add_chunk(conn, f"has vec {i}", i)
-        insert_chunk_vec(conn, cid, [0.1 * (i + 1)] * DEFAULT_EMBED_DIM)
+        insert_chunk_vec(conn, cid, [0.1 * (i + 1)] * TEST_EMBED_DIM)
         with_vec.append(cid)
     no_vec = [_char_add_chunk(conn, f"no vec {j}", 10 + j) for j in range(2)]
     conn.commit()
@@ -904,7 +902,7 @@ def test_char_delete_chunk_vecs_clamps_chunk_count_at_zero(tmp_path):
     cids = []
     for i in range(3):
         cid = _char_add_chunk(conn, f"clamp {i}", i)
-        insert_chunk_vec(conn, cid, [0.2] * DEFAULT_EMBED_DIM)
+        insert_chunk_vec(conn, cid, [0.2] * TEST_EMBED_DIM)
         cids.append(cid)
     conn.commit()
     assert _char_active_count(conn) == 3
@@ -925,9 +923,9 @@ def test_char_delete_chunk_vecs_explicit_nonactive_table(tmp_path):
     init_schema(conn)
     active_start = _char_active_count(conn)
 
-    create_space(conn, "expl", "model", DEFAULT_EMBED_DIM, "ollama")
+    create_space(conn, "expl", "model", TEST_EMBED_DIM, "ollama")
     cid = _char_add_chunk(conn, "explicit del", 0)
-    insert_chunk_vec(conn, cid, [0.4] * DEFAULT_EMBED_DIM, table_name="chunks_vec_expl")
+    insert_chunk_vec(conn, cid, [0.4] * TEST_EMBED_DIM, table_name="chunks_vec_expl")
     conn.commit()
     # Insert into a non-active table does NOT touch any chunk_count.
     assert _char_space_count(conn, "expl") == 0
@@ -962,14 +960,14 @@ def test_char_delete_chunk_vecs_int8_space(tmp_path):
     init_schema(conn)
 
     # int8 element_type space (non-active); insert + delete round-trips count.
-    create_space(conn, "i8", "model", DEFAULT_EMBED_DIM, "ollama", element_type="int8")
+    create_space(conn, "i8", "model", TEST_EMBED_DIM, "ollama", element_type="int8")
     cids = []
     for i in range(2):
         cid = _char_add_chunk(conn, f"int8 {i}", i)
         insert_chunk_vec(
             conn,
             cid,
-            [0.1 * (i + 1)] * DEFAULT_EMBED_DIM,
+            [0.1 * (i + 1)] * TEST_EMBED_DIM,
             table_name="chunks_vec_i8",
         )
         cids.append(cid)
@@ -1001,7 +999,7 @@ def test_char_delete_chunks_cascade_empty_returns_zero(tmp_path):
     init_schema(conn)
 
     cid = _char_add_chunk(conn, "stay put", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
     before = _char_active_count(conn)
 
@@ -1018,7 +1016,7 @@ def test_char_delete_chunks_cascade_removes_chunk_vec_and_fts(tmp_path):
     init_schema(conn)
 
     cid = _char_add_chunk(conn, "transformers attention mechanism cascade", 0)
-    insert_chunk_vec(conn, cid, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
     conn.commit()
 
     # FTS sees the content before deletion.
@@ -1043,7 +1041,7 @@ def test_char_delete_chunks_cascade_return_counts_input_not_actual(tmp_path):
     init_schema(conn)
 
     real = _char_add_chunk(conn, "real chunk to delete", 0)
-    insert_chunk_vec(conn, real, [0.1] * DEFAULT_EMBED_DIM)
+    insert_chunk_vec(conn, real, [0.1] * TEST_EMBED_DIM)
     conn.commit()
 
     bogus = real + 9999  # an id that does not exist
@@ -1500,11 +1498,11 @@ def test_char_bootstrap_counts_existing_vecs_and_forces_mechanical(tmp_path):
         cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(
             "INSERT INTO chunks_vec (rowid, embedding, chunk_id) VALUES (?, ?, ?)",
-            (cid, _serialize_f32([0.1] * DEFAULT_EMBED_DIM), cid),
+            (cid, _serialize_f32([0.1] * TEST_EMBED_DIM), cid),
         )
     conn.commit()
 
-    _bootstrap_embed_spaces(conn, DEFAULT_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space is not None
@@ -1526,19 +1524,19 @@ def test_char_bootstrap_picks_up_custom_config_model_provider(tmp_path):
     conn.execute("UPDATE config SET value = 'openai' WHERE key = 'embed_provider'")
     conn.commit()
 
-    _bootstrap_embed_spaces(conn, DEFAULT_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space["model"] == "custom-model"
     assert space["provider"] == "openai"
-    assert space["model"] != DEFAULT_EMBED_MODEL
-    assert space["provider"] != DEFAULT_EMBED_PROVIDER
-    assert space["dim"] == DEFAULT_EMBED_DIM
+    assert space["model"] != TEST_EMBED_MODEL
+    assert space["provider"] != TEST_EMBED_PROVIDER
+    assert space["dim"] == TEST_EMBED_DIM
 
 
 def test_char_bootstrap_falls_back_to_defaults_when_config_absent(tmp_path):
     """(b cont.) embed_model/embed_provider config rows ABSENT -> space falls
-    back to DEFAULT_EMBED_MODEL / DEFAULT_EMBED_PROVIDER."""
+    back to TEST_EMBED_MODEL / TEST_EMBED_PROVIDER."""
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
@@ -1546,11 +1544,11 @@ def test_char_bootstrap_falls_back_to_defaults_when_config_absent(tmp_path):
     conn.execute("DELETE FROM config WHERE key IN ('embed_model', 'embed_provider')")
     conn.commit()
 
-    _bootstrap_embed_spaces(conn, DEFAULT_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
-    assert space["model"] == DEFAULT_EMBED_MODEL
-    assert space["provider"] == DEFAULT_EMBED_PROVIDER
+    assert space["model"] == TEST_EMBED_MODEL
+    assert space["provider"] == TEST_EMBED_PROVIDER
 
 
 def test_char_bootstrap_count_falls_back_to_zero_without_chunks_vec(tmp_path):
@@ -1580,7 +1578,7 @@ def test_char_bootstrap_count_falls_back_to_zero_without_chunks_vec(tmp_path):
     conn.commit()
 
     # No raise despite chunks_vec being absent.
-    _bootstrap_embed_spaces(conn, DEFAULT_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space is not None
@@ -1597,7 +1595,7 @@ def test_char_bootstrap_idempotent_second_call_is_noop(tmp_path):
     assert before == 1
     orig = dict(conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone())
 
-    _bootstrap_embed_spaces(conn, DEFAULT_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
 
     after = conn.execute("SELECT COUNT(*) FROM embed_spaces").fetchone()[0]
     assert after == 1

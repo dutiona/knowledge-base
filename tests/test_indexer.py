@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from knowledge_base.db import DEFAULT_EMBED_DIM, get_connection, init_schema
+from knowledge_base.db import get_connection, init_schema
 from knowledge_base.indexer import (
     _drain_jobs,
     build_parser,
@@ -17,6 +17,7 @@ from knowledge_base.indexer import (
     cmd_status,
     main,
 )
+from tests.declared_env import TEST_EMBED_DIM
 
 
 # ---------------------------------------------------------------------------
@@ -27,7 +28,7 @@ NEW_DIM = 384
 
 
 def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else DEFAULT_EMBED_DIM
+    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
     return [[0.1] * dim for _ in texts]
 
 
