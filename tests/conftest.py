@@ -92,7 +92,12 @@ def _declared_environment(monkeypatch):
     """
     for name, value in DECLARATION.items():
         monkeypatch.setenv(name, value)
-    for name in ("EMBED_PROVIDER", "KNOWLEDGE_BASE_EMBED_API_KEY", "KNOWLEDGE_BASE_LLM_API_KEY"):
+    for name in (
+        "EMBED_PROVIDER",
+        "KNOWLEDGE_BASE_EMBED_API_KEY",
+        "KNOWLEDGE_BASE_LLM_API_KEY",
+        "KNOWLEDGE_BASE_HOST_ADDRESSES",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 

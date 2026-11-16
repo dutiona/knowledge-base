@@ -6,9 +6,11 @@ import pytest
 
 from knowledge_base.exceptions import ValidationError
 from knowledge_base.settings import (
+    HOST_ADDRESSES_VAR,
     EmbedSettings,
     check_environment,
     declared_embed_host,
+    host_networks,
     load_embed_settings,
     switch_on,
 )
@@ -168,3 +170,33 @@ def test_a_refused_url_never_echoes_its_credentials(declare, url):
     with pytest.raises(ValidationError) as refused:
         load_embed_settings()
     assert "TOKEN" not in str(refused.value)
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_host_addresses_unset_is_empty(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv(HOST_ADDRESSES_VAR, raising=False)
+    else:
+        monkeypatch.setenv(HOST_ADDRESSES_VAR, value)
+    assert host_networks() == ()
+
+
+def test_host_addresses_parse(monkeypatch):
+    monkeypatch.setenv(HOST_ADDRESSES_VAR, " 198.51.100.7 , 2001:db8:7::/64 ")
+    assert [str(n) for n in host_networks()] == ["198.51.100.7/32", "2001:db8:7::/64"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["198.51.100.7,,2001:db8::7", "self.example.test", "198.51.100.7/24", "::ffff:198.51.100.7", "300.1.2.3"],
+)
+def test_host_addresses_refuse_malformed(monkeypatch, value):
+    monkeypatch.setenv(HOST_ADDRESSES_VAR, value)
+    with pytest.raises(ValidationError, match=r"^KNOWLEDGE_BASE_HOST_ADDRESSES"):
+        host_networks()
+
+
+def test_check_environment_validates_host_addresses(monkeypatch):
+    monkeypatch.setenv(HOST_ADDRESSES_VAR, "198.51.100.7/24")
+    with pytest.raises(ValidationError, match=r"^KNOWLEDGE_BASE_HOST_ADDRESSES"):
+        check_environment()
