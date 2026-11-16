@@ -1,7 +1,9 @@
 """Embedding provider abstraction.
 
-Supports pluggable backends: Ollama (default), OpenAI, ONNX Runtime.
-Auto-detects Ollama URL: OLLAMA_HOST env > WSL2 Windows host > localhost.
+Pluggable backends by API family (ADR-0018): any OpenAI-compatible server, Ollama, ONNX
+Runtime. Configured embedding always goes to the declared ``KNOWLEDGE_BASE_EMBED_URL``
+(#569); the Ollama URL auto-detection below serves only the bare-name provider and the
+LLM/vision defaults.
 """
 
 from __future__ import annotations
@@ -140,9 +142,9 @@ class ProviderConfig:
 class OllamaProvider:
     """Embedding provider using Ollama's /api/embed endpoint.
 
-    With no ``base_url`` the URL is auto-detected (``OLLAMA_HOST`` env > WSL2 Windows
-    host > localhost). A configured ``base_url`` (e.g. a remote/LAN Ollama) overrides
-    auto-detection. Ollama is localhost-trusted by family, so it is not SSRF-validated.
+    The config path always passes the declared ``base_url`` (#569); only the bare-name
+    ``OllamaProvider()`` auto-detects (``OLLAMA_HOST`` env > WSL2 Windows host >
+    localhost). Ollama is localhost-trusted by family, so it is not SSRF-validated.
     """
 
     def __init__(self, base_url: str | None = None) -> None:
