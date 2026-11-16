@@ -1,6 +1,6 @@
 # ADR 0018: Embedding & LLM provider abstraction (standard-API provider portability)
 
-**Status:** Accepted (2026-06-26)
+**Status:** Accepted (2026-06-26); amended 2026-11-16 by #569 (see Amendment)
 **Date:** 2026-06-26
 **Scope:** Knowledge layer — `embeddings.py`, `llm.py`, `config` table, `embed_spaces` registry
 **Roadmap:** KB delta 14 — epic #474 (embedding & quantization) primary, #480 (infra & scale) for the shared-port surface
@@ -339,6 +339,36 @@ its existing optional-group import.
 - It does **not** add a `StorageBackend` port (KB delta 9 / epic #480) — that is a
   separate seam; this ADR is the _producer_ seam, not the _store_ seam, though both are
   "pluggable port" work and may share the #480 home.
+
+## Amendment (2026-11-16, #569): the environment declares the embedding endpoint
+
+A configuration mistake must never send documents to an outside provider, and a networked
+KB must not let a tool call redirect its embedding traffic. For the **embedding** side
+(the LLM side is unchanged except where stated):
+
+- **The declaration is authoritative.** `KNOWLEDGE_BASE_EMBED_{PROVIDER,MODEL,DIM,URL,API_KEY}`
+  declare the embedding configuration. The `config` table records the declaration: a
+  blank database is seeded from it, and every start binds the database to it, refusing a
+  disagreeing provider, model, dimension, URL or active space and naming the field. This
+  supersedes §3's `configure_embeddings()` and the `EMBED_PROVIDER`/`OPENAI_API_KEY`
+  back-compat window: the function and its tool are removed, and `EMBED_PROVIDER` is
+  refused.
+- **Changing what is recorded** happens only through two maintenance commands, run with
+  the server stopped: `knowledge-base-ingest re-embed` (to the declared identity) and
+  `knowledge-base-ingest rebind` (a moved endpoint). In a served process, promotion is
+  limited to the declared identity.
+- **One key source (§4).** The embedding key is read only from
+  `KNOWLEDGE_BASE_EMBED_API_KEY`; `config` stores the spec `env:KNOWLEDGE_BASE_EMBED_API_KEY`,
+  never an inline key. An LLM key is an inline value or exactly `env:KNOWLEDGE_BASE_LLM_API_KEY`.
+- **One floor exemption (§4).** The floor stays for every non-loopback URL with a single
+  exception: the declared embedding host, by exact host match, on the embedding request
+  path only. Every tool-supplied URL keeps the floor.
+- **No default endpoint.** No HTTP embedding family builds a provider without an explicit
+  base URL: `openai_compat` and the config-path `openai` never fall back to
+  `https://api.openai.com`, and `ollama` embeddings never auto-detect a host. The bare-name
+  `OpenAIProvider` keeps its literal endpoint.
+- **Egress switches.** Vision, the Playwright fallback and LLM extraction run only with
+  `KNOWLEDGE_BASE_VISION`, `KNOWLEDGE_BASE_BROWSER`, `KNOWLEDGE_BASE_LLM` set to `on`.
 
 ## References
 
