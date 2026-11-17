@@ -83,9 +83,6 @@ _MIN_IMAGE_DIMENSION = 100
 _MAX_IMAGES_PER_PAGE = 10
 """Maximum number of inline images to extract per web page."""
 
-_MAX_IMAGE_DOWNLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
-"""Maximum size of a single image download."""
-
 _DECORATIVE_URL_PATTERNS = re.compile(
     r"[/\-_](logo|favicon|avatar|banner|sprite|spacer|badge)[/\-_.]"
     r"|[/\-_]ads?[/\-_]"
@@ -421,31 +418,12 @@ def _extract_html_images(
     # --- Download, convert, describe ---
     collected: list[tuple[str, dict]] = []  # (description, metadata_dict)
 
-    # Every request and redirect hop is floored and pinned by the client (#572).
-    with egress_client(floor=True, follow_redirects=True, timeout=15.0) as image_client:
+    # Every request and redirect hop is floored and pinned by the client (#572), and each download keeps the
+    # page's fetch limits (#588).
+    with egress_client(floor=True, timeout=15.0) as image_client:
         for image_url, alt_text in candidates:
             try:
-                with image_client.stream("GET", image_url) as resp:
-                    resp.raise_for_status()
-
-                    # Stream with byte counter
-                    chunks: list[bytes] = []
-                    total = 0
-                    for chunk in resp.iter_bytes(chunk_size=65536):
-                        total += len(chunk)
-                        if total > _MAX_IMAGE_DOWNLOAD_BYTES:
-                            logger.warning(
-                                "Image too large (>%d bytes): %s",
-                                _MAX_IMAGE_DOWNLOAD_BYTES,
-                                image_url,
-                            )
-                            break
-                        chunks.append(chunk)
-
-                    if total > _MAX_IMAGE_DOWNLOAD_BYTES:
-                        continue
-
-                    image_bytes = b"".join(chunks)
+                image_bytes = _fetch(image_client, image_url).body
             except Exception:
                 logger.warning("Image download failed: %s", image_url, exc_info=True)
                 continue

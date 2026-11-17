@@ -2612,8 +2612,9 @@ def test_extract_html_images_non_png_conversion(_mock_ip, mock_vision_cfg, mock_
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
-def test_extract_html_images_oversized_download(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
-    """Skips images that exceed _MAX_IMAGE_DOWNLOAD_BYTES."""
+def test_extract_html_images_oversized_download(_mock_ip, mock_vision_cfg, http_requests, tmp_path, monkeypatch):
+    """Skips images over the fetch cap (KNOWLEDGE_BASE_FETCH_MAX_BYTES)."""
+    monkeypatch.setenv("KNOWLEDGE_BASE_FETCH_MAX_BYTES", str(1024 * 1024))
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
     mock_vision_cfg.return_value = _VISION_CFG

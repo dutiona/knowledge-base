@@ -7,6 +7,9 @@ ranges play the public internet (``public_net``), and a fake clock drives the de
 from __future__ import annotations
 
 import gzip
+import io
+import json
+import logging
 from collections.abc import Callable, Iterator
 from unittest.mock import patch
 
@@ -15,7 +18,7 @@ import pytest
 
 from knowledge_base import utils
 from knowledge_base.exceptions import ValidationError
-from knowledge_base.web import ingest_url
+from knowledge_base.web import _extract_html_images, ingest_url
 from tests.declared_env import TEST_EMBED_DIM
 
 _URL = "https://page.example.test/start"
@@ -224,3 +227,57 @@ def test_an_http_error_keeps_its_message(kb_conn, http_requests):
     http_requests.handlers["page.example.test"] = lambda request: httpx.Response(404)
     with pytest.raises(ValidationError, match=rf"^Failed to fetch {_URL}: Client error '404 Not Found'"):
         ingest_url(kb_conn, _URL)
+
+
+def _png() -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (200, 200), color=(128, 128, 128)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_images_are_downloaded_under_the_same_limits(kb_conn, http_requests, monkeypatch, clock, caplog):
+    png = _png()
+    monkeypatch.setenv("KNOWLEDGE_BASE_FETCH_MAX_BYTES", str(len(png)))
+    monkeypatch.setenv("KNOWLEDGE_BASE_FETCH_MAX_REDIRECTS", "1")
+
+    def _tick() -> None:
+        clock.now += 7
+
+    _serve(
+        http_requests,
+        {
+            "/ok.png": lambda: httpx.Response(200, content=iter([png])),
+            "/big.png": lambda: httpx.Response(200, content=iter([png + b"x"])),
+            "/far.png": _redirect("/r1"),
+            "/r1": _redirect("/ok.png"),
+            "/drip.png": lambda: httpx.Response(200, content=_Endless(10, _tick)),
+        },
+        host="img.example.test",
+    )
+    names = ("ok", "big", "far", "drip")
+    html = (
+        "<html><body>"
+        + "".join(
+            f'<img src="https://img.example.test/{name}.png" width="800" height="600" alt="Chart {name}">'
+            for name in names
+        )
+        + "</body></html>"
+    )
+    figure = [{"description": "A chart.", "figure_type": "chart", "title": "Chart"}]
+
+    with (
+        patch("knowledge_base.vision._get_vision_config", return_value={"base_url": "x", "model": "m"}),
+        patch("knowledge_base.vision._vision_call", return_value=figure) as vision_call,
+        caplog.at_level(logging.WARNING, logger="knowledge_base.web"),
+    ):
+        added = _extract_html_images(kb_conn, html, source_url="https://page.example.test/a")
+
+    assert added == 1
+    assert vision_call.call_count == 1
+    row = kb_conn.execute("SELECT metadata FROM chunks WHERE source_type = 'figure'").fetchone()
+    assert json.loads(row["metadata"])["image_url"] == "https://img.example.test/ok.png"
+    warned = " ".join(record.getMessage() for record in caplog.records)
+    for name in ("big", "far", "drip"):
+        assert f"https://img.example.test/{name}.png" in warned
