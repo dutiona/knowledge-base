@@ -168,7 +168,7 @@ def test_main_refuses_a_database_that_disagrees(monkeypatch, capsys):
         server.main([])
     assert exit_info.value.code == 78
     err = capsys.readouterr().err
-    assert "embed_model" in err
+    assert "model" in err
     assert "KNOWLEDGE_BASE_EMBED_MODEL" in err
     run.assert_not_called()
 

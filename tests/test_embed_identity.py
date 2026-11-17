@@ -318,3 +318,120 @@ def test_re_embed_records_the_whole_declaration(kb_conn, monkeypatch, embedder):
     assert _space_identity(kb_conn, result["space"]) == declared_identity(load_embed_settings())
     active = kb_conn.execute("SELECT name FROM embed_spaces WHERE status = 'active'").fetchone()[0]
     assert active == result["space"]
+
+
+# --- startup compares all nine fields --------------------------------------------
+
+_SEED = {**FULL, "KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM": "2048"}
+
+#: (case, environment changes after seeding, active-row change after seeding, the differing fields)
+_STARTUP_CASES = [
+    ("model", {"KNOWLEDGE_BASE_EMBED_MODEL": "other-model"}, None, ["model"]),
+    ("provider", {"KNOWLEDGE_BASE_EMBED_PROVIDER": "openai_compat"}, None, ["provider"]),
+    ("dim", {"KNOWLEDGE_BASE_EMBED_DIM": "768"}, None, ["dim"]),
+    ("matryoshka_base_dim", {"KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM": ""}, None, ["matryoshka_base_dim"]),
+    ("element_type", {}, "element_type = 'int8'", ["element_type"]),
+    ("artifact_sha256", {"KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256": "b" * 64}, None, ["artifact_sha256"]),
+    ("pooling", {"KNOWLEDGE_BASE_EMBED_POOLING": "mean"}, None, ["pooling"]),
+    ("normalization", {"KNOWLEDGE_BASE_EMBED_NORMALIZATION": "none"}, None, ["normalization"]),
+    ("max_input_tokens", {"KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS": "512"}, None, ["max_input_tokens"]),
+    ("served artifact dropped", dict.fromkeys(FULL, ""), None, list(FULL)),
+]
+
+
+def _rows(conn: sqlite3.Connection) -> tuple:
+    return (
+        sorted(tuple(row) for row in conn.execute("SELECT key, value FROM config")),
+        [tuple(row) for row in conn.execute("SELECT * FROM embed_spaces ORDER BY name")],
+    )
+
+
+@pytest.mark.parametrize(("case", "env", "row_change", "fields"), _STARTUP_CASES, ids=[c[0] for c in _STARTUP_CASES])
+def test_startup_refuses_a_mismatch_in_any_field(case, env, row_change, fields, monkeypatch, capsys):
+    from knowledge_base.db import open_declared_db
+    from knowledge_base.settings import VARIABLES
+
+    for name, value in _SEED.items():
+        monkeypatch.setenv(name, value)
+    conn = open_declared_db()
+    if row_change:
+        conn.execute(f"UPDATE embed_spaces SET {row_change} WHERE status = 'active'")  # noqa: S608  # literal case
+        conn.commit()
+    before = _rows(conn)
+    conn.close()
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exit_info:
+        server.main([])
+    assert exit_info.value.code == 78
+    err = capsys.readouterr().err
+    for field in (f.removeprefix("KNOWLEDGE_BASE_EMBED_").lower() for f in fields):
+        assert field in err
+        assert VARIABLES.get(field, "KB declares 'float32'") in err
+    assert "knowledge-base-ingest re-embed" in err
+    run.assert_not_called()
+    conn = get_connection(resolve_db_path())
+    assert _rows(conn) == before
+    conn.close()
+
+
+def test_startup_refuses_adopting_a_served_artifact(monkeypatch, capsys, declared_db):
+    _declare_full(monkeypatch)
+    with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exit_info:
+        server.main([])
+    assert exit_info.value.code == 78
+    err = capsys.readouterr().err
+    assert all(name in err for name in FULL)
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize("matryoshka", ["", "2048"])
+def test_startup_accepts_the_identity_it_recorded(matryoshka, monkeypatch):
+    from knowledge_base.db import open_declared_db
+
+    _declare_full(monkeypatch, KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM=matryoshka)
+    open_declared_db().close()
+    with patch.object(server.mcp, "run") as run:
+        server.main([])
+    run.assert_called_once_with(transport="stdio")
+
+
+def test_the_server_process_exits_78_on_an_adopted_served_artifact(tmp_path, declared_db):
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, **FULL}
+    proc = subprocess.run(  # noqa: S603  # trusted argv: this interpreter, our module
+        [sys.executable, "-m", "knowledge_base.server"],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 78
+    assert "KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256" in proc.stderr
+
+
+def test_adopting_a_served_artifact_is_a_re_embed(monkeypatch, capsys, embedder):
+    from knowledge_base.db import open_declared_db
+    from knowledge_base.indexer import main as cli
+    from knowledge_base.ingest import ingest_text
+
+    conn = open_declared_db()
+    ingest_text(conn, "Stored before the artifact was declared.", source_uri="/docs/a.md", source_type="markdown")
+    conn.close()
+    db = str(resolve_db_path())
+    _declare_full(monkeypatch)
+    with pytest.raises(SystemExit) as exit_info:
+        cli(["--db", db, "--quiet", "rebind"])
+    assert exit_info.value.code == 1
+    assert "KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256" in capsys.readouterr().err
+    cli(["--db", db, "--quiet", "re-embed"])
+    conn = open_declared_db()
+    active = conn.execute("SELECT name FROM embed_spaces WHERE status = 'active'").fetchone()[0]
+    assert _space_identity(conn, active)["artifact_sha256"] == "a" * 64
+    assert _space_identity(conn, "default")["artifact_sha256"] is None
+    conn.close()

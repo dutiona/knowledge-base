@@ -1739,9 +1739,9 @@ def _config(conn) -> dict:
 @pytest.mark.parametrize(
     ("variable", "value", "key"),
     [
-        ("provider", "ollama", "embed_provider"),
-        ("model", "other-model", "embed_model"),
-        ("dim", "8", "embed_dim"),
+        ("provider", "ollama", "provider"),
+        ("model", "other-model", "model"),
+        ("dim", "8", "dim"),
         ("url", "https://moved.example.test", "embed_base_url"),
     ],
 )
@@ -1820,7 +1820,7 @@ def test_bind_transition_rebind(tmp_path, monkeypatch):
     bind_embed_config(conn, load_embed_settings())  # a plain bind now passes
 
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
-    with pytest.raises(KnowledgeBaseError, match="embed_model"):
+    with pytest.raises(KnowledgeBaseError, match="KNOWLEDGE_BASE_EMBED_MODEL"):
         bind_embed_config(conn, load_embed_settings(), transition="rebind")
 
 
@@ -1855,7 +1855,7 @@ def test_open_declared_db_returns_a_bound_connection(tmp_path, monkeypatch):
     assert _config(conn)["embed_base_url"] == "https://embedder.example.test"
     conn.close()
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
-    with pytest.raises(KnowledgeBaseError, match="embed_model"):
+    with pytest.raises(KnowledgeBaseError, match="KNOWLEDGE_BASE_EMBED_MODEL"):
         open_declared_db(tmp_path / "kb.db")
 
 

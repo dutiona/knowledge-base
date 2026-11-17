@@ -14,7 +14,16 @@ import sqlite_vec
 from . import migrate as _migrate  # schema-version framework (#450); read attrs live
 from .embeddings import default_query_instruction
 from .exceptions import KnowledgeBaseError
-from .settings import VARIABLES, EmbedSettings, check_environment, load_embed_settings, normalize_embed_url
+from .settings import (
+    VARIABLES,
+    EmbedSettings,
+    check_environment,
+    declared_identity,
+    identity_mismatch,
+    load_embed_settings,
+    normalize_embed_url,
+    require_identity,
+)
 from .utils import (
     ELEMENT_INSERT_EXPR,
     _sanitize_url,
@@ -1274,24 +1283,19 @@ def bind_embed_config(
     active = get_active_space(conn)
     if active is None:
         raise KnowledgeBaseError(f"the database has no active embedding space; {_REMEDY_RE_EMBED}")
-    active_identity = {
-        "embed_provider": active["provider"],
-        "embed_model": active["model"],
-        "embed_dim": str(active["dim"]),
-    }
-    active_matches = all(active_identity[k] == wanted[k] for k in _IDENTITY_KEYS)
 
     writes: list[tuple[str, str | None]] = []
     if transition == "re-embed":
-        if active_matches:
+        if not identity_mismatch(dict(active), declared_identity(declared)):
             raise KnowledgeBaseError("the active embedding space already has the declared identity; use rebind")
     else:
-        for key in _IDENTITY_KEYS:
-            if not active_matches and active_identity[key] != wanted[key]:
-                raise KnowledgeBaseError(
-                    f"the active space records {key} {active_identity[key]!r}, but {var[key]} declares "
-                    f"{wanted[key]!r}; {_REMEDY_RE_EMBED}"
-                )
+        # ADR-0015 §3: the store's identity is its active space's whole tuple.
+        require_identity(
+            dict(active),
+            declared_identity(declared),
+            subject=f"the active space {active['name']!r}",
+            remedy=_REMEDY_RE_EMBED,
+        )
         for key in _IDENTITY_KEYS:
             if recorded.get(key) != wanted[key]:
                 if transition != "rebind":

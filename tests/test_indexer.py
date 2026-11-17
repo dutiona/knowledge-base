@@ -539,7 +539,7 @@ def test_cli_ingest_on_a_disagreeing_database_exits_naming_the_field(tmp_path, m
     with pytest.raises(SystemExit) as exit_info:
         main(["--db", str(db_path), "ingest", str(md_file)])
     assert exit_info.value.code == 1
-    assert "embed_model" in capsys.readouterr().err
+    assert "KNOWLEDGE_BASE_EMBED_MODEL" in capsys.readouterr().err
 
 
 def test_cli_maintenance_commands_need_no_declaration(tmp_path, monkeypatch):
@@ -663,7 +663,7 @@ def test_cli_rebind_adopts_a_moved_endpoint(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit) as exit_info:
         main(["--db", str(db_path), "--quiet", "rebind"])
     assert exit_info.value.code == 1
-    assert "embed_model" in capsys.readouterr().err
+    assert "KNOWLEDGE_BASE_EMBED_MODEL" in capsys.readouterr().err
 
 
 def test_cli_rebind_repairs_drifted_config_identity(tmp_path):
