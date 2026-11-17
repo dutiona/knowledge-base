@@ -221,3 +221,16 @@ def test_re_ingesting_an_unchanged_file_counts_nothing(conn, bounded_embedder, h
     before = len(http_requests)
     assert ingest_file(conn, path)["chunks_skipped"] == 1
     assert [r.url.path for r in http_requests[before:]] == []
+
+
+def test_a_piece_the_limit_split_cuts_is_still_a_redaction_fixpoint(conn, bounded_embedder, monkeypatch):
+    """#592: the split can cut mid-word, which a redaction rule reads as a boundary: each stored piece is scrubbed."""
+    from knowledge_base import ingest
+    from knowledge_base.redact import scrub
+
+    monkeypatch.setattr(ingest, "split_inputs", lambda texts, cfg: [[t[:400], t[400:]] for t in texts])
+    text = "x" * 399 + "_me_" + "0" * 32 + " plain words"
+    ingest.ingest_text(conn, text, source_uri="/docs/cut.md", source_type="markdown")
+    contents = [r[0] for r in conn.execute("SELECT content FROM chunks WHERE source_uri = '/docs/cut.md'")]
+    assert len(contents) == 2
+    assert all(c == scrub(c) for c in contents)

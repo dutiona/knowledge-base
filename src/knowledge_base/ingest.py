@@ -572,7 +572,8 @@ def ingest_text(
     chunks = [scrub(c) for c in _chunk_text(scrub(text))]
     if not chunks:
         return {"chunks_added": 0, "chunks_skipped": 0}
-    chunks = [piece for pieces in _bounded_chunks(conn, chunks) for piece in pieces]
+    # The input-limit split cuts anywhere too, so each piece is scrubbed again.
+    chunks = [scrub(piece) for pieces in _bounded_chunks(conn, chunks) for piece in pieces]
     try:
         return _store_text_chunks(conn, chunks, source_uri, source_type, session_id, metadata)
     except BaseException:
