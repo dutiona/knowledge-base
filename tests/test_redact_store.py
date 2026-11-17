@@ -588,7 +588,7 @@ def test_a_window_shared_by_many_revisions_is_read_one_side_at_a_time(kb_conn, t
 
     def revision(k: int) -> str:  # revisions differ only outside the shared window's reach
         return (
-            f"revision {k} ".ljust(700, ".") + common[700:790] + SECRET + common[826:1790] + SECRET + f" tail {k}" * 99
+            f"revision {k} ".ljust(700, ".") + common[700:783] + SECRET + common[819:1790] + SECRET + f" tail {k}" * 99
         )
 
     windows = [_legacy_windows(revision(k)) for k in range(9)]
@@ -604,4 +604,4 @@ def test_a_window_shared_by_many_revisions_is_read_one_side_at_a_time(kb_conn, t
     conn = _open(db)
     stored = conn.execute("SELECT content FROM chunks WHERE id = ?", (shared_id,)).fetchone()[0]
     conn.close()
-    assert SECRET[:10] not in stored and SECRET[10:] not in stored
+    assert SECRET[17:] not in stored and SECRET[:10] not in stored  # 19 and 10 characters: each needs its side
