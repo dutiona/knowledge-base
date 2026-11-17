@@ -10,7 +10,7 @@ from fastmcp.exceptions import ToolError
 
 from .._conn import _get_conn
 from ..db import co_occurrence_pairs, get_index_stats
-from ..embed_swap import get_embed_config
+from ..embed_swap import get_embed_config, get_space
 from ..exceptions import KnowledgeBaseError
 from ..prediction_errors import detect_and_log, get_prediction_error_count
 from ..search import search
@@ -49,6 +49,11 @@ def search_index(
             (match_type is not 'reranked'). Default false.
     """
     conn = _get_conn()
+    if space_name:
+        try:
+            get_space(conn, space_name)  # the one ValueError a caller should read; any other stays masked
+        except ValueError as e:
+            raise ToolError(str(e)) from e
     try:
         results = search(
             conn,
@@ -61,7 +66,7 @@ def search_index(
             space_name=space_name,
             rerank=rerank,
         )
-    except (KnowledgeBaseError, ValueError) as e:  # an unknown space_name is a ValueError from embed_swap
+    except KnowledgeBaseError as e:
         raise ToolError(str(e)) from e
     except httpx.HTTPError as e:
         kind, retryable = embedder_failure(e)

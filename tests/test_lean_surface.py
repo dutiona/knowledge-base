@@ -326,9 +326,13 @@ def test_no_http_tool_deletes(
         if table in _INSERT_ONLY:
             assert rows <= after[table], table  # rows added, none deleted or rewritten
         elif table == "embed_spaces":  # only the active space's chunk_count, which may only grow
-            k = [c[1] for c in conn.execute("PRAGMA table_info(embed_spaces)")].index("chunk_count")
+            columns = [c[1] for c in conn.execute("PRAGMA table_info(embed_spaces)")]
+            k, name, status = (columns.index(c) for c in ("chunk_count", "name", "status"))
             assert {r[:k] + r[k + 1 :] for r in after[table]} == {r[:k] + r[k + 1 :] for r in rows}
-            assert sum(r[k] for r in after[table]) >= sum(r[k] for r in rows)
+            old = {r[name]: r for r in rows}
+            for r in after[table]:
+                grown = r[k] >= old[r[name]][k] if r[status] == "active" else r[k] == old[r[name]][k]
+                assert grown, r[name]
         else:
             assert after[table] == rows, table  # e.g. no job queued, no relationship touched
     assert conn.execute("SELECT COUNT(*) FROM chunks WHERE source_type = 'figure'").fetchone()[0] == 1
