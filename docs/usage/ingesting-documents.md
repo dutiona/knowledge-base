@@ -317,7 +317,7 @@ makes, which is why a served artifact is accepted only for `llama.cpp` or `opena
 
 | Input | Over the limit |
 | --- | --- |
-| Chunks from file ingest (every chunker) and from stored text or a URL | split at ingest into consecutive pieces that each fit and together are exactly the chunk, cut after whitespace where one fits; no overlap |
+| Chunks from file ingest (every chunker) and from stored text or a URL | split at ingest into consecutive pieces that each fit and together are exactly the chunk, cut after whitespace when that keeps at least half the piece; no overlap. A piece identical to a stored chunk is stored once, as every repeated chunk is |
 | Folder summaries | truncated: one vector per folder; the stored summary text stays whole |
 | Figure, image and element-capture descriptions | truncated: one chunk per figure keeps the figure's metadata |
 | Queries | truncated |
@@ -326,9 +326,11 @@ makes, which is why a served artifact is accepted only for `llama.cpp` or `opena
 A split PDF piece keeps its parent's pages and lists only the images in its own text. A split Python piece keeps
 its function's line range and is named `name[k]`. Each truncation is logged at INFO.
 
-The count costs one `/tokenize` request per embedded input, one more per document chunk at ingest, and about
-log2 of its cut points more per over-length input. On llama.cpp b12048 a `/tokenize` call took 0.2 to 0.9 ms at
-the median (up to 3.8 ms) on loopback, and it takes no embedding slot.
+The count costs one `/tokenize` request per embedded input and one more per new document chunk at ingest (a chunk
+already stored is not counted, so an unchanged re-ingest sends nothing). Each piece of an over-length input costs
+about twice log2 of its length in characters more, each request at most about twice the piece. The requests share
+one kept-alive connection. On llama.cpp b12048 a `/tokenize` call took 0.2 to 0.9 ms at the median (up to 3.8 ms)
+on loopback, and it takes no embedding slot.
 
 A blank database is seeded from the declaration; an existing one must agree with it, or the
 server exits naming the field. There is no default endpoint: nothing falls back to

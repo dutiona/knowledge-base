@@ -262,6 +262,7 @@ def test_check_environment_validates_fetch_limits(monkeypatch):
 
 _ARTIFACT = {"artifact_sha256": "a" * 64, "pooling": "last", "normalization": "l2", "max_input_tokens": "2048"}
 _OLLAMA = {"provider": "ollama", "model": "bge-m3", "dim": "1024", "url": "http://embedder.example.test:11434"}
+_LLAMA = {"provider": "llama.cpp", "model": "bge-m3", "dim": "1024", "url": "http://embedder.example.test:8010"}
 
 
 def test_the_whole_identity_is_declared(declare):
@@ -279,9 +280,6 @@ def test_the_whole_identity_is_declared(declare):
         "max_input_tokens": 2048,
     }
     assert list(declared_identity(settings)) == list(IDENTITY_FIELDS)
-
-
-_LLAMA = {"provider": "llama.cpp", "model": "bge-m3", "dim": "1024", "url": "http://embedder.example.test:8010"}
 
 
 @pytest.mark.parametrize("provider", ["llama.cpp", "openai_compat"])
@@ -350,7 +348,7 @@ def test_a_partial_served_artifact_names_every_missing_variable(declare, present
     ],
 )
 def test_an_invalid_identity_value_names_its_variable(declare, field, value):
-    declare(**_OLLAMA, **{**_ARTIFACT, field: value})
+    declare(**_LLAMA, **{**_ARTIFACT, field: value})
     with pytest.raises(ValidationError, match=rf"^KNOWLEDGE_BASE_EMBED_{field.upper()}"):
         load_embed_settings()
 
