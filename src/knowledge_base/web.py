@@ -1167,7 +1167,10 @@ def ingest_url(
     Uses trafilatura for content extraction (strips boilerplate, extracts main content).
     Falls back to browser rendering when trafilatura extracts insufficient content.
     """
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError as e:  # an unclosed IPv6 bracket
+        raise ValidationError(f"Invalid URL {url!r}: {e}") from e
     if parsed.scheme not in _ALLOWED_URL_SCHEMES:
         raise ValidationError(f"URL scheme must be http or https, got: {parsed.scheme!r}")
     if not parsed.hostname:
@@ -1177,7 +1180,7 @@ def ingest_url(
     try:
         with egress_client(floor=True, timeout=30.0) as client:
             fetched = _fetch(client, url)
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, httpx.InvalidURL) as e:  # InvalidURL (a bad port, a control character) is no HTTPError
         raise ValidationError(f"Failed to fetch {url}: {e}") from e
 
     try:
