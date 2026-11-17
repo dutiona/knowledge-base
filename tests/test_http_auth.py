@@ -7,6 +7,7 @@ import threading
 import time
 
 import pytest
+from starlette.routing import Route
 
 from knowledge_base import server
 from tests.conftest import machine_token, token_line
@@ -65,7 +66,7 @@ _CALLS = [
 @pytest.mark.parametrize("credential", list(_REFUSED_CREDENTIALS), ids=list(_REFUSED_CREDENTIALS))
 def test_every_request_without_a_valid_token_is_refused(kb_http, stub_embedder, credential):
     authorization = _REFUSED_CREDENTIALS[credential]
-    inner_paths = [route.path for route in server.mcp.http_app(path="/mcp", stateless_http=True).routes]
+    inner_paths = [r.path for r in server.mcp.http_app(path="/mcp", stateless_http=True).routes if isinstance(r, Route)]
     attempts = [("POST", "/mcp", _JSON, _rpc_body(method, params)) for method, params in _CALLS]
     attempts += [("GET", "/mcp", {}, None), ("DELETE", "/mcp", {}, None), ("GET", "/mcp", _UPGRADE, None)]
     attempts += [(method, path, {}, None) for path in _PATHS + inner_paths for method in ("GET", "POST")]
