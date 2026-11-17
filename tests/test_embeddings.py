@@ -690,3 +690,40 @@ def test_the_key_comes_from_the_declaration_not_the_config_row(monkeypatch, fake
     _embed_with_config(conn, ["hello"])
     conn.close()
     assert http_requests[0].headers["Authorization"] == "Bearer sk-test-only"
+
+
+class TestLlamaCppProvider:
+    """#573: ADR-0015 §5 pins provider ``llama.cpp``; it speaks the openai_compat wire."""
+
+    def test_the_declaration_accepts_llama_cpp(self, monkeypatch):
+        from knowledge_base.settings import load_embed_settings
+
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_PROVIDER", "llama.cpp")
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "https://embedder.example.test/v1/")
+        declared = load_embed_settings()
+        assert (declared.provider, declared.base_url) == ("llama.cpp", "https://embedder.example.test")
+
+    def test_llama_cpp_posts_the_openai_compat_body(self, monkeypatch, fake_dns, http_requests):
+        import json
+
+        import httpx
+
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "https://embedder.example.test")
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_API_KEY", "sk-test-only")
+        fake_dns["embedder.example.test"] = ["100.64.0.10"]
+        http_requests.handlers["embedder.example.test"] = lambda request: httpx.Response(
+            200, json={"data": [{"index": 0, "embedding": [1.0] + [0.0] * 7}]}
+        )
+        cfg = ProviderConfig(
+            family="llama.cpp", base_url="https://embedder.example.test", api_key="env:KNOWLEDGE_BASE_EMBED_API_KEY"
+        )
+        provider = get_provider(cfg=cfg)
+        assert isinstance(provider, OpenAICompatProvider)
+        assert provider.embed(["hello"], model="Qwen/Qwen3-Embedding-0.6B", expected_dim=8) == [[1.0] + [0.0] * 7]
+        (request,) = http_requests
+        assert str(request.url) == "https://embedder.example.test/v1/embeddings"
+        assert request.headers["Authorization"] == "Bearer sk-test-only"
+        body = {"model": "Qwen/Qwen3-Embedding-0.6B", "input": ["hello"], "dimensions": 8}
+        assert json.loads(request.content) == body

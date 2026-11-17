@@ -390,6 +390,16 @@ place (`utils.egress_client`):
   connected by the browser out of process, so it must be an IP literal (or `localhost` under
   the opt-in), leaving no lookup to rebind.
 
+## Amendment (2026-11-17, #573): `provider` names the serving backend ADR-0015 pins
+
+ADR-0015 §1 defines the identity tuple's `provider` as the serving backend, and §5 pins
+`llama.cpp` for both layers; §5 above made it the API family, which cannot express that.
+`KNOWLEDGE_BASE_EMBED_PROVIDER` therefore also accepts `llama.cpp`, recorded as such in
+`embed_spaces`. It speaks the `openai_compat` wire (`/v1/embeddings`, the same URL, key and
+floor rules). The family names stay valid. The same change renamed the one-text embedding
+call `embed_single` to `embed_query`: it is now only the query path, prefixing the space's
+query instruction (ADR-0015 §6).
+
 ## References
 
 - Current code: `src/knowledge_base/embeddings.py` (`EmbeddingProvider` Protocol,

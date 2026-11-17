@@ -350,20 +350,20 @@ _provider_cache: dict[str | ProviderConfig, EmbeddingProvider] = {}
 def _build_provider(cfg: ProviderConfig) -> EmbeddingProvider:
     """Construct a provider from a resolved :class:`ProviderConfig`."""
     family = cfg.family.lower()
-    if family in ("ollama", "openai_compat", "openai") and not cfg.base_url:
+    if family in ("ollama", "openai_compat", "openai", "llama.cpp") and not cfg.base_url:
         raise ValidationError(
             f"the {family} embedding provider needs a base URL (KNOWLEDGE_BASE_EMBED_URL); "
             "KB has no default embedding endpoint"
         )
     if family == "ollama":
         return OllamaProvider(cfg.base_url)
-    if family in ("openai_compat", "openai"):
+    if family in ("openai_compat", "openai", "llama.cpp"):
         return OpenAICompatProvider(cfg.base_url, cfg.api_key, allow_loopback=cfg.allow_loopback)
     if family == "onnx":
         return ONNXProvider()
     raise ValueError(
         f"'{cfg.family}' is not an embedding provider "
-        "(anthropic_compat is chat-only; valid: openai_compat, ollama, onnx)."
+        "(anthropic_compat is chat-only; valid: openai_compat, llama.cpp, ollama, onnx)."
     )
 
 

@@ -87,8 +87,9 @@ FETCH_DEADLINE_VAR = "KNOWLEDGE_BASE_FETCH_DEADLINE"
 _ONNX_MODEL_VAR = "ONNX_EMBED_MODEL_PATH"
 _DEPRECATED_VAR = "EMBED_PROVIDER"
 
-EMBED_PROVIDERS = ("openai_compat", "openai", "ollama", "onnx")
-_OPENAI_FAMILIES = ("openai_compat", "openai")
+#: ``llama.cpp`` is ADR-0015 §5's provider; it speaks the openai_compat wire (``/v1/embeddings``).
+EMBED_PROVIDERS = ("openai_compat", "openai", "llama.cpp", "ollama", "onnx")
+_OPENAI_FAMILIES = ("openai_compat", "openai", "llama.cpp")
 _DIM_RE = re.compile(r"[1-9][0-9]*")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 #: The only endpoint besides Ollama known to serve the model a request names (Decision 4 of the #573 plan).
