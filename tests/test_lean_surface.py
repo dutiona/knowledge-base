@@ -336,3 +336,45 @@ def test_no_http_tool_deletes(
     ingest_url(conn, url)
     assert conn.execute("SELECT COUNT(*) FROM chunks WHERE source_type = 'figure'").fetchone()[0] == 0
     conn.close()
+
+
+# --- the request-body cap ---
+
+_JSON_HEADERS = {"Accept": "application/json", "Content-Type": "application/json"}
+
+
+def _oversized_ingest() -> bytes:
+    arguments = {"name": "big.md", "content": "x" * server.MAX_REQUEST_BYTES}
+    return json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "ingest_text", "arguments": arguments}}
+    ).encode()
+
+
+def test_a_body_over_the_cap_is_refused_before_any_tool_runs(kb_http, stub_document_embedder):
+    authorization = {"Authorization": f"Bearer {machine_token('laptop')}"}
+    body = _oversized_ingest()
+    sized = httpx.post(kb_http.url + "/mcp", content=body, headers={**_JSON_HEADERS, **authorization}, timeout=30)
+    chunked = httpx.post(
+        kb_http.url + "/mcp",
+        content=iter([body[i : i + 65536] for i in range(0, len(body), 65536)]),
+        headers={**_JSON_HEADERS, **authorization},
+        timeout=30,
+    )
+    assert (sized.status_code, sized.content) == (413, b"")
+    assert (chunked.status_code, chunked.content) == (413, b"")
+    assert (_count("chunks"), list(stub_document_embedder)) == (0, [])
+
+
+def test_a_body_at_the_cap_is_served(kb_http):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}).encode()
+    body += b" " * (server.MAX_REQUEST_BYTES - len(body))
+    response = kb_http.request(
+        "POST", authorization=f"Bearer {machine_token('laptop')}", headers=_JSON_HEADERS, content=body
+    )
+    assert response.status_code == 200
+    assert {tool["name"] for tool in response.json()["result"]["tools"]} == _APPROVED
+
+
+def test_an_unauthenticated_oversized_body_meets_the_gate(kb_http):
+    response = kb_http.request("POST", headers=_JSON_HEADERS, content=_oversized_ingest())
+    assert response.status_code == 401

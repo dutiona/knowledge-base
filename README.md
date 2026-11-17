@@ -187,6 +187,7 @@ printf '%s %s\n' laptop "$(printf '%s' "$token" | sha256sum | cut -d' ' -f1)" >>
 | 401 | Any request, on any method or path, without exactly one valid token |
 | 404 | An unknown path, with a token |
 | 405 | `GET` or `DELETE` on `/mcp` (stateless mode serves `POST` only) |
+| 413 | A request body over 4 MiB, with a valid token (read up to the cap, before any tool runs) |
 | other 4xx | A `POST` the MCP SDK refuses (`Accept`, `Content-Type`, body) |
 
 KB never sends 403 and has no unauthenticated route, so a liveness probe expects 401. Every `Host` is served, and the
