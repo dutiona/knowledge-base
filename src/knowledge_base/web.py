@@ -1109,7 +1109,7 @@ class _Fetched:
 
 
 #: The userinfo of an http(s) URL inside a message, up to the authority's last "@".
-_USERINFO = re.compile(r"(?i)(https?://)[^\s/?#]*@")
+_USERINFO = re.compile(r"(?i)(https?://)[^/?#]*@")  # as without_userinfo: a password can hold a space
 
 
 def _fetch(client: httpx.Client, url: str) -> _Fetched:

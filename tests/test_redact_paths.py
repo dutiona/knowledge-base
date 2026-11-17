@@ -502,6 +502,7 @@ def test_a_failed_browser_render_logs_no_userinfo(caplog, monkeypatch, tmp_path)
         assert web._render_with_browser(url, {"venv": str(tmp_path)}) is None
     assert "Browser rendering failed" in caplog.text
     assert "example-pass" not in caplog.text
+    assert web._USERINFO.sub(r"\1", "'https://reader:a pass@docs.example.test/p'") == "'https://docs.example.test/p'"
 
 
 def test_a_malformed_url_error_names_no_userinfo(kb_conn):
