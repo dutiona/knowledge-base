@@ -286,3 +286,24 @@ def test_images_are_downloaded_under_the_same_limits(kb_conn, http_requests, mon
     warned = " ".join(record.getMessage() for record in caplog.records)
     for name in ("big", "far", "drip"):
         assert f"https://img.example.test/{name}.png" in warned
+
+
+def test_a_body_in_tiny_chunks_costs_about_its_own_size(http_requests):
+    import tracemalloc
+
+    from knowledge_base.utils import egress_client
+    from knowledge_base.web import _fetch
+
+    size = 1024 * 1024
+    http_requests.handlers["page.example.test"] = lambda request: httpx.Response(
+        200, content=(b"xx" for _ in range(size // 2))
+    )
+    with egress_client(floor=True) as client:
+        tracemalloc.start()
+        try:
+            body = _fetch(client, _URL).body
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+    assert len(body) == size
+    assert peak < 4 * size  # one list item per 2-byte chunk would cost about 25 times the body

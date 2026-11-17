@@ -1098,7 +1098,7 @@ def _cleanup_stale_inline_images(conn: sqlite3.Connection, source_uri: str) -> i
 
 @dataclass(frozen=True, slots=True)
 class _Fetched:
-    body: bytes
+    body: bytearray
     url: httpx.URL
     encoding: str
 
@@ -1133,19 +1133,17 @@ def _fetch(client: httpx.Client, url: str) -> _Fetched:
                     codings = [c for c in (part.strip().lower() for part in encoding.split(",")) if c]
                     if codings not in ([], ["identity"], ["gzip"], ["deflate"]):
                         raise ValidationError(f"Failed to fetch {url}: unsupported Content-Encoding {encoding!r}")
-                    chunks: list[bytes] = []
-                    size = 0
+                    body = bytearray()  # one buffer: a list of many tiny chunks costs far more than their bytes
                     for chunk in response.iter_bytes():
-                        size += len(chunk)
-                        if size > limits.max_bytes:
+                        if len(body) + len(chunk) > limits.max_bytes:
                             raise ValidationError(
                                 f"Failed to fetch {url}: the response is over the {limits.max_bytes}-byte cap "
                                 f"({FETCH_MAX_BYTES_VAR})"
                             )
-                        chunks.append(chunk)
+                        body += chunk
                         deadline_left()
                     deadline_left()
-                    return _Fetched(b"".join(chunks), response.url, response.encoding or "utf-8")
+                    return _Fetched(body, response.url, response.encoding or "utf-8")
                 finally:
                     response.close()
     except DeadlineExceeded:
