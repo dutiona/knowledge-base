@@ -64,7 +64,6 @@ _DEPRECATED_VAR = "EMBED_PROVIDER"
 EMBED_PROVIDERS = ("openai_compat", "openai", "ollama", "onnx")
 _OPENAI_FAMILIES = ("openai_compat", "openai")
 _DIM_RE = re.compile(r"[1-9][0-9]*")
-_COUNT_RE = re.compile(r"0|[1-9][0-9]*")
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +191,7 @@ def _count(var: str, default: int, *, minimum: int) -> int:
     raw = _get(var)
     if raw is None:
         return default
-    if not raw.isascii() or not _COUNT_RE.fullmatch(raw) or int(raw) < minimum:
+    if not (raw.isascii() and raw.isdecimal()) or int(raw) < minimum:
         raise ValidationError(f"{var} must be a whole number of at least {minimum}, got {raw!r}")
     return int(raw)
 

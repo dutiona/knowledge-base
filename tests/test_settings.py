@@ -223,8 +223,8 @@ def test_fetch_limits_default(monkeypatch, value):
 def test_fetch_limits_parse(monkeypatch):
     monkeypatch.setenv(FETCH_MAX_BYTES_VAR, "4096")
     monkeypatch.setenv(FETCH_MAX_REDIRECTS_VAR, "0")
-    monkeypatch.setenv(FETCH_DEADLINE_VAR, " 1 ")
-    assert fetch_limits() == FetchLimits(max_bytes=4096, max_redirects=0, deadline=1)
+    monkeypatch.setenv(FETCH_DEADLINE_VAR, " 007 ")  # surrounding blanks are dropped, as for every variable
+    assert fetch_limits() == FetchLimits(max_bytes=4096, max_redirects=0, deadline=7)
 
 
 @pytest.mark.parametrize(
