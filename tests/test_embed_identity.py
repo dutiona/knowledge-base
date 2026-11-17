@@ -642,3 +642,16 @@ def test_an_interrupted_first_initialization_still_records_the_declaration(tmp_p
     init_schema(conn)
     assert _space_identity(conn) == declared_identity(load_embed_settings())
 
+@pytest.mark.parametrize(("next_model", "kept"), [(QWEN, ""), ("other-model", None)])
+def test_re_embed_keeps_the_instruction_of_the_same_model(next_model, kept, tmp_path, monkeypatch, embedder):
+    from knowledge_base.embed_swap import re_embed
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", QWEN)
+    conn = _store(tmp_path)
+    conn.execute("UPDATE embed_spaces SET query_instruction = ''")
+    conn.commit()
+    _declare_full(monkeypatch, KNOWLEDGE_BASE_EMBED_MODEL=next_model)
+    result = re_embed(conn)
+    recorded = conn.execute("SELECT query_instruction FROM embed_spaces WHERE name = ?", (result["space"],)).fetchone()
+    assert recorded[0] == kept
+

@@ -500,7 +500,17 @@ def re_embed(conn: sqlite3.Connection, batch_size: int = 32) -> dict:
     if existing:
         space_name = f"{space_name}_{int(time.time())}"
 
-    create_space(conn, space_name, new_model, new_dim, strategy, matryoshka_base_dim=declared.matryoshka_base_dim)
+    # A reconstruction of the same model keeps the space's query instruction (policy, not identity).
+    instruction = active["query_instruction"] if active is not None and active["model"] == new_model else None
+    create_space(
+        conn,
+        space_name,
+        new_model,
+        new_dim,
+        strategy,
+        matryoshka_base_dim=declared.matryoshka_base_dim,
+        query_instruction=instruction,
+    )
     try:
         result = backfill_space(conn, space_name, batch_size)
         promote_space(conn, space_name)
