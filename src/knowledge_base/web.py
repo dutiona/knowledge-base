@@ -428,7 +428,7 @@ def _extract_html_images(
             try:
                 image_bytes = bytes(_fetch(image_client, image_url).body)  # BytesIO would copy a bytearray again
             except Exception:
-                logger.warning("Image download failed: %s", image_url, exc_info=True)
+                logger.warning("Image download failed: %s", without_userinfo(image_url), exc_info=True)
                 continue
 
             # Open with Pillow, check dimensions, convert to PNG
@@ -442,7 +442,7 @@ def _extract_html_images(
                 img_obj.convert("RGB").save(buf, format="PNG")
                 b64 = base64.b64encode(buf.getvalue()).decode("ascii")
             except Exception:
-                logger.warning("Image decode failed: %s", image_url, exc_info=True)
+                logger.warning("Image decode failed: %s", without_userinfo(image_url), exc_info=True)
                 continue
 
             # Vision call
@@ -455,7 +455,7 @@ def _extract_html_images(
             try:
                 figures = _vision_call(b64, prompt, **vision_config)
             except Exception:
-                logger.warning("Vision call failed for image %s", image_url, exc_info=True)
+                logger.warning("Vision call failed for image %s", without_userinfo(image_url), exc_info=True)
                 continue
 
             for fig in figures:
