@@ -145,8 +145,8 @@ def test_an_over_length_semantic_pdf_section_is_split_with_each_piece_s_own_imag
 def test_an_image_reference_cut_by_the_split_still_lists_its_image(conn, bounded_embedder, tmp_path, monkeypatch):
     from knowledge_base import ingest
 
-    caption = " ".join(f"c{i}" for i in range(10))
-    words = [*WORDS[: LIMIT - 5], f"![{caption}](fig.png)", *WORDS[LIMIT - 5 :]]  # the first cut falls in the caption
+    caption = " ".join(f"c{i}" for i in range(LIMIT + 16))  # longer than a piece, so a cut falls inside it
+    words = [*WORDS[: LIMIT - 5], f"![{caption}](fig.png)", *WORDS[LIMIT - 5 :]]
     text = "## Methods\n\n" + " ".join(words)
     monkeypatch.setattr(ingest, "_extract_pdf_markdown", lambda _path, image_dir=None: (text, {0: 1}))
     conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')")
@@ -158,6 +158,21 @@ def test_an_image_reference_cut_by_the_split_still_lists_its_image(conn, bounded
     rows = _stored(conn, path.resolve().as_posix())
     assert not any("![" in row["content"] and "](fig.png)" in row["content"] for row in rows)
     assert [meta.get("images") for meta in metas].count(["fig.png"]) == 1
+
+
+def test_an_image_reference_on_its_own_line_is_never_cut(conn, bounded_embedder, tmp_path, monkeypatch):
+    from knowledge_base import ingest
+
+    caption = " ".join(f"c{i}" for i in range(10))
+    text = "## Methods\n\n" + " ".join(WORDS[: LIMIT - 5]) + f"\n![{caption}](fig.png)\n" + " ".join(WORDS[LIMIT:])
+    monkeypatch.setattr(ingest, "_extract_pdf_markdown", lambda _path, image_dir=None: (text, {0: 1}))
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')")
+    conn.commit()
+    path = tmp_path / "paper.pdf"
+    path.write_bytes(b"%PDF-1.7 not parsed: the extractor is patched")
+    ingest.ingest_file(conn, path)
+    _assert_split(conn, bounded_embedder, path.resolve().as_posix(), text)
+    assert any(f"![{caption}](fig.png)" in row["content"] for row in _stored(conn, path.resolve().as_posix()))
 
 
 def test_an_over_length_python_function_is_split_into_named_pieces(conn, bounded_embedder, tmp_path):

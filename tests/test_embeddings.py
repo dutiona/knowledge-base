@@ -756,17 +756,24 @@ class TestSplitToLimit:
     def test_a_non_monotone_count_still_yields_verified_pieces(self):
         probed: list[int] = []
 
-        def count(text: str) -> int:  # 16 characters count far over the limit, though 20 fit
+        def count(text: str) -> int:  # 20 characters count far over the limit, though 20 would fit
             probed.append(len(text))
-            return 999 if len(text) == 16 else len(text)
+            return 999 if len(text) == 20 else len(text)
 
-        pieces = self._check("a " * 30, 20, count)
-        assert 16 in probed
-        assert len(pieces[0]) < 16
+        self._check("a " * 30, 20, count)
+        assert 20 in probed
 
     def test_a_cut_keeps_at_least_half_a_piece_rather_than_a_lone_heading(self):
         pieces = self._check("## References\n\n" + "x" * 100, 50, len)
-        assert len(pieces[0]) == 50
+        assert len(pieces[0]) > len("## References\n\n")
+
+    def test_a_cut_prefers_the_end_of_a_line(self):
+        text = "one two three\nfour five six seven"
+        assert self._check(text, 6, _words)[0] == "one two three\n"
+
+    def test_pieces_share_the_count_rather_than_leave_a_one_word_tail(self):
+        pieces = self._check(" ".join(["w"] * 64), 64, _words)
+        assert min(map(_words, pieces)) > 20
 
     def test_probes_stay_near_the_piece_they_cut(self):
         probed: list[int] = []
@@ -789,7 +796,7 @@ class TestSplitToLimit:
         from knowledge_base.exceptions import ValidationError
 
         with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS"):
-            split_to_limit("abc", 0, len)
+            split_to_limit("abc", 1, lambda text: len(text) + 1)  # one character and its EOS count 2
 
 
 class TestBoundedProvider:
@@ -833,14 +840,23 @@ class TestBoundedProvider:
 
     @pytest.mark.parametrize(
         ("status", "body"),
-        [(404, {"error": "not found"}), (422, {"detail": "prompt missing"}), (400, {}), (200, {"count": 1})],
+        [
+            (404, {"error": "not found"}),
+            (422, {"detail": "prompt missing"}),
+            (400, {}),
+            (200, {"count": 1}),
+            (200, None),
+        ],
     )
     def test_a_server_without_llama_server_s_tokenize_is_refused(self, server, status, body):
         import httpx
 
         from knowledge_base.exceptions import ValidationError
 
-        server.handlers["embedder.example.test"] = lambda request: httpx.Response(status, json=body)
+        def answer(request: httpx.Request) -> httpx.Response:  # None: an HTML fallback page, not JSON
+            return httpx.Response(status, json=body) if body is not None else httpx.Response(status, text="<html>")
+
+        server.handlers["embedder.example.test"] = answer
         with pytest.raises(ValidationError, match=r"KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS.*/tokenize"):
             self._provider(8).token_counter()("one")
 

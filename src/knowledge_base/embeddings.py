@@ -193,11 +193,12 @@ _LIMIT_VAR = VARIABLES["max_input_tokens"]
 def _fit(text: str, limit: int, count: Callable[[str], int]) -> int:
     """The length of a prefix of *text* that counts at most *limit*; ``len(text)`` when all of it fits (#604).
 
-    It gallops from the start (1, 2, 4, ... characters), then bisects, so it never sends much more than twice the
-    piece it cuts. It only returns a length it counted: a count that does not grow with length can shorten a piece,
-    never overfill one. The cut moves back to just after the last whitespace when that keeps at least half of it.
+    It gallops from *limit* characters (doubling), then bisects, so it never sends much more than twice the piece it
+    cuts. It only returns a length it counted: a count that does not grow with length can shorten a piece, never
+    overfill one. The cut moves back to just after the last line end, else the last whitespace, when that keeps at
+    least half of it, so an image reference on its own line is never cut.
     """
-    best, probe = 0, 1
+    best, probe = 0, max(limit, 1)
     while True:
         probe = min(probe, len(text))
         if count(text[:probe]) > limit:
@@ -215,17 +216,24 @@ def _fit(text: str, limit: int, count: Callable[[str], int]) -> int:
             hi = mid - 1
     if not best:
         raise ValidationError(f"{_LIMIT_VAR}: not even one character of an embedding input fits in {limit} tokens")
-    space = next((i + 1 for i in range(best - 1, best // 2 - 1, -1) if text[i].isspace()), best)
+    half = range(best - 1, best // 2 - 1, -1)
+    line_end = next((i + 1 for i in half if text[i] == "\n"), None)
+    space = line_end or next((i + 1 for i in half if text[i].isspace()), best)
     return space if space == best or count(text[:space]) <= limit else best
 
 
 def split_to_limit(text: str, limit: int, count: Callable[[str], int]) -> list[str]:
-    """*text* as consecutive slices that each count at most *limit*; joined, they are *text* again."""
-    if count(text) <= limit:
+    """*text* as consecutive slices that each count at most *limit*; joined, they are *text* again.
+
+    Each piece aims at an even share of the whole count, so the last one is not a stray word.
+    """
+    total = count(text)
+    if total <= limit:
         return [text]
+    target = math.ceil(total / math.ceil(total / limit))
     pieces = []
     while text:
-        cut = _fit(text, limit, count)
+        cut = _fit(text, target, count)
         pieces.append(text[:cut])
         text = text[cut:]
     return pieces
@@ -286,7 +294,10 @@ class OpenAICompatProvider:
             resp = self._http.post(f"{self._base_url}/tokenize", headers=headers, json={**body, "content": text})
             if resp.status_code not in (400, 404, 405, 422):  # what a server without llama-server's /tokenize answers
                 resp.raise_for_status()
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError:  # an HTML fallback page, say
+                    data = None
                 tokens = data.get("tokens") if isinstance(data, dict) else None
                 if isinstance(tokens, list):
                     return len(tokens)

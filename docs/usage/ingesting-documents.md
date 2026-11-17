@@ -317,18 +317,20 @@ makes, which is why a served artifact is accepted only for `llama.cpp` or `opena
 
 | Input | Over the limit |
 | --- | --- |
-| Chunks from file ingest (every chunker) and from stored text or a URL | split at ingest into consecutive pieces that each fit and together are exactly the chunk, cut after whitespace when that keeps at least half the piece; no overlap. A piece identical to a stored chunk is stored once, as every repeated chunk is |
+| Chunks from file ingest (every chunker) and from stored text or a URL | split at ingest into consecutive pieces of about equal count that each fit and together are exactly the chunk, cut after a line end, else whitespace, when that keeps at least half the piece; no overlap. A piece identical to a stored chunk is stored once, as every repeated chunk is |
 | Folder summaries | truncated: one vector per folder; the stored summary text stays whole |
 | Figure, image and element-capture descriptions | truncated: one chunk per figure keeps the figure's metadata |
 | Queries | truncated |
 | Stored chunks during `re-embed` | truncated: a stored chunk is one row; reingesting its document splits it |
 
-A split PDF piece keeps its parent's pages and lists only the images in its own text. A split Python piece keeps
-its function's line range and is named `name[k]`. Each truncation is logged at INFO.
+A split PDF piece keeps its parent's pages and lists the images whose reference starts in it; a reference on its
+own line is never cut. A split Python piece keeps its function's line range and is named `name[k]`. Each
+truncation is logged at INFO with the count it had and the count it kept.
 
-The count costs one `/tokenize` request per embedded input and one more per new document chunk at ingest (a chunk
-already stored is not counted, so an unchanged re-ingest sends nothing). Each piece of an over-length input costs
-about twice log2 of its length in characters more, each request at most about twice the piece. The requests share
+The count costs one `/tokenize` request per embedded input and one more per new document chunk at ingest. A chunk
+already stored whole is not counted, so an unchanged re-ingest of chunks that fit sends nothing; a chunk that was
+split is counted and split again, and its pieces are then found stored. Each piece of an over-length input costs a
+few more requests, each at most about twice the piece. The requests share
 one kept-alive connection. On llama.cpp b12048 a `/tokenize` call took 0.2 to 0.9 ms at the median (up to 3.8 ms)
 on loopback, and it takes no embedding slot.
 
