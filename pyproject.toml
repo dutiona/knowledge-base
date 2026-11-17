@@ -19,6 +19,9 @@ dependencies = [
     # 1.27.2.2+ drop ![](…) image refs from to_markdown(write_images), breaking
     # vision figure extraction (#465); strategic unpin tracked in #466.
     "pymupdf4llm>=1.27.2,<1.27.2.2",
+    # \p{Alphabetic}/\p{White_Space} port Rust's char classes exactly (#592); the floor is the release whose
+    # Unicode tables the conformance run compared with memory-engine's.
+    "regex>=2026.2.28",
     "sqlite-vec>=0.1.6",
     "trafilatura>=2.0.0",
     "uvicorn>=0.41.0",

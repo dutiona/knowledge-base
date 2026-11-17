@@ -1,0 +1,129 @@
+"""The redaction engine against the cases it shares with memory-engine.
+
+``tests/fixtures/redaction-cases.jsonl`` is carried byte for byte by dutiona/knowledge-base and
+dutiona/memory-engine (memory-engine#1024). Its outputs were produced by memory-engine's own code at
+97c8e77 (``crates/memory-engine/src/bootstrap/redact.rs``) with Michaël's rulings of 2026-11-17 applied: no
+email detector, the ADR-0020 machine-token detector first, and links exempt from every rule but
+url-credential. Only ``url-authority-ends-at-multibyte-space`` is written by hand: memory-engine panics on it.
+Change the file only through a linked pair of PRs, memory-engine first, both quoting the same ``sha256sum``.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from pathlib import Path
+
+import pytest
+
+from knowledge_base.redact import TOKEN_SHAPE, redact, redact_json, scrub
+
+FIXTURE = Path(__file__).parent / "fixtures" / "redaction-cases.jsonl"
+_LINES = FIXTURE.read_text(encoding="utf-8").split("\n")
+HEADER = json.loads(_LINES[0])
+CASES = [json.loads(line) for line in _LINES[1:] if line]
+_SHORT = {'"': '\\"', "\\": "\\\\", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def _string(value: str, *, hide: bool) -> str:
+    """JSON string as both serializers write it; ``hide`` escapes ``@`` and each ASCII-alphanumeric run's first char."""
+    out = []
+    for i, c in enumerate(value):
+        prev = value[i - 1] if i else ""
+        starts_run = c.isascii() and c.isalnum() and not (prev.isascii() and prev.isalnum())
+        if c in _SHORT:
+            out.append(_SHORT[c])
+        elif ord(c) < 0x20 or (hide and (c == "@" or starts_run)):
+            out.append(f"\\u{ord(c):04x}")
+        else:
+            out.append(c)
+    return '"' + "".join(out) + '"'
+
+
+def encode_line(case: dict) -> str:
+    """One fixture line in its canonical form (the header when ``case`` has only ``about``)."""
+    if set(case) == {"about"}:
+        return '{"about":' + _string(case["about"], hide=False) + "}"
+    rules = ",".join(_string(r, hide=False) for r in case["rules"])
+    return (
+        f'{{"name":{_string(case["name"], hide=False)},"input":{_string(case["input"], hide=True)},'
+        f'"output":{_string(case["output"], hide=True)},"rules":[{rules}]}}'
+    )
+
+
+@pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
+def test_redact_matches_the_shared_case(case):
+    assert redact(case["input"]) == (case["output"], case["rules"])
+
+
+def test_fixture_is_canonical():
+    names = [c["name"] for c in CASES]
+    assert len(names) == len(set(names))
+    assert all(re.fullmatch(r"[a-z0-9]+(?:[-.][a-z0-9]+)*", n) for n in names)
+    expected = "\n".join([encode_line(HEADER), *(encode_line(c) for c in CASES)]) + "\n"
+    assert FIXTURE.read_text(encoding="utf-8") == expected
+
+
+def test_fixture_holds_no_secret():
+    for line in _LINES:
+        assert scrub(line) == line
+
+
+def test_no_email_case_and_no_email_rule():
+    """Owner ruling, 2026-11-17: an email address is not a secret."""
+    assert not any("@" in c["input"] and "://" not in c["input"] for c in CASES)
+    for text in ("contact craig@example.com please", '{"email":"a@b.com"}', "aws AKIAIOSFODNN7EXAMPLE and a@b.com"):
+        out, rules = redact(text)
+        assert "@b.com" in out or "@example.com" in out
+        assert "email" not in rules
+
+
+def test_url_authority_ending_at_a_multibyte_space_does_not_crash():
+    for space in (" ", "　"):
+        out, rules = redact(f"see https://u:pw@example.com{space}more https://v:pw2@example.org")
+        assert rules == ["connection-string-password", "connection-string-password"]
+        assert "pw" not in out.replace("[REDACTED:connection-string-password]", "")
+
+
+def test_redact_json_keeps_keys_and_non_strings():
+    value = {
+        "description": "leaked AKIAIOSFODNN7EXAMPLE here",
+        "nested": {"note": "token ghp_0123456789abcdefghij0123456789abcdef"},
+        "list": ["sk-abcdefghijklmnopqrstuvwxyz0123", "harmless"],
+        "count": 7,
+        "flag": True,
+    }
+    out = redact_json(value)
+    assert set(out) == set(value)
+    assert "AKIA" not in json.dumps(out)
+    assert out["list"][1] == "harmless"
+    assert out["count"] == 7
+    assert out["flag"] is True
+    clean = {"a": "nothing secret", "b": [1, 2, 3]}
+    assert redact_json(clean) == clean
+
+
+def test_scrub_reaches_the_fixpoint_one_pass_misses():
+    text = "api_key=a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6qWeRtYuIoPaSdFgHjKl9876"
+    once, _ = redact(text)
+    assert once != scrub(text)
+    assert scrub(text) == "api_key=[REDACTED:hex-secret][REDACTED:high-entropy]"
+    assert scrub(scrub(text)) == scrub(text)
+
+
+def test_token_shape_is_the_adr_shape():
+    assert re.fullmatch(TOKEN_SHAPE, "me_" + "0" * 32)
+    assert not re.fullmatch(TOKEN_SHAPE, "me_types")
+
+
+@pytest.mark.parametrize(
+    "unit",
+    ["=eyJ", "://u:p@", "token=a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6 ", "-----BEGIN ", "_a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6"],
+)
+def test_redaction_is_linear_on_hostile_input(unit):
+    """``ingest_text`` takes 4 MiB over HTTP; a literal port of the reference scans is quadratic on these."""
+    text = unit * (2**20 // len(unit))
+    started = time.monotonic()
+    redact(text)
+    assert time.monotonic() - started < 10
