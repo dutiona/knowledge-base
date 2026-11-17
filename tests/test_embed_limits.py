@@ -92,3 +92,70 @@ def test_an_over_length_folder_summary_no_longer_fails_its_batch(conn, bounded_e
     assert bounded_embedder.refused == 0
     ((sent,),) = bounded_embedder.inputs
     assert count(sent) <= LIMIT
+
+
+#: One section of 3 x LIMIT distinct words, under the 1,000 characters every chunker keeps as one chunk.
+WORDS = [f"w{i}" for i in range(3 * LIMIT)]
+SECTION = " ".join(WORDS)
+
+
+def _stored(conn: sqlite3.Connection, source_uri: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT content, metadata FROM chunks WHERE source_uri = ? ORDER BY chunk_index", (source_uri,)
+    ).fetchall()
+
+
+def _assert_split(conn: sqlite3.Connection, embedder: BoundedEmbedder, source_uri: str, text: str) -> list:
+    rows = _stored(conn, source_uri)
+    assert embedder.refused == 0
+    assert len(rows) > 1
+    assert all(count(row["content"]) <= LIMIT for row in rows)
+    assert "".join(row["content"] for row in rows) == text
+    return [json.loads(row["metadata"]) for row in rows]
+
+
+def test_an_over_length_markdown_section_is_split_not_failed(conn, bounded_embedder, tmp_path):
+    from knowledge_base.ingest import ingest_file
+
+    path = tmp_path / "notes.md"
+    path.write_text(SECTION)
+    ingest_file(conn, path)
+    _assert_split(conn, bounded_embedder, path.resolve().as_posix(), SECTION)
+
+
+def test_an_over_length_semantic_pdf_section_is_split_with_each_piece_s_own_images(
+    conn, bounded_embedder, tmp_path, monkeypatch
+):
+    from knowledge_base import ingest
+
+    words = [*WORDS[: LIMIT * 2], "![](fig.png)", *WORDS[LIMIT * 2 :]]
+    text = "## Methods\n\n" + " ".join(words)
+    monkeypatch.setattr(ingest, "_extract_pdf_markdown", lambda _path, image_dir=None: (text, {0: 1}))
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')")
+    conn.commit()
+    path = tmp_path / "paper.pdf"
+    path.write_bytes(b"%PDF-1.7 not parsed: the extractor is patched")
+    ingest.ingest_file(conn, path)
+    metas = _assert_split(conn, bounded_embedder, path.resolve().as_posix(), text)
+    assert [meta.get("images") for meta in metas].count(["fig.png"]) == 1
+    assert sum("images" in meta for meta in metas) == 1
+    assert all(meta["pages"] == [1] for meta in metas)
+
+
+def test_an_over_length_python_function_is_split_into_named_pieces(conn, bounded_embedder, tmp_path):
+    from knowledge_base.ingest import ingest_file
+
+    source = f'def f():\n    s = "{SECTION}"\n    return s'
+    path = tmp_path / "mod.py"
+    path.write_text(source + "\n")
+    ingest_file(conn, path)
+    metas = _assert_split(conn, bounded_embedder, path.resolve().as_posix(), source)
+    assert [meta["name"] for meta in metas] == [f"f[{k}]" for k in range(len(metas))]
+    assert {(meta["start_line"], meta["end_line"]) for meta in metas} == {(1, 3)}
+
+
+def test_an_over_length_stored_text_is_split_not_failed(conn, bounded_embedder):
+    from knowledge_base.ingest import ingest_text
+
+    ingest_text(conn, SECTION, source_uri="/docs/stored.md", source_type="markdown")
+    _assert_split(conn, bounded_embedder, "/docs/stored.md", SECTION)
