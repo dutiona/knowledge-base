@@ -174,7 +174,8 @@ To roll back, restore the backup `migrate` wrote: an older build refuses the new
 **Queries carry their space's instruction.** A space records its own query instruction, or none
 (`""`), or the default for its model: KB's pinned ADR-0015 §6 instruction for Qwen3-Embedding
 models, nothing for others, so a bge-m3 quickstart sends exactly the query text. Documents never
-carry one.
+carry one. This also applies to an existing Qwen3-Embedding store after the upgrade: its spaces
+record no instruction, so its queries start carrying the pinned one and rankings shift.
 
 **Upgrading an existing install.** Declare what the database already holds: for the
 historical default, `ollama`, `bge-m3`, `1024` and the Ollama URL (on WSL2, the Windows host
