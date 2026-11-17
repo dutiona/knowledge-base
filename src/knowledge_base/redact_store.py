@@ -59,6 +59,8 @@ _CONTEXT = 4096
 #: The most (before, after) pairs a row is read in; past it, each side is read alone. A source re-ingested many
 #: times can put hundreds of revisions' windows on each side of a row they share.
 _MAX_CONTEXTS = 64
+#: The shortest overlap read as two windows of one document: less is too likely a coincidence.
+_MIN_OVERLAP = CHUNK_OVERLAP // 2
 
 
 def _contents(conn: sqlite3.Connection) -> dict[int, tuple[str, list[str]]]:
@@ -76,8 +78,13 @@ def _contents(conn: sqlite3.Connection) -> dict[int, tuple[str, list[str]]]:
         if content != row["content"]:
             changed[row["id"]] = (content, rules + findings(edged))
 
-    def windowed(a: sqlite3.Row, b: sqlite3.Row) -> bool:
-        return len(a["content"]) > CHUNK_OVERLAP and a["content"][-CHUNK_OVERLAP:] == b["content"][:CHUNK_OVERLAP]
+    def overlap(a: str, b: str) -> int:
+        """How many characters ``a`` ends with that ``b`` starts with, as the old windows overlap, else 0.
+
+        A window stored stripped (the markdown chunker's oversized sections) overlaps by less than 200.
+        """
+        top = min(CHUNK_OVERLAP, len(a) - 1, len(b) - 1)
+        return next((m for m in range(top, _MIN_OVERLAP - 1, -1) if a.endswith(b[:m])), 0)
 
     rows = conn.execute("SELECT id, content, source_uri, chunk_index FROM chunks ORDER BY source_uri, chunk_index, id")
     for _uri, document in groupby(rows, key=lambda r: r["source_uri"]):
@@ -88,11 +95,16 @@ def _contents(conn: sqlite3.Connection) -> dict[int, tuple[str, list[str]]]:
             by_index.setdefault(row["chunk_index"], []).append(row)
         for index, here in by_index.items():
             for cur in here:
+                text = cur["content"]
                 befores = {
-                    r["content"][:-CHUNK_OVERLAP][-_CONTEXT:] for r in by_index.get(index - 1, ()) if windowed(r, cur)
+                    r["content"][:-m][-_CONTEXT:]
+                    for r in by_index.get(index - 1, ())
+                    if (m := overlap(r["content"], text))
                 } or {""}
                 afters = {
-                    r["content"][CHUNK_OVERLAP:][:_CONTEXT] for r in by_index.get(index + 1, ()) if windowed(cur, r)
+                    r["content"][m:][:_CONTEXT]
+                    for r in by_index.get(index + 1, ())
+                    if (m := overlap(text, r["content"]))
                 } or {""}
                 if len(befores) * len(afters) <= _MAX_CONTEXTS:
                     settle(cur, list(product(befores, afters)))

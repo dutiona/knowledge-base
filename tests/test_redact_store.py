@@ -605,3 +605,18 @@ def test_a_window_shared_by_many_revisions_is_read_one_side_at_a_time(kb_conn, t
     stored = conn.execute("SELECT content FROM chunks WHERE id = ?", (shared_id,)).fetchone()[0]
     conn.close()
     assert SECRET[17:] not in stored and SECRET[:10] not in stored  # 19 and 10 characters: each needs its side
+
+
+def test_rewrite_pairs_windows_the_markdown_chunker_stored_stripped(kb_conn, tmp_path, vectors, capsys):
+    """#592: an oversized markdown section's windows were stored stripped, so they overlap by less than 200."""
+    db = tmp_path / "test.db"
+    text = ("word " * 200)[:798] + "    " + ("word " * 40)[:186] + SECRET + " " + "dolor sit amet " * 80
+    windows = [w.strip() for w in _legacy_windows(text)]
+    assert not windows[1].startswith(windows[0][-200:]), "the second window must have lost its leading spaces"
+    for i, window in enumerate(windows):
+        _with_vector(kb_conn, window, uri="/d/report.pdf", index=i)
+    kb_conn.commit()
+    kb_conn.close()
+
+    assert _run(db, "redact", "--rewrite") == 0
+    assert not _windows(SECRET.encode(), 8) & _windows(_file_bytes(db), 8)
