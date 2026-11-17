@@ -369,3 +369,20 @@ def test_configure_browser_tool_error_mapping_includes_details(kb_conn):
     ):
         result = json.loads(configure_browser_tool(venv_path="/some/path"))
     assert result == {"error": "boom", "field": "venv_path"}
+
+
+# ---------------------------------------------------------------------------
+# ingest_text() — ingest by content
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_text_over_stdio_has_no_machine(kb_conn, monkeypatch):
+    from knowledge_base.routes.ingestion import ingest_text
+    from tests.declared_env import TEST_EMBED_DIM
+
+    monkeypatch.setattr("knowledge_base.ingest.embed", lambda batch, *a, **k: [[0.1] * TEST_EMBED_DIM for _ in batch])
+    with patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn):
+        result = json.loads(ingest_text("notes.md", "a stdio note"))
+
+    assert result["source_uri"] == "content:///notes.md"
+    assert result["chunks_added"] == 1

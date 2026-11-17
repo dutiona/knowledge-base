@@ -278,6 +278,23 @@ def stub_embedder(monkeypatch) -> StubEmbedder:
 
 
 @pytest.fixture
+def stub_document_embedder(monkeypatch) -> StubEmbedder:
+    """Answer the document embeddings ingest asks for; the fixture is the list of texts it received."""
+    texts = StubEmbedder()
+
+    def _embed(batch, *_args, expected_dim=None, **_kwargs):
+        from tests.declared_env import TEST_EMBED_DIM
+
+        if texts.down is not None:
+            raise embedder_error(texts.down)
+        texts.extend(batch)
+        return [[0.1] * (expected_dim or TEST_EMBED_DIM) for _ in batch]
+
+    monkeypatch.setattr("knowledge_base.ingest.embed", _embed)
+    return texts
+
+
+@pytest.fixture
 def declared_db() -> None:
     """Run the #569 startup gate on the per-test database, as ``main()`` does before serving."""
     from knowledge_base.db import open_declared_db
@@ -372,7 +389,7 @@ class KbHttp:
 
 
 @pytest.fixture
-def kb_http(declared_db, token_file, stub_embedder) -> Iterator[KbHttp]:
+def kb_http(declared_db, token_file, stub_embedder, stub_document_embedder) -> Iterator[KbHttp]:
     """KB served over HTTP behind the machine-token gate, with ``laptop`` and ``desktop`` admitted."""
     from knowledge_base.auth import TokenTable
     from knowledge_base.server import build_http_app

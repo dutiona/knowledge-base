@@ -87,6 +87,50 @@ Uses content-hash dedup -- unchanged pages are skipped on re-ingest.
 
 Falls back to browser rendering (if configured) when trafilatura extracts insufficient content (< 200 chars). When browser rendering is active, figures may also be extracted from a viewport screenshot.
 
+### ingest_text
+
+Ingest a text or markdown document passed in by the caller, under a name search results cite. Served over stdio and
+HTTP.
+
+| Parameter | Type  | Required | Default | Description                                                                         |
+| --------- | ----- | -------- | ------- | ----------------------------------------------------------------------------------- |
+| `name`    | `str` | yes      | --      | The document's name, for example `notes/attention.md`: an opaque label, never a path |
+| `content` | `str` | yes      | --      | The text or markdown to store                                                        |
+
+The document is stored with `source_type` `markdown` and `source_uri` `content://<machine>/<name>`, the machine being
+the caller's token's (`content:///<name>` over stdio). A `name` is stripped and must hold 1 to 255 characters, with no
+control, format or surrogate characters and no line or paragraph separators, and must not start with `/`.
+
+Ingest only adds. Identical text is skipped. Re-ingesting changed text under the same name stores it again from its
+first edit on (chunks are fixed 1000-character windows, so one edit shifts every later window), and the earlier
+version stays searchable beside it: give each revision its own name. No tool removes a content document yet.
+
+**Request** (MCP `tools/call`):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": { "name": "ingest_text", "arguments": { "name": "notes/attention.md", "content": "# Attention\n\n..." } }
+}
+```
+
+**Returns:**
+
+```json
+{
+  "source_uri": "content://laptop/notes/attention.md",
+  "source_type": "markdown",
+  "chunks_added": 3,
+  "chunks_skipped": 0
+}
+```
+
+Failures are tool errors (`isError: true`): a refused name or empty content, an embedder failure ("the embedding
+service failed (HTTP 503); nothing was stored, retry later"), or a lost race with a concurrent ingest of the same
+passages. A failed call stored nothing.
+
 ### co_occurrence
 
 Find document pairs that were ingested together in the same session. Co-ingestion is a behavioral signal: documents ingested together share research context at ingestion time, complementing embedding similarity.

@@ -28,6 +28,7 @@ _INGESTION_TOOLS = {
     "ingest",
     "reingest",
     "ingest_url",
+    "ingest_text",
     "configure_chunking",
     "configure_browser_tool",
 }
