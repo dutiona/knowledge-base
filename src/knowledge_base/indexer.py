@@ -186,6 +186,25 @@ def cmd_status(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_redact(args: argparse.Namespace) -> None:
+    """Report stored rows that hold a secret (#592); ``--rewrite`` (server stopped) redacts them."""
+    from .redact_store import needs_rewrite, report, rewrite
+
+    if not args.db.is_file():  # a mistyped path would otherwise be created, and reported clean
+        raise KnowledgeBaseError(f"no database at {args.db}")
+    if args.rewrite:
+        conn = open_declared_db(args.db)  # it re-embeds: the declared embedder, as re-embed
+    else:
+        conn = get_connection(args.db)  # the report only reads: no declaration needed
+        init_schema(conn)
+    try:
+        result = rewrite(conn) if args.rewrite else report(conn)
+    finally:
+        conn.close()  # a held connection is what --rewrite refuses
+    _print(result, quiet=args.quiet)
+    sys.exit(1 if needs_rewrite(result) else 0)
+
+
 def cmd_schema(args: argparse.Namespace) -> None:
     """Report live-vs-current schema version. Exit non-zero on any mismatch
     (release-gate verify, ME parity). Read-only — never creates/mutates the DB."""
@@ -320,6 +339,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory for the pre-migration backup (default: <db dir>/backups).",
     )
 
+    # -- redact ---------------------------------------------------------------
+    p_redact = sub.add_parser(
+        "redact",
+        help="Report stored chunks holding a secret (exit 1 if any); never prints them.",
+    )
+    p_redact.add_argument(
+        "--rewrite",
+        action="store_true",
+        help="Redact them, re-embed, rebuild folder summaries and purge the file (server stopped).",
+    )
+
     # -- schema ---------------------------------------------------------------
     sub.add_parser(
         "schema",
@@ -361,6 +391,7 @@ def main(argv: list[str] | None = None) -> None:
         "status": cmd_status,
         "migrate": cmd_migrate,
         "schema": cmd_schema,
+        "redact": cmd_redact,
     }
 
     try:

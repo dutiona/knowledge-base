@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 
@@ -766,6 +768,74 @@ def delete_chunks_cascade(
     delete_chunk_vecs(conn, chunk_ids, table_name=table_name)
     _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", chunk_ids)
     return len(chunk_ids)
+
+
+def _rebuild_vec_table(conn: sqlite3.Connection, name: str) -> None:
+    """Recreate a vec0 table from its own DDL with the same rows, leaving no deleted slot behind."""
+    ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name = ?", (name,)).fetchone()[0]
+    aux = ", ".join(f"[{r[1]}]" for r in conn.execute(f"PRAGMA table_info([{name}])").fetchall()[2:])
+    embedding = "vec_int8(embedding)" if " int8[" in ddl else "embedding"
+    conn.execute(f"CREATE TEMP TABLE _purge_rows AS SELECT rowid AS rid, embedding, {aux} FROM [{name}]")  # noqa: S608  # vec0 table and column names from sqlite_master
+    conn.execute(f"DROP TABLE [{name}]")
+    conn.execute(ddl)
+    conn.execute(
+        f"INSERT INTO [{name}] (rowid, embedding, {aux}) SELECT rid, {embedding}, {aux} FROM temp._purge_rows"  # noqa: S608
+    )
+    conn.execute("DROP TABLE temp._purge_rows")
+
+
+@contextmanager
+def held_exclusively(conn: sqlite3.Connection) -> Iterator[None]:
+    """Hold the database alone for the block; refuse at once if any other connection has it open.
+
+    In exclusive locking mode SQLite takes the file lock for the connection's life, which fails while any
+    other connection is open, idle or reading: this is how a maintenance command knows the server is stopped.
+    """
+    if conn.in_transaction:
+        raise KnowledgeBaseError("maintenance needs no open transaction; commit or roll back first")
+    timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    conn.execute("PRAGMA busy_timeout = 0")
+    conn.execute("PRAGMA locking_mode = EXCLUSIVE")
+    try:
+        try:
+            conn.execute("BEGIN EXCLUSIVE")
+        except sqlite3.OperationalError as e:
+            raise KnowledgeBaseError("another connection holds the database; stop the server and rerun") from e
+        conn.commit()
+        yield
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.execute("PRAGMA locking_mode = NORMAL")
+        conn.execute("SELECT 1 FROM sqlite_master").fetchone()  # the next access releases the file lock
+        conn.execute(f"PRAGMA busy_timeout = {int(timeout)}")
+
+
+def purge_deleted_content(conn: sqlite3.Connection) -> None:
+    """Remove deleted text from the database file: FTS segments, vec0 slots, free pages and the WAL (#592).
+
+    SQLite keeps a deleted row's bytes in free pages, FTS5 keeps a deleted term in its segments until they
+    are rebuilt, sqlite-vec keeps a deleted vector in its chunk blob, and in WAL mode ``VACUUM`` writes the
+    clean pages to the WAL while the main file keeps the old ones until a checkpoint. The caller holds the
+    database through :func:`held_exclusively`, or this takes it.
+    """
+    if conn.execute("PRAGMA locking_mode").fetchone()[0] != "exclusive":
+        with held_exclusively(conn):
+            purge_deleted_content(conn)
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
+        for (name,) in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND sql LIKE 'CREATE VIRTUAL TABLE % USING vec0%'"
+        ).fetchall():
+            _rebuild_vec_table(conn, name)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.execute("VACUUM")
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 
 def _migrate_embed_spaces_matryoshka(conn: sqlite3.Connection) -> None:

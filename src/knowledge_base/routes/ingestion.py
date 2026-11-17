@@ -120,7 +120,8 @@ def ingest_text(name: str, content: str) -> str:
     The document is stored as ``content://<machine>/<name>``, the machine being the caller's.
     Ingest only adds: identical text is skipped, and re-ingesting changed text under the same
     name keeps the earlier version searchable beside the new one, so give each revision its own
-    name. A failed ingest stored nothing.
+    name. A failed ingest stored nothing. Token-shaped secrets and URL passwords are stored as
+    ``[REDACTED:<rule>]``: KB is no place to keep a credential.
 
     Args:
         name: The document's name, for example 'notes/attention.md'. An opaque label: KB never
@@ -156,7 +157,8 @@ def ingest_url(url: str, session_id: str | None = None) -> str:
 
     Uses content-hash dedup — unchanged pages are skipped on re-ingest.
     Re-ingesting a changed page adds its new text passages beside the earlier ones; no tool replaces
-    or removes a page's text.
+    or removes a page's text. Token-shaped secrets and URL passwords are stored as
+    ``[REDACTED:<rule>]``, and the page under its URL without its userinfo.
 
     Args:
         url: The URL to fetch and ingest.

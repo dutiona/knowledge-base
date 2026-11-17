@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import ast
 import re
+from bisect import bisect_right
 from pathlib import Path
+
+from .redact import link_extents
 
 __all__ = [
     "CHUNK_OVERLAP",
@@ -93,16 +96,31 @@ def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) 
         overlap = 0
     if len(text) <= size:
         return [text] if text.strip() else []
+    # A cut inside a link leaves a fragment that is no longer one, which redaction then reads as text (#592).
+    links = link_extents(text)
+    starts = [s for s, _ in links]
+
+    def link_at(pos: int) -> tuple[int, int] | None:
+        i = bisect_right(starts, pos) - 1
+        return links[i] if i >= 0 and links[i][0] < pos < links[i][1] else None
+
     chunks = []
     start = 0
     while start < len(text):
         end = start + size
+        if (cut := link_at(end)) is not None:
+            # A link starting the window stretches it, but never past four windows: the per-chunk scrub keeps
+            # that rare fragment safe, and an embedder may refuse a chunk the size of a whole huge URL.
+            end = cut[0] if cut[0] > start else min(cut[1], start + 4 * size)
         chunk = text[start:end]
         if chunk.strip():
             chunks.append(chunk)
         if end >= len(text):
             break
-        start = end - overlap
+        nxt = end - overlap
+        if (cut := link_at(nxt)) is not None:
+            nxt = cut[0]
+        start = nxt if nxt > start else end
     return chunks
 
 

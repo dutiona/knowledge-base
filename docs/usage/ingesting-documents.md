@@ -175,7 +175,7 @@ The response includes per-file results:
 
 `reingest` is for files, over stdio. A document ingested by URL or by content has no replace or removal yet (#595).
 
-Use the `reingest` tool to force a full re-ingest. This deletes all existing chunks for the file and reinserts from scratch -- it does not compare content hashes. Use this after a file has been updated.
+Use the `reingest` tool to force a full re-ingest. This deletes all existing chunks for the file and inserts the new ones. A chunk another document already holds (the same text; after redaction, a passage that differs only by a secret) is linked to the file's sessions instead of inserted again. Use this after a file has been updated.
 
 ```json
 {
@@ -218,7 +218,34 @@ Two chunking strategies are available for PDFs, selectable via the `configure_ch
 
 On normal `ingest`, each chunk is SHA-256 hashed (truncated to 16 hex chars). If a chunk with the same hash already exists in the database, it is skipped. This makes ingestion idempotent: ingesting the same file twice adds zero new chunks.
 
-On `reingest`, all existing chunks for the source URI are deleted unconditionally, then new chunks are inserted. No hash comparison occurs -- it is a force-replace operation.
+Hashes are of the redacted text (see [Redaction](#redaction)), so two documents that differ only by a secret share their chunks.
+
+On `reingest`, all existing chunks for the source URI are deleted unconditionally, then the new chunks are inserted; a chunk another document holds is linked rather than inserted again.
+
+## Redaction
+
+Before KB embeds or stores an ingested document's text, it replaces token-shaped secrets with `[REDACTED:<rule>]`. The rules are memory-engine's (`crates/memory-engine/src/bootstrap/redact.rs`), with Michaël's rulings of 2026-11-17, in priority order:
+
+| Rule | Matches |
+| --- | --- |
+| `machine-token` | `me_` and 32 base62 characters, with no `[0-9A-Za-z_]` on either side (memory-engine ADR-0020) |
+| `aws-access-key`, `github-pat`, `github-fine-pat`, `openai-key`, `google-api-key`, `slack-token`, `jwt`, `sendgrid` | a known prefix at a word boundary, 20 bytes or more |
+| `private-key-header` | a `-----BEGIN` line |
+| `connection-string-password` | the password of a URL's `user:pass@` |
+| `hex-secret` | 32 or more hex digits right after a word such as `api_key`, `secret` or `token` |
+| `high-entropy` | a token of 20 or more characters, letters, digits and `+/=_-` only, with a digit or one of `+/=_-`, at 4.3 bits per character or more |
+
+- **Where it runs**: on a whole document before it is chunked (a PDF page by page), on figure descriptions, captions and OCR text, on folder summaries, and on every string in a chunk's metadata.
+- **Not redacted**: email addresses (they are not secrets), and links: a key in a published paper's link stays as published. Inside a link (`scheme://` and the characters a URL holds, up to a space, a quote, `<`, `>`, an apostrophe, a parenthesis, a comma or a semicolon) only three things are redacted: the password of a `user:pass@`, a known token shape (a provider prefix or a machine token) used as the userinfo, and a machine token anywhere in it. Neither chunking nor the split that fits a chunk to the embedder's input limit cuts a link, so a stored chunk holds no fragment that reads as something else. Two links are the exception, cut and their pieces redacted as text: one over 4,000 characters, and one that alone counts more tokens than the embedder's input limit. A page fetched by URL is stored under its URL without `user:pass@`, its query kept; a metadata value that is a whole URL is treated the same way. File paths and `content://` names are stored as given, since they identify the document.
+- **What it promises**: known secret formats are caught; an arbitrary password with no prefix is not guaranteed to be, nor is a secret broken by a space, a line end or a page break in the source, which reads as two words. Text KB stores outside ingestion (a logged search query, a conclusion, a paper's BibTeX) is not redacted yet (#610). Base64 blobs and integrity hashes read as `high-entropy`, and a `-----BEGIN` line is redacted whatever follows it.
+
+Rows stored before redaction existed are fixed with the maintenance command, server stopped:
+
+1. `knowledge-base-ingest redact` reads the chunks (text, metadata and source) and the folder summaries, the text ingestion stores; the other tables are #610's. It reports what would change: rows per field, matches per rule, the chunk ids, the folder summaries to rebuild, and the backups, which may still hold the old text. A row stored before redaction can hold a fragment of a secret where the old chunker cut its window; the command reads such a row with the windows it overlaps, so the fragment is found and redacted with the rest. Pieces the input-limit split cut before this release do not overlap, and neither do two PDF windows where an image reference was rewritten across the cut, so each such row is read alone. A link such a row starts or ends inside is still read as text there, so a key in that piece of it is redacted: each stored chunk stays one that redaction leaves unchanged on its own. It never prints the text and exits 1 when anything needs rewriting.
+2. `knowledge-base-ingest redact --rewrite` redacts those rows, merges rows that become identical, re-embeds what changed in the active space (other spaces lose those vectors: a populating space refills them at backfill), rebuilds the folder summaries, and purges the old bytes from the FTS index, the vector tables, free pages and the WAL. It refuses to start while any other connection holds the database, and a rerun finishes an interrupted run.
+3. `redact` again exits 0. Backups taken before the rewrite (`<db dir>/backups/`) still hold the old text, and a secret the report found has already reached the embedder: rotate it.
+
+The rules are pinned by `tests/fixtures/redaction-cases.jsonl`, which memory-engine carries byte for byte; a change to the rules is a pair of PRs, memory-engine first, both quoting the same `sha256sum` of the file.
 
 ## Session Tracking (Co-occurrence)
 

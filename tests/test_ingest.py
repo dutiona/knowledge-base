@@ -4412,3 +4412,39 @@ def test_ingest_text_rolls_back_a_failed_write(kb_conn):
     assert not kb_conn.in_transaction
     kb_conn.commit()
     assert _rows(kb_conn, "content:///rb") == []
+
+
+# ---------------------------------------------------------------------------
+# Reingest over a chunk another document holds (#592)
+# ---------------------------------------------------------------------------
+
+_SHARED_FN = 'def shared_attention(query, key):\n    """Scaled dot-product attention."""\n    return query @ key\n'
+
+
+@pytest.mark.parametrize("session", [None, "s-new"])
+@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_reingest_links_a_chunk_another_document_holds(kb_conn, tmp_path, session):
+    """B's first function is A's; reingesting B used to insert that chunk again and fail on the UNIQUE hash."""
+    a = tmp_path / "a.py"
+    a.write_text(_SHARED_FN)
+    b = tmp_path / "b.py"
+    b.write_text(_SHARED_FN + "\n\ndef own_helper():\n    return 42\n")
+    ingest_file(kb_conn, a)
+    ingest_file(kb_conn, b, session_id="s-1")
+    shared_id = kb_conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (a.resolve().as_posix(),)).fetchone()[
+        "id"
+    ]
+    own_id = kb_conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (b.resolve().as_posix(),)).fetchone()["id"]
+    kb_conn.execute("INSERT INTO chunk_sessions (chunk_id, session_id) VALUES (?, 's-2')", (own_id,))
+    pid = kb_conn.execute("INSERT INTO papers (title, abstract_chunk_id) VALUES ('B', ?)", (own_id,)).lastrowid
+    kb_conn.execute("INSERT INTO methods (name, paper_id, chunk_id) VALUES ('shared_attention', ?, ?)", (pid, own_id))
+    kb_conn.commit()
+
+    reingest_file(kb_conn, b, session_id=session)
+
+    sessions = {r[0] for r in kb_conn.execute("SELECT session_id FROM chunk_sessions WHERE chunk_id = ?", (shared_id,))}
+    assert {"s-1", "s-2"} <= sessions
+    assert (session is None) or session in sessions
+    assert kb_conn.execute("SELECT abstract_chunk_id FROM papers WHERE id = ?", (pid,)).fetchone()[0] == shared_id
+    assert kb_conn.execute("SELECT chunk_id FROM methods WHERE paper_id = ?", (pid,)).fetchone()[0] == shared_id

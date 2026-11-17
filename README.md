@@ -162,7 +162,12 @@ connects to the address it checked. Endpoints the operator's environment declare
   previous declaration instead of rerunning, restore it and run `knowledge-base-ingest rebind`.
 - **Moving the embedder** (server stopped): set the new `KNOWLEDGE_BASE_EMBED_URL`, run
   `knowledge-base-ingest rebind`, start the server.
-- These two commands assume the server is stopped; nothing enforces it.
+- **Redacting rows stored before redaction existed** (server stopped): `knowledge-base-ingest redact` reports them
+  (exit 1 if any, never printing the text), `knowledge-base-ingest redact --rewrite` redacts them, re-embeds and
+  purges the old bytes from the file. Backups taken earlier still hold that text. See
+  [Redaction](docs/usage/ingesting-documents.md#redaction).
+- `re-embed` and `rebind` assume the server is stopped; nothing enforces it. `redact --rewrite` refuses to start while
+  any other connection holds the database.
 
 **Upgrading to schema v2** (the served artifact and each space's query instruction): stop the
 unit and run `knowledge-base-ingest migrate`, which backs the database up first; until then the

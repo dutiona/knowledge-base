@@ -33,11 +33,13 @@ from .db import (
     require_active_space,
 )
 from .migrate import _main_db_path
+from .redact import redact_json, scrub
 from .embed_swap import declared_provider_config
 from .embeddings import embed, split_inputs, truncate_embedding
 from .exceptions import NotFoundError
 from .folder_summaries import update_folder_summary
 from .utils import content_hash as _content_hash
+from .utils import without_userinfo
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +145,21 @@ def _bounded_chunks(conn: sqlite3.Connection, texts: list[str]) -> list[list[str
     return [[text] if known else next(split) for text, known in zip(texts, stored, strict=True)]
 
 
+_WHOLE_URL = re.compile(r"(?i)https?://\S+")
+
+
+def _metadata_leaf(value: str) -> str:
+    """A whole URL is a stored reference and keeps all but its userinfo (owner ruling); other text is scrubbed."""
+    return without_userinfo(value) if _WHOLE_URL.fullmatch(value) else scrub(value)
+
+
+def redact_metadata(metadata: str) -> str:
+    """A chunk's metadata JSON with every string value redacted, or ``metadata`` itself when nothing changes."""
+    value = json.loads(metadata)
+    clean = redact_json(value, _metadata_leaf)
+    return metadata if clean == value else json.dumps(clean)
+
+
 def _flush_deferred_session_links(conn: sqlite3.Connection, chunk_ids: list[int], session_id: str | None) -> None:
     """Batch-insert deferred chunk_sessions rows for deduped chunks."""
     if chunk_ids and session_id is not None:
@@ -193,7 +210,7 @@ def _insert_chunk(
         source_uri,
         chunk_index,
         session_id,
-        metadata,
+        redact_metadata(metadata),  # neither hashed nor embedded, so the insert is its one complete point
     ]
     if chunk_strategy is not None:
         columns.append("chunk_strategy")
@@ -243,7 +260,7 @@ def _extract_pdf_text(path: Path) -> str:
     doc = fitz.open(str(path))
     pages = []
     for page in doc:
-        pages.append(page.get_text())
+        pages.append(scrub(cast("str", page.get_text())))  # "text" mode returns a str; the stub says more
     doc.close()
     return "\n\n".join(pages)
 
@@ -298,9 +315,11 @@ def _extract_pdf_markdown(path: Path, image_dir: Path | None = None) -> tuple[st
         for pno, p in enumerate(pages):
             meta = p.get("metadata", {})
             page_num = meta.get("page_number") or meta.get("page") or pno + 1
+            # Redact each page before its length moves the next offset, so page_map stays exact.
+            page_text = scrub(p["text"])
             page_map[offset] = page_num
-            texts.append(p["text"])
-            offset += len(p["text"]) + len(_PAGE_SEPARATOR)
+            texts.append(page_text)
+            offset += len(page_text) + len(_PAGE_SEPARATOR)
         return _PAGE_SEPARATOR.join(texts), page_map
     except (RuntimeError, OSError) as exc:
         logger.warning("pymupdf4llm failed (%s), falling back to flat extraction", exc)
@@ -308,8 +327,8 @@ def _extract_pdf_markdown(path: Path, image_dir: Path | None = None) -> tuple[st
 
 
 def _extract_markdown_text(path: Path) -> str:
-    """Read a markdown/text file as UTF-8, replacing undecodable bytes."""
-    return path.read_text(encoding="utf-8", errors="replace")
+    """Read a markdown/text file as UTF-8, replacing undecodable bytes, and redact it."""
+    return scrub(path.read_text(encoding="utf-8", errors="replace"))
 
 
 def _produce_and_insert_chunks(
@@ -321,16 +340,16 @@ def _produce_and_insert_chunks(
     session_id: str | None = None,
     session_ids: set[str] | None = None,
     deduplicate: bool = True,
-) -> tuple[int, int, list[int]]:
+) -> tuple[int, int, list[tuple[int, int]]]:
     """Extract text, produce chunks, embed, and insert into the database.
 
     Does NOT commit the transaction — callers handle commit timing.
 
     When *deduplicate* is True, existing chunks (by content hash) are
-    skipped and their IDs collected in the returned deferred-links list
-    so the caller can flush session associations.
+    skipped and returned, so the caller can link them to its sessions.
 
-    Returns ``(chunks_added, chunks_skipped, deferred_session_links)``.
+    Returns ``(chunks_added, chunks_skipped, deduplicated)``: ``deduplicated`` holds the ``(chunk_index, id)`` of
+    each chunk already stored under another document, in document order, whatever *session_id* is.
     """
     strategy = _get_chunk_strategy(conn)
     effective_strategy = "semantic" if source_type == "pdf" and strategy == "semantic" else "mechanical"
@@ -355,7 +374,9 @@ def _produce_and_insert_chunks(
         # A piece keeps its function's line range and is named like chunk_python_ast's own oversize split.
         ast_chunks = [
             {**ac, "text": piece, "name": f"{ac['name']}[{k}]" if len(pieces) > 1 else ac["name"]}
-            for ac, pieces in zip(ast_chunks, _bounded_chunks(conn, [ac["text"] for ac in ast_chunks]), strict=True)
+            for ac, pieces in zip(
+                ast_chunks, _bounded_chunks(conn, [scrub(ac["text"]) for ac in ast_chunks]), strict=True
+            )
             for k, piece in enumerate(pieces)
         ]
         items: list[tuple[int, str, str, str]] = []
@@ -384,6 +405,8 @@ def _produce_and_insert_chunks(
             )
         if not md_chunks:
             return (0, 0, [])
+        # The split counts, and looks up, the text that is stored (#592).
+        md_chunks = [(scrub(chunk_text), pages) for chunk_text, pages in md_chunks]
         # A piece keeps its parent's pages and lists the images whose reference starts in it. They are read from
         # the whole parent, because a cut can fall inside a reference's caption.
         split: list[tuple[str, list[int], list[str]]] = []
@@ -408,19 +431,22 @@ def _produce_and_insert_chunks(
                 chunk_meta["images"] = images
             items.append((i, chunk_text, _content_hash(chunk_text), json.dumps(chunk_meta)))
     else:
-        fixed_chunks = [piece for pieces in _bounded_chunks(conn, _chunk_text(text)) for piece in pieces]
+        fixed_chunks = [
+            piece for pieces in _bounded_chunks(conn, [scrub(c) for c in _chunk_text(text)]) for piece in pieces
+        ]
         if not fixed_chunks:
             return (0, 0, [])
         items = [(i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)]
+
+    # A cut can start a chunk mid-word, which a rule reads as a boundary: every stored chunk is a fixpoint (#592).
+    items = [(i, (clean := scrub(t)), h if clean == t else _content_hash(clean), m) for i, t, h, m in items]
 
     # --- Deduplication ---
     # The intra-document (in-batch) hash collapse ALWAYS runs: two identical chunks
     # in one document share a content_hash and the second would hit the
     # chunks.content_hash UNIQUE constraint (#553). This is independent of
-    # *deduplicate*, which only governs the cross-document DB probe below —
-    # reingest_file() passes deduplicate=False (old rows already deleted) yet must
-    # still collapse in-document duplicates (#553 review).
-    deferred_session_links: list[int] = []
+    # *deduplicate*, which only governs the cross-document DB probe below (#553 review).
+    deduplicated: list[tuple[int, int]] = []
     new_items: list[tuple[int, str, str, str]] = []
     skipped = 0
     batch_hashes: set[str] = set()
@@ -435,15 +461,14 @@ def _produce_and_insert_chunks(
         if deduplicate:
             existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (item[2],)).fetchone()
             if existing:
-                if session_id is not None:
-                    deferred_session_links.append(existing["id"])
+                deduplicated.append((item[0], existing["id"]))
                 skipped += 1
                 continue
         new_items.append(item)
     items = new_items
 
     if not items:
-        return (0, skipped, deferred_session_links)
+        return (0, skipped, deduplicated)
 
     # --- Embed + insert ---
     texts_to_embed = [item[1] for item in items]
@@ -478,7 +503,7 @@ def _produce_and_insert_chunks(
     if n_inserted:
         bump_chunk_count(conn, vec_table, n_inserted)
 
-    return (len(items), skipped, deferred_session_links)
+    return (len(items), skipped, deduplicated)
 
 
 def ingest_file(
@@ -502,7 +527,7 @@ def ingest_file(
     )
 
     # Flush deferred session links for deduped chunks (#180).
-    _flush_deferred_session_links(conn, deferred, session_id)
+    _flush_deferred_session_links(conn, [cid for _, cid in deferred], session_id)
     conn.commit()
 
     result: dict = {
@@ -548,10 +573,13 @@ def ingest_text(
     chunk is embedded before the first write, so an embedder failure stores nothing. Commits once; any
     failure rolls back, so the thread's reused connection never carries half a document (#554).
     """
-    chunks = _chunk_text(text)
+    # Redact the whole text before chunking (a 1000-character window can cut a token in two), then each chunk:
+    # a window can start mid-word, which a rule reads as a boundary, so every stored chunk is a fixpoint.
+    chunks = [scrub(c) for c in _chunk_text(scrub(text))]
     if not chunks:
         return {"chunks_added": 0, "chunks_skipped": 0}
-    chunks = [piece for pieces in _bounded_chunks(conn, chunks) for piece in pieces]
+    # The input-limit split cuts anywhere too, so each piece is scrubbed again.
+    chunks = [scrub(piece) for pieces in _bounded_chunks(conn, chunks) for piece in pieces]
     try:
         return _store_text_chunks(conn, chunks, source_uri, source_type, session_id, metadata)
     except BaseException:
@@ -751,46 +779,53 @@ def reingest_file(
         if session_id is not None:
             all_sessions = historical_sessions | {session_id}
 
-        added, _, _ = _produce_and_insert_chunks(
+        # Its own rows are gone, so the probe finds only chunks another document holds (#592: redaction and
+        # the redact --rewrite merge make that sharing common); link them instead of inserting them again.
+        added, _, shared = _produce_and_insert_chunks(
             conn,
             path=path,
             source_type=source_type,
             source_uri=source_uri,
             session_id=session_id,
             session_ids=all_sessions,
-            deduplicate=False,
+            deduplicate=True,
+        )
+        conn.executemany(
+            "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",
+            [(cid, sid) for _, cid in shared for sid in all_sessions],
+        )
+        # The document's chunks in document order: its new rows and the shared ones together.
+        own = conn.execute("SELECT chunk_index, id, content FROM chunks WHERE source_uri = ?", (source_uri,)).fetchall()
+        shared_content = {
+            r["id"]: r["content"]
+            for r in _batched_select(conn, "SELECT id, content FROM chunks WHERE id IN ({ph})", [c for _, c in shared])
+        }
+        document = sorted(
+            [(r["chunk_index"], r["id"], r["content"]) for r in own]
+            + [(idx, cid, shared_content[cid]) for idx, cid in shared]
         )
 
         # --- Re-link papers whose abstract_chunk_id was nullified ---
-        if affected_paper_ids:
-            new_first = conn.execute(
-                "SELECT id FROM chunks WHERE source_uri = ? ORDER BY chunk_index LIMIT 1",
-                (source_uri,),
-            ).fetchone()
-            if new_first:
-                _batched_execute(
-                    conn,
-                    "UPDATE papers SET abstract_chunk_id = ? WHERE id IN ({ph})",
-                    affected_paper_ids,
-                    extra_params=[new_first["id"]],
-                )
+        if affected_paper_ids and document:
+            _batched_execute(
+                conn,
+                "UPDATE papers SET abstract_chunk_id = ? WHERE id IN ({ph})",
+                affected_paper_ids,
+                extra_params=[document[0][1]],
+            )
 
         # --- Re-link methods/datasets/metrics by name search ---
-        new_chunks = conn.execute(
-            "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
-            (source_uri,),
-        ).fetchall()
-        if new_chunks:
+        if document:
             for table, affected in affected_entities.items():
                 for entity in affected:
                     # Compile the word-boundary pattern once per entity, then reuse
                     # it across every candidate chunk (avoids per-chunk recompilation).
                     name_pattern = re.compile(r"\b" + re.escape(entity["name"]) + r"\b")
-                    for nc in new_chunks:
-                        if name_pattern.search(nc["content"]):
+                    for _idx, chunk_id, content in document:
+                        if name_pattern.search(content):
                             conn.execute(
                                 f"UPDATE {table} SET chunk_id = ? WHERE id = ?",  # noqa: S608  # table is a hardcoded literal identifier, not user input
-                                (nc["id"], entity["id"]),
+                                (chunk_id, entity["id"]),
                             )
                             break
 

@@ -41,6 +41,7 @@ Source lives in `src/knowledge_base/`. Each module owns its domain:
 - `server.py` — FastMCP entry point, tool registration
 - `db.py` — SQLite schema, migrations, batched SQL helpers
 - `ingest.py` — ingestion pipeline (PDF via pymupdf4llm, Python via AST, web via trafilatura, fixed-size chunking for the rest)
+- `redact.py` — secret redaction (memory-engine's rules); `redact_store.py` — the `redact` maintenance command
 - `search.py` — hybrid search: FTS5 BM25 + sqlite-vec cosine, merged via RRF (k=60)
 - `extraction.py` — LLM extraction using map-reduce for long documents
 - `vision.py` — figure extraction from PDF pages using vision models
@@ -61,6 +62,7 @@ Tests in `tests/`, one file per module. Test/source ratio: 1.35x.
 - **Thread safety**: thread-local `sqlite3.Connection` objects. Never share connections across threads.
 - **Deduplication**: SHA-256 content hash on chunk content. Maintain this for any new content types.
 - **SQL safety**: use `_batched_execute`/`_batched_select` from `db.py` for IN-clause queries (SQLite 999 variable limit)
+- **Redaction**: text stored as chunk content passes `redact.scrub()` before it is hashed or embedded; `tests/fixtures/redaction-cases.jsonl` is shared byte for byte with memory-engine
 
 ## Issue & PR Labels
 

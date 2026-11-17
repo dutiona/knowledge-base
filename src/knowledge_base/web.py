@@ -42,6 +42,7 @@ from .utils import (
     egress_client,
     egress_deadline,
     is_private_ip,
+    without_userinfo,
     loopback_opt_in,
     validate_base_url,
 )
@@ -51,6 +52,7 @@ from .ingest import (
     _insert_chunk,
     ingest_text,
 )
+from .redact import scrub
 from .utils import content_hash as _content_hash
 
 logger = logging.getLogger(__name__)
@@ -294,7 +296,7 @@ def _parse_image_candidates(
     try:
         parser.feed(html_content)
     except Exception:
-        logger.warning("HTML parsing failed for %s", base_url, exc_info=True)
+        logger.warning("HTML parsing failed for %s", without_userinfo(base_url), exc_info=True)
         return None
 
     if not parser.images:
@@ -425,8 +427,10 @@ def _extract_html_images(
         for image_url, alt_text in candidates:
             try:
                 image_bytes = bytes(_fetch(image_client, image_url).body)  # BytesIO would copy a bytearray again
-            except Exception:
-                logger.warning("Image download failed: %s", image_url, exc_info=True)
+            except Exception as e:  # its text can name the URL, userinfo included: no traceback, the text cleaned
+                logger.warning(
+                    "Image download failed: %s: %s", without_userinfo(image_url), _USERINFO.sub(r"\1", str(e))
+                )
                 continue
 
             # Open with Pillow, check dimensions, convert to PNG
@@ -440,7 +444,7 @@ def _extract_html_images(
                 img_obj.convert("RGB").save(buf, format="PNG")
                 b64 = base64.b64encode(buf.getvalue()).decode("ascii")
             except Exception:
-                logger.warning("Image decode failed: %s", image_url, exc_info=True)
+                logger.warning("Image decode failed: %s", without_userinfo(image_url), exc_info=True)
                 continue
 
             # Vision call
@@ -453,11 +457,11 @@ def _extract_html_images(
             try:
                 figures = _vision_call(b64, prompt, **vision_config)
             except Exception:
-                logger.warning("Vision call failed for image %s", image_url, exc_info=True)
+                logger.warning("Vision call failed for image %s", without_userinfo(image_url), exc_info=True)
                 continue
 
             for fig in figures:
-                desc = fig.get("description", "")
+                desc = scrub(fig.get("description", ""))
                 if not desc:
                     continue
                 meta = {
@@ -722,8 +726,8 @@ def _render_with_browser(
         subprocess.TimeoutExpired,
         subprocess.CalledProcessError,
         OSError,
-    ) as exc:
-        logger.warning("Browser rendering failed for %s: %s", url, exc)
+    ) as exc:  # the argv in its text holds the URL
+        logger.warning("Browser rendering failed for %s: %s", without_userinfo(url), _USERINFO.sub(r"\1", str(exc)))
         shutil.rmtree(tmpdir, ignore_errors=True)
         return None
 
@@ -731,7 +735,7 @@ def _render_with_browser(
     screenshot_path = tmpdir / "screenshot.png"
 
     if not html_path.exists():
-        logger.warning("Browser produced no HTML for %s", url)
+        logger.warning("Browser produced no HTML for %s", without_userinfo(url))
         shutil.rmtree(tmpdir, ignore_errors=True)
         return None
 
@@ -757,7 +761,7 @@ def _render_with_browser(
                         }
                     )
         except (json.JSONDecodeError, KeyError, TypeError):
-            logger.warning("Failed to parse elements.json for %s", url)
+            logger.warning("Failed to parse elements.json for %s", without_userinfo(url))
 
     return {
         "html": html,
@@ -845,7 +849,7 @@ def _extract_web_figures(
         if omni_elements and len(figures) == 1:
             enriched = _merge_omniparser_elements(fig, omni_elements)
             desc = enriched.get("description", desc)
-        texts.append(desc)
+        texts.append(scrub(desc))
         valid_figures.append(fig)
 
     if not texts:
@@ -977,7 +981,7 @@ def _extract_element_captures(
             continue
 
         fig = figures[0]
-        desc = fig.get("description", "")
+        desc = scrub(fig.get("description", ""))
         if not desc:
             continue
 
@@ -1104,6 +1108,10 @@ class _Fetched:
     encoding: str
 
 
+#: The userinfo of an http(s) URL inside a message, up to the authority's last "@".
+_USERINFO = re.compile(r"(?i)(https?://)[^/?#]*@")  # as without_userinfo: a password can hold a space
+
+
 def _fetch(client: httpx.Client, url: str) -> _Fetched:
     """GET *url* with *client* (a floored client) under the fetch limits.
 
@@ -1112,6 +1120,7 @@ def _fetch(client: httpx.Client, url: str) -> _Fetched:
     (gzip or deflate, one layer) and its decoded bytes count. The deadline covers every hop and socket operation.
     A limit raises ``ValidationError``; any other failure is the ``httpx.HTTPError`` it was.
     """
+    shown = without_userinfo(url)  # an error is returned and logged, never with the URL's credentials
     limits = fetch_limits()
     request = client.build_request("GET", url, headers={"Accept-Encoding": "identity"})
     redirects = 0
@@ -1124,7 +1133,7 @@ def _fetch(client: httpx.Client, url: str) -> _Fetched:
                         redirects += 1
                         if redirects > limits.max_redirects:
                             raise ValidationError(
-                                f"Failed to fetch {url}: more than {limits.max_redirects} redirects "
+                                f"Failed to fetch {shown}: more than {limits.max_redirects} redirects "
                                 f"({FETCH_MAX_REDIRECTS_VAR})"
                             )
                         request = response.next_request
@@ -1133,12 +1142,12 @@ def _fetch(client: httpx.Client, url: str) -> _Fetched:
                     encoding = response.headers.get("content-encoding", "")
                     codings = [c for c in (part.strip().lower() for part in encoding.split(",")) if c]
                     if codings not in ([], ["identity"], ["gzip"], ["deflate"]):
-                        raise ValidationError(f"Failed to fetch {url}: unsupported Content-Encoding {encoding!r}")
+                        raise ValidationError(f"Failed to fetch {shown}: unsupported Content-Encoding {encoding!r}")
                     body = bytearray()  # one buffer: a list of many tiny chunks costs far more than their bytes
                     for chunk in response.iter_bytes():
                         if len(body) + len(chunk) > limits.max_bytes:
                             raise ValidationError(
-                                f"Failed to fetch {url}: the response is over the {limits.max_bytes}-byte cap "
+                                f"Failed to fetch {shown}: the response is over the {limits.max_bytes}-byte cap "
                                 f"({FETCH_MAX_BYTES_VAR})"
                             )
                         body += chunk
@@ -1149,7 +1158,7 @@ def _fetch(client: httpx.Client, url: str) -> _Fetched:
                     response.close()
     except DeadlineExceeded:
         raise ValidationError(
-            f"Failed to fetch {url}: not done within the {limits.deadline} s deadline ({FETCH_DEADLINE_VAR})"
+            f"Failed to fetch {shown}: not done within the {limits.deadline} s deadline ({FETCH_DEADLINE_VAR})"
         ) from None
 
 
@@ -1171,18 +1180,20 @@ def ingest_url(
     try:
         parsed = urlparse(url)
     except ValueError as e:  # an unclosed IPv6 bracket
-        raise ValidationError(f"Invalid URL {url!r}: {e}") from e
+        raise ValidationError(f"Invalid URL {without_userinfo(url)!r}: {e}") from e
     if parsed.scheme not in _ALLOWED_URL_SCHEMES:
         raise ValidationError(f"URL scheme must be http or https, got: {parsed.scheme!r}")
     if not parsed.hostname:
         raise ValidationError("URL must include a hostname")
+    # The page is stored and logged under its URL without userinfo; it is fetched with all of it (#592).
+    source_uri = without_userinfo(url)
     # The client floors and pins the first request and every redirect hop, so a refused hop is never sent and
     # raises ValidationError (#572); _fetch bounds the fetch's size, redirects and time (#588).
     try:
         with egress_client(floor=True, timeout=30.0) as client:
             fetched = _fetch(client, url)
     except (httpx.HTTPError, httpx.InvalidURL) as e:  # InvalidURL (a bad port, a control character) is no HTTPError
-        raise ValidationError(f"Failed to fetch {url}: {e}") from e
+        raise ValidationError(f"Failed to fetch {source_uri}: {_USERINFO.sub(r'\1', str(e))}") from e
 
     # punycode is a hostname codec that decodes a run of digits in quadratic time, after the fetch's deadline
     encoding = "utf-8" if codecs.lookup(fetched.encoding).name == "punycode" else fetched.encoding
@@ -1241,11 +1252,11 @@ def ingest_url(
                     screenshot = render_result.get("screenshot_path")
                     if screenshot and screenshot.exists():
                         try:
-                            figures_extracted = _extract_web_figures(conn, url, screenshot)
+                            figures_extracted = _extract_web_figures(conn, source_uri, screenshot)
                         except Exception:
                             logger.warning(
                                 "Figure extraction failed for %s",
-                                url,
+                                source_uri,
                                 exc_info=True,
                             )
                             figures_extracted = 0
@@ -1254,11 +1265,11 @@ def ingest_url(
                     element_captures = render_result.get("element_captures")
                     if element_captures:
                         try:
-                            figures_extracted += _extract_element_captures(conn, url, element_captures)
+                            figures_extracted += _extract_element_captures(conn, source_uri, element_captures)
                         except Exception:
                             logger.warning(
                                 "Element capture extraction failed for %s",
-                                url,
+                                source_uri,
                                 exc_info=True,
                             )
                 finally:
@@ -1277,17 +1288,17 @@ def ingest_url(
         inline_figures = _extract_html_images(
             conn,
             html,
-            source_url=url,
+            source_url=source_uri,
             base_url=str(fetched.url),
             extra_html_sources=extra_sources,
         )
         figures_extracted += inline_figures
     except Exception:
-        logger.warning("Inline image extraction failed for %s", url, exc_info=True)
+        logger.warning("Inline image extraction failed for %s", source_uri, exc_info=True)
 
     _base_result: dict = {
         "url": url,
-        "source_uri": url,
+        "source_uri": source_uri,
         "source_type": "web",
         "browser_rendered": browser_rendered,
         "figures_extracted": figures_extracted,
@@ -1299,7 +1310,7 @@ def ingest_url(
     stored = ingest_text(
         conn,
         text,
-        source_uri=url,
+        source_uri=source_uri,
         source_type="web",
         session_id=session_id,
         metadata={"title": extracted_title} if extracted_title else None,

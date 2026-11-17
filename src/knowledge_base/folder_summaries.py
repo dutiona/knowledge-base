@@ -13,6 +13,7 @@ import sqlite3
 from .db import escape_like, require_active_space
 from .embed_swap import declared_provider_config
 from .embeddings import embed, truncate_embedding
+from .redact import scrub
 from .utils import serialize_f32 as _serialize_f32
 
 __all__ = ["update_folder_summary"]
@@ -70,7 +71,8 @@ def _build_folder_summary(conn: sqlite3.Connection, folder_path: str) -> str:
         filename = posixpath.basename(row["source_uri"])
         snippet = row["content"][:200].replace("\n", " ").strip()
         parts.append(f"{filename}: {snippet}")
-    return "\n".join(parts)
+    # File names stay as written (identity) and cuts and joined lines can make a match: redact the whole.
+    return scrub("\n".join(parts))
 
 
 def update_folder_summary(

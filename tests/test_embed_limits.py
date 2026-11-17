@@ -221,3 +221,77 @@ def test_re_ingesting_an_unchanged_file_counts_nothing(conn, bounded_embedder, h
     before = len(http_requests)
     assert ingest_file(conn, path)["chunks_skipped"] == 1
     assert [r.url.path for r in http_requests[before:]] == []
+
+
+def test_a_piece_the_limit_split_cuts_is_still_a_redaction_fixpoint(conn, bounded_embedder, monkeypatch):
+    """#592: the split can cut mid-word, which a redaction rule reads as a boundary: each stored piece is scrubbed."""
+    from knowledge_base import ingest
+    from knowledge_base.redact import scrub
+
+    monkeypatch.setattr(ingest, "split_inputs", lambda texts, cfg: [[t[:400], t[400:]] for t in texts])
+    text = "x" * 399 + "_me_" + "0" * 32 + " plain words"
+    ingest.ingest_text(conn, text, source_uri="/docs/cut.md", source_type="markdown")
+    contents = [r[0] for r in conn.execute("SELECT content FROM chunks WHERE source_uri = '/docs/cut.md'")]
+    assert len(contents) == 2
+    assert all(c == scrub(c) for c in contents)
+
+
+def test_re_ingesting_a_file_whose_chunk_redaction_changed_counts_nothing(
+    conn, bounded_embedder, http_requests, tmp_path
+):
+    """#592 with #604: the split's stored-chunk lookup hashes the text that is stored, the scrubbed one."""
+    from knowledge_base.ingest import ingest_file
+
+    path = tmp_path / "edge.md"
+    # The second 1000-character window starts at "me_", which the per-chunk scrub then redacts.
+    path.write_text("x" * 799 + "_me_" + "0" * 32 + " " + "word " * 40)  # each chunk fits the limit
+    ingest_file(conn, path)
+    before = len(http_requests)
+    assert ingest_file(conn, path)["chunks_added"] == 0
+    assert [r.url.path for r in http_requests[before:]] == []
+
+
+@pytest.mark.parametrize(
+    ("before", "repeat"),
+    [("w" * 329 + "(", 4), ("(", 16), ("", 16)],
+    ids=["cut-before-the-link", "cut-after-a-link-near-the-start", "cut-after-a-leading-link"],
+)
+def test_the_limit_split_does_not_cut_a_link_that_fits(before, repeat):
+    """#592: a link is not redacted, so the input-limit split moves a cut out of a link, to its start or its end."""
+    from knowledge_base.embeddings import split_to_limit
+    from knowledge_base.redact import link_extents
+
+    link = "https://maps.example.test/api?key=" + "Ab3dE5fG7hI9jK1lM2nO" * repeat
+    text = before + link + ")" + "v" * 600  # no whitespace for _fit's own pull-back to reach
+
+    def by_chars(t: str) -> int:  # cuts anywhere, as a subword tokenizer can
+        return len(t) // 4 + 1
+
+    pieces = split_to_limit(text, 100, by_chars)
+    assert "".join(pieces) == text
+    cuts, at = [], 0
+    for piece in pieces[:-1]:
+        at += len(piece)
+        cuts.append(at)
+    assert all(not (s < c < e) for c in cuts for s, e in link_extents(text))
+    assert all(by_chars(p) <= 100 and len(p) > 1 for p in pieces)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "w" * 50 + "(" + "https://maps.example.test/api?key=" + "Ab3dE5fG7hI9jK1lM2nO" * 30 + ")" + "v" * 300,
+        "w" * 50 + "(" + "https://maps.example.test/api?key=" + "Ab3dE5fG7hI9jK1lM2nO" * 300 + ")",
+    ],
+    ids=["a-link-over-the-limit", "a-link-past-the-lookahead"],
+)
+def test_the_limit_split_still_ends_when_a_link_cannot_be_kept_whole(text):
+    """#592: when neither edge of a link fits, the split keeps its own cut, so it ends and every piece fits."""
+    from knowledge_base.embeddings import split_to_limit
+
+    def by_chars(t: str) -> int:
+        return len(t) // 4 + 1
+
+    pieces = split_to_limit(text, 100, by_chars)
+    assert "".join(pieces) == text
+    assert all(by_chars(p) <= 100 for p in pieces)

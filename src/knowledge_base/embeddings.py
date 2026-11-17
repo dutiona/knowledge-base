@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 import httpx
 
 from .exceptions import ValidationError
+from .redact import link_extents
 from .settings import VARIABLES, declared_embed_host
 from .utils import _resolve_api_key, _sanitize_url, validate_base_url
 
@@ -226,6 +227,25 @@ def _fit(text: str, limit: int, count: Callable[[str], int]) -> int:
     return space if space == best or count(text[:space]) <= limit else best
 
 
+#: How far past a cut the link scan reads to see whether the cut falls inside a link.
+_LINK_LOOKAHEAD = 4096
+
+
+def _cuts_outside_link(text: str, cut: int) -> list[int]:
+    """Where to cut instead when *cut* falls inside a link, best first: before the link or after it.
+
+    A link is not redacted (#592), but a cut fragment of one would be read as text. Cutting before the link is
+    preferred while it keeps at least half the piece, so a piece is not a stray ``(``.
+    """
+    window = text[: cut + _LINK_LOOKAHEAD]
+    for start, end in link_extents(window):
+        if start < cut < end:
+            after = [end] if end < len(window) or len(window) == len(text) else []
+            before = [start] if start else []
+            return before + after if start >= cut // 2 else after + before
+    return []
+
+
 def split_to_limit(text: str, limit: int, count: Callable[[str], int]) -> list[str]:
     """*text* as consecutive slices that each count at most *limit*; joined, they are *text* again.
 
@@ -247,6 +267,8 @@ def split_to_limit(text: str, limit: int, count: Callable[[str], int]) -> list[s
         cut = _fit(text, aim, count) or _fit(text, limit, count)
         if not cut:
             raise _nothing_fits(limit)
+        # A count is not monotone, so a moved cut is counted again, as _fit does.
+        cut = next((c for c in _cuts_outside_link(text, cut) if count(text[:c]) <= limit), cut)
         pieces.append(text[:cut])
         text = text[cut:]
     return pieces

@@ -450,3 +450,21 @@ def test_the_recorder_keys_a_request_by_its_host_header(url, host_header, expect
     from tests.conftest import logical_host
 
     assert logical_host(httpx.Request("GET", url, headers={"host": host_header})) == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://user:pw@docs.example.test/a?k=v#f", "https://docs.example.test/a?k=v#f"),
+        ("HTTPS://token@docs.example.test", "HTTPS://docs.example.test"),
+        ("http://a:b@c@host.example.test:8443/p", "http://host.example.test:8443/p"),
+        ("https://docs.example.test/a?mail=a@b.test", "https://docs.example.test/a?mail=a@b.test"),
+        ("ftp://user:pw@host.example.test/f", "ftp://user:pw@host.example.test/f"),
+        ("content://laptop/notes.md", "content://laptop/notes.md"),
+        ("/srv/x@y/file.md", "/srv/x@y/file.md"),
+    ],
+)
+def test_without_userinfo(url, expected):
+    from knowledge_base.utils import without_userinfo
+
+    assert without_userinfo(url) == expected
