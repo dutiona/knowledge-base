@@ -99,12 +99,24 @@ Or register as an MCP server in your client's config (e.g. Claude Code `settings
 }
 ```
 
+Or serve stateless MCP over HTTP, with the same declaration exported, behind per-machine tokens (see
+[HTTP transport and machine tokens](#http-transport-and-machine-tokens)):
+
+```bash
+uv run knowledge-base --http 127.0.0.1:<port> --token-file /path/to/token-hashes
+```
+
+Plain `knowledge-base` serves stdio: the local and maintenance surface. Against a database the HTTP server uses, run
+it only with that server stopped; nothing enforces it.
+
 ### Configuration
 
 The environment is authoritative for the embedding configuration. A missing or invalid
 variable, or a database that disagrees with the declaration, stops the server before it
 serves: it prints the reason (naming the variable or the `config` field) and exits 78
-(`EX_CONFIG`). Empty values count as unset.
+(`EX_CONFIG`). Empty values count as unset. So do a bad command line, `--http` without `--token-file`, and a
+missing, unreadable or malformed token-hash file (named by path and line), all checked before the database is
+opened.
 
 | Variable | Required | Value |
 | --- | --- | --- |
@@ -154,6 +166,44 @@ LAN or tailnet one is refused. Clear it to use the default (`configure_llm_tool`
 `base_url`, `configure_vision_tool(base_url="")`, `configure_omniparser_tool(server_url="")`),
 declare a LAN or tailnet Ollama with `OLLAMA_HOST`, or set `allow_loopback_base_url` (through
 `configure_llm_tool`) for a localhost server.
+
+### HTTP transport and machine tokens
+
+`knowledge-base --http IP:PORT --token-file PATH` serves MCP's streamable HTTP on `POST /mcp`, stateless with JSON
+responses, so a restart needs no client session recovery. `IP` is an address (IPv6 in brackets), never a host name.
+
+Every request carries exactly one `Authorization: Bearer <token>` header. Tokens and the token-hash file are
+memory-engine's ([ADR-0020 §4](https://github.com/dutiona/memory-engine/blob/main/docs/design/adr/0020-harness-neutral-lifecycle-api.md#4-machine-tokens)):
+one token per machine, serving both services; one `<machine> <sha256-hex>` line per machine, for example
+`laptop <64 lowercase hex digits>`, read at startup only; a malformed line stops the server. Mint a line without
+putting the token on a command line or hashing a line feed:
+
+```bash
+printf '%s %s\n' laptop "$(printf '%s' "$token" | sha256sum | cut -d' ' -f1)" >> token-hashes
+```
+
+| Status | When |
+| --- | --- |
+| 401 | Any request, on any method or path, without exactly one valid token |
+| 404 | An unknown path, with a token |
+| 405 | `GET` or `DELETE` on `/mcp` (stateless mode serves `POST` only) |
+| other 4xx | A `POST` the MCP SDK refuses (`Accept`, `Content-Type`, body) |
+
+KB never sends 403 and has no unauthenticated route, so a liveness probe expects 401. Every `Host` is served, and the
+transport is plain HTTP: keep the port reachable from the host only (a loopback bind, or for a container the
+[published-port setup](docs/getting-started/installation.md#container-image)) behind a TLS proxy such as
+`tailscale serve`. Each tool call writes one stderr line naming the machine and the tool, and any token shape in any
+log line is written `me_[redacted]`. A stop lets calls already started finish, bounded by the unit's stop timeout.
+Only `knowledge-base --http` serves HTTP through the token check; any other HTTP server of the hub runs no tool.
+
+A client sends the header itself (the Claude Code plugin's `headersHelper`, ADR-0020 §12), never in `.mcp.json` or on
+a command line. A manual check reads the header from standard input:
+
+```bash
+printf 'Authorization: Bearer %s\n' "$(cat ~/.config/memory-engine/secrets/token)" | curl -sS -H @- \
+  -H 'Accept: application/json' -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' https://kb.example-tailnet.ts.net/mcp
+```
 
 ### Run tests
 
@@ -327,6 +377,7 @@ database and checked at every start (see [Configuration](#configuration)).
 
 ## Limitations
 
-- Single-user, single-process (SQLite WAL mode, no concurrent writers)
+- One process (SQLite WAL mode, no concurrent writers), shared over HTTP by every machine holding a token; each
+  reaches every tool until the lean tool map (#543)
 - AST-aware chunking only for Python files; other code uses fixed-size chunks
 - Embedding model swap re-embeds all chunks sequentially (can be slow for large indexes)

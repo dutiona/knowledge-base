@@ -46,14 +46,15 @@ uv sync
 
 This installs all runtime dependencies:
 
-| Package              | Purpose                                |
-| -------------------- | -------------------------------------- |
-| fastmcp (>=3.1.0)    | MCP server framework (stdio transport) |
-| httpx                | HTTP client for Ollama API             |
-| pymupdf, pymupdf4llm | PDF text extraction                    |
-| sqlite-vec           | Vector similarity search               |
-| trafilatura          | Web page content extraction            |
-| pillow               | Image processing for figure extraction |
+| Package              | Purpose                                          |
+| -------------------- | ------------------------------------------------ |
+| fastmcp (>=3.1.0)    | MCP server framework (stdio and HTTP transports) |
+| httpx                | HTTP client for Ollama API                       |
+| pymupdf, pymupdf4llm | PDF text extraction                              |
+| sqlite-vec           | Vector similarity search                         |
+| trafilatura          | Web page content extraction                      |
+| pillow               | Image processing for figure extraction           |
+| uvicorn              | HTTP server for `--http`                         |
 
 ## MCP client registration
 
@@ -87,7 +88,8 @@ declaration, and a blank database is created from it (see the README's Configura
 section). Vision, the browser fallback and LLM extraction stay off unless you add
 `KNOWLEDGE_BASE_VISION`, `KNOWLEDGE_BASE_BROWSER` or `KNOWLEDGE_BASE_LLM` set to `"on"`.
 
-The server uses FastMCP's stdio transport. The `knowledge-base` entry point is
+The server uses FastMCP's stdio transport by default, or stateless HTTP behind per-machine tokens with `--http`
+(see the README's HTTP transport and machine tokens section). The `knowledge-base` entry point is
 defined in `pyproject.toml` and maps to `knowledge_base.server:main`.
 
 ## Database location
@@ -155,8 +157,12 @@ reaching them reaches the host's own services. Tailnet, bridge and gateway addre
 
 ### Snapshotting a running server
 
-Until the server gains an HTTP transport (#571), `knowledge-base` speaks MCP over stdio and exits when its standard
-input closes, so a detached container needs `-i` to stay up.
+Under `--http` the container needs no `-i`. Inside it the server binds `--http 0.0.0.0:<port>` (a loopback bind
+inside a bridge or slirp4netns container is not reachable through a published port); the unit publishes that port on
+the host's loopback only (`PublishPort=127.0.0.1:<port>:<port>`), so plain HTTP crosses only the hop inside the host,
+and mounts the token-hash file read-only for `--token-file`. Podman's stop timeout (`StopTimeout=`, 10 s by default)
+bounds how long a stop waits for calls in flight. Over stdio, `knowledge-base` exits when its standard input closes,
+so a detached container needs `-i` to stay up.
 
 Take a backup inside the running container, read-only, through Python's `sqlite3` alone. Never use `knowledge-base`
 or `knowledge-base-ingest` for it: a KB entry point can start the job worker, whose crash recovery resets running

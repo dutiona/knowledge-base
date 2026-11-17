@@ -4,7 +4,7 @@
 
 ```{mermaid}
 graph LR
-    Client["MCP Client<br/>(Claude, IDE)"] -->|stdio| Server["FastMCP Server<br/>server.py"]
+    Client["MCP Client<br/>(Claude, IDE)"] -->|stdio or HTTP + Bearer| Server["FastMCP Server<br/>server.py"]
     Server --> Ingest["ingest.py"]
     Server --> Search["search.py"]
     Server --> Extract["extraction.py"]
@@ -37,7 +37,9 @@ graph LR
 
 ## Module Responsibilities
 
-**`server.py`** -- FastMCP entry point. Builds the hub and mounts the six `routes/` modules, which register the MCP tools, validate their arguments and serialize their responses. `main()` runs the startup gate (the embedding declaration the database must agree with) and then serves stdio. Thread-local database connections and the double-checked schema initialization live in `_conn.py`.
+**`server.py`** -- FastMCP entry point. Builds the hub and mounts the six `routes/` modules, which register the MCP tools, validate their arguments and serialize their responses. `main()` runs the startup gate (the embedding declaration the database must agree with) and then serves stdio, or with `--http` the stateless streamable-HTTP app behind `auth.py`'s gate under uvicorn. Thread-local database connections and the double-checked schema initialization live in `_conn.py`.
+
+**`auth.py`** -- Machine tokens (memory-engine ADR-0020 §4). Parses the token-hash file, fail-closed; the ASGI gate answers 401 to any request without exactly one valid `Bearer` token and hands the machine on; a hub middleware logs the machine of every tool call and refuses an HTTP call without one; HTTP mode's log formatter redacts token shapes and keeps one record per line.
 
 **`db.py`** -- Database schema creation, migrations, and shared SQL helpers. Defines the complete schema (chunks, papers, relationships, conclusions, methods, datasets, metrics, entities, jobs, config tables) along with FTS5 virtual tables and sqlite-vec vector tables. Provides `get_connection()` which loads the sqlite-vec extension and enables WAL mode. Includes `_batched_execute` and `_batched_select` helpers that batch IN-clause queries to stay under SQLite's 999 variable limit.
 
