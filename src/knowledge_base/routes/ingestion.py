@@ -1,16 +1,22 @@
-"""Ingestion route: ingest, reingest, ingest_url, configure_chunking, configure_browser."""
+"""Ingestion route: ingest, reingest, ingest_text, ingest_url, configure_chunking, configure_browser."""
 
 from __future__ import annotations
 
 import json
+import sqlite3
+import unicodedata
 from pathlib import Path
 
+import httpx
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from .._conn import _get_conn
+from ..auth import calling_machine
 from ..exceptions import KnowledgeBaseError
-from ..ingest import ingest_directory, ingest_file, reingest_file
+from ..ingest import ingest_directory, ingest_file, ingest_text as _ingest_text, reingest_file
 from ..web import configure_browser, ingest_url as _ingest_url
+from . import RACE, embedder_failure
 
 mcp = FastMCP("ingestion-routes")
 
@@ -98,12 +104,59 @@ def reingest(
     return json.dumps(result)
 
 
+#: Controls, format characters (bidi overrides, zero-width), lone surrogates, line and paragraph separators: a name
+#: is shown in other machines' results, and a lone surrogate cannot be stored.
+_REFUSED_NAME_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
+_NAME_RULE = (
+    "name must be 1 to 255 characters, with no control, format or surrogate characters and no line or paragraph "
+    "separators, not starting with /"
+)
+
+
+@mcp.tool()
+def ingest_text(name: str, content: str) -> str:
+    """Ingest a text or markdown document you pass in, under a name search results will cite.
+
+    The document is stored as ``content://<machine>/<name>``, the machine being the caller's.
+    Ingest only adds: identical text is skipped, and re-ingesting changed text under the same
+    name keeps the earlier version searchable beside the new one, so give each revision its own
+    name. A failed ingest stored nothing.
+
+    Args:
+        name: The document's name, for example 'notes/attention.md'. An opaque label: KB never
+            opens it as a path.
+        content: The text or markdown to store.
+    """
+    name = name.strip()
+    if (
+        not 1 <= len(name) <= 255
+        or name.startswith("/")
+        or any(unicodedata.category(c) in _REFUSED_NAME_CATEGORIES for c in name)
+    ):
+        raise ToolError(_NAME_RULE)
+    if not content.strip():
+        raise ToolError("content is empty: there is nothing to ingest")
+    source_uri = f"content://{calling_machine() or ''}/{name}"
+    conn = _get_conn()
+    try:
+        stored = _ingest_text(conn, content, source_uri=source_uri, source_type="markdown")
+    except KnowledgeBaseError as e:
+        raise ToolError(str(e)) from e
+    except sqlite3.IntegrityError as e:
+        raise ToolError(f"{RACE}; nothing was stored, retry") from e
+    except httpx.HTTPError as e:
+        kind, retryable = embedder_failure(e)
+        raise ToolError(f"{kind}; nothing was stored" + (", retry later" if retryable else "")) from e
+    return json.dumps({"source_uri": source_uri, "source_type": "markdown", **stored})
+
+
 @mcp.tool()
 def ingest_url(url: str, session_id: str | None = None) -> str:
     """Ingest a web page by URL. Fetches the page, extracts main content, and indexes it.
 
     Uses content-hash dedup — unchanged pages are skipped on re-ingest.
-    Use the reingest tool with the URL as path to force re-ingest.
+    Re-ingesting a changed page adds its new text passages beside the earlier ones; no tool replaces
+    or removes a page's text.
 
     Args:
         url: The URL to fetch and ingest.
@@ -113,8 +166,12 @@ def ingest_url(url: str, session_id: str | None = None) -> str:
     try:
         return json.dumps(_ingest_url(conn, url, session_id=session_id))
     except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+        raise ToolError(str(e)) from e
+    except sqlite3.IntegrityError as e:
+        raise ToolError(f"{RACE}; the page's text was not stored, retry") from e
+    except httpx.HTTPError as e:  # ingest_url reports every page-fetch failure as ValidationError: this is the embedder
+        kind, retryable = embedder_failure(e)
+        raise ToolError(f"{kind}; the page's text was not stored" + (", retry later" if retryable else "")) from e
 
 
 @mcp.tool()

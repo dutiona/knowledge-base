@@ -88,8 +88,10 @@ declaration, and a blank database is created from it (see the README's Configura
 section). Vision, the browser fallback and LLM extraction stay off unless you add
 `KNOWLEDGE_BASE_VISION`, `KNOWLEDGE_BASE_BROWSER` or `KNOWLEDGE_BASE_LLM` set to `"on"`.
 
-The server uses FastMCP's stdio transport by default, or stateless HTTP behind per-machine tokens with `--http`
-(see the README's HTTP transport and machine tokens section). The `knowledge-base` entry point is
+The server uses FastMCP's stdio transport by default, with every tool, or stateless HTTP behind per-machine tokens
+with `--http`, which serves only `search_index`, `ingest_text` and `ingest_url` and refuses to start while
+`KNOWLEDGE_BASE_VISION` or `KNOWLEDGE_BASE_BROWSER` is on (see the README's HTTP transport and machine tokens
+section). The `knowledge-base` entry point is
 defined in `pyproject.toml` and maps to `knowledge_base.server:main`.
 
 ## Database location

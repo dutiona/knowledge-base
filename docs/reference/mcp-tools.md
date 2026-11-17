@@ -1,6 +1,30 @@
 # MCP Tools Reference
 
-Complete reference for all 43 MCP tools exposed by the knowledge-base server.
+Complete reference for the knowledge-base MCP tools: 48 tools over stdio, 3 over HTTP.
+
+## Surfaces
+
+- **stdio** (`knowledge-base`) serves every tool: the local and maintenance surface. Against a database the HTTP
+  server uses, run it only with that server stopped.
+- **HTTP** (`knowledge-base --http`) serves only `search_index`, `ingest_text` and `ingest_url`, the same tools with
+  the same names and schemas. No HTTP tool takes or writes a server path, configures the server, or removes
+  or replaces a document. The server refuses to start while `KNOWLEDGE_BASE_VISION` or `KNOWLEDGE_BASE_BROWSER` is
+  on, logs the machine of every call, and refuses a request body over 4 MiB. Search results still name a file
+  ingested over stdio by its server path (its `source_uri`): a document name no HTTP caller can make KB read.
+
+Every failure of `search_index`, `ingest_text` and `ingest_url` is an MCP tool error (`isError: true`) whose text KB
+wrote: a refusal gives its reason, an embedder failure gives its kind (`HTTP 503`, `ConnectError`) and never the
+endpoint, with "retry later" only when a retry can help. A failed ingest stored no text. Over HTTP, any other
+exception reads `Error calling tool '<name>'`; its detail goes only to the server log. The other tools return
+failures as `{"error": ...}` results.
+
+A document's `source_uri` names it in every result. It is an opaque identifier, never parsed as a URL:
+
+| Ingested by | `source_uri` |
+| --- | --- |
+| file (`ingest`, stdio) | the absolute path, `/...` |
+| web page (`ingest_url`) | the URL as given, `https://...` |
+| content (`ingest_text`) | `content://<machine>/<name>` over HTTP, `content:///<name>` over stdio |
 
 Return values are JSON strings unless noted otherwise.
 
@@ -57,13 +81,15 @@ Force re-ingest of a previously ingested file. Deletes old chunks and inserts ne
 
 ### ingest_url
 
-Ingest a web page by URL. Fetches the page, extracts main content, and indexes it.
+Ingest a web page by URL. Fetches the page, extracts main content, and indexes it. Served over stdio and HTTP; over
+HTTP it stores the page's text only (no rendering, no figures).
 
 Redirects are followed. Every hop keeps the SSRF floor and connects to the address it checked, so a redirect into a
 private, loopback, tailnet or host-owned address (`KNOWLEDGE_BASE_HOST_ADDRESSES`) fails the call before anything is
 sent there.
 
-Uses content-hash dedup -- unchanged pages are skipped on re-ingest.
+Uses content-hash dedup -- unchanged pages are skipped on re-ingest. Re-ingesting a changed page adds its new text
+passages beside the earlier ones; no tool replaces or removes a page's text. Failures are tool errors (see Surfaces).
 
 | Parameter    | Type          | Required | Default | Description                                    |
 | ------------ | ------------- | -------- | ------- | ---------------------------------------------- |
@@ -86,6 +112,50 @@ Uses content-hash dedup -- unchanged pages are skipped on re-ingest.
 ```
 
 Falls back to browser rendering (if configured) when trafilatura extracts insufficient content (< 200 chars). When browser rendering is active, figures may also be extracted from a viewport screenshot.
+
+### ingest_text
+
+Ingest a text or markdown document passed in by the caller, under a name search results cite. Served over stdio and
+HTTP.
+
+| Parameter | Type  | Required | Default | Description                                                                         |
+| --------- | ----- | -------- | ------- | ----------------------------------------------------------------------------------- |
+| `name`    | `str` | yes      | --      | The document's name, for example `notes/attention.md`: an opaque label, never a path |
+| `content` | `str` | yes      | --      | The text or markdown to store                                                        |
+
+The document is stored with `source_type` `markdown` and `source_uri` `content://<machine>/<name>`, the machine being
+the caller's token's (`content:///<name>` over stdio). A `name` is stripped and must hold 1 to 255 characters, with no
+control, format or surrogate characters and no line or paragraph separators, and must not start with `/`.
+
+Ingest only adds. Identical text is skipped. Re-ingesting changed text under the same name stores it again from its
+first edit on (chunks are fixed 1000-character windows, so one edit shifts every later window), and the earlier
+version stays searchable beside it: give each revision its own name. No tool removes a content document yet.
+
+**Request** (MCP `tools/call`):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": { "name": "ingest_text", "arguments": { "name": "notes/attention.md", "content": "# Attention\n\n..." } }
+}
+```
+
+**Returns:**
+
+```json
+{
+  "source_uri": "content://laptop/notes/attention.md",
+  "source_type": "markdown",
+  "chunks_added": 3,
+  "chunks_skipped": 0
+}
+```
+
+Failures are tool errors (`isError: true`): a refused name or empty content, an embedder failure ("the embedding
+service failed (HTTP 503); nothing was stored, retry later"), or a lost race with a concurrent ingest of the same
+passages. A failed call stored nothing.
 
 ### co_occurrence
 
@@ -117,7 +187,8 @@ Tools for querying the index.
 
 ### search_index
 
-Search the research index using hybrid semantic + keyword search.
+Search the research index using hybrid semantic + keyword search. Served over stdio and HTTP. Failures are tool
+errors (see Surfaces); while the embedder is down, `mode="fts"` still answers.
 
 | Parameter        | Type          | Required | Default    | Description                                                                  |
 | ---------------- | ------------- | -------- | ---------- | ---------------------------------------------------------------------------- |
@@ -125,9 +196,10 @@ Search the research index using hybrid semantic + keyword search.
 | `top_k`          | `int`         | no       | `10`       | Number of results to return                                                  |
 | `source_type`    | `str \| None` | no       | `None`     | Filter results by type (`pdf`, `markdown`, `code`, `web`, `note`, `figure`)  |
 | `mode`           | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)           |
+| `keyword_prefilter` | `bool`     | no       | `false`    | Match FTS on intent keywords extracted from the query instead of the raw query (strips stopwords and filler from verbose queries) |
 | `chunk_strategy` | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all.  |
 | `space_name`     | `str \| None` | no       | `None`     | Search a specific embedding space instead of the active one.                 |
-| `rerank`         | `bool`        | no       | `false`    | Enable cross-encoder reranking for improved relevance. Requires onnxruntime. |
+| `rerank`         | `bool`        | no       | `false`    | Enable cross-encoder reranking. Needs the reranker installed on the server; without it, results come back in fused order (`match_type` is not `reranked`). |
 
 **Returns:** Array of result objects:
 
@@ -862,6 +934,42 @@ Batch-compare two embedding spaces with multiple queries. Returns aggregated sta
   "warnings": []
 }
 ```
+
+### benchmark_spaces_tool
+
+Benchmark every non-deprecated space against a baseline: samples stored chunk texts as queries, runs
+`batch_compare_spaces_tool` for each other space and adds a storage estimate.
+
+| Parameter        | Type          | Required | Default              | Description                                  |
+| ---------------- | ------------- | -------- | -------------------- | -------------------------------------------- |
+| `baseline_space` | `str \| None` | no       | `None` (active space) | The space every other space is compared with |
+| `sample_queries` | `int`         | no       | `50`                 | Number of random chunk texts used as queries |
+| `top_k`          | `int`         | no       | `10`                 | Number of results per space per query        |
+
+**Returns:**
+
+```json
+{
+  "baseline": "bge_m3_1024",
+  "baseline_element_type": "float32",
+  "queries_sampled": 50,
+  "top_k": 10,
+  "comparisons": [
+    {
+      "space": "qwen3_512",
+      "element_type": "int8",
+      "dim": 512,
+      "status": "populating",
+      "chunk_count": 1200,
+      "storage_ratio_vs_baseline": 0.125,
+      "metrics": { "overlap_at_k": {}, "jaccard": {}, "rank_correlation": {} },
+      "warnings": []
+    }
+  ]
+}
+```
+
+A space whose comparison fails appears as `{"space": ..., "error": ...}`.
 
 ---
 

@@ -21,7 +21,15 @@ from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
 from .exceptions import ValidationError
 
-__all__ = ["TOKEN_SHAPE", "CallingMachine", "RedactingFormatter", "RequireMachine", "TokenTable", "log_to_stderr"]
+__all__ = [
+    "TOKEN_SHAPE",
+    "CallingMachine",
+    "RedactingFormatter",
+    "RequireMachine",
+    "TokenTable",
+    "calling_machine",
+    "log_to_stderr",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +138,15 @@ class RequireMachine:
         inner["headers"] = [(name, value) for name, value in scope["headers"] if name != b"authorization"]
         inner["state"] = {**scope.get("state", {}), "machine": machine}
         await self.app(inner, receive, send)
+
+
+def calling_machine() -> str | None:
+    """The machine ``RequireMachine`` put on this call's HTTP request; ``None`` without one (stdio)."""
+    try:
+        request = get_http_request()
+    except RuntimeError:
+        return None
+    return getattr(request.state, "machine", None)
 
 
 class CallingMachine(Middleware):

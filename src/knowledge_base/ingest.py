@@ -55,6 +55,7 @@ __all__ = [
     "CHUNK_SIZE",
     "ingest_directory",
     "ingest_file",
+    "ingest_text",
     "kb_data_dir",
     "pdf_image_dir",
     "reingest_file",
@@ -510,6 +511,94 @@ def ingest_file(
         _update_folder_summary_safe(conn, path)
 
     return result
+
+
+def ingest_text(
+    conn: sqlite3.Connection,
+    text: str,
+    *,
+    source_uri: str,
+    source_type: str,
+    session_id: str | None = None,
+    metadata: dict | None = None,
+) -> dict[str, int]:
+    """Store *text* as chunks of one document: the single path for text stored by content or by URL.
+
+    Insert-only: a chunk repeated within *text*, or whose hash is already stored under any source, is
+    skipped (a stored one is linked to *session_id*); nothing stored is deleted or updated. Every new
+    chunk is embedded before the first write, so an embedder failure stores nothing. Commits once; any
+    failure rolls back, so the thread's reused connection never carries half a document (#554).
+    """
+    chunks = _chunk_text(text)
+    if not chunks:
+        return {"chunks_added": 0, "chunks_skipped": 0}
+    try:
+        return _store_text_chunks(conn, chunks, source_uri, source_type, session_id, metadata)
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _store_text_chunks(
+    conn: sqlite3.Connection,
+    chunks: list[str],
+    source_uri: str,
+    source_type: str,
+    session_id: str | None,
+    metadata: dict | None,
+) -> dict[str, int]:
+    # Defer chunk_sessions writes until after embeddings succeed (#180).
+    new_chunks: list[tuple[int, str, str]] = []
+    skipped = 0
+    deferred_session_links: list[int] = []
+    seen: set[str] = set()
+    for i, chunk in enumerate(chunks):
+        h = _content_hash(chunk)
+        if h in seen:  # chunks.content_hash is UNIQUE: a repeat within the text is stored once (#553)
+            skipped += 1
+            continue
+        seen.add(h)
+        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
+        if existing:
+            if session_id is not None:
+                deferred_session_links.append(existing["id"])
+            skipped += 1
+            continue
+        new_chunks.append((i, chunk, h))
+
+    if not new_chunks:
+        _flush_deferred_session_links(conn, deferred_session_links, session_id)
+        conn.commit()
+        return {"chunks_added": 0, "chunks_skipped": skipped}
+
+    embeddings = _embed_with_config(conn, [c[1] for c in new_chunks])
+
+    # One vec table for every insert and the single batched chunk_count bump (#392).
+    vec_table = get_vec_table_name(conn)
+    meta_json = json.dumps(metadata or {})
+    n_inserted = 0
+    for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings, strict=True):
+        _insert_chunk(
+            conn,
+            content_hash=chunk_hash,
+            content=chunk_text,
+            source_type=source_type,
+            source_uri=source_uri,
+            chunk_index=idx,
+            embedding=emb_vec,
+            session_id=session_id,
+            metadata=meta_json,
+            vec_table=vec_table,
+            bump_count=False,
+        )
+        if emb_vec is not None:
+            n_inserted += 1
+    if n_inserted:
+        bump_chunk_count(conn, vec_table, n_inserted)
+
+    _flush_deferred_session_links(conn, deferred_session_links, session_id)
+    conn.commit()
+    return {"chunks_added": len(new_chunks), "chunks_skipped": skipped}
 
 
 def _cleanup_conclusion_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> None:

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 
+import httpx
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from .._conn import _get_conn
 from ..db import co_occurrence_pairs, get_index_stats
-from ..embed_swap import get_embed_config
+from ..embed_swap import get_embed_config, get_space
 from ..exceptions import KnowledgeBaseError
 from ..prediction_errors import detect_and_log, get_prediction_error_count
 from ..search import search
+from . import embedder_failure
 
 mcp = FastMCP("search-routes")
 
@@ -41,10 +44,16 @@ def search_index(
             None (default) returns all chunks regardless of strategy.
         space_name: Search a specific embedding space instead of the active one.
             Useful for A/B comparison before promoting a new space.
-        rerank: Enable cross-encoder reranking for improved relevance. Requires
-            onnxruntime (install with: uv sync --group reranker). Default false.
+        rerank: Enable cross-encoder reranking for improved relevance. Needs the reranker
+            installed on the server; without it, results come back in fused order
+            (match_type is not 'reranked'). Default false.
     """
     conn = _get_conn()
+    if space_name:
+        try:
+            get_space(conn, space_name)  # the one ValueError a caller should read; any other stays masked
+        except ValueError as e:
+            raise ToolError(str(e)) from e
     try:
         results = search(
             conn,
@@ -58,7 +67,12 @@ def search_index(
             rerank=rerank,
         )
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e), **e.details})
+        raise ToolError(str(e)) from e
+    except httpx.HTTPError as e:
+        kind, retryable = embedder_failure(e)
+        raise ToolError(
+            f"{kind}; retry later, or search with mode='fts'" if retryable else f"{kind}; search with mode='fts'"
+        ) from e
 
     detect_and_log(conn, query, results, source_type_filter=source_type, mode=mode)
 

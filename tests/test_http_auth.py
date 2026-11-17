@@ -46,12 +46,12 @@ def _rpc_body(method: str, params: dict | None = None) -> bytes:
     return json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
 
 
-def _papers() -> int:
+def _chunks() -> int:
     from knowledge_base.db import get_connection
 
     conn = get_connection()
     try:
-        return conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+        return conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     finally:
         conn.close()
 
@@ -60,14 +60,16 @@ _CALLS = [
     ("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}),
     ("tools/list", None),
     ("tools/call", {"name": "search_index", "arguments": {"query": "attention"}}),
-    ("tools/call", {"name": "register_paper_tool", "arguments": {"title": "A paper"}}),
+    ("tools/call", {"name": "ingest_text", "arguments": {"name": "a.md", "content": "a note"}}),
 ]
 
 
 @pytest.mark.parametrize("credential", list(_REFUSED_CREDENTIALS), ids=list(_REFUSED_CREDENTIALS))
 def test_every_request_without_a_valid_token_is_refused(kb_http, stub_embedder, credential):
     authorization = _REFUSED_CREDENTIALS[credential]
-    inner_paths = [r.path for r in server.mcp.http_app(path="/mcp", stateless_http=True).routes if isinstance(r, Route)]
+    inner_paths = [
+        r.path for r in server.network.http_app(path="/mcp", stateless_http=True).routes if isinstance(r, Route)
+    ]
     attempts = [("POST", "/mcp", _JSON, _rpc_body(method, params)) for method, params in _CALLS]
     attempts += [("GET", "/mcp", {}, None), ("DELETE", "/mcp", {}, None), ("GET", "/mcp", _UPGRADE, None)]
     attempts += [(method, path, {}, None) for path in _PATHS + inner_paths for method in ("GET", "POST")]
@@ -76,14 +78,14 @@ def test_every_request_without_a_valid_token_is_refused(kb_http, stub_embedder, 
         assert (response.status_code, response.content) == (401, b""), (method, path)
         assert response.headers["www-authenticate"] == "Bearer"
     assert stub_embedder == []
-    assert _papers() == 0
+    assert _chunks() == 0
 
     for method, params in _CALLS[2:]:
         response = kb_http.rpc(method, params)
         assert response.status_code == 200
         assert response.json()["result"]["isError"] is False
     assert stub_embedder == ["attention"]
-    assert _papers() == 1
+    assert _chunks() == 1
 
 
 def test_tools_list_is_served(kb_http):
@@ -91,7 +93,7 @@ def test_tools_list_is_served(kb_http):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     served = {tool["name"] for tool in response.json()["result"]["tools"]}
-    assert served == {tool.name for tool in asyncio.run(server.mcp.list_tools())}
+    assert served == {tool.name for tool in asyncio.run(server.network.list_tools())}
 
 
 def test_the_first_request_may_be_a_tool_call(kb_http, stub_embedder):
@@ -125,7 +127,9 @@ def test_a_restart_needs_no_initialize(kb_http, token_file):
     kb_http.restart()
 
     for machine in ("laptop", "phone"):
-        response = kb_http.rpc("tools/call", {"name": "status", "arguments": {}}, machine=machine)
+        response = kb_http.rpc(
+            "tools/call", {"name": "search_index", "arguments": {"query": "q", "mode": "fts"}}, machine=machine
+        )
         assert response.status_code == 200
         assert response.json()["result"]["isError"] is False
 
@@ -166,25 +170,27 @@ def test_each_tool_call_logs_its_machine(kb_http, caplog):
     caplog.set_level(logging.INFO, logger="knowledge_base.auth")
     kb_http.rpc(*_CALLS[0])
     kb_http.rpc("tools/list")
-    kb_http.rpc("tools/call", {"name": "status", "arguments": {}}, machine=None)
+    kb_http.rpc("tools/call", {"name": "search_index", "arguments": {"query": "q", "mode": "fts"}}, machine=None)
     kb_http.rpc("tools/call", {"name": "search_index", "arguments": {"query": "q"}})
-    kb_http.rpc("tools/call", {"name": "status", "arguments": {}}, machine="desktop")
+    kb_http.rpc("tools/call", {"name": "search_index", "arguments": {"query": "q", "mode": "fts"}}, machine="desktop")
     records = [r.getMessage() for r in caplog.records if r.name == "knowledge_base.auth"]
-    assert records == ["machine laptop called 'search_index'", "machine desktop called 'status'"]
+    assert records == ["machine laptop called 'search_index'", "machine desktop called 'search_index'"]
 
 
-def test_a_gate_less_http_app_runs_no_tool(declared_db, stub_embedder):
+@pytest.mark.parametrize("hub", ["mcp", "network"])
+def test_a_gate_less_http_app_runs_no_tool(declared_db, stub_embedder, stub_document_embedder, hub):
     from tests.conftest import KbHttp
 
-    bare = KbHttp(lambda: server.mcp.http_app(path="/mcp", stateless_http=True, json_response=True))
+    bare = KbHttp(lambda: getattr(server, hub).http_app(path="/mcp", stateless_http=True, json_response=True))
     bare.start()
     try:
-        response = bare.rpc("tools/call", {"name": "register_paper_tool", "arguments": {"title": "T"}}, machine=None)
+        arguments = {"name": "a.md", "content": "a note"}
+        response = bare.rpc("tools/call", {"name": "ingest_text", "arguments": arguments}, machine=None)
     finally:
         bare.close()
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is True
-    assert _papers() == 0
+    assert _chunks() == 0
 
 
 def test_an_in_memory_call_still_runs(declared_db, caplog):

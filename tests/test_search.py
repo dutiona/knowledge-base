@@ -1,6 +1,5 @@
 """Tests for hybrid search (embeddings mocked)."""
 
-import json
 from unittest.mock import patch
 
 import pytest
@@ -265,14 +264,50 @@ def test_search_input_validation(tmp_path, param, value, match):
         search(conn, "test", **{param: value})
 
 
-def test_search_index_tool_returns_json_error(tmp_path):
-    """search_index tool should return a JSON error instead of crashing on ValidationError."""
-    db_path = tmp_path / "test.db"
-    conn = get_connection(db_path)
+def test_search_index_tool_raises_a_tool_error(tmp_path):
+    """A refused search is an MCP tool error carrying KB's reason, not a JSON result."""
+    from fastmcp.exceptions import ToolError
+
+    conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
 
-    with patch("knowledge_base.routes.search._get_conn", return_value=conn):
-        response_str = search_index("test", mode="invalid")
-        response = json.loads(response_str)
-        assert "error" in response
-        assert "mode must be one of" in response["error"]
+    with (
+        patch("knowledge_base.routes.search._get_conn", return_value=conn),
+        pytest.raises(ToolError, match="mode must be one of"),
+    ):
+        search_index("test", mode="invalid")
+
+
+@pytest.mark.parametrize(("status", "retry"), [(503, True), (429, True), (401, False)])
+def test_an_embedder_failure_never_names_the_embedder(tmp_path, status, retry):
+
+    from fastmcp.exceptions import ToolError
+
+    from tests.conftest import embedder_error, names_the_embedder
+
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    with (
+        patch("knowledge_base.routes.search._get_conn", return_value=conn),
+        patch("knowledge_base.routes.search.search", side_effect=embedder_error(status)),
+        pytest.raises(ToolError) as raised,
+    ):
+        search_index("q")
+
+    text = str(raised.value)
+    assert f"HTTP {status}" in text
+    assert not names_the_embedder(text)
+    assert ("retry later" in text) is retry
+
+
+def test_an_unknown_space_is_refused_with_its_reason(tmp_path):
+    from fastmcp.exceptions import ToolError
+
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    with (
+        patch("knowledge_base.routes.search._get_conn", return_value=conn),
+        patch("knowledge_base.search.embed_single", return_value=[0.1] * TEST_EMBED_DIM),
+        pytest.raises(ToolError, match="nope"),
+    ):
+        search_index("q", space_name="nope")

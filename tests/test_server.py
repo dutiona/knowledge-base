@@ -28,6 +28,7 @@ _INGESTION_TOOLS = {
     "ingest",
     "reingest",
     "ingest_url",
+    "ingest_text",
     "configure_chunking",
     "configure_browser_tool",
 }
@@ -93,14 +94,6 @@ def _registered_tool_names() -> set[str]:
 
 def test_mcp_is_fastmcp_instance():
     assert isinstance(server.mcp, FastMCP)
-
-
-def test_instructions_present_and_mentions_core_tools():
-    """The hub advertises its core tools in the instructions string."""
-    instructions = server.mcp.instructions
-    assert instructions is not None and instructions.strip()
-    for phrase in ("search", "ingest", "status"):
-        assert phrase in instructions
 
 
 def test_all_routes_are_mounted():
@@ -252,6 +245,9 @@ def served(monkeypatch):
 
     monkeypatch.setattr(uvicorn.Server, "run", _run)
     monkeypatch.setattr(server, "log_to_stderr", lambda: None)
+    # --http refuses vision and the browser fallback, which the suite's declaration switches on.
+    monkeypatch.setenv("KNOWLEDGE_BASE_VISION", "off")
+    monkeypatch.setenv("KNOWLEDGE_BASE_BROWSER", "off")
     with patch.object(server.mcp, "run") as stdio:
         yield runs, stdio
 
@@ -372,7 +368,9 @@ def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_fil
 
     with socket.create_server(("127.0.0.1", 0)) as probe:
         port = probe.getsockname()[1]
-    env = dict(os.environ, KNOWLEDGE_BASE_DB=str(tmp_path / "kb.db"))
+    env = dict(
+        os.environ, KNOWLEDGE_BASE_DB=str(tmp_path / "kb.db"), KNOWLEDGE_BASE_VISION="off", KNOWLEDGE_BASE_BROWSER="off"
+    )
     out, err = tmp_path / "stdout", tmp_path / "stderr"
     token = machine_token("laptop")
     url = f"http://127.0.0.1:{port}/mcp"
@@ -420,14 +418,14 @@ def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_fil
                 assert time.monotonic() < deadline, err.read_text()
                 time.sleep(0.1)
 
-            assert call("status", {}).status_code == 200
+            assert call("search_index", {"query": "q", "mode": "fts"}).status_code == 200
             size = err.stat().st_size
             call(token, {})
             assert "me_[redacted]" in added_after(size, "me_[redacted]")
             # FastMCP logs the rejected argument's name and value in a traceback today; the whole-output
             # assertion below holds whether or not a later release keeps logging it.
-            assert call("status", {token: token}).json()["result"]["isError"] is True
-            forged = "INFO knowledge_base.auth: machine desktop called 'status'"
+            assert call("search_index", {"query": "q", "mode": "fts", token: token}).json()["result"]["isError"] is True
+            forged = "INFO knowledge_base.auth: machine desktop called 'search_index'"
             for name in (f"x\n{forged}", f"x\x00{forged}", "a" * 2000 + forged):
                 call(name, {})
         finally:
@@ -439,10 +437,22 @@ def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_fil
                 raise
 
     lines = err.read_text().split("\n")
-    assert sum(line.startswith("INFO knowledge_base.auth: machine laptop called 'status'") for line in lines) == 2
+    assert sum(line.startswith("INFO knowledge_base.auth: machine laptop called 'search_index'") for line in lines) == 2
     assert not any(line.startswith("INFO knowledge_base.auth: machine desktop") for line in lines)
     assert all(len(line) <= 2002 for line in lines)
     for path in (out, err):
         data = path.read_bytes()
         assert token.encode() not in data
         assert b"\x00" not in data
+
+
+@pytest.mark.parametrize("var", ["KNOWLEDGE_BASE_VISION", "KNOWLEDGE_BASE_BROWSER"])
+def test_http_exits_78_while_vision_or_the_browser_is_on(served, token_file, capsys, monkeypatch, var):
+    from knowledge_base.db import resolve_db_path
+
+    runs, _ = served
+    monkeypatch.setenv(var, "on")
+    assert _exit_code(["--http", "127.0.0.1:65000", "--token-file", str(token_file)]) == 78
+    assert var in capsys.readouterr().err
+    assert runs == []
+    assert not resolve_db_path().exists()

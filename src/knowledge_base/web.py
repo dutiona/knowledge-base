@@ -27,12 +27,11 @@ from .db import (
 from .exceptions import ValidationError
 from .settings import BROWSER_VAR, switch_on
 from .utils import _is_allowed_loopback, egress_client, is_private_ip, loopback_opt_in, validate_base_url
-from .chunking import chunk_text as _chunk_text
 from .ingest import (
     _cleanup_conclusion_refs,
     _embed_with_config,
-    _flush_deferred_session_links,
     _insert_chunk,
+    ingest_text,
 )
 from .utils import content_hash as _content_hash
 
@@ -1233,66 +1232,14 @@ def ingest_url(
     if not text.strip():
         return {**_base_result, "chunks_added": 0, "chunks_skipped": 0}
 
-    chunks = _chunk_text(text)
-    if not chunks:
-        return {**_base_result, "chunks_added": 0, "chunks_skipped": 0}
-
-    # Compute content hashes, skip duplicates.
-    # Defer chunk_sessions writes until after embeddings succeed (#180).
-    new_chunks = []
-    skipped = 0
-    deferred_session_links: list[int] = []
-    meta_json = json.dumps({"title": extracted_title} if extracted_title else {})
-    for i, chunk in enumerate(chunks):
-        h = _content_hash(chunk)
-        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
-        if existing:
-            if session_id is not None:
-                deferred_session_links.append(existing["id"])
-            skipped += 1
-            continue
-        new_chunks.append((i, chunk, h))
-
-    if not new_chunks:
-        _flush_deferred_session_links(conn, deferred_session_links, session_id)
-        conn.commit()
-        return {**_base_result, "chunks_added": 0, "chunks_skipped": skipped}
-
-    texts_to_embed = [c[1] for c in new_chunks]
-    embeddings = _embed_with_config(conn, texts_to_embed)
-
-    # Resolve the active vec table once for the per-chunk inserts and the single
-    # batched chunk_count bump (#392); suppress the per-row UPDATE and bump once
-    # with the count of embeddings actually inserted (some chunks may not embed).
-    vec_table = get_vec_table_name(conn)
-    n_inserted = 0
-    for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings, strict=True):
-        _insert_chunk(
-            conn,
-            content_hash=chunk_hash,
-            content=chunk_text,
-            source_type="web",
-            source_uri=url,
-            chunk_index=idx,
-            embedding=emb_vec,
-            session_id=session_id,
-            metadata=meta_json,
-            vec_table=vec_table,
-            bump_count=False,
-        )
-        if emb_vec is not None:
-            n_inserted += 1
-
-    if n_inserted:
-        bump_chunk_count(conn, vec_table, n_inserted)
-
-    # Embeddings succeeded — flush deferred session links for deduped chunks
-    _flush_deferred_session_links(conn, deferred_session_links, session_id)
-
-    conn.commit()
-    return {
-        **_base_result,
-        "chunks_added": len(new_chunks),
-        "chunks_skipped": skipped,
-        "title": extracted_title,
-    }
+    stored = ingest_text(
+        conn,
+        text,
+        source_uri=url,
+        source_type="web",
+        session_id=session_id,
+        metadata={"title": extracted_title} if extracted_title else None,
+    )
+    if not stored["chunks_added"]:
+        return {**_base_result, **stored}
+    return {**_base_result, **stored, "title": extracted_title}

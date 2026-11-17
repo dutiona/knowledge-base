@@ -245,18 +245,62 @@ def token_file(tmp_path):
     return path
 
 
+def embedder_error(status: int = 503) -> httpx.HTTPStatusError:
+    """The error a real embedding endpoint raises: httpx puts the endpoint URL in its message."""
+    from tests.declared_env import TEST_EMBED_URL
+
+    request = httpx.Request("POST", f"{TEST_EMBED_URL}/v1/embeddings")
+    response = httpx.Response(status, request=request)
+    return httpx.HTTPStatusError(f"Server error '{status}' for url '{request.url}'", request=request, response=response)
+
+
+def names_the_embedder(text: str) -> bool:
+    """Whether *text* carries the test embedder's host or port, as httpx's own error text does."""
+    from urllib.parse import urlparse
+
+    from tests.declared_env import TEST_EMBED_URL
+
+    endpoint = urlparse(TEST_EMBED_URL)
+    return str(endpoint.hostname) in text or str(endpoint.port) in text
+
+
+class StubEmbedder(list):
+    """The texts an embedding stub received; while ``down`` it raises what a real endpoint raises."""
+
+    down: int | None = None  # the HTTP status to fail with, or None
+
+
 @pytest.fixture
-def stub_embedder(monkeypatch) -> list[str]:
+def stub_embedder(monkeypatch) -> StubEmbedder:
     """Answer the query embedding ``search_index`` asks for; the fixture is the list of texts it received."""
     from tests.declared_env import TEST_EMBED_DIM
 
-    texts: list[str] = []
+    texts = StubEmbedder()
 
     def _embed_single(text, *_args, **_kwargs):
+        if texts.down is not None:
+            raise embedder_error(texts.down)
         texts.append(text)
         return [0.1] * TEST_EMBED_DIM
 
     monkeypatch.setattr("knowledge_base.search.embed_single", _embed_single)
+    return texts
+
+
+@pytest.fixture
+def stub_document_embedder(monkeypatch) -> StubEmbedder:
+    """Answer the document embeddings ingest asks for; the fixture is the list of texts it received."""
+    texts = StubEmbedder()
+
+    def _embed(batch, *_args, expected_dim=None, **_kwargs):
+        from tests.declared_env import TEST_EMBED_DIM
+
+        if texts.down is not None:
+            raise embedder_error(texts.down)
+        texts.extend(batch)
+        return [[0.1] * (expected_dim or TEST_EMBED_DIM) for _ in batch]
+
+    monkeypatch.setattr("knowledge_base.ingest.embed", _embed)
     return texts
 
 
@@ -355,8 +399,11 @@ class KbHttp:
 
 
 @pytest.fixture
-def kb_http(declared_db, token_file, stub_embedder) -> Iterator[KbHttp]:
+def kb_http(declared_db, token_file, stub_embedder, stub_document_embedder, monkeypatch) -> Iterator[KbHttp]:
     """KB served over HTTP behind the machine-token gate, with ``laptop`` and ``desktop`` admitted."""
+    # --http refuses vision and the browser fallback, which the suite's declaration switches on.
+    monkeypatch.setenv("KNOWLEDGE_BASE_VISION", "off")
+    monkeypatch.setenv("KNOWLEDGE_BASE_BROWSER", "off")
     from knowledge_base.auth import TokenTable
     from knowledge_base.server import build_http_app
 

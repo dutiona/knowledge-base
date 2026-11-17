@@ -16,7 +16,11 @@ disable/error paths) run against the real ``kb_conn`` temp DB with no mocks.
 from __future__ import annotations
 
 import json
+import sqlite3
 from unittest.mock import patch
+
+import pytest
+from fastmcp.exceptions import ToolError
 
 from knowledge_base.exceptions import NotFoundError, ValidationError
 from knowledge_base.routes.ingestion import (
@@ -255,16 +259,43 @@ def test_ingest_url_passthrough_success(kb_conn):
     assert kwargs["session_id"] == "s-9"
 
 
-def test_ingest_url_maps_knowledgebase_error_to_json(kb_conn):
-    """A KnowledgeBaseError from _ingest_url → {"error": str(e), **e.details}."""
+def test_ingest_url_maps_knowledgebase_error_to_a_tool_error(kb_conn):
+    """A KnowledgeBaseError from _ingest_url is an MCP tool error carrying its reason."""
     exc = ValidationError("URL must include a hostname", details={"url": "ftp://x"})
     with (
         patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
         patch("knowledge_base.routes.ingestion._ingest_url", side_effect=exc),
+        pytest.raises(ToolError, match="URL must include a hostname"),
     ):
-        result = json.loads(ingest_url("ftp://x"))
+        ingest_url("ftp://x")
 
-    assert result == {"error": str(exc), "url": "ftp://x"}
+
+@pytest.mark.parametrize(("status", "retry"), [(503, True), (401, False)])
+def test_ingest_url_embedder_failure_never_names_the_embedder(kb_conn, status, retry):
+
+    from tests.conftest import embedder_error, names_the_embedder
+
+    with (
+        patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
+        patch("knowledge_base.routes.ingestion._ingest_url", side_effect=embedder_error(status)),
+        pytest.raises(ToolError) as raised,
+    ):
+        ingest_url("https://example.com")
+
+    text = str(raised.value)
+    assert f"HTTP {status}" in text and "the page's text was not stored" in text
+    assert not names_the_embedder(text)
+    assert ("retry later" in text) is retry
+
+
+def test_ingest_url_concurrent_duplicate_says_retry(kb_conn):
+    race = sqlite3.IntegrityError("UNIQUE constraint failed: chunks.content_hash")
+    with (
+        patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
+        patch("knowledge_base.routes.ingestion._ingest_url", side_effect=race),
+        pytest.raises(ToolError, match="another ingest stored some of the same passages meanwhile"),
+    ):
+        ingest_url("https://example.com")
 
 
 # ---------------------------------------------------------------------------
@@ -335,3 +366,20 @@ def test_configure_browser_tool_error_mapping_includes_details(kb_conn):
     ):
         result = json.loads(configure_browser_tool(venv_path="/some/path"))
     assert result == {"error": "boom", "field": "venv_path"}
+
+
+# ---------------------------------------------------------------------------
+# ingest_text() — ingest by content
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_text_over_stdio_has_no_machine(kb_conn, monkeypatch):
+    from knowledge_base.routes.ingestion import ingest_text
+    from tests.declared_env import TEST_EMBED_DIM
+
+    monkeypatch.setattr("knowledge_base.ingest.embed", lambda batch, *a, **k: [[0.1] * TEST_EMBED_DIM for _ in batch])
+    with patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn):
+        result = json.loads(ingest_text("notes.md", "a stdio note"))
+
+    assert result["source_uri"] == "content:///notes.md"
+    assert result["chunks_added"] == 1

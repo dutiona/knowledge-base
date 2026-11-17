@@ -3,6 +3,7 @@
 import contextlib
 import json
 import socket
+import sqlite3
 import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -4308,3 +4309,105 @@ def test_ingest_url_with_the_browser_off_launches_nothing(kb_conn, http_requests
         configure_browser(kb_conn, venv_path=str(venv))
     with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_BROWSER"):
         configure_browser(kb_conn)
+
+
+# --- ingest_text: the one insert-only path for text stored by content or by URL (#543) ---
+
+
+def _rows(conn, source_uri):
+    return conn.execute(
+        "SELECT id, content, source_type, metadata FROM chunks WHERE source_uri = ? ORDER BY id", (source_uri,)
+    ).fetchall()
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_text_stores_chunks_under_its_source_uri(kb_conn):
+    from knowledge_base.ingest import ingest_text
+
+    text = "".join(f"passage {i} about attention and transformers. " for i in range(60))
+    result = ingest_text(
+        kb_conn, text, source_uri="content:///notes.md", source_type="markdown", metadata={"title": "N"}
+    )
+
+    rows = _rows(kb_conn, "content:///notes.md")
+    assert result == {"chunks_added": len(rows), "chunks_skipped": 0}
+    assert len(rows) > 1
+    assert {r["source_type"] for r in rows} == {"markdown"}
+    assert {json.loads(r["metadata"])["title"] for r in rows} == {"N"}
+    assert not kb_conn.in_transaction
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_text_skips_identical_text(kb_conn):
+    from knowledge_base.ingest import ingest_text
+
+    first = ingest_text(kb_conn, "a short note", source_uri="content:///a", source_type="markdown")
+    again = ingest_text(kb_conn, "a short note", source_uri="content:///a", source_type="markdown")
+
+    assert first == {"chunks_added": 1, "chunks_skipped": 0}
+    assert again == {"chunks_added": 0, "chunks_skipped": 1}
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_text_adds_a_revision_beside_the_original(kb_conn):
+    from knowledge_base.ingest import ingest_text
+
+    ingest_text(kb_conn, "the first version", source_uri="content:///doc", source_type="markdown")
+    before = [tuple(r) for r in _rows(kb_conn, "content:///doc")]
+    ingest_text(kb_conn, "the second version", source_uri="content:///doc", source_type="markdown")
+
+    after = [tuple(r) for r in _rows(kb_conn, "content:///doc")]
+    assert after[: len(before)] == before
+    assert len(after) == len(before) + 1
+
+
+def test_ingest_text_stores_nothing_when_the_embedder_fails(kb_conn):
+    from knowledge_base.ingest import ingest_text
+
+    def _down(*_args, **_kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    with patch("knowledge_base.ingest.embed", _down), pytest.raises(httpx.ConnectError):
+        ingest_text(kb_conn, "text " * 500, source_uri="content:///x", source_type="markdown", session_id="s")
+
+    assert kb_conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
+    assert kb_conn.execute("SELECT COUNT(*) FROM chunk_sessions").fetchone()[0] == 0
+    assert not kb_conn.in_transaction
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_text_stores_repeated_chunks_once(kb_conn):
+    from knowledge_base.ingest import ingest_text
+
+    text = "word " * 1000  # period 5: the fixed windows at 0, 800, 1600, ... are identical
+    chunks = _chunk_text(text)
+    distinct = len(set(chunks))
+    assert distinct < len(chunks)
+
+    result = ingest_text(kb_conn, text, source_uri="content:///rep", source_type="markdown")
+
+    assert result == {"chunks_added": distinct, "chunks_skipped": len(chunks) - distinct}
+    assert len(_rows(kb_conn, "content:///rep")) == distinct
+    assert not kb_conn.in_transaction
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_text_rolls_back_a_failed_write(kb_conn):
+    import knowledge_base.ingest as ingest_mod
+
+    real_insert = ingest_mod._insert_chunk
+    calls = []
+
+    def _fail_second(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real_insert(*args, **kwargs)
+
+    text = "".join(f"distinct passage number {i}. " for i in range(120))
+    with patch.object(ingest_mod, "_insert_chunk", _fail_second), pytest.raises(sqlite3.OperationalError):
+        ingest_mod.ingest_text(kb_conn, text, source_uri="content:///rb", source_type="markdown")
+
+    assert not kb_conn.in_transaction
+    kb_conn.commit()
+    assert _rows(kb_conn, "content:///rb") == []
