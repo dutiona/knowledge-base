@@ -8,9 +8,15 @@ import os
 import socket
 import sqlite3
 import struct
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
+from time import monotonic
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
+import httpcore
 import httpx
 
 from knowledge_base.exceptions import ValidationError
@@ -22,9 +28,12 @@ __all__ = [
     "STOPWORDS",
     "TITLE_STOPWORDS",
     "VALID_ELEMENT_TYPES",
+    "DeadlineExceeded",
     "compute_file_hash",
     "content_hash",
+    "deadline_left",
     "egress_client",
+    "egress_deadline",
     "is_private_ip",
     "loopback_opt_in",
     "serialize_f32",
@@ -151,6 +160,96 @@ def _pinned(request: httpx.Request, name: str, address: _IPAddress) -> httpx.Req
     )
 
 
+class DeadlineExceeded(Exception):
+    """The deadline of the enclosing :func:`egress_deadline` block passed."""
+
+
+_deadline: ContextVar[float | None] = ContextVar("egress_deadline", default=None)
+
+
+@contextmanager
+def egress_deadline(seconds: float) -> Iterator[None]:
+    """Bound every floored request made inside the block to *seconds* from now, at each socket operation (#588)."""
+    token = _deadline.set(monotonic() + seconds)
+    try:
+        yield
+    finally:
+        _deadline.reset(token)
+
+
+def deadline_left() -> float | None:
+    """Seconds left before the enclosing deadline, None outside one; ``DeadlineExceeded`` once none are left."""
+    at = _deadline.get()
+    if at is None:
+        return None
+    left = at - monotonic()
+    if left <= 0:
+        raise DeadlineExceeded
+    return left
+
+
+def _bounded[T](call: Callable[[float | None], T], timeout: float | None) -> T:
+    """Run *call* with *timeout*, or with the time left when the deadline is tighter: its timeout is the deadline."""
+    left = deadline_left()
+    if left is None or (timeout is not None and timeout <= left):
+        return call(timeout)
+    try:
+        return call(left)
+    except httpcore.TimeoutException as exc:
+        raise DeadlineExceeded from exc
+
+
+class _DeadlineStream(httpcore.NetworkStream):
+    """A socket stream whose every read, write and TLS handshake ends by the deadline."""
+
+    def __init__(self, stream: httpcore.NetworkStream) -> None:
+        self._stream = stream
+
+    def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        return _bounded(lambda t: self._stream.read(max_bytes, t), timeout)
+
+    def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        _bounded(lambda t: self._stream.write(buffer, t), timeout)
+
+    def close(self) -> None:
+        self._stream.close()
+
+    def start_tls(
+        self, ssl_context: Any, server_hostname: str | None = None, timeout: float | None = None
+    ) -> httpcore.NetworkStream:
+        return _DeadlineStream(_bounded(lambda t: self._stream.start_tls(ssl_context, server_hostname, t), timeout))
+
+    def get_extra_info(self, info: str) -> Any:
+        return self._stream.get_extra_info(info)
+
+
+class _DeadlineBackend(httpcore.NetworkBackend):
+    """httpcore's sync backend with every connection, and every operation on it, bounded by the deadline."""
+
+    def __init__(self) -> None:
+        self._backend: httpcore.NetworkBackend = httpcore.SyncBackend()
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[Any] | None = None,
+    ) -> httpcore.NetworkStream:
+        return _DeadlineStream(
+            _bounded(lambda t: self._backend.connect_tcp(host, port, t, local_address, socket_options), timeout)
+        )
+
+    def connect_unix_socket(
+        self, path: str, timeout: float | None = None, socket_options: Iterable[Any] | None = None
+    ) -> httpcore.NetworkStream:
+        return _DeadlineStream(_bounded(lambda t: self._backend.connect_unix_socket(path, t, socket_options), timeout))
+
+    def sleep(self, seconds: float) -> None:
+        self._backend.sleep(seconds)
+
+
 class _PinnedTransport(httpx.BaseTransport):
     """Floor every request at the transport and send it to an address the floor accepted (#572, ADR-0018 §4).
 
@@ -164,21 +263,33 @@ class _PinnedTransport(httpx.BaseTransport):
         self._allow_loopback = allow_loopback
         # The inner pool is keyed by address: a kept-alive connection could carry one name's request over a
         # TLS session verified for another name on the same address, so no connection is ever reused.
-        self._inner = httpx.HTTPTransport(limits=httpx.Limits(max_keepalive_connections=0))
+        self._inner = httpx.HTTPTransport()
+        # httpx takes no network backend, so its pool is rebuilt on the deadline-aware one, with the values
+        # httpx.Limits(max_keepalive_connections=0) gave. tests/test_egress_deadline.py fails if httpx renames _pool.
+        self._inner._pool = httpcore.ConnectionPool(
+            ssl_context=httpx.create_ssl_context(),
+            max_connections=100,
+            max_keepalive_connections=0,
+            keepalive_expiry=5.0,
+            network_backend=_DeadlineBackend(),
+        )
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         if request.url.scheme not in ("http", "https"):
             raise ValidationError(f"Invalid URL scheme: {request.url.scheme!r}. Use http or https.")
         # The IDNA 2008 form httpx connects to; a Unicode str would be IDNA 2003-encoded by ssl.
         name = request.url.raw_host.decode("ascii")
+        deadline_left()  # a hop due after the deadline is neither resolved nor sent
         if self._allow_loopback and _is_allowed_loopback(name):
             return self._inner.handle_request(request)
         *earlier, final = _accepted_addresses(name)
         for address in earlier:
+            deadline_left()
             try:
                 return self._inner.handle_request(_pinned(request, name, address))
             except (httpx.ConnectError, httpx.ConnectTimeout):
                 continue  # nothing was sent: try the next accepted answer
+        deadline_left()
         return self._inner.handle_request(_pinned(request, name, final))
 
     def close(self) -> None:
