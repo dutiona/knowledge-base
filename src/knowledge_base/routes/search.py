@@ -41,8 +41,9 @@ def search_index(
             None (default) returns all chunks regardless of strategy.
         space_name: Search a specific embedding space instead of the active one.
             Useful for A/B comparison before promoting a new space.
-        rerank: Enable cross-encoder reranking for improved relevance. Requires
-            onnxruntime (install with: uv sync --group reranker). Default false.
+        rerank: Enable cross-encoder reranking for improved relevance. Needs the reranker
+            installed on the server; without it, results come back in fused order
+            (match_type is not 'reranked'). Default false.
     """
     conn = _get_conn()
     try:

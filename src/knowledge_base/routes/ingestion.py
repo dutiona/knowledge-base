@@ -103,7 +103,8 @@ def ingest_url(url: str, session_id: str | None = None) -> str:
     """Ingest a web page by URL. Fetches the page, extracts main content, and indexes it.
 
     Uses content-hash dedup — unchanged pages are skipped on re-ingest.
-    Use the reingest tool with the URL as path to force re-ingest.
+    Re-ingesting a changed page adds its new text passages beside the earlier ones; no tool replaces
+    or removes a page's text.
 
     Args:
         url: The URL to fetch and ingest.
