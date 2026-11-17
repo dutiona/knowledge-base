@@ -142,6 +142,24 @@ def test_an_over_length_semantic_pdf_section_is_split_with_each_piece_s_own_imag
     assert all(meta["pages"] == [1] for meta in metas)
 
 
+def test_an_image_reference_cut_by_the_split_still_lists_its_image(conn, bounded_embedder, tmp_path, monkeypatch):
+    from knowledge_base import ingest
+
+    caption = " ".join(f"c{i}" for i in range(10))
+    words = [*WORDS[: LIMIT - 5], f"![{caption}](fig.png)", *WORDS[LIMIT - 5 :]]  # the first cut falls in the caption
+    text = "## Methods\n\n" + " ".join(words)
+    monkeypatch.setattr(ingest, "_extract_pdf_markdown", lambda _path, image_dir=None: (text, {0: 1}))
+    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', 'semantic')")
+    conn.commit()
+    path = tmp_path / "paper.pdf"
+    path.write_bytes(b"%PDF-1.7 not parsed: the extractor is patched")
+    ingest.ingest_file(conn, path)
+    metas = _assert_split(conn, bounded_embedder, path.resolve().as_posix(), text)
+    rows = _stored(conn, path.resolve().as_posix())
+    assert not any("![" in row["content"] and "](fig.png)" in row["content"] for row in rows)
+    assert [meta.get("images") for meta in metas].count(["fig.png"]) == 1
+
+
 def test_an_over_length_python_function_is_split_into_named_pieces(conn, bounded_embedder, tmp_path):
     from knowledge_base.ingest import ingest_file
 
@@ -159,3 +177,32 @@ def test_an_over_length_stored_text_is_split_not_failed(conn, bounded_embedder):
 
     ingest_text(conn, SECTION, source_uri="/docs/stored.md", source_type="markdown")
     _assert_split(conn, bounded_embedder, "/docs/stored.md", SECTION)
+
+
+def test_a_space_recording_another_limit_is_refused_before_any_request(conn, bounded_embedder, http_requests):
+    """A space's limit can only be the declaration's: one recording another is never embedded into (#573's check)."""
+    from knowledge_base.embed_swap import backfill_space, create_space
+    from knowledge_base.exceptions import EmbeddingModelMismatchError
+
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) VALUES ('h', ?, ?, ?, 0)",
+        (SECTION, "markdown", "/docs/a.md"),
+    )
+    conn.commit()
+    create_space(conn, "alt", "Qwen/Qwen3-Embedding-0.6B", DIM)
+    conn.execute("UPDATE embed_spaces SET max_input_tokens = ? WHERE name = 'alt'", (LIMIT * 2,))
+    conn.commit()
+    with pytest.raises(EmbeddingModelMismatchError, match="max_input_tokens"):
+        backfill_space(conn, "alt")
+    assert http_requests == []
+
+
+def test_re_ingesting_an_unchanged_file_counts_nothing(conn, bounded_embedder, http_requests, tmp_path):
+    from knowledge_base.ingest import ingest_file
+
+    path = tmp_path / "short.md"
+    path.write_text("A short note that fits.")
+    ingest_file(conn, path)
+    before = len(http_requests)
+    assert ingest_file(conn, path)["chunks_skipped"] == 1
+    assert [r.url.path for r in http_requests[before:]] == []

@@ -127,8 +127,20 @@ def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[
 
 
 def _bounded_chunks(conn: sqlite3.Connection, texts: list[str]) -> list[list[str]]:
-    """Each chunk as the consecutive pieces that fit the active space's ``max_input_tokens`` (#604)."""
-    return split_inputs(texts, declared_provider_config(conn, require_active_space(conn)))
+    """Each chunk as the consecutive pieces that fit the active space's ``max_input_tokens`` (#604).
+
+    A chunk already stored whole is kept whole without being counted, so dedup skips it and an unchanged
+    re-ingest sends the embedder nothing.
+    """
+    cfg = declared_provider_config(conn, require_active_space(conn))
+    if cfg.max_input_tokens is None:
+        return [[text] for text in texts]
+    stored = [
+        conn.execute("SELECT 1 FROM chunks WHERE content_hash = ?", (_content_hash(text),)).fetchone() is not None
+        for text in texts
+    ]
+    split = iter(split_inputs([text for text, known in zip(texts, stored, strict=True) if not known], cfg))
+    return [[text] if known else next(split) for text, known in zip(texts, stored, strict=True)]
 
 
 def _flush_deferred_session_links(conn: sqlite3.Connection, chunk_ids: list[int], session_id: str | None) -> None:
@@ -372,14 +384,17 @@ def _produce_and_insert_chunks(
             )
         if not md_chunks:
             return (0, 0, [])
-        # A piece keeps its parent's pages; its images are read from its own text below.
-        md_chunks = [
-            (piece, pages)
-            for (chunk_text, pages), pieces in zip(
-                md_chunks, _bounded_chunks(conn, [chunk_text for chunk_text, _ in md_chunks]), strict=True
-            )
-            for piece in pieces
-        ]
+        # A piece keeps its parent's pages and lists the images whose reference starts in it. They are read from
+        # the whole parent, because a cut can fall inside a reference's caption.
+        split: list[tuple[str, list[int], list[str]]] = []
+        pieces_of = _bounded_chunks(conn, [chunk_text for chunk_text, _ in md_chunks])
+        for (chunk_text, pages), pieces in zip(md_chunks, pieces_of, strict=True):
+            refs = [(m.start(), Path(m.group(2)).name) for m in _IMAGE_REF_RE.finditer(chunk_text)]
+            start = 0
+            for piece in pieces:
+                end = start + len(piece)
+                split.append((piece, pages, [name for at, name in refs if start <= at < end]))
+                start = end
         try:
             import pymupdf4llm
 
@@ -387,8 +402,7 @@ def _produce_and_insert_chunks(
         except (ImportError, AttributeError):
             extractor_tag = "pymupdf4llm"
         items = []
-        for i, (chunk_text, chunk_pages) in enumerate(md_chunks):
-            images = [Path(m.group(2)).name for m in _IMAGE_REF_RE.finditer(chunk_text)]
+        for i, (chunk_text, chunk_pages, images) in enumerate(split):
             chunk_meta: dict = {"extractor": extractor_tag, "pages": chunk_pages}
             if images:
                 chunk_meta["images"] = images
