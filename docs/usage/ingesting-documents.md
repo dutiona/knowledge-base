@@ -307,6 +307,33 @@ Documents are embedded as they are, without an instruction; only queries carry o
 searching guide). llama.cpp ignores the request's model name, so declare the slug of the file it
 serves: it selects the default query instruction.
 
+### Inputs longer than the embedder takes
+
+With a served artifact declared, no input KB sends counts more than `KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS`
+tokens as the server counts them, the end-of-sequence token it appends included. llama-server refuses a longer
+one with HTTP 400 `exceed_context_size_error`, and one such input fails its whole request. KB counts each input
+with the server's own `POST /tokenize` (`add_special: true`), the same tokenizer call its embeddings handler
+makes, which is why a served artifact is accepted only for `llama.cpp` or `openai_compat` (llama-server).
+
+| Input | Over the limit |
+| --- | --- |
+| Chunks from file ingest (every chunker) and from stored text or a URL | split at ingest into consecutive pieces of about equal count that each fit and together are exactly the chunk, cut after a line end, else whitespace, when that keeps at least half the piece; no overlap. A piece identical to a stored chunk is stored once, as every repeated chunk is |
+| Folder summaries | truncated: one vector per folder; the stored summary text stays whole |
+| Figure, image and element-capture descriptions | truncated: one chunk per figure keeps the figure's metadata |
+| Queries | truncated |
+| Stored chunks during `re-embed` | truncated: a stored chunk is one row; reingesting its document splits it |
+
+A split PDF piece keeps its parent's pages and lists the images whose reference starts in it; a reference on its
+own line is never cut, unless that line is longer than half a piece. A split Python piece keeps its function's line
+range and is named `name[k]`. Each truncation is logged at INFO with the count it had and the count it kept.
+
+The count costs one `/tokenize` request per embedded input and one more per new document chunk at ingest. A chunk
+already stored whole is not counted, so an unchanged re-ingest of chunks that fit sends nothing; a chunk that was
+split is counted and split again, and its pieces are then found stored. Each piece of an over-length input costs a
+few more requests, each a few times the piece at most. The requests share
+one kept-alive connection. On llama.cpp b12048 a `/tokenize` call took 0.2 to 0.9 ms at the median (up to 3.8 ms)
+on loopback, and it takes no embedding slot.
+
 A blank database is seeded from the declaration; an existing one must agree with it, or the
 server exits naming the field. There is no default endpoint: nothing falls back to
 `https://api.openai.com`, and Ollama embeddings never auto-detect a host.

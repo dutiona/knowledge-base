@@ -767,7 +767,7 @@ List all embedding spaces with status, progress, and chunk strategy.
 
 ### create_embed_space_tool
 
-Create a new embedding space in `populating` status, filled by the declared endpoint: it records the declared provider and served artifact, and the shape given here. A space of another model than the declared one is accepted only when the endpoint serves the model a request names (`ollama`, or `openai` at exactly `https://api.openai.com`, with no served artifact declared); otherwise it is refused with the differing field.
+Create a new embedding space in `populating` status, filled by the declared endpoint: it records the declared provider and served artifact, and the shape given here. A space of another model than the declared one is accepted only when the endpoint serves the model a request names (`ollama`, or `openai` at exactly `https://api.openai.com`, neither of which takes a served artifact); otherwise it is refused with the differing field.
 
 | Parameter             | Type          | Required | Default        | Description                                                                                                                                                                                                      |
 | --------------------- | ------------- | -------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

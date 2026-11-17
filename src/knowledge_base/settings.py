@@ -90,6 +90,9 @@ _DEPRECATED_VAR = "EMBED_PROVIDER"
 #: ``llama.cpp`` is ADR-0015 §5's provider; it speaks the openai_compat wire (``/v1/embeddings``).
 EMBED_PROVIDERS = ("openai_compat", "openai", "llama.cpp", "ollama", "onnx")
 _OPENAI_FAMILIES = ("openai_compat", "openai", "llama.cpp")
+#: The providers whose endpoint can count tokens as it embeds them (llama-server's ``/tokenize``), which bounding every
+#: input by the served artifact's ``max_input_tokens`` needs (#604).
+_COUNTING_PROVIDERS = ("llama.cpp", "openai_compat")
 _DIM_RE = re.compile(r"[1-9][0-9]*")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 #: The only endpoint besides Ollama known to serve the model a request names (Decision 4 of the #573 plan).
@@ -195,6 +198,12 @@ def load_embed_settings() -> EmbedSettings:
         raise ValidationError(
             f"{VARIABLES['matryoshka_base_dim']} must be greater than {VARIABLES['dim']} ({dim}), got {base_dim}"
         )
+    served = _served_artifact()
+    if served["max_input_tokens"] is not None and provider not in _COUNTING_PROVIDERS:
+        raise ValidationError(
+            f"{VARIABLES['max_input_tokens']} needs an embedder that counts tokens at /tokenize (llama-server): "
+            f"{VARIABLES['provider']} must be llama.cpp or openai_compat with a served artifact, got {provider!r}"
+        )
     return EmbedSettings(
         provider=provider,
         model=model,
@@ -202,7 +211,7 @@ def load_embed_settings() -> EmbedSettings:
         base_url=base_url,
         api_key_source=f"env:{API_KEY_VAR}" if _get(API_KEY_VAR) else None,
         matryoshka_base_dim=base_dim,
-        **_served_artifact(),  # pyright: ignore[reportArgumentType]  # typed per field above
+        **served,  # pyright: ignore[reportArgumentType]  # typed per field above
     )
 
 
@@ -215,11 +224,9 @@ def routes_by_model(declared: EmbedSettings) -> bool:
     """Whether the declared endpoint serves the model a request names, so a space of another model can be served.
 
     Only Ollama, and OpenAI at exactly its canonical origin, are known to; ``llama.cpp`` serves one file, ``onnx``
-    loads one, and an ``openai_compat`` (or another ``openai``) backend may ignore the name. A served artifact pins
-    its model. Anything else fails closed.
+    loads one, and an ``openai_compat`` (or another ``openai``) backend may ignore the name. A served artifact,
+    declared only for ``llama.cpp`` or ``openai_compat``, so pins its model. Anything else fails closed.
     """
-    if declared.artifact_sha256 is not None:
-        return False
     return declared.provider == "ollama" or (declared.provider == "openai" and declared.base_url == _OPENAI_ORIGIN)
 
 

@@ -84,6 +84,8 @@ def declared_provider_config(conn: sqlite3.Connection, space: Mapping[str, objec
         base_url=declared.base_url,
         api_key=declared.api_key_source,
         allow_loopback=loopback_opt_in(conn),
+        # The space's own limit: require_identity just checked it equals the declaration's (#604).
+        max_input_tokens=declared.max_input_tokens,
     )
 
 

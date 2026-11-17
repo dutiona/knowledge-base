@@ -262,14 +262,15 @@ def test_check_environment_validates_fetch_limits(monkeypatch):
 
 _ARTIFACT = {"artifact_sha256": "a" * 64, "pooling": "last", "normalization": "l2", "max_input_tokens": "2048"}
 _OLLAMA = {"provider": "ollama", "model": "bge-m3", "dim": "1024", "url": "http://embedder.example.test:11434"}
+_LLAMA = {"provider": "llama.cpp", "model": "bge-m3", "dim": "1024", "url": "http://embedder.example.test:8010"}
 
 
 def test_the_whole_identity_is_declared(declare):
-    declare(**_OLLAMA, matryoshka_base_dim="2048", **_ARTIFACT)
+    declare(**_LLAMA, matryoshka_base_dim="2048", **_ARTIFACT)
     settings = load_embed_settings()
     assert declared_identity(settings) == {
         "model": "bge-m3",
-        "provider": "ollama",
+        "provider": "llama.cpp",
         "dim": 1024,
         "matryoshka_base_dim": 2048,
         "element_type": "float32",
@@ -279,6 +280,32 @@ def test_the_whole_identity_is_declared(declare):
         "max_input_tokens": 2048,
     }
     assert list(declared_identity(settings)) == list(IDENTITY_FIELDS)
+
+
+@pytest.mark.parametrize("provider", ["llama.cpp", "openai_compat"])
+def test_a_served_artifact_is_declared_for_an_endpoint_that_counts_tokens(declare, provider):
+    declare(**{**_LLAMA, "provider": provider}, **_ARTIFACT)
+    assert load_embed_settings().max_input_tokens == 2048
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        _OLLAMA,
+        {"provider": "openai", "model": "m", "dim": "8", "url": "https://api.openai.com"},
+        {"provider": "onnx", "model": "local", "dim": "8"},
+    ],
+    ids=["ollama", "openai", "onnx"],
+)
+def test_a_served_artifact_is_refused_where_no_endpoint_counts_tokens(declare, values, tmp_path, monkeypatch):
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"")
+    monkeypatch.setenv("ONNX_EMBED_MODEL_PATH", str(model))
+    declare(**values, **_ARTIFACT)
+    with pytest.raises(ValidationError, match=r"^KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS") as error:
+        load_embed_settings()
+    assert "llama.cpp" in str(error.value)
+    assert "openai_compat" in str(error.value)
 
 
 def test_declaring_nothing_new_gives_the_unset_values(declare):
@@ -321,7 +348,7 @@ def test_a_partial_served_artifact_names_every_missing_variable(declare, present
     ],
 )
 def test_an_invalid_identity_value_names_its_variable(declare, field, value):
-    declare(**_OLLAMA, **{**_ARTIFACT, field: value})
+    declare(**_LLAMA, **{**_ARTIFACT, field: value})
     with pytest.raises(ValidationError, match=rf"^KNOWLEDGE_BASE_EMBED_{field.upper()}"):
         load_embed_settings()
 
@@ -381,7 +408,6 @@ def test_require_identity_names_every_differing_field_and_its_variable():
     ("values", "routes"),
     [
         (_OLLAMA, True),
-        ({**_OLLAMA, **_ARTIFACT}, False),
         ({"provider": "openai", "model": "m", "dim": "8", "url": "https://api.openai.com"}, True),
         ({"provider": "openai", "model": "m", "dim": "8", "url": "https://api.openai.com/v1/"}, True),
         ({"provider": "openai", "model": "m", "dim": "8", "url": "http://api.openai.com"}, False),
