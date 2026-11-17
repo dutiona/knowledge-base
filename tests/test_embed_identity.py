@@ -385,13 +385,20 @@ def test_startup_refuses_a_mismatch_in_any_field(case, env, row_change, fields, 
 
 
 def test_startup_refuses_adopting_a_served_artifact(monkeypatch, capsys, declared_db):
+    conn = get_connection(resolve_db_path())
+    before = _rows(conn)
+    conn.close()
     _declare_full(monkeypatch)
     with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exit_info:
         server.main([])
     assert exit_info.value.code == 78
     err = capsys.readouterr().err
     assert all(name in err for name in FULL)
+    assert "knowledge-base-ingest re-embed" in err
     run.assert_not_called()
+    conn = get_connection(resolve_db_path())
+    assert _rows(conn) == before
+    conn.close()
 
 
 @pytest.mark.parametrize("matryoshka", ["", "2048"])
@@ -625,7 +632,9 @@ def test_the_comparison_tools_report_a_space_the_endpoint_cannot_serve(tool, kb_
             )
         else:
             result = json.loads(emb.benchmark_spaces_tool(sample_queries=1))
-    assert "provider" in json.dumps(result)
+    error = result["comparisons"][0]["error"] if tool == "benchmark" else result["error"]
+    assert "provider 'onnx'" in error
+
 
 # --- super-review round 1 (PR #612) -----------------------------------------------
 
@@ -642,6 +651,7 @@ def test_an_interrupted_first_initialization_still_records_the_declaration(tmp_p
     init_schema(conn)
     assert _space_identity(conn) == declared_identity(load_embed_settings())
 
+
 @pytest.mark.parametrize(("next_model", "kept"), [(QWEN, ""), ("other-model", None)])
 def test_re_embed_keeps_the_instruction_of_the_same_model(next_model, kept, tmp_path, monkeypatch, embedder):
     from knowledge_base.embed_swap import re_embed
@@ -655,6 +665,7 @@ def test_re_embed_keeps_the_instruction_of_the_same_model(next_model, kept, tmp_
     recorded = conn.execute("SELECT query_instruction FROM embed_spaces WHERE name = ?", (result["space"],)).fetchone()
     assert recorded[0] == kept
 
+
 def test_a_keyword_search_needs_no_space(kb_conn, http_requests):
     from knowledge_base.ingest import ingest_text
     from knowledge_base.search import search
@@ -663,4 +674,3 @@ def test_a_keyword_search_needs_no_space(kb_conn, http_requests):
         ingest_text(kb_conn, "Attention is all you need.", source_uri="/docs/a.md", source_type="markdown")
     assert search(kb_conn, "attention", mode="fts", space_name="no_such_space")
     assert http_requests == []
-
