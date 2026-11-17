@@ -138,6 +138,16 @@ build that stops when the lock no longer matches `pyproject.toml` (run `uv lock`
 reranker group ships its runtime, but not a model: mount one and set `ONNX_RERANK_MODEL_PATH` and
 `ONNX_RERANK_TOKENIZER_PATH` as described in [searching](../usage/searching.md#cross-encoder-reranking).
 
+Only steps that run no dependency code have network: the base image's own tools and the fetch, where uv installs the
+locked wheels, the server's into its environment and the build backend's (hatchling, the `build` dependency group) into
+one the image does not ship. Installing a wheel runs none of its code, and `--no-build` makes a package published only
+as source fail the build instead of running its build backend with network. Every later build-stage `RUN` starts with
+`RUN --network=none`, which leaves it only loopback: compiling the bytecode (it starts Python, which runs installed
+`.pth` files), the backend building the project's wheel, and installing that wheel. The backend is locked and
+hash-checked like every other package because it writes the code the server runs; `uv lock --upgrade-package hatchling`
+moves it. uv itself, which runs the fetch, comes from `ghcr.io/astral-sh/uv:latest` unpinned: an accepted risk, as uv is
+widely used and maintained.
+
 The server runs as UID/GID `10001`. On a rootless host, map the service user onto it so the volumes stay owned by
 that user, with `--userns keep-id:uid=10001,gid=10001` (`UserNS=` in a quadlet). Run it with `--init`
 (`RunInit=true` in a quadlet): as PID 1, Python ignores `SIGTERM`, so without an init process `podman stop` waits out
