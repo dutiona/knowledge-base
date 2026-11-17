@@ -151,7 +151,7 @@ its grace period and then kills the server. The state lives on two volumes:
 The image carries no embedding declaration: pass the `KNOWLEDGE_BASE_EMBED_*` variables (and any
 `KNOWLEDGE_BASE_{VISION,BROWSER,LLM}` switch) with `--env` (`Environment=` in a quadlet), and the key
 `KNOWLEDGE_BASE_EMBED_API_KEY` through `--env-file` or a secret, never in the unit file. Without them the server
-exits 78 at start (see the README's Configuration section). An embedder with a known model file declares its
+exits 78 at start (see the README's Configuration section). A llama.cpp embedder with a known model file declares its
 served artifact too (`KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256`, `_POOLING`, `_NORMALIZATION`, `_MAX_INPUT_TOKENS`, all
 four), so the store records the exact ADR-0015 identity. A database from before schema v2 needs
 `knowledge-base-ingest migrate` with the unit stopped before the new image starts.

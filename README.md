@@ -125,7 +125,7 @@ missing, unreadable or malformed token-hash file (named by path and line), and `
 | `KNOWLEDGE_BASE_EMBED_MODEL` | always | the model slug; it also selects the default query instruction (KB's ADR-0015 one when it contains `qwen3-embedding`) |
 | `KNOWLEDGE_BASE_EMBED_DIM` | always | the stored dimension (after any Matryoshka truncation) |
 | `KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM` | optional | the native dimension the server embeds at before truncation to `_DIM`; greater than `_DIM` |
-| `KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256`, `_POOLING`, `_NORMALIZATION`, `_MAX_INPUT_TOKENS` | optional, all four or none | the served artifact (ADR-0015 §1): the model file's sha256 (64 lowercase hex digits), the server's pooling and normalization, and its maximum input in tokens |
+| `KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256`, `_POOLING`, `_NORMALIZATION`, `_MAX_INPUT_TOKENS` | optional, all four or none; only for `llama.cpp` or `openai_compat` | the served artifact (ADR-0015 §1): the model file's sha256 (64 lowercase hex digits), the server's pooling and normalization, and its maximum input in tokens as llama-server counts it, EOS included (`2048` for ADR-0015 §5). Every input is counted at the server's `/tokenize` and kept within it: chunks are split, everything else truncated (see the ingesting guide) |
 | `KNOWLEDGE_BASE_EMBED_URL` | for `openai_compat`, `openai`, `llama.cpp`, `ollama`; refused for `onnx` | `http(s)://host[:port][/path]`, no userinfo, query or fragment |
 | `ONNX_EMBED_MODEL_PATH` | for `onnx` | an existing model file |
 | `KNOWLEDGE_BASE_EMBED_API_KEY` | optional | the embedder's key; `config` records only `env:KNOWLEDGE_BASE_EMBED_API_KEY` |

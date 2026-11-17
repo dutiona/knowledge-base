@@ -307,6 +307,29 @@ Documents are embedded as they are, without an instruction; only queries carry o
 searching guide). llama.cpp ignores the request's model name, so declare the slug of the file it
 serves: it selects the default query instruction.
 
+### Inputs longer than the embedder takes
+
+With a served artifact declared, no input KB sends counts more than `KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS`
+tokens as the server counts them, the end-of-sequence token it appends included. llama-server refuses a longer
+one with HTTP 400 `exceed_context_size_error`, and one such input fails its whole request. KB counts each input
+with the server's own `POST /tokenize` (`add_special: true`), the same tokenizer call its embeddings handler
+makes, which is why a served artifact is accepted only for `llama.cpp` or `openai_compat` (llama-server).
+
+| Input | Over the limit |
+| --- | --- |
+| Chunks from file ingest (every chunker) and from stored text or a URL | split at ingest into consecutive pieces that each fit and together are exactly the chunk, cut after whitespace where one fits; no overlap |
+| Folder summaries | truncated: one vector per folder; the stored summary text stays whole |
+| Figure, image and element-capture descriptions | truncated: one chunk per figure keeps the figure's metadata |
+| Queries | truncated |
+| Stored chunks during `re-embed` | truncated: a stored chunk is one row; reingesting its document splits it |
+
+A split PDF piece keeps its parent's pages and lists only the images in its own text. A split Python piece keeps
+its function's line range and is named `name[k]`. Each truncation is logged at INFO.
+
+The count costs one `/tokenize` request per embedded input, one more per document chunk at ingest, and about
+log2 of its cut points more per over-length input. On llama.cpp b12048 a `/tokenize` call took 0.2 to 0.9 ms at
+the median (up to 3.8 ms) on loopback, and it takes no embedding slot.
+
 A blank database is seeded from the declaration; an existing one must agree with it, or the
 server exits naming the field. There is no default endpoint: nothing falls back to
 `https://api.openai.com`, and Ollama embeddings never auto-detect a host.
