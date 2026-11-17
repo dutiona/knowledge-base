@@ -210,10 +210,12 @@ FULL = {
     "KNOWLEDGE_BASE_EMBED_NORMALIZATION": "l2",
     "KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS": "2048",
 }
+#: A served artifact is declared only for an endpoint that counts tokens (#604); the suite's URL is kept.
+SERVED_ENDPOINT = {"KNOWLEDGE_BASE_EMBED_PROVIDER": "llama.cpp"}
 
 
 def _declare_full(monkeypatch, **extra: str) -> None:
-    for name, value in {**FULL, **extra}.items():
+    for name, value in {**SERVED_ENDPOINT, **FULL, **extra}.items():
         monkeypatch.setenv(name, value)
 
 
@@ -283,7 +285,7 @@ def test_a_new_space_records_its_shape_and_the_endpoint(kb_conn):
 
 
 _SINGLE_MODEL = {
-    "artifact": {**FULL},
+    "artifact": {**SERVED_ENDPOINT, **FULL},
     "llama.cpp": {
         "KNOWLEDGE_BASE_EMBED_PROVIDER": "llama.cpp",
         "KNOWLEDGE_BASE_EMBED_URL": "https://embedder.example.test",
@@ -331,7 +333,7 @@ def test_re_embed_records_the_whole_declaration(kb_conn, monkeypatch, embedder):
 
 # --- startup compares all nine fields --------------------------------------------
 
-_SEED = {**FULL, "KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM": "2048"}
+_SEED = {**SERVED_ENDPOINT, **FULL, "KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM": "2048"}
 
 #: (case, environment changes after seeding, active-row change after seeding, the differing fields)
 _STARTUP_CASES = [
@@ -417,7 +419,7 @@ def test_the_server_process_exits_78_on_an_adopted_served_artifact(tmp_path, dec
     import subprocess
     import sys
 
-    env = {**os.environ, **FULL}
+    env = {**os.environ, **SERVED_ENDPOINT, **FULL}
     proc = subprocess.run(  # noqa: S603  # trusted argv: this interpreter, our module
         [sys.executable, "-m", "knowledge_base.server"],
         env=env,
