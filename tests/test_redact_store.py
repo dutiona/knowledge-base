@@ -579,3 +579,29 @@ def test_rewrite_reads_a_shared_window_against_every_revision_after_it(kb_conn, 
     stored = conn.execute("SELECT content FROM chunks WHERE id = ?", (shared_id,)).fetchone()[0]
     conn.close()
     assert SECRET[:12] not in stored  # read against the second revision alone, its 12 characters are no secret
+
+
+def test_a_window_shared_by_many_revisions_is_read_one_side_at_a_time(kb_conn, tmp_path, vectors, capsys):
+    """#592: past 64 (before, after) pairs each side is read alone, and a fragment at either edge is still found."""
+    db = tmp_path / "test.db"
+    common = "lorem ipsum " * 300
+
+    def revision(k: int) -> str:  # revisions differ only outside the shared window's reach
+        return (
+            f"revision {k} ".ljust(700, ".") + common[700:790] + SECRET + common[826:1790] + SECRET + f" tail {k}" * 99
+        )
+
+    windows = [_legacy_windows(revision(k)) for k in range(9)]
+    assert all(w[1] == windows[0][1] for w in windows)
+    for w in windows:
+        _with_vector(kb_conn, w[0], uri="content://status", index=0)
+        _with_vector(kb_conn, w[2], uri="content://status", index=2)
+    shared_id = _with_vector(kb_conn, windows[0][1], uri="content://status", index=1)
+    kb_conn.commit()
+    kb_conn.close()
+
+    assert _run(db, "redact", "--rewrite") == 0
+    conn = _open(db)
+    stored = conn.execute("SELECT content FROM chunks WHERE id = ?", (shared_id,)).fetchone()[0]
+    conn.close()
+    assert SECRET[:10] not in stored and SECRET[10:] not in stored

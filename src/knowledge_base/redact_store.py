@@ -56,6 +56,9 @@ def _strings(value: Any) -> Iterator[str]:
 
 #: How much of a neighbouring chunk is read as a chunk's context: past any secret a rule matches.
 _CONTEXT = 4096
+#: The most (before, after) pairs a row is read in; past it, each side is read alone. A source re-ingested many
+#: times can put hundreds of revisions' windows on each side of a row they share.
+_MAX_CONTEXTS = 64
 
 
 def _contents(conn: sqlite3.Connection) -> dict[int, tuple[str, list[str]]]:
@@ -85,13 +88,16 @@ def _contents(conn: sqlite3.Connection) -> dict[int, tuple[str, list[str]]]:
             by_index.setdefault(row["chunk_index"], []).append(row)
         for index, here in by_index.items():
             for cur in here:
-                befores = [
+                befores = {
                     r["content"][:-CHUNK_OVERLAP][-_CONTEXT:] for r in by_index.get(index - 1, ()) if windowed(r, cur)
-                ]
-                afters = [
+                } or {""}
+                afters = {
                     r["content"][CHUNK_OVERLAP:][:_CONTEXT] for r in by_index.get(index + 1, ()) if windowed(cur, r)
-                ]
-                settle(cur, list(product(befores or [""], afters or [""])))
+                } or {""}
+                if len(befores) * len(afters) <= _MAX_CONTEXTS:
+                    settle(cur, list(product(befores, afters)))
+                else:  # only a match longer than the row needs both sides at once
+                    settle(cur, [(b, "") for b in befores] + [("", a) for a in afters])
     return changed
 
 
