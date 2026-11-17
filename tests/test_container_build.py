@@ -4,6 +4,7 @@ import io
 import shutil
 import subprocess
 import tarfile
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -59,3 +60,10 @@ def test_archived_marker_passes(git_config: tuple[str, ...], tmp_path: Path) -> 
     marker = _archived_marker(*git_config)
     assert marker == head
     assert _run_check(marker, tmp_path).returncode == 0
+
+
+def test_build_group_is_the_declared_backend() -> None:
+    # The image builds the project with the locked build group, every other build with [build-system]; uv lock --check
+    # never reads [build-system], so only this keeps a raised floor from missing the image.
+    data = tomllib.loads((REPO / "pyproject.toml").read_text())
+    assert data["dependency-groups"]["build"] == data["build-system"]["requires"]

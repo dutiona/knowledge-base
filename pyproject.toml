@@ -99,3 +99,6 @@ reranker = [
 # an undeclared runtime import; declared here so the type-checker resolves it and the
 # optional feature is installable via `uv sync --group browser`.
 browser = ["playwright>=1.40"]
+# The image's build backend: the Containerfile builds the project with this group from uv.lock, so the code that
+# writes the wheel is hash-checked like every runtime wheel. Keep it equal to [build-system] requires.
+build = ["hatchling>=1.27"]
