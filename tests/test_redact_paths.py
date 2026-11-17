@@ -455,3 +455,11 @@ def test_a_failed_fetch_names_the_url_without_userinfo(
         ingest_url(kb_conn, "https://reader:example-pass@docs.example.test/page")
     assert "example-pass" not in str(failed.value) and "reader" not in str(failed.value)
     assert "https://docs.example.test/page" in str(failed.value)
+
+
+def test_a_link_longer_than_four_windows_is_still_cut():
+    """A link stretches its window to its end, but a 200 KB URL must not become one 200 KB chunk for the embedder."""
+    from knowledge_base.chunking import CHUNK_SIZE, chunk_text
+
+    text = "see https://data.example.org/" + "a" * (10 * CHUNK_SIZE) + " end"
+    assert max(len(c) for c in chunk_text(text)) <= 4 * CHUNK_SIZE

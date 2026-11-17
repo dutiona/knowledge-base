@@ -109,7 +109,9 @@ def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) 
     while start < len(text):
         end = start + size
         if (cut := link_at(end)) is not None:
-            end = cut[0] if cut[0] > start else cut[1]
+            # A link starting the window stretches it, but never past four windows: the per-chunk scrub keeps
+            # that rare fragment safe, and an embedder may refuse a chunk the size of a whole huge URL.
+            end = cut[0] if cut[0] > start else min(cut[1], start + 4 * size)
         chunk = text[start:end]
         if chunk.strip():
             chunks.append(chunk)
