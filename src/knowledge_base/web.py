@@ -1180,7 +1180,10 @@ def ingest_url(
     except httpx.HTTPError as e:
         raise ValidationError(f"Failed to fetch {url}: {e}") from e
 
-    html = fetched.body.decode(fetched.encoding, errors="replace")  # httpx's own .text rule
+    try:
+        html = fetched.body.decode(fetched.encoding, errors="replace")  # httpx's own .text rule
+    except LookupError:  # a codec that is no text encoding (charset=base64, rot13)
+        html = fetched.body.decode("utf-8", errors="replace")
     text = trafilatura.extract(html, include_links=False, include_tables=True) or ""
     extracted_title = None
     metadata = trafilatura.extract_metadata(html)
