@@ -11,10 +11,11 @@ import hmac
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .exceptions import ValidationError
 
-__all__ = ["TOKEN_SHAPE", "TokenTable"]
+__all__ = ["TOKEN_SHAPE", "RequireMachine", "TokenTable"]
 
 #: ``me_`` followed by 32 base62 characters.
 TOKEN_SHAPE = "me_[0-9A-Za-z]{32}"  # noqa: S105 -- a pattern, not a secret
@@ -87,3 +88,37 @@ class TokenTable:
             if hmac.compare_digest(known, digest):
                 found = machine
         return found
+
+
+_REFUSAL_HEADERS = [(b"www-authenticate", b"Bearer"), (b"content-length", b"0"), (b"connection", b"close")]
+
+
+class RequireMachine:
+    """The ASGI application uvicorn serves: refuses every request without exactly one valid machine token.
+
+    It wraps the whole FastMCP app, so it covers every route FastMCP has or adds, Starlette's 404 and 405
+    answers, and FastMCP's own middleware. An admitted request reaches the app without its ``Authorization``
+    header, with its machine in ``scope["state"]["machine"]``.
+    """
+
+    def __init__(self, app: Any, tokens: TokenTable) -> None:
+        self.app = app
+        self.tokens = tokens
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] == "lifespan":
+            await self.app(scope, receive, send)
+            return
+        values = [value for name, value in scope["headers"] if name == b"authorization"]
+        machine = self.tokens.authenticate(values[0]) if len(values) == 1 else None
+        if machine is None:
+            if scope["type"] == "http":
+                await send({"type": "http.response.start", "status": 401, "headers": _REFUSAL_HEADERS})
+                await send({"type": "http.response.body", "body": b""})
+            else:
+                await send({"type": "websocket.close"})
+            return
+        inner = dict(scope)
+        inner["headers"] = [(name, value) for name, value in scope["headers"] if name != b"authorization"]
+        inner["state"] = {**scope.get("state", {}), "machine": machine}
+        await self.app(inner, receive, send)

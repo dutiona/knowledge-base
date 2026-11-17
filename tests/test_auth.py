@@ -143,3 +143,82 @@ def test_an_off_shape_value_is_never_hashed():
     off_shape = "me_" + "0" * 31
     table = TokenTable.parse(token_line("ghost", off_shape).encode())
     assert table.authenticate(_bearer(off_shape)) is None
+
+
+# --- the Bearer gate ---
+
+
+class _Recorder:
+    """An inner ASGI app that records the scope it was called with and answers 204."""
+
+    def __init__(self) -> None:
+        self.scopes: list[dict] = []
+
+    async def __call__(self, scope, receive, send):
+        self.scopes.append(scope)
+        if scope["type"] == "http":
+            await send({"type": "http.response.start", "status": 204, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+
+def _call_gate(headers: list[tuple[bytes, bytes]], *, scope_type: str = "http") -> tuple[_Recorder, list[dict], dict]:
+    import asyncio
+
+    from knowledge_base.auth import RequireMachine
+
+    inner = _Recorder()
+    gate = RequireMachine(inner, TokenTable.parse((token_line("laptop") + token_line("desktop")).encode()))
+    scope = {"type": scope_type, "method": "POST", "path": "/mcp", "headers": headers, "state": {"kept": 1}}
+    sent: list[dict] = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(gate(scope, receive, send))
+    return inner, sent, scope
+
+
+def _auth(machine: str) -> tuple[bytes, bytes]:
+    return (b"authorization", f"Bearer {machine_token(machine)}".encode())
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [],
+        [(b"authorization", b"Bearer not-a-token")],
+        [_auth("laptop"), _auth("laptop")],
+        [_auth("laptop"), _auth("desktop")],
+        [(b"authorization", "Bearer me_é".encode())],
+    ],
+    ids=["none", "off-shape", "twice", "two-machines", "non-ascii"],
+)
+def test_the_gate_refuses_without_exactly_one_valid_token(headers):
+    inner, sent, _ = _call_gate(headers)
+    assert inner.scopes == []
+    start, body = sent
+    assert start["status"] == 401
+    assert (b"www-authenticate", b"Bearer") in start["headers"]
+    assert (b"connection", b"close") in start["headers"]
+    assert (b"content-length", b"0") in start["headers"]
+    assert body == {"type": "http.response.body", "body": b""}
+
+
+def test_the_gate_admits_a_valid_token_and_hands_on_the_machine_without_the_header():
+    headers = [(b"accept", b"application/json"), _auth("laptop"), (b"content-type", b"application/json")]
+    inner, sent, scope = _call_gate(headers)
+    (seen,) = inner.scopes
+    assert seen["headers"] == [(b"accept", b"application/json"), (b"content-type", b"application/json")]
+    assert seen["state"] == {"kept": 1, "machine": "laptop"}
+    assert scope["headers"] == headers
+    assert scope["state"] == {"kept": 1}
+    assert sent[0]["status"] == 204
+
+
+def test_the_gate_forwards_a_lifespan_scope_untouched():
+    inner, sent, scope = _call_gate([], scope_type="lifespan")
+    assert inner.scopes == [scope]
+    assert sent == []
