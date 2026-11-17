@@ -102,6 +102,9 @@ def _declared_environment(monkeypatch):
         "KNOWLEDGE_BASE_EMBED_API_KEY",
         "KNOWLEDGE_BASE_LLM_API_KEY",
         "KNOWLEDGE_BASE_HOST_ADDRESSES",
+        "KNOWLEDGE_BASE_FETCH_MAX_BYTES",
+        "KNOWLEDGE_BASE_FETCH_MAX_REDIRECTS",
+        "KNOWLEDGE_BASE_FETCH_DEADLINE",
     ):
         monkeypatch.delenv(name, raising=False)
 
