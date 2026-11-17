@@ -62,9 +62,10 @@ class _StubStream(httpcore.NetworkStream):
         self.fail = fail
         self.closed = False
         self.socket = _StubSocket(calls)
+        self.ssl_object: object | None = None
 
     def get_extra_info(self, info: str):
-        return self.socket if info == "socket" else None
+        return {"socket": self.socket, "ssl_object": self.ssl_object}.get(info)
 
     def close(self) -> None:
         self.closed = True
@@ -164,6 +165,13 @@ def test_a_send_error_keeps_httpcore_s_mapping(clock, stub):
     stream._stream.socket.error = ConnectionResetError("reset")
     with pytest.raises(httpcore.WriteError):
         stream.write(b"x", timeout=5)
+
+
+def test_a_stream_whose_socket_does_not_carry_its_tls_is_refused():
+    stream = _StubStream([])
+    stream.ssl_object = object()  # TLS held somewhere the raw socket does not reach: a send there would be plaintext
+    with pytest.raises(RuntimeError, match="TLS"):
+        utils._DeadlineStream(stream)
 
 
 def test_a_deadline_between_connect_and_tls_closes_the_socket(clock, stub):

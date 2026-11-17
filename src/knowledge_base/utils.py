@@ -215,6 +215,14 @@ class _DeadlineStream(httpcore.NetworkStream):
     """A socket stream whose every read, write and TLS handshake ends by the deadline."""
 
     def __init__(self, stream: httpcore.NetworkStream) -> None:
+        # write() sends on the stream's socket, which is right only while that socket carries the stream's TLS
+        # (httpcore's SyncStream wraps an SSLSocket). Fail closed rather than ever send a request in plaintext.
+        self._socket = stream.get_extra_info("socket")
+        ssl_object = stream.get_extra_info("ssl_object")
+        if self._socket is None or (
+            ssl_object is not None and getattr(self._socket, "_sslobj", None) is not ssl_object
+        ):
+            raise RuntimeError("httpcore's stream no longer sends through a socket carrying its TLS")
         self._stream = stream
 
     def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
@@ -223,10 +231,9 @@ class _DeadlineStream(httpcore.NetworkStream):
     def write(self, buffer: bytes, timeout: float | None = None) -> None:
         # httpcore's own write loops send() under one timeout, so a slow reader could stretch it past the
         # deadline; here each send gets the time left when it starts.
-        sock = self._stream.get_extra_info("socket")
         data = memoryview(buffer)
         while data:
-            data = data[_bounded(partial(_send, sock, data), timeout) :]
+            data = data[_bounded(partial(_send, self._socket, data), timeout) :]
 
     def close(self) -> None:
         self._stream.close()
