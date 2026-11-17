@@ -13,10 +13,9 @@ opens its own raw read-only connection. ``db.py`` imports the constant + the
 no cycle). ``db.py`` reads ``migrate.CURRENT_SCHEMA_VERSION`` via the module
 attribute so tests can monkeypatch it.
 
-The ``_MIGRATIONS`` registry ships **empty**: ``CURRENT_SCHEMA_VERSION = 1`` is
-the current schema, whose definition is the idempotent builds in
-``db.init_schema``. Future schema changes are version-gated v2+ — one registry
-entry + one function.
+The v1 schema is the idempotent builds in ``db.init_schema``; each later version is
+one ``_MIGRATIONS`` entry + one function. ``db.init_schema`` runs the same functions
+for a fresh or legacy-unversioned database, so every origin converges to one shape.
 """
 
 from __future__ import annotations
@@ -33,6 +32,7 @@ from .exceptions import KnowledgeBaseError
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
     "SCHEMA_VERSION_KEY",
+    "add_v2_space_columns",
     "backup_database",
     "get_schema_version",
     "migrate",
@@ -45,7 +45,7 @@ __all__ = [
 
 #: The schema version this build targets. A fresh DB is stamped with this; the
 #: read path validates against it.
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 #: `config` key under which the applied schema version is stored.
 SCHEMA_VERSION_KEY = "schema_version"
@@ -55,7 +55,26 @@ SCHEMA_VERSION_KEY = "schema_version"
 #: table-rebuild migrations). Keyed by the **target** version (the one it
 #: produces), so `_MIGRATIONS[2]` migrates v1 → v2.
 Migration = tuple[Callable[[sqlite3.Connection], None], bool]
-_MIGRATIONS: dict[int, Migration] = {}
+
+#: v2 (#573): the ADR-0015 served artifact and each space's query instruction.
+_V2_SPACE_COLUMNS = (
+    ("artifact_sha256", "TEXT"),
+    ("pooling", "TEXT"),
+    ("normalization", "TEXT"),
+    ("max_input_tokens", "INTEGER"),
+    ("query_instruction", "TEXT"),
+)
+
+
+def add_v2_space_columns(conn: sqlite3.Connection) -> None:
+    """Add the missing v2 ``embed_spaces`` columns, all NULL; commits nothing (``migrate`` owns the transaction)."""
+    present = {row[1] for row in conn.execute("PRAGMA table_info(embed_spaces)")}
+    for name, sql_type in _V2_SPACE_COLUMNS:
+        if name not in present:
+            conn.execute(f"ALTER TABLE embed_spaces ADD COLUMN {name} {sql_type}")
+
+
+_MIGRATIONS: dict[int, Migration] = {2: (add_v2_space_columns, False)}
 
 
 # --- version read/write on the config table ------------------------------------

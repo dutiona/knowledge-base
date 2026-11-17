@@ -610,6 +610,11 @@ class EmbedSpace(TypedDict):
     total_chunks: int | None
     matryoshka_base_dim: int | None
     element_type: str
+    artifact_sha256: str | None
+    pooling: str | None
+    normalization: str | None
+    max_input_tokens: int | None
+    query_instruction: str | None
 
 
 def get_active_space(conn: sqlite3.Connection) -> EmbedSpace | None:
@@ -1139,7 +1144,9 @@ def _run_migrations(conn: sqlite3.Connection, embed_dim: int) -> None:
     The order is **load-bearing** and must be preserved exactly: e.g.
     ``_migrate_session_id`` must add the column before ``_migrate_chunk_sessions``
     backfills from it, and ``_bootstrap_embed_spaces`` sits after the chunk-table
-    migrations but before the embed_spaces ALTER migrations. The
+    migrations and after every embed_spaces column step, so each column it writes exists
+    (the v2 columns come from ``migrate.add_v2_space_columns``, the one ALTER path for every
+    origin). The
     ``idx_chunks_session_id`` index creation is interleaved at its original
     position (after ``_migrate_chunk_strategy``, before ``_migrate_paper_paths``).
     Each entry is a no-arg callable invoked in sequence.
@@ -1154,9 +1161,10 @@ def _run_migrations(conn: sqlite3.Connection, embed_dim: int) -> None:
         _migrate_paper_paths,
         _migrate_jobs_types,
         _migrate_chunk_sessions,
-        lambda c: _bootstrap_embed_spaces(c, embed_dim),
         _migrate_embed_spaces_matryoshka,
         _migrate_embed_spaces_element_type,
+        lambda c: _migrate.add_v2_space_columns(c),
+        lambda c: _bootstrap_embed_spaces(c, embed_dim),
         _migrate_normalize_source_uri,
         _migrate_extraction_source,
     )
