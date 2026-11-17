@@ -144,7 +144,7 @@ def test_a_stop_answers_the_call_in_flight(kb_http, monkeypatch):
         release.wait(10)
         return [0.1] * TEST_EMBED_DIM
 
-    monkeypatch.setattr("knowledge_base.search.embed_single", _blocking_embed)
+    monkeypatch.setattr("knowledge_base.search.embed_query", _blocking_embed)
     answers = []
     call = threading.Thread(
         target=lambda: answers.append(kb_http.rpc("tools/call", {"name": "search_index", "arguments": {"query": "q"}}))

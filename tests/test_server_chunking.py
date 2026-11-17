@@ -80,7 +80,7 @@ def test_search_index_chunk_strategy_passthrough(tmp_path):
     )
     conn.commit()
 
-    with patch("knowledge_base.search.embed_single", _fake_embed_single):
+    with patch("knowledge_base.search.embed_query", _fake_embed_single):
         # Default (no filter) returns both — vec leg filters implicitly
         # but FTS mode returns all strategies
         all_results = search(conn, "graph neural", mode="fts")

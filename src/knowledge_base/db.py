@@ -12,10 +12,19 @@ from typing import Literal, TypedDict, cast
 import sqlite_vec
 
 from . import migrate as _migrate  # schema-version framework (#450); read attrs live
-from .exceptions import KnowledgeBaseError
-from .settings import VARIABLES, EmbedSettings, check_environment, load_embed_settings, normalize_embed_url
+from .embeddings import default_query_instruction
+from .exceptions import KnowledgeBaseError, ValidationError
+from .settings import (
+    VARIABLES,
+    EmbedSettings,
+    check_environment,
+    declared_identity,
+    identity_mismatch,
+    load_embed_settings,
+    normalize_embed_url,
+    require_identity,
+)
 from .utils import (
-    ELEMENT_INSERT_EXPR,
     _sanitize_url,
     serialize_f32 as _serialize_f32,
 )  # shared vec serialization
@@ -40,12 +49,13 @@ __all__ = [
     "get_active_space",
     "get_connection",
     "get_index_stats",
-    "get_space_element_type",
     "get_vec_table_name",
     "init_schema",
     "insert_chunk_vec",
     "open_declared_db",
+    "require_active_space",
     "resolve_db_path",
+    "space_query_instruction",
     "space_table_name",
 ]
 
@@ -610,6 +620,11 @@ class EmbedSpace(TypedDict):
     total_chunks: int | None
     matryoshka_base_dim: int | None
     element_type: str
+    artifact_sha256: str | None
+    pooling: str | None
+    normalization: str | None
+    max_input_tokens: int | None
+    query_instruction: str | None
 
 
 def get_active_space(conn: sqlite3.Connection) -> EmbedSpace | None:
@@ -620,6 +635,20 @@ def get_active_space(conn: sqlite3.Connection) -> EmbedSpace | None:
     # Runtime value is a plain dict (identical to the previous ``dict(row)``); the
     # cast asserts it conforms to the EmbedSpace schema (SELECT * over the table).
     return cast("EmbedSpace", dict(row))
+
+
+def space_query_instruction(space: EmbedSpace | dict) -> str:
+    """The instruction a query into *space* carries: its recorded one, or its model's default when it records NULL."""
+    recorded = space.get("query_instruction")
+    return default_query_instruction(space["model"]) if recorded is None else recorded
+
+
+def require_active_space(conn: sqlite3.Connection) -> EmbedSpace:
+    """The active embedding space; a store without one refuses (the startup bind's rule, #569)."""
+    active = get_active_space(conn)
+    if active is None:
+        raise KnowledgeBaseError(f"the database has no active embedding space; {_REMEDY_RE_EMBED}")
+    return active
 
 
 def get_vec_table_name(conn: sqlite3.Connection) -> str:
@@ -647,18 +676,6 @@ def get_active_chunk_strategy(conn: sqlite3.Connection) -> str:
     return row["chunk_strategy"]
 
 
-def get_space_element_type(
-    conn: sqlite3.Connection,
-    table_name: str | None = None,
-) -> str:
-    """Return the element_type for the given (or active) space, defaulting to 'float32'."""
-    tbl = _resolve_vec_table(conn, table_name)
-    row = conn.execute("SELECT element_type FROM embed_spaces WHERE table_name = ?", (tbl,)).fetchone()
-    if row is None:
-        return "float32"
-    return row["element_type"] or "float32"
-
-
 def bump_chunk_count(conn: sqlite3.Connection, table_name: str, delta: int) -> None:
     """Increment ``embed_spaces.chunk_count`` for the active space by *delta* (#392).
 
@@ -681,13 +698,9 @@ def insert_chunk_vec(
     chunk_id: int,
     embedding: list[float],
     table_name: str | None = None,
-    element_type: str | None = None,
     bump_count: bool = True,
 ) -> None:
     """Insert a single chunk embedding into the specified (or active) vec table.
-
-    If *element_type* is ``None`` (the default), it is auto-resolved from the
-    space registry so callers never need to look it up themselves.
 
     When *bump_count* is ``True`` (the default), the per-row
     ``embed_spaces.chunk_count`` UPDATE fires exactly as before, preserving behavior
@@ -697,11 +710,8 @@ def insert_chunk_vec(
     write amplification while keeping the resulting ``chunk_count`` identical.
     """
     tbl = _resolve_vec_table(conn, table_name)
-    if element_type is None:
-        element_type = get_space_element_type(conn, tbl)
-    expr = ELEMENT_INSERT_EXPR[element_type]
     conn.execute(
-        f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, {expr}, ?)",  # noqa: S608  # trusted internal identifier (vec table name + fixed expr), not user input
+        f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",  # noqa: S608  # trusted internal identifier (vec table name), not user input
         (chunk_id, _serialize_f32(embedding), chunk_id),
     )
     # Keep embed_spaces.chunk_count in sync for the active space (per-row path).
@@ -797,11 +807,13 @@ def _migrate_extraction_source(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
+def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int, declared: EmbedSettings | None) -> None:
     """Register the default embedding space if embed_spaces is empty.
 
     Works for both fresh DBs (chunks_vec just created, 0 rows) and legacy
     DBs (chunks_vec has data). Idempotent — skips if any space already exists.
+    A blank database records the whole *declared* identity; a legacy one records
+    its config rows, with no served artifact (ADR-0015: recorded before it existed).
     """
     existing = conn.execute("SELECT 1 FROM embed_spaces LIMIT 1").fetchone()
     if existing:
@@ -830,6 +842,19 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
         " VALUES (?, ?, ?, ?, ?, 'active', 'chunks_vec', ?)",
         ("default", model, provider, embed_dim, strategy, count),
     )
+    if declared is not None:
+        conn.execute(
+            "UPDATE embed_spaces SET matryoshka_base_dim = ?, element_type = ?, artifact_sha256 = ?, pooling = ?,"
+            " normalization = ?, max_input_tokens = ? WHERE name = 'default'",
+            (
+                declared.matryoshka_base_dim,
+                declared.element_type,
+                declared.artifact_sha256,
+                declared.pooling,
+                declared.normalization,
+                declared.max_input_tokens,
+            ),
+        )
     conn.commit()
 
 
@@ -847,7 +872,26 @@ def embed_config_rows(declared: EmbedSettings) -> list[tuple[str, str]]:
     return rows
 
 
-def _seed_default_config(conn: sqlite3.Connection) -> int:
+def _declaration_of_an_empty_store(conn: sqlite3.Connection) -> EmbedSettings | None:
+    """The declaration a store holding no space and no chunk was seeded from, else None.
+
+    A first initialization interrupted after its config seed committed leaves exactly that: the
+    rows are the declaration's and nothing is recorded yet, so the bootstrap still records the
+    whole declared identity (#573). Any other store keeps its legacy bootstrap.
+    """
+    for table in ("embed_spaces", "chunks"):
+        if _table_sql(conn, table) is not None and conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():  # noqa: S608  # literal names
+            return None
+    try:
+        declared = load_embed_settings()
+    except ValidationError:
+        return None  # nothing declared: a maintenance command on an empty legacy store
+    recorded = dict(conn.execute("SELECT key, value FROM config WHERE key LIKE 'embed_%'").fetchall())
+    wanted = dict(embed_config_rows(declared))
+    return declared if all(recorded.get(key) == wanted[key] for key in _IDENTITY_KEYS) else None
+
+
+def _seed_default_config(conn: sqlite3.Connection) -> tuple[int, EmbedSettings | None]:
     """Create the config table and seed all default key/value rows.
 
     Consolidates the two historically-split config-seeding spots: the embed_* rows
@@ -858,7 +902,7 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
     tables (which embed it) are built.
 
     Returns the configured ``embed_dim`` for the caller to thread into the base
-    schema DDL.
+    schema DDL, and the declaration a blank database was seeded from (None otherwise).
     """
     conn.execute("""
         CREATE TABLE IF NOT EXISTS config (
@@ -867,8 +911,10 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
         )
     """)
     existing = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
+    declared = None
     if not existing:
-        conn.executemany("INSERT INTO config (key, value) VALUES (?, ?)", embed_config_rows(load_embed_settings()))
+        declared = load_embed_settings()
+        conn.executemany("INSERT INTO config (key, value) VALUES (?, ?)", embed_config_rows(declared))
         conn.commit()
     else:
         # Upgraded pre-provider DB (embed_model present, embed_provider possibly absent): every
@@ -876,6 +922,7 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
         # its recorded provider. Idempotent via INSERT OR IGNORE.
         conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('embed_provider', 'ollama')")
         conn.commit()
+        declared = _declaration_of_an_empty_store(conn)
 
     # These keys are seeded ahead of the base-schema DDL and the migration chain,
     # but none are read during DDL or by any migration (only embed_dim is read,
@@ -890,7 +937,7 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
     dim_row = conn.execute("SELECT value FROM config WHERE key = 'embed_dim'").fetchone()
     if dim_row is None:
         raise KnowledgeBaseError("config has embed_model but no embed_dim; KB cannot size its vector tables")
-    return int(dim_row["value"])
+    return int(dim_row["value"]), declared
 
 
 def _create_base_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
@@ -1133,13 +1180,15 @@ def _create_base_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
     )
 
 
-def _run_migrations(conn: sqlite3.Connection, embed_dim: int) -> None:
+def _run_migrations(conn: sqlite3.Connection, embed_dim: int, declared: EmbedSettings | None) -> None:
     """Drive the ordered legacy-migration chain over the just-built base schema.
 
     The order is **load-bearing** and must be preserved exactly: e.g.
     ``_migrate_session_id`` must add the column before ``_migrate_chunk_sessions``
     backfills from it, and ``_bootstrap_embed_spaces`` sits after the chunk-table
-    migrations but before the embed_spaces ALTER migrations. The
+    migrations and after every embed_spaces column step, so each column it writes exists
+    (the v2 columns come from ``migrate.add_v2_space_columns``, the one ALTER path for every
+    origin). The
     ``idx_chunks_session_id`` index creation is interleaved at its original
     position (after ``_migrate_chunk_strategy``, before ``_migrate_paper_paths``).
     Each entry is a no-arg callable invoked in sequence.
@@ -1154,9 +1203,10 @@ def _run_migrations(conn: sqlite3.Connection, embed_dim: int) -> None:
         _migrate_paper_paths,
         _migrate_jobs_types,
         _migrate_chunk_sessions,
-        lambda c: _bootstrap_embed_spaces(c, embed_dim),
         _migrate_embed_spaces_matryoshka,
         _migrate_embed_spaces_element_type,
+        lambda c: _migrate.add_v2_space_columns(c),
+        lambda c: _bootstrap_embed_spaces(c, embed_dim, declared),
         _migrate_normalize_source_uri,
         _migrate_extraction_source,
     )
@@ -1189,14 +1239,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
             f"database schema v{version} is behind v{current}; run `knowledge-base-ingest migrate`"
         )
 
-    embed_dim = _seed_default_config(conn)
+    embed_dim, declared = _seed_default_config(conn)
     _create_base_schema(conn, embed_dim)
     conn.commit()
-    _run_migrations(conn, embed_dim)
+    _run_migrations(conn, embed_dim, declared)
 
-    # Stamp the baseline version (#450). Reached only for a fresh/legacy-unversioned
-    # DB (an already-current DB early-returns above); the idempotent builds have
-    # converged it to the v1 contract.
+    # Stamp the current version (#450). Reached only for a fresh/legacy-unversioned
+    # DB (an already-current DB early-returns above); the idempotent builds and the
+    # version functions they share with `migrate` have converged it to the current contract.
     _migrate.set_schema_version(conn, _migrate.CURRENT_SCHEMA_VERSION)
     conn.commit()
 
@@ -1241,24 +1291,19 @@ def bind_embed_config(
     active = get_active_space(conn)
     if active is None:
         raise KnowledgeBaseError(f"the database has no active embedding space; {_REMEDY_RE_EMBED}")
-    active_identity = {
-        "embed_provider": active["provider"],
-        "embed_model": active["model"],
-        "embed_dim": str(active["dim"]),
-    }
-    active_matches = all(active_identity[k] == wanted[k] for k in _IDENTITY_KEYS)
 
     writes: list[tuple[str, str | None]] = []
     if transition == "re-embed":
-        if active_matches:
+        if not identity_mismatch(dict(active), declared_identity(declared)):
             raise KnowledgeBaseError("the active embedding space already has the declared identity; use rebind")
     else:
-        for key in _IDENTITY_KEYS:
-            if not active_matches and active_identity[key] != wanted[key]:
-                raise KnowledgeBaseError(
-                    f"the active space records {key} {active_identity[key]!r}, but {var[key]} declares "
-                    f"{wanted[key]!r}; {_REMEDY_RE_EMBED}"
-                )
+        # ADR-0015 §3: the store's identity is its active space's whole tuple.
+        require_identity(
+            dict(active),
+            declared_identity(declared),
+            subject=f"the active space {active['name']!r}",
+            remedy=_REMEDY_RE_EMBED,
+        )
         for key in _IDENTITY_KEYS:
             if recorded.get(key) != wanted[key]:
                 if transition != "rebind":

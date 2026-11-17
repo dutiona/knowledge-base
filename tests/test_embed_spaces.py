@@ -13,7 +13,6 @@ from knowledge_base.db import (
     get_active_chunk_strategy,
     get_active_space,
     get_connection,
-    get_space_element_type,
     get_vec_table_name,
     init_schema,
     insert_chunk_vec,
@@ -138,7 +137,7 @@ def test_space_table_name():
 
 def test_create_space(tmp_path):
     conn = _setup(tmp_path)
-    result = create_space(conn, "new_space", "mxbai", 4, "ollama")
+    result = create_space(conn, "new_space", "mxbai", 4)
     assert result["space"] == "new_space"
     assert result["status"] == "populating"
     assert result["table_name"] == "chunks_vec_new_space"
@@ -159,17 +158,17 @@ def test_create_space(tmp_path):
 
 def test_create_space_duplicate_rejected(tmp_path):
     conn = _setup(tmp_path)
-    create_space(conn, "dup", "model", 4, "ollama")
+    create_space(conn, "dup", "model", 4)
     with pytest.raises(ValueError, match="already exists"):
-        create_space(conn, "dup", "model", 4, "ollama")
+        create_space(conn, "dup", "model", 4)
 
 
 def test_create_space_invalid_name(tmp_path):
     conn = _setup(tmp_path)
     with pytest.raises(ValueError, match="alphanumeric"):
-        create_space(conn, "has spaces", "model", 4, "ollama")
+        create_space(conn, "has spaces", "model", 4)
     with pytest.raises(ValueError, match="alphanumeric"):
-        create_space(conn, "no-dashes", "model", 4, "ollama")
+        create_space(conn, "no-dashes", "model", 4)
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +185,7 @@ def test_backfill_space(mock_prov, tmp_path):
     _add_chunk(conn, "chunk one", 0)
     _add_chunk(conn, "chunk two", 1)
 
-    create_space(conn, "test_bf", "mxbai", 4, "ollama")
+    create_space(conn, "test_bf", "mxbai", 4)
     result = backfill_space(conn, "test_bf", batch_size=10)
 
     assert result["chunks_processed"] == 2
@@ -207,7 +206,7 @@ def test_backfill_resumable(mock_prov, tmp_path):
     cid1 = _add_chunk(conn, "first chunk", 0)
     _add_chunk(conn, "second chunk", 1)
 
-    create_space(conn, "resume", "mxbai", 4, "ollama")
+    create_space(conn, "resume", "mxbai", 4)
 
     # Manually insert first chunk as if a previous partial backfill happened
     from knowledge_base.db import _serialize_f32
@@ -240,7 +239,7 @@ def test_promote_space(mock_prov, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
     _add_chunk(conn, "data", 0)
 
-    create_space(conn, "promoted", "new_model", 4, "ollama")
+    create_space(conn, "promoted", "new_model", 4)
     backfill_space(conn, "promoted")
     _declare(monkeypatch, "new_model", 4)
     result = promote_space(conn, "promoted")
@@ -267,7 +266,7 @@ def test_promote_updates_config(mock_prov, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
     _add_chunk(conn, "data", 0)
 
-    create_space(conn, "cfg_test", "new_model", 4, "ollama")
+    create_space(conn, "cfg_test", "new_model", 4)
     backfill_space(conn, "cfg_test")
     _declare(monkeypatch, "new_model", 4)
     promote_space(conn, "cfg_test")
@@ -276,6 +275,8 @@ def test_promote_updates_config(mock_prov, tmp_path, monkeypatch):
     assert config["model"] == "new_model"
     assert config["dim"] == 4
     assert config["provider"] == "ollama"
+    identity_keys = {key for (key,) in conn.execute("SELECT key FROM config WHERE key LIKE 'embed_%'")}
+    assert identity_keys - {"embed_base_url", "embed_api_key"} == {"embed_provider", "embed_model", "embed_dim"}
 
 
 def test_promote_empty_space_blocked(tmp_path, monkeypatch):
@@ -283,7 +284,7 @@ def test_promote_empty_space_blocked(tmp_path, monkeypatch):
     # Add a chunk so total_chunks > 0 in the new space
     _add_chunk(conn, "data", 0)
 
-    create_space(conn, "empty", "model", 4, "ollama")
+    create_space(conn, "empty", "model", 4)
     # Don't backfill — chunk_count stays 0 but total_chunks > 0
     _declare(monkeypatch, "model", 4)
     with pytest.raises(ValueError, match="0 of"):
@@ -314,7 +315,7 @@ def test_cleanup_space(mock_prov, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
     _add_chunk(conn, "data", 0)
 
-    create_space(conn, "to_clean", "model", 4, "ollama")
+    create_space(conn, "to_clean", "model", 4)
     backfill_space(conn, "to_clean")
     _declare(monkeypatch, "model", 4)
     promote_space(conn, "to_clean")
@@ -350,7 +351,7 @@ def test_list_spaces(tmp_path):
     assert len(spaces) == 1
     assert spaces[0]["name"] == "default"
 
-    create_space(conn, "second", "model", 4, "ollama")
+    create_space(conn, "second", "model", 4)
     spaces = list_spaces(conn)
     assert len(spaces) == 2
     names = {s["name"] for s in spaces}
@@ -377,7 +378,7 @@ def test_insert_chunk_vec_explicit_table(tmp_path):
     conn = _setup(tmp_path)
     cid = _add_chunk(conn, "explicit table test", 0)
 
-    create_space(conn, "explicit", "model", 4, "ollama")
+    create_space(conn, "explicit", "model", 4)
     insert_chunk_vec(conn, cid, [0.2] * 4, table_name="chunks_vec_explicit")
     conn.commit()
 
@@ -409,7 +410,7 @@ def test_partial_unique_index_active(tmp_path):
 @patch("knowledge_base.embed_swap.get_provider", return_value=_FakeProvider())
 def test_create_matryoshka_space(mock_prov, tmp_path):
     conn = _setup(tmp_path)
-    result = create_space(conn, "mat_test", "qwen3", 4, "ollama", matryoshka_base_dim=8)
+    result = create_space(conn, "mat_test", "qwen3", 4, matryoshka_base_dim=8)
     assert result["space"] == "mat_test"
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'mat_test'").fetchone()
     assert space["matryoshka_base_dim"] == 8
@@ -419,7 +420,7 @@ def test_create_matryoshka_space(mock_prov, tmp_path):
 def test_create_matryoshka_invalid_dim(tmp_path):
     conn = _setup(tmp_path)
     with pytest.raises(ValueError, match=r"matryoshka_base_dim.*must be greater"):
-        create_space(conn, "bad", "model", 8, "ollama", matryoshka_base_dim=4)
+        create_space(conn, "bad", "model", 8, matryoshka_base_dim=4)
 
 
 @patch("knowledge_base.embed_swap.get_provider")
@@ -437,7 +438,7 @@ def test_backfill_matryoshka_space(mock_get_prov, tmp_path):
     # Add a chunk
     _add_chunk(conn, "test content", 0)
 
-    create_space(conn, "mat", "qwen3", 4, "ollama", matryoshka_base_dim=8)
+    create_space(conn, "mat", "qwen3", 4, matryoshka_base_dim=8)
     result = backfill_space(conn, "mat")
     assert result["chunks_processed"] == 1
 
@@ -454,121 +455,15 @@ def test_backfill_matryoshka_space(mock_get_prov, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_create_space_with_int8_element_type(tmp_path):
-    conn = _setup(tmp_path)
-    result = create_space(conn, "int8_space", "bge-m3", 4, "ollama", element_type="int8")
-    assert result["space"] == "int8_space"
-
-    row = conn.execute("SELECT element_type FROM embed_spaces WHERE name = 'int8_space'").fetchone()
-    assert row["element_type"] == "int8"
-
-    # The vec0 table must exist and be queryable
-    conn.execute("SELECT COUNT(*) FROM [chunks_vec_int8_space]").fetchone()
-
-
 def test_create_space_default_element_type(tmp_path):
     conn = _setup(tmp_path)
-    create_space(conn, "f32_space", "bge-m3", 4, "ollama")
+    create_space(conn, "f32_space", "bge-m3", 4)
 
     row = conn.execute("SELECT element_type FROM embed_spaces WHERE name = 'f32_space'").fetchone()
     assert row["element_type"] == "float32"
-
-
-def test_create_space_invalid_element_type(tmp_path):
-    conn = _setup(tmp_path)
-    with pytest.raises(ValueError, match="element_type"):
-        create_space(conn, "bad_type", "bge-m3", 4, "ollama", element_type="float16")
-
-
-@patch(
-    "knowledge_base.embed_swap.get_provider",
-    return_value=_FakeProvider(),
-)
-def test_backfill_int8_space(mock_prov, tmp_path):
-    conn = _setup(tmp_path)
-    _add_chunk(conn, "int8 chunk", 0)
-
-    create_space(conn, "bf_int8", "bge-m3", 4, "ollama", element_type="int8")
-    result = backfill_space(conn, "bf_int8", batch_size=10)
-
-    assert result["chunks_processed"] == 1
-    count = conn.execute("SELECT COUNT(*) FROM [chunks_vec_bf_int8]").fetchone()[0]
-    assert count == 1
-
-
-@patch(
-    "knowledge_base.embed_swap.get_provider",
-    return_value=_FakeProvider(),
-)
-def test_search_int8_space(mock_prov, tmp_path, monkeypatch):
-    conn = _setup(tmp_path)
-    _add_chunk(conn, "searchable int8 content", 0)
-
-    create_space(conn, "search_int8", "bge-m3", 4, "ollama", element_type="int8")
-    backfill_space(conn, "search_int8", batch_size=10)
-    _declare(monkeypatch, "bge-m3", 4)
-    promote_space(conn, "search_int8")
-
-    from knowledge_base.search import _vec_search
-
-    results = _vec_search(conn, [0.1] * 4, limit=5)
-    assert len(results) > 0
-
-
-@patch(
-    "knowledge_base.embed_swap.get_provider",
-    return_value=_FakeProvider(),
-)
-def test_promote_int8_space_syncs_config(mock_prov, tmp_path, monkeypatch):
-    conn = _setup(tmp_path)
-    _add_chunk(conn, "config sync chunk", 0)
-
-    create_space(conn, "cfg_int8", "bge-m3", 4, "ollama", element_type="int8")
-    backfill_space(conn, "cfg_int8", batch_size=10)
-    _declare(monkeypatch, "bge-m3", 4)
-    promote_space(conn, "cfg_int8")
-
-    row = conn.execute("SELECT value FROM config WHERE key = 'embed_element_type'").fetchone()
-    assert row is not None
-    assert row["value"] == "int8"
 
 
 def test_migration_adds_element_type(tmp_path):
     conn = _setup(tmp_path)
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()}
     assert "element_type" in columns
-
-
-def test_get_space_element_type_default(tmp_path):
-    conn = _setup(tmp_path)
-    # Default space is float32
-    assert get_space_element_type(conn) == "float32"
-
-
-def test_get_space_element_type_int8(tmp_path):
-    conn = _setup(tmp_path)
-    create_space(conn, "et_int8", "bge-m3", 4, "ollama", element_type="int8")
-    assert get_space_element_type(conn, "chunks_vec_et_int8") == "int8"
-
-
-@patch(
-    "knowledge_base.embed_swap.get_provider",
-    return_value=_FakeProvider(),
-)
-def test_insert_chunk_vec_auto_resolves_element_type(mock_prov, tmp_path, monkeypatch):
-    conn = _setup(tmp_path)
-    _add_chunk(conn, "auto resolve chunk", 0)
-
-    create_space(conn, "auto_int8", "bge-m3", 4, "ollama", element_type="int8")
-    backfill_space(conn, "auto_int8", batch_size=10)
-    _declare(monkeypatch, "bge-m3", 4)
-    promote_space(conn, "auto_int8")
-
-    cid = _add_chunk(conn, "new chunk after promotion", 1)
-    # Call insert_chunk_vec without element_type — should auto-detect int8
-    insert_chunk_vec(conn, cid, [0.1] * 4)
-    conn.commit()
-
-    row = conn.execute("SELECT chunk_id FROM [chunks_vec_auto_int8] WHERE chunk_id = ?", (cid,)).fetchone()
-    assert row is not None
-    assert row["chunk_id"] == cid

@@ -2,30 +2,41 @@
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
-from knowledge_base.exceptions import ValidationError
+from knowledge_base.exceptions import EmbeddingModelMismatchError, ValidationError
 from knowledge_base.settings import (
     FETCH_DEADLINE_VAR,
     FETCH_MAX_BYTES_VAR,
     FETCH_MAX_REDIRECTS_VAR,
     HOST_ADDRESSES_VAR,
+    IDENTITY_FIELDS,
     EmbedSettings,
     FetchLimits,
     check_environment,
     declared_embed_host,
+    declared_identity,
     fetch_limits,
     host_networks,
+    identity_mismatch,
     load_embed_settings,
+    require_identity,
+    routes_by_model,
+    serving_identity,
     switch_on,
 )
 
+_SERVED = ("artifact_sha256", "pooling", "normalization", "max_input_tokens")
 _EMBED_VARS = (
     "KNOWLEDGE_BASE_EMBED_PROVIDER",
     "KNOWLEDGE_BASE_EMBED_MODEL",
     "KNOWLEDGE_BASE_EMBED_DIM",
     "KNOWLEDGE_BASE_EMBED_URL",
     "KNOWLEDGE_BASE_EMBED_API_KEY",
+    "KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM",
+    *(f"KNOWLEDGE_BASE_EMBED_{field.upper()}" for field in _SERVED),
 )
 
 
@@ -245,3 +256,157 @@ def test_check_environment_validates_fetch_limits(monkeypatch):
     monkeypatch.setenv(FETCH_DEADLINE_VAR, "soon")
     with pytest.raises(ValidationError, match=rf"^{FETCH_DEADLINE_VAR}"):
         check_environment()
+
+
+# --- the whole ADR-0015 tuple (#573) ----------------------------------------------
+
+_ARTIFACT = {"artifact_sha256": "a" * 64, "pooling": "last", "normalization": "l2", "max_input_tokens": "2048"}
+_OLLAMA = {"provider": "ollama", "model": "bge-m3", "dim": "1024", "url": "http://embedder.example.test:11434"}
+
+
+def test_the_whole_identity_is_declared(declare):
+    declare(**_OLLAMA, matryoshka_base_dim="2048", **_ARTIFACT)
+    settings = load_embed_settings()
+    assert declared_identity(settings) == {
+        "model": "bge-m3",
+        "provider": "ollama",
+        "dim": 1024,
+        "matryoshka_base_dim": 2048,
+        "element_type": "float32",
+        "artifact_sha256": "a" * 64,
+        "pooling": "last",
+        "normalization": "l2",
+        "max_input_tokens": 2048,
+    }
+    assert list(declared_identity(settings)) == list(IDENTITY_FIELDS)
+
+
+def test_declaring_nothing_new_gives_the_unset_values(declare):
+    declare(**_OLLAMA)
+    identity = declared_identity(load_embed_settings())
+    assert [identity[field] for field in ("matryoshka_base_dim", "element_type", *_SERVED)] == [
+        None,
+        "float32",
+        None,
+        None,
+        None,
+        None,
+    ]
+
+
+@pytest.mark.parametrize(
+    "present",
+    [subset for size in (1, 2, 3) for subset in itertools.combinations(_SERVED, size)],
+)
+def test_a_partial_served_artifact_names_every_missing_variable(declare, present):
+    declare(**_OLLAMA, **{field: _ARTIFACT[field] for field in present})
+    missing = [f"KNOWLEDGE_BASE_EMBED_{field.upper()}" for field in _SERVED if field not in present]
+    with pytest.raises(ValidationError, match=rf"^{missing[0]}") as error:
+        load_embed_settings()
+    assert all(name in str(error.value) for name in missing)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("artifact_sha256", "A" * 64),
+        ("artifact_sha256", "a" * 63),
+        ("artifact_sha256", "g" * 64),
+        ("max_input_tokens", "0"),
+        ("max_input_tokens", "-1"),
+        ("max_input_tokens", "2k"),
+        ("matryoshka_base_dim", "abc"),
+        ("matryoshka_base_dim", "1024"),
+        ("matryoshka_base_dim", "512"),
+    ],
+)
+def test_an_invalid_identity_value_names_its_variable(declare, field, value):
+    declare(**_OLLAMA, **{**_ARTIFACT, field: value})
+    with pytest.raises(ValidationError, match=rf"^KNOWLEDGE_BASE_EMBED_{field.upper()}"):
+        load_embed_settings()
+
+
+def _identity(**changes: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "model": "bge-m3",
+        "provider": "ollama",
+        "dim": 1024,
+        "matryoshka_base_dim": None,
+        "element_type": "float32",
+        "artifact_sha256": "a" * 64,
+        "pooling": "last",
+        "normalization": "l2",
+        "max_input_tokens": 2048,
+    }
+    return {**base, **changes}
+
+
+_OTHER = {
+    "model": "other",
+    "provider": "onnx",
+    "dim": 768,
+    "matryoshka_base_dim": 2048,
+    "element_type": "int8",
+    "artifact_sha256": "b" * 64,
+    "pooling": "mean",
+    "normalization": "none",
+    "max_input_tokens": 512,
+}
+
+
+def test_identity_mismatch_compares_field_by_field():
+    assert identity_mismatch(_identity(), _identity()) == []
+    for field in IDENTITY_FIELDS:
+        assert identity_mismatch(_identity(**{field: _OTHER[field]}), _identity()) == [field]
+    absent = _identity(**dict.fromkeys(_SERVED))
+    assert identity_mismatch(absent, _identity()) == list(_SERVED)
+    assert identity_mismatch(_identity(), absent) == list(_SERVED)
+
+
+def test_require_identity_names_every_differing_field_and_its_variable():
+    require_identity(_identity(), _identity(), subject="s", remedy="r")
+    with pytest.raises(EmbeddingModelMismatchError) as error:
+        drifted = _identity(model="other", pooling="mean")
+        require_identity(drifted, _identity(), subject="the space 'x'", remedy="fix it")
+    message = str(error.value)
+    assert message.startswith("the space 'x' records ")
+    assert message.endswith("; fix it")
+    assert "KNOWLEDGE_BASE_EMBED_MODEL" in message
+    assert "KNOWLEDGE_BASE_EMBED_POOLING" in message
+    with pytest.raises(EmbeddingModelMismatchError, match="KB declares 'float32'"):
+        require_identity(_identity(element_type="int8"), _identity(), subject="s", remedy="r")
+
+
+@pytest.mark.parametrize(
+    ("values", "routes"),
+    [
+        (_OLLAMA, True),
+        ({**_OLLAMA, **_ARTIFACT}, False),
+        ({"provider": "openai", "model": "m", "dim": "8", "url": "https://api.openai.com"}, True),
+        ({"provider": "openai", "model": "m", "dim": "8", "url": "https://api.openai.com/v1/"}, True),
+        ({"provider": "openai", "model": "m", "dim": "8", "url": "http://api.openai.com"}, False),
+        ({"provider": "openai", "model": "m", "dim": "8", "url": "https://api.openai.com:8443"}, False),
+        ({"provider": "openai", "model": "m", "dim": "8", "url": "https://api.openai.com/proxy"}, False),
+        ({"provider": "openai", "model": "m", "dim": "8", "url": "https://embedder.example.test"}, False),
+        ({**_OPENAI_COMPAT, "url": "https://embedder.example.test"}, False),
+    ],
+)
+def test_only_a_model_routing_endpoint_serves_other_models(declare, values, routes):
+    declare(**values)
+    settings = load_embed_settings()
+    assert routes_by_model(settings) is routes
+    space = {**declared_identity(settings), "model": "another-model", "dim": 8, "matryoshka_base_dim": 16}
+    serving = serving_identity(settings, space)
+    assert serving["model"] == ("another-model" if routes else settings.model)
+    assert (serving["dim"], serving["matryoshka_base_dim"]) == (8, 16)
+    assert {field: serving[field] for field in ("provider", "element_type", *_SERVED)} == {
+        field: declared_identity(settings)[field] for field in ("provider", "element_type", *_SERVED)
+    }
+
+
+def test_onnx_never_routes_by_model(declare, tmp_path, monkeypatch):
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"")
+    monkeypatch.setenv("ONNX_EMBED_MODEL_PATH", str(model))
+    declare(provider="onnx", model="local", dim="8")
+    assert routes_by_model(load_embed_settings()) is False

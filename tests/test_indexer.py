@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from knowledge_base.db import get_connection, init_schema
+from knowledge_base.migrate import CURRENT_SCHEMA_VERSION
 from knowledge_base.indexer import (
     _drain_jobs,
     build_parser,
@@ -111,7 +112,7 @@ def test_cli_migrate_bootstraps_fresh_db(tmp_path, capsys):
     main(["--db", str(db), "migrate"])
     out = json.loads(capsys.readouterr().out)
     assert out["bootstrapped"] is True
-    assert out["schema_version"] == 1
+    assert out["schema_version"] == CURRENT_SCHEMA_VERSION
     assert db.is_file()
 
 
@@ -124,7 +125,7 @@ def test_cli_schema_reports_current(tmp_path, capsys):
     assert exc.value.code == 0
     out = json.loads(capsys.readouterr().out)
     assert out["matches"] is True
-    assert out["schema_version"] == 1
+    assert out["schema_version"] == CURRENT_SCHEMA_VERSION
 
 
 def test_cli_schema_mismatch_exits_nonzero(tmp_path):
@@ -153,7 +154,7 @@ def test_cli_migrate_check_up_to_date_exit_zero(tmp_path):
 def test_cli_migrate_check_pending_exit_nonzero(tmp_path, monkeypatch):
     db = tmp_path / "k.db"
     _bootstrap(db)
-    monkeypatch.setattr("knowledge_base.migrate.CURRENT_SCHEMA_VERSION", 2)
+    monkeypatch.setattr("knowledge_base.migrate.CURRENT_SCHEMA_VERSION", CURRENT_SCHEMA_VERSION + 1)
     with pytest.raises(SystemExit) as exc:
         main(["--db", str(db), "--quiet", "migrate", "--check"])
     assert exc.value.code == 1
@@ -175,14 +176,16 @@ def test_cli_migrate_backs_up_legacy_unversioned(tmp_path):
     c.close()
     main(["--db", str(db), "--quiet", "migrate"])  # legacy → backup + re-stamp
     assert (tmp_path / "backups").exists(), "legacy bootstrap must take a backup"
-    assert mm.peek_schema_version(db) == 1  # re-stamped
+    assert mm.peek_schema_version(db) == mm.CURRENT_SCHEMA_VERSION  # re-stamped
 
 
 def test_build_parser_re_embed_takes_its_identity_from_the_declaration():
-    """#569: --model/--dim/--provider are gone; the declaration supplies them."""
+    """#569/#573: --model/--dim/--provider/--matryoshka-base-dim are gone; the declaration supplies them."""
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["re-embed", "--model", "x"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["re-embed", "--matryoshka-base-dim", "2048"])
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +362,7 @@ def test_cmd_re_embed(mock_provider, tmp_path, monkeypatch):
 
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "mxbai-embed-large")
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_DIM", str(NEW_DIM))
-    cmd_re_embed(_make_args(tmp_path, batch_size=32, matryoshka_base_dim=None))
+    cmd_re_embed(_make_args(tmp_path, batch_size=32))
 
     conn = get_connection(db_path)
     rels = conn.execute("SELECT COUNT(*) AS n FROM relationships WHERE relation_type = 'similar'").fetchone()["n"]
@@ -536,7 +539,7 @@ def test_cli_ingest_on_a_disagreeing_database_exits_naming_the_field(tmp_path, m
     with pytest.raises(SystemExit) as exit_info:
         main(["--db", str(db_path), "ingest", str(md_file)])
     assert exit_info.value.code == 1
-    assert "embed_model" in capsys.readouterr().err
+    assert "KNOWLEDGE_BASE_EMBED_MODEL" in capsys.readouterr().err
 
 
 def test_cli_maintenance_commands_need_no_declaration(tmp_path, monkeypatch):
@@ -660,7 +663,7 @@ def test_cli_rebind_adopts_a_moved_endpoint(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit) as exit_info:
         main(["--db", str(db_path), "--quiet", "rebind"])
     assert exit_info.value.code == 1
-    assert "embed_model" in capsys.readouterr().err
+    assert "KNOWLEDGE_BASE_EMBED_MODEL" in capsys.readouterr().err
 
 
 def test_cli_rebind_repairs_drifted_config_identity(tmp_path):

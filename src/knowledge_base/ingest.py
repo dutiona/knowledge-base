@@ -28,12 +28,12 @@ from .db import (
     _batched_select,
     bump_chunk_count,
     delete_chunks_cascade,
-    get_active_space,
     get_vec_table_name,
     insert_chunk_vec,
+    require_active_space,
 )
 from .migrate import _main_db_path
-from .embed_swap import assert_embed_identity_match, declared_provider_config, get_embed_config
+from .embed_swap import declared_provider_config
 from .embeddings import embed, truncate_embedding
 from .exceptions import NotFoundError
 from .folder_summaries import update_folder_summary
@@ -42,12 +42,12 @@ from .utils import content_hash as _content_hash
 logger = logging.getLogger(__name__)
 
 
-def _update_folder_summary_safe(conn: sqlite3.Connection, path: Path) -> None:
-    """Update folder summary for the parent directory, swallowing errors."""
+def _update_folder_summary_safe(conn: sqlite3.Connection, folder: str) -> None:
+    """Update *folder*'s summary, swallowing errors."""
     try:
-        update_folder_summary(conn, path.parent.as_posix())
+        update_folder_summary(conn, folder)
     except Exception:
-        logger.warning("Failed to update folder summary for %s", path.parent, exc_info=True)
+        logger.warning("Failed to update folder summary for %s", folder, exc_info=True)
 
 
 __all__ = [
@@ -113,31 +113,17 @@ def _detect_source_type(path: Path) -> str:
 
 
 def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[float] | None]:
-    """Call embed() using the model, dim, and provider from the config table.
+    """Embed document *texts* into the active space, after its identity check (ADR-0015 §3, #573).
 
     Returns None entries for texts whose embeddings had zero norm.
     """
-    # Producer-seam identity guard (AC6): reject writing vectors whose configured
-    # (family, model) differs from the active space's recorded identity (ADR-0015).
-    assert_embed_identity_match(conn)
-    cfg = get_embed_config(conn)
-    provider_cfg = declared_provider_config(conn, cfg["provider"])
-    active = get_active_space(conn)
-    base_dim = active.get("matryoshka_base_dim") if active else None
+    active = require_active_space(conn)
+    provider_cfg = declared_provider_config(conn, active)
+    base_dim = active["matryoshka_base_dim"]
     if base_dim:
-        vecs = embed(
-            texts,
-            model=cfg["model"],
-            expected_dim=base_dim,
-            _provider_cfg=provider_cfg,
-        )
-        return [truncate_embedding(v, cfg["dim"]) if v is not None else None for v in vecs]
-    return embed(
-        texts,
-        model=cfg["model"],
-        expected_dim=cfg["dim"],
-        _provider_cfg=provider_cfg,
-    )
+        vecs = embed(texts, model=active["model"], expected_dim=base_dim, _provider_cfg=provider_cfg)
+        return [truncate_embedding(v, active["dim"]) if v is not None else None for v in vecs]
+    return embed(texts, model=active["model"], expected_dim=active["dim"], _provider_cfg=provider_cfg)
 
 
 def _flush_deferred_session_links(conn: sqlite3.Connection, chunk_ids: list[int], session_id: str | None) -> None:
@@ -508,7 +494,7 @@ def ingest_file(
                 result["duplicate_of_paper_id"] = existing_paper["paper_id"]
 
     if added > 0 and not _skip_folder_summary:
-        _update_folder_summary_safe(conn, path)
+        _update_folder_summary_safe(conn, path.parent.as_posix())
 
     return result
 
@@ -788,7 +774,7 @@ def reingest_file(
     except Exception:
         conn.rollback()
         raise
-    _update_folder_summary_safe(conn, path)
+    _update_folder_summary_safe(conn, path.parent.as_posix())
 
     return {
         "file": source_uri,
@@ -815,10 +801,10 @@ def ingest_directory(
         if f.is_file() and f.suffix.lower() in extensions:
             result = ingest_file(conn, f, session_id=session_id, _skip_folder_summary=True)
             results.append(result)
-            affected_folders.add(str(f.resolve().parent))
+            affected_folders.add(f.resolve().parent.as_posix())
 
     # Batch-update folder summaries once per affected folder
     for folder in sorted(affected_folders):
-        _update_folder_summary_safe(conn, Path(folder))
+        _update_folder_summary_safe(conn, folder)
 
     return results

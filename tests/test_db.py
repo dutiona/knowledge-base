@@ -741,7 +741,7 @@ def test_char_insert_chunk_vec_nonactive_table_leaves_active_unchanged(tmp_path)
     init_schema(conn)
     start = _char_active_count(conn)
 
-    create_space(conn, "other", "model", TEST_EMBED_DIM, "ollama")
+    create_space(conn, "other", "model", TEST_EMBED_DIM)
     cid = _char_add_chunk(conn, "non-active vec", 0)
     insert_chunk_vec(conn, cid, [0.2] * TEST_EMBED_DIM, table_name="chunks_vec_other")
     conn.commit()
@@ -801,7 +801,7 @@ def test_bump_chunk_count_only_touches_active_space(tmp_path):
     init_schema(conn)
     start = _char_active_count(conn)
 
-    create_space(conn, "pop", "model", TEST_EMBED_DIM, "ollama")
+    create_space(conn, "pop", "model", TEST_EMBED_DIM)
     # Bumping the populating space's table is a no-op (status='active' gate).
     bump_chunk_count(conn, "chunks_vec_pop", 7)
     conn.commit()
@@ -927,7 +927,7 @@ def test_char_delete_chunk_vecs_explicit_nonactive_table(tmp_path):
     init_schema(conn)
     active_start = _char_active_count(conn)
 
-    create_space(conn, "expl", "model", TEST_EMBED_DIM, "ollama")
+    create_space(conn, "expl", "model", TEST_EMBED_DIM)
     cid = _char_add_chunk(conn, "explicit del", 0)
     insert_chunk_vec(conn, cid, [0.4] * TEST_EMBED_DIM, table_name="chunks_vec_expl")
     conn.commit()
@@ -957,42 +957,6 @@ def test_char_delete_chunk_vecs_explicit_nonactive_table(tmp_path):
     assert _char_space_count(conn, "expl") == 4
     # Active default space untouched throughout.
     assert _char_active_count(conn) == active_start
-
-
-def test_char_delete_chunk_vecs_int8_space(tmp_path):
-    conn = get_connection(tmp_path / "test.db")
-    init_schema(conn)
-
-    # int8 element_type space (non-active); insert + delete round-trips count.
-    create_space(conn, "i8", "model", TEST_EMBED_DIM, "ollama", element_type="int8")
-    cids = []
-    for i in range(2):
-        cid = _char_add_chunk(conn, f"int8 {i}", i)
-        insert_chunk_vec(
-            conn,
-            cid,
-            [0.1 * (i + 1)] * TEST_EMBED_DIM,
-            table_name="chunks_vec_i8",
-        )
-        cids.append(cid)
-    conn.commit()
-
-    # Rows landed in the int8 vec table.
-    n = conn.execute("SELECT COUNT(*) FROM [chunks_vec_i8]").fetchone()[0]
-    assert n == 2
-
-    # Seed a positive chunk_count so the decrement is observable (insert's
-    # status='active' gate left it at 0). #378 asked to parametrize the
-    # chunk_count contract across element types: the decrement is element-type
-    # agnostic, so deleting the 2 int8 rows takes 5 -> MAX(0, 5-2) == 3.
-    conn.execute("UPDATE embed_spaces SET chunk_count = 5 WHERE name = 'i8'")
-    conn.commit()
-
-    delete_chunk_vecs(conn, cids, table_name="chunks_vec_i8")
-    conn.commit()
-    n = conn.execute("SELECT COUNT(*) FROM [chunks_vec_i8]").fetchone()[0]
-    assert n == 0
-    assert _char_space_count(conn, "i8") == 3
 
 
 # --- #379 delete_chunks_cascade ---
@@ -1506,7 +1470,7 @@ def test_char_bootstrap_counts_existing_vecs_and_forces_mechanical(tmp_path):
         )
     conn.commit()
 
-    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM, None)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space is not None
@@ -1528,7 +1492,7 @@ def test_char_bootstrap_picks_up_custom_config_model_provider(tmp_path):
     conn.execute("UPDATE config SET value = 'openai' WHERE key = 'embed_provider'")
     conn.commit()
 
-    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM, None)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space["model"] == "custom-model"
@@ -1565,7 +1529,7 @@ def test_char_bootstrap_count_falls_back_to_zero_without_chunks_vec(tmp_path):
     conn.commit()
 
     # No raise despite chunks_vec being absent.
-    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM, None)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space is not None
@@ -1582,7 +1546,7 @@ def test_char_bootstrap_idempotent_second_call_is_noop(tmp_path):
     assert before == 1
     orig = dict(conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone())
 
-    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM, None)
 
     after = conn.execute("SELECT COUNT(*) FROM embed_spaces").fetchone()[0]
     assert after == 1
@@ -1775,9 +1739,9 @@ def _config(conn) -> dict:
 @pytest.mark.parametrize(
     ("variable", "value", "key"),
     [
-        ("provider", "ollama", "embed_provider"),
-        ("model", "other-model", "embed_model"),
-        ("dim", "8", "embed_dim"),
+        ("provider", "ollama", "provider"),
+        ("model", "other-model", "model"),
+        ("dim", "8", "dim"),
         ("url", "https://moved.example.test", "embed_base_url"),
     ],
 )
@@ -1856,7 +1820,7 @@ def test_bind_transition_rebind(tmp_path, monkeypatch):
     bind_embed_config(conn, load_embed_settings())  # a plain bind now passes
 
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
-    with pytest.raises(KnowledgeBaseError, match="embed_model"):
+    with pytest.raises(KnowledgeBaseError, match="KNOWLEDGE_BASE_EMBED_MODEL"):
         bind_embed_config(conn, load_embed_settings(), transition="rebind")
 
 
@@ -1891,7 +1855,7 @@ def test_open_declared_db_returns_a_bound_connection(tmp_path, monkeypatch):
     assert _config(conn)["embed_base_url"] == "https://embedder.example.test"
     conn.close()
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
-    with pytest.raises(KnowledgeBaseError, match="embed_model"):
+    with pytest.raises(KnowledgeBaseError, match="KNOWLEDGE_BASE_EMBED_MODEL"):
         open_declared_db(tmp_path / "kb.db")
 
 

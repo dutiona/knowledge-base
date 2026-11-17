@@ -11,9 +11,10 @@ import pytest
 from knowledge_base.embeddings import (
     EmbeddingProvider,
     OllamaProvider,
+    ProviderConfig,
     _provider_cache,
     embed,
-    embed_single,
+    embed_query,
     get_provider,
 )
 
@@ -304,7 +305,7 @@ class TestProviderConfigCache:
 
 
 class TestEmbedDispatch:
-    """Test that module-level embed()/embed_single() dispatch through providers."""
+    """Test that module-level embed()/embed_query() dispatch through providers."""
 
     @patch("knowledge_base.embeddings.get_provider")
     def test_embed_dispatches_to_named_provider(self, mock_get):
@@ -328,23 +329,27 @@ class TestEmbedDispatch:
         mock_get.assert_called_once_with("ollama")
 
     @patch("knowledge_base.embeddings.get_provider")
-    def test_embed_single_dispatches(self, mock_get):
+    def test_embed_query_sends_the_instruction_then_the_text(self, mock_get):
         mock_provider = MagicMock()
         mock_provider.embed.return_value = [[0.1, 0.2, 0.3]]
         mock_get.return_value = mock_provider
 
-        result = embed_single("hello", model="bge-m3", _provider_name="openai")
+        cfg = ProviderConfig(family="ollama", base_url="http://embedder.example.test:11434")
+        result = embed_query("hello", "Query: ", model="bge-m3", expected_dim=3, _provider_cfg=cfg)
         assert result == [0.1, 0.2, 0.3]
+        args, kwargs = mock_provider.embed.call_args
+        assert args == (["Query: hello"],)
+        assert kwargs["expected_dim"] == 3
 
     @patch("knowledge_base.embeddings.get_provider")
-    def test_embed_single_passes_expected_dim(self, mock_get):
+    def test_embed_sends_documents_unchanged(self, mock_get):
         mock_provider = MagicMock()
         mock_provider.embed.return_value = [[0.1, 0.2, 0.3]]
         mock_get.return_value = mock_provider
 
-        embed_single("hello", model="bge-m3", expected_dim=3, _provider_name="ollama")
-        _, kwargs = mock_provider.embed.call_args
-        assert kwargs["expected_dim"] == 3
+        embed(["hello"], model="bge-m3")
+        args, _ = mock_provider.embed.call_args
+        assert args == (["hello"],)
 
 
 class TestOpenAIProvider:
@@ -685,3 +690,40 @@ def test_the_key_comes_from_the_declaration_not_the_config_row(monkeypatch, fake
     _embed_with_config(conn, ["hello"])
     conn.close()
     assert http_requests[0].headers["Authorization"] == "Bearer sk-test-only"
+
+
+class TestLlamaCppProvider:
+    """#573: ADR-0015 §5 pins provider ``llama.cpp``; it speaks the openai_compat wire."""
+
+    def test_the_declaration_accepts_llama_cpp(self, monkeypatch):
+        from knowledge_base.settings import load_embed_settings
+
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_PROVIDER", "llama.cpp")
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "https://embedder.example.test/v1/")
+        declared = load_embed_settings()
+        assert (declared.provider, declared.base_url) == ("llama.cpp", "https://embedder.example.test")
+
+    def test_llama_cpp_posts_the_openai_compat_body(self, monkeypatch, fake_dns, http_requests):
+        import json
+
+        import httpx
+
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "https://embedder.example.test")
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_API_KEY", "sk-test-only")
+        fake_dns["embedder.example.test"] = ["100.64.0.10"]
+        http_requests.handlers["embedder.example.test"] = lambda request: httpx.Response(
+            200, json={"data": [{"index": 0, "embedding": [1.0] + [0.0] * 7}]}
+        )
+        cfg = ProviderConfig(
+            family="llama.cpp", base_url="https://embedder.example.test", api_key="env:KNOWLEDGE_BASE_EMBED_API_KEY"
+        )
+        provider = get_provider(cfg=cfg)
+        assert isinstance(provider, OpenAICompatProvider)
+        assert provider.embed(["hello"], model="Qwen/Qwen3-Embedding-0.6B", expected_dim=8) == [[1.0] + [0.0] * 7]
+        (request,) = http_requests
+        assert str(request.url) == "https://embedder.example.test/v1/embeddings"
+        assert request.headers["Authorization"] == "Bearer sk-test-only"
+        body = {"model": "Qwen/Qwen3-Embedding-0.6B", "input": ["hello"], "dimensions": 8}
+        assert json.loads(request.content) == body

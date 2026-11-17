@@ -72,7 +72,7 @@ Thresholds are stored in the `config` table and tuned for the default `bge-m3` e
 | `auto_relate_propose_threshold` | `0.82`  | Minimum top-3 average cosine similarity to create a relationship |
 | `auto_relate_accept_threshold`  | `0.95`  | Reserved for future `status` column (proposed vs auto-accepted)  |
 
-Different embedding models have different cosine similarity distributions. If you switch models via `re_embed_tool`, adjust these thresholds accordingly.
+Different embedding models have different cosine similarity distributions. If you switch models (`knowledge-base-ingest re-embed`), adjust these thresholds accordingly.
 
 ## Stale Relationship Cleanup
 

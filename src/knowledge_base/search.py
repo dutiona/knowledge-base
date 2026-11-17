@@ -11,14 +11,15 @@ from dataclasses import dataclass
 from .db import (
     _batched_select,
     get_active_space,
-    get_space_element_type,
     get_vec_table_name,
+    require_active_space,
+    space_query_instruction,
 )
-from .embed_swap import declared_provider_config, get_embed_config, get_space
-from .embeddings import embed_single, truncate_embedding
+from .embed_swap import declared_provider_config, get_space
+from .embeddings import embed_query, truncate_embedding
 from .exceptions import ValidationError
 from .keywords import build_fts_query, extract_keywords
-from .utils import ELEMENT_QUERY_EXPR, serialize_f32 as _serialize_f32
+from .utils import serialize_f32 as _serialize_f32
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +109,8 @@ def _vec_search(
 ) -> list[tuple[int, float]]:
     """Vector similarity search. Returns (chunk_id, distance) pairs."""
     vec_table = table_name or get_vec_table_name(conn)
-    element_type = get_space_element_type(conn, vec_table)
-    query_expr = ELEMENT_QUERY_EXPR[element_type]
     rows = conn.execute(
-        f"SELECT chunk_id, distance FROM [{vec_table}] WHERE embedding MATCH {query_expr} ORDER BY distance LIMIT ?",  # noqa: S608  # trusted internal identifier, not user input
+        f"SELECT chunk_id, distance FROM [{vec_table}] WHERE embedding MATCH ? ORDER BY distance LIMIT ?",  # noqa: S608  # trusted internal identifier, not user input
         (_serialize_f32(query_embedding), limit),
     ).fetchall()
     return [(row["chunk_id"], row["distance"]) for row in rows]
@@ -257,32 +256,21 @@ def search(
 
     fetch_limit = top_k * SEARCH_OVERFETCH_MULTIPLIER
 
-    # Resolve space configuration — either specific space or active
-    if space_name:
-        space = get_space(conn, space_name)
-        space_cfg = {
-            "model": space["model"],
-            "dim": space["dim"],
-            "provider": space["provider"],
-        }
-        space_base_dim = space.get("matryoshka_base_dim")
-        vec_table: str | None = space["table_name"]
-        # Only skip folder boost if the space differs from the active one
-        # (folder_summaries_vec is always at the active space's dim)
+    # Only the embedding legs need a space (#573): the named one, else the active one, resolved and
+    # checked before either leg runs. folder_summaries_vec is always at the active space's dim, so the
+    # folder boost applies only when the active space is queried. fts mode resolves and checks nothing.
+    queried: dict | None = None
+    vec_table: str | None = None
+    skip_folder_boost = False
+    if mode in ("hybrid", "vec"):
         active = get_active_space(conn)
-        skip_folder_boost = not active or space["name"] != active["name"]
-    else:
-        active = get_active_space(conn)
-        if active is not None:
-            # Query with the ACTIVE SPACE's recorded identity: the stored vectors are that
-            # space's model, whatever the config rows say. Connection details come from this
-            # process's declaration (declared_provider_config).
-            space_cfg = {"model": active["model"], "dim": active["dim"], "provider": active["provider"]}
+        if space_name:
+            queried = get_space(conn, space_name)
+            vec_table = queried["table_name"]
+            skip_folder_boost = active is None or queried["name"] != active["name"]
         else:
-            space_cfg = get_embed_config(conn)  # fresh DB / no active space
-        space_base_dim = active.get("matryoshka_base_dim") if active else None
-        vec_table = None  # use active space default
-        skip_folder_boost = False
+            queried = dict(active if active is not None else require_active_space(conn))
+        query_provider_cfg = declared_provider_config(conn, queried)
 
     # Strategy filtering: only apply when the caller explicitly requests it.
     strategy_fetch_limit = fetch_limit * STRATEGY_OVERFETCH_MULTIPLIER if chunk_strategy else fetch_limit
@@ -302,27 +290,17 @@ def search(
             with contextlib.suppress(sqlite3.OperationalError):
                 fts_results = _fts_search(conn, fts_query, strategy_fetch_limit, chunk_strategy=chunk_strategy)
 
-    if mode in ("hybrid", "vec"):
-        # Query-vector provider: the (possibly non-active) space's family, at the declared
-        # endpoint; a space of another family than the declaration is refused (#569).
-        query_provider_cfg = declared_provider_config(conn, space_cfg["provider"])
-        # Use space-specific config for query embedding
-        if space_base_dim:
-            query_embedding = embed_single(
-                query,
-                model=space_cfg["model"],
-                expected_dim=space_base_dim,
-                _provider_cfg=query_provider_cfg,
-            )
-            if query_embedding is not None:
-                query_embedding = truncate_embedding(query_embedding, space_cfg["dim"])
-        else:
-            query_embedding = embed_single(
-                query,
-                model=space_cfg["model"],
-                expected_dim=space_cfg["dim"],
-                _provider_cfg=query_provider_cfg,
-            )
+    if queried is not None:
+        base_dim = queried["matryoshka_base_dim"]
+        query_embedding = embed_query(
+            query,
+            instruction=space_query_instruction(queried),
+            model=queried["model"],
+            expected_dim=base_dim or queried["dim"],
+            _provider_cfg=query_provider_cfg,
+        )
+        if query_embedding is not None and base_dim:
+            query_embedding = truncate_embedding(query_embedding, queried["dim"])
         if query_embedding is not None:
             vec_results = _vec_search(conn, query_embedding, strategy_fetch_limit, table_name=vec_table)
 

@@ -215,7 +215,9 @@ Each result contains:
 
 ## Embedding Provider
 
-Vector search uses the embedding provider declared in the environment (`KNOWLEDGE_BASE_EMBED_*`), at the declared endpoint; OpenAI-compatible servers, Ollama and ONNX Runtime are supported. The query embedding is generated using the same provider and model as the indexed chunks -- mismatched providers will produce poor results. See [Ingesting Documents: Embedding Providers](ingesting-documents.md#embedding-providers) for configuration details.
+Vector search uses the embedding provider declared in the environment (`KNOWLEDGE_BASE_EMBED_*`), at the declared endpoint; OpenAI-compatible servers (including `llama.cpp`), Ollama and ONNX Runtime are supported. The query is embedded with the queried space's model and shape, after a check that the declared endpoint can produce that space's vectors (ADR-0015 §3): a space it cannot serve is refused naming the differing field, and `fts` mode embeds nothing and checks nothing. See [Ingesting Documents: Embedding Providers](ingesting-documents.md#embedding-providers) for configuration details.
+
+**Query instruction.** Each query is sent as its space's instruction followed by the query text; documents never carry one. A space records its own instruction, none (`""`), or the default for its model: for Qwen3-Embedding models, KB's pinned ADR-0015 §6 instruction, verbatim `Instruct: Given a search query, retrieve relevant document passages.` then a line feed and `Query: `; for every other model (bge-m3 included), nothing, so the query is sent unchanged.
 
 ## Status
 

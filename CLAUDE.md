@@ -55,7 +55,7 @@ Read these when the task touches the corresponding area:
 | ---------- | ------------------------------------------------------------------------ | ----------------------------------------- |
 | Ingestion  | ingest, reingest, ingest_text, ingest_url, configure_chunking, configure_browser_tool | `src/knowledge_base/routes/ingestion.py`  |
 | Search     | search_index, co_occurrence, status                                      | `src/knowledge_base/routes/search.py`     |
-| Embeddings | embed_config, re_embed_tool, space lifecycle, compare                    | `src/knowledge_base/routes/embeddings.py` |
+| Embeddings | embed_config, space lifecycle, compare                                   | `src/knowledge_base/routes/embeddings.py` |
 | Papers     | paper CRUD, relationships, conclusions, bibtex                           | `src/knowledge_base/routes/papers.py`     |
 | Extraction | LLM extraction, vision, entity recording                                 | `src/knowledge_base/routes/extraction.py` |
 | Operations | jobs, prediction errors                                                  | `src/knowledge_base/routes/operations.py` |

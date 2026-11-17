@@ -105,6 +105,11 @@ def _declared_environment(monkeypatch):
         "KNOWLEDGE_BASE_FETCH_MAX_BYTES",
         "KNOWLEDGE_BASE_FETCH_MAX_REDIRECTS",
         "KNOWLEDGE_BASE_FETCH_DEADLINE",
+        "KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM",
+        "KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256",
+        "KNOWLEDGE_BASE_EMBED_POOLING",
+        "KNOWLEDGE_BASE_EMBED_NORMALIZATION",
+        "KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -280,13 +285,13 @@ def stub_embedder(monkeypatch) -> StubEmbedder:
 
     texts = StubEmbedder()
 
-    def _embed_single(text, *_args, **_kwargs):
+    def _embed_query(text, *_args, **_kwargs):  # records the query as search passes it, without its instruction
         if texts.down is not None:
             raise embedder_error(texts.down)
         texts.append(text)
         return [0.1] * TEST_EMBED_DIM
 
-    monkeypatch.setattr("knowledge_base.search.embed_single", _embed_single)
+    monkeypatch.setattr("knowledge_base.search.embed_query", _embed_query)
     return texts
 
 
