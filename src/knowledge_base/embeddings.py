@@ -190,13 +190,17 @@ class OllamaProvider:
 _LIMIT_VAR = VARIABLES["max_input_tokens"]
 
 
-def _fit(text: str, limit: int, count: Callable[[str], int]) -> int:
-    """The length of a prefix of *text* that counts at most *limit*; ``len(text)`` when all of it fits (#604).
+def _nothing_fits(limit: int) -> ValidationError:
+    return ValidationError(f"{_LIMIT_VAR}: not even one character of an embedding input fits in {limit} tokens")
 
-    It gallops from *limit* characters (doubling), then bisects, so it never sends much more than twice the piece it
-    cuts. It only returns a length it counted: a count that does not grow with length can shorten a piece, never
-    overfill one. The cut moves back to just after the last line end, else the last whitespace, when that keeps at
-    least half of it, so an image reference on its own line is never cut.
+
+def _fit(text: str, limit: int, count: Callable[[str], int]) -> int:
+    """The length of a prefix of *text* that counts at most *limit*: all of it when it fits, 0 when nothing does.
+
+    It gallops from *limit* characters (doubling), then bisects. It only returns a length it counted: a count that
+    does not grow with length can shorten a piece, never overfill one. The cut moves back to just after the last line
+    end, else the last whitespace, when that keeps at least half of it, so a line shorter than half a piece (an image
+    reference on its own line) is never cut (#604).
     """
     best, probe = 0, max(limit, 1)
     while True:
@@ -215,7 +219,7 @@ def _fit(text: str, limit: int, count: Callable[[str], int]) -> int:
         else:
             hi = mid - 1
     if not best:
-        raise ValidationError(f"{_LIMIT_VAR}: not even one character of an embedding input fits in {limit} tokens")
+        return 0
     half = range(best - 1, best // 2 - 1, -1)
     line_end = next((i + 1 for i in half if text[i] == "\n"), None)
     space = line_end or next((i + 1 for i in half if text[i].isspace()), best)
@@ -225,15 +229,24 @@ def _fit(text: str, limit: int, count: Callable[[str], int]) -> int:
 def split_to_limit(text: str, limit: int, count: Callable[[str], int]) -> list[str]:
     """*text* as consecutive slices that each count at most *limit*; joined, they are *text* again.
 
-    Each piece aims at an even share of the whole count, so the last one is not a stray word.
+    The pieces but the last aim at an even share of the content, each with the tokens the server adds to every input
+    (``count("")``, its EOS), so the last one is not a stray word; the last aims at the limit to take what the cuts
+    left over.
     """
     total = count(text)
     if total <= limit:
         return [text]
-    target = math.ceil(total / math.ceil(total / limit))
+    overhead = count("")
+    if limit <= overhead:
+        raise _nothing_fits(limit)
+    planned = math.ceil((total - overhead) / (limit - overhead))
+    share = math.ceil((total - overhead) / planned) + overhead
     pieces = []
     while text:
-        cut = _fit(text, target, count)
+        aim = share if len(pieces) < planned - 1 else limit
+        cut = _fit(text, aim, count) or _fit(text, limit, count)
+        if not cut:
+            raise _nothing_fits(limit)
         pieces.append(text[:cut])
         text = text[cut:]
     return pieces
@@ -314,7 +327,10 @@ class OpenAICompatProvider:
         for text in texts:
             tokens = count(text)
             if tokens > limit:
-                text = text[: _fit(text, limit, count)]
+                cut = _fit(text, limit, count)
+                if not cut:
+                    raise _nothing_fits(limit)
+                text = text[:cut]
                 logger.info(
                     "an embedding input of %d tokens is truncated to %d tokens to fit %s=%d",
                     tokens,

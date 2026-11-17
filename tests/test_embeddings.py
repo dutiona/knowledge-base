@@ -768,12 +768,24 @@ class TestSplitToLimit:
         assert len(pieces[0]) > len("## References\n\n")
 
     def test_a_cut_prefers_the_end_of_a_line(self):
-        text = "one two three\nfour five six seven"
-        assert self._check(text, 6, _words)[0] == "one two three\n"
+        from knowledge_base.embeddings import _fit
 
-    def test_pieces_share_the_count_rather_than_leave_a_one_word_tail(self):
-        pieces = self._check(" ".join(["w"] * 64), 64, _words)
-        assert min(map(_words, pieces)) > 20
+        assert _fit("one two three\nfour five", 5, _words) == len("one two three\n")  # not after "four "
+        assert self._check("one two three\nfour five six seven", 6, _words) == [
+            "one two three\n",
+            "four five six seven",
+        ]
+
+    @pytest.mark.parametrize("words", [64, 65, 127, 128, 200])
+    def test_no_piece_is_a_stray_tail(self, words):
+        pieces = self._check(" ".join(["w"] * words), 64, _words)
+        assert min(map(_words, pieces)) > 64 // 4
+
+    def test_a_character_too_big_for_the_even_share_still_fits_the_limit(self):
+        def count(text: str) -> int:  # "X" alone counts 3 with its EOS: over the even share of 2, within the limit 3
+            return text.count("X") * 2 + text.count("a") + 1
+
+        self._check("Xa", 3, count)
 
     def test_probes_stay_near_the_piece_they_cut(self):
         probed: list[int] = []

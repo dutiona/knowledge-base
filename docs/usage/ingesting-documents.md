@@ -324,13 +324,13 @@ makes, which is why a served artifact is accepted only for `llama.cpp` or `opena
 | Stored chunks during `re-embed` | truncated: a stored chunk is one row; reingesting its document splits it |
 
 A split PDF piece keeps its parent's pages and lists the images whose reference starts in it; a reference on its
-own line is never cut. A split Python piece keeps its function's line range and is named `name[k]`. Each
+own line is never cut, unless that line is longer than half a piece. A split Python piece keeps its function's line range and is named `name[k]`. Each
 truncation is logged at INFO with the count it had and the count it kept.
 
 The count costs one `/tokenize` request per embedded input and one more per new document chunk at ingest. A chunk
 already stored whole is not counted, so an unchanged re-ingest of chunks that fit sends nothing; a chunk that was
 split is counted and split again, and its pieces are then found stored. Each piece of an over-length input costs a
-few more requests, each at most about twice the piece. The requests share
+few more requests, each a few times the piece at most. The requests share
 one kept-alive connection. On llama.cpp b12048 a `/tokenize` call took 0.2 to 0.9 ms at the median (up to 3.8 ms)
 on loopback, and it takes no embedding slot.
 
