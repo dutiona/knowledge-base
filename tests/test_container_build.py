@@ -112,7 +112,8 @@ def test_build_group_is_the_declared_backend() -> None:
 
 
 def test_dependency_code_runs_without_network() -> None:
-    """Only the pinned fetch has network; everything after it is offline.
+    """Only the pinned fetch has network; every later build-stage step, and every RUN once the venv is in the runtime
+    stage, is offline.
 
     The archive check is matched by its text, not pinned: its body is #585's and the archive tests run it. So the
     static guard's residue is the base image and that one line.
