@@ -179,10 +179,8 @@ def test_element_type_constants():
     from knowledge_base.utils import (
         ELEMENT_INSERT_EXPR,
         ELEMENT_QUERY_EXPR,
-        VALID_ELEMENT_TYPES,
     )
 
-    assert {"float32", "int8"} == VALID_ELEMENT_TYPES
     assert set(ELEMENT_INSERT_EXPR.keys()) == set(ELEMENT_QUERY_EXPR.keys())
     assert ELEMENT_INSERT_EXPR["float32"] == "?"
     assert ELEMENT_QUERY_EXPR["float32"] == "?"

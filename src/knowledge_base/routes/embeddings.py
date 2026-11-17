@@ -18,7 +18,6 @@ from ..embed_swap import (
     get_embed_config,
     list_spaces,
     promote_space,
-    re_embed,
 )
 
 mcp = FastMCP("embeddings-routes")
@@ -41,37 +40,6 @@ def embed_config() -> str:
 
 
 @mcp.tool()
-def re_embed_tool(model: str, dim: int, matryoshka_base_dim: int | None = None) -> str:
-    """Rebuild the active space for the declared embedding model.
-
-    Creates a new space, re-embeds every chunk and promotes it. The model and dim must
-    be the declared ones (``KNOWLEDGE_BASE_EMBED_MODEL``/``_DIM``): changing the model is
-    a maintenance step (``knowledge-base-ingest re-embed`` with the server stopped). Use
-    this to rebuild with another ``matryoshka_base_dim``. This is expensive.
-
-    Args:
-        model: The declared embedding model.
-        dim: Embedding dimension for the new model. For Matryoshka models,
-            this is the truncated storage dimension.
-        matryoshka_base_dim: Native embedding dimension when using Matryoshka
-            truncation. Must be greater than ``dim``. See
-            ``create_embed_space_tool`` for details.
-    """
-    conn = _get_conn()
-    try:
-        result = re_embed(conn, model, dim, matryoshka_base_dim=matryoshka_base_dim)
-    except (KnowledgeBaseError, ValueError) as e:
-        return json.dumps({"error": str(e)})
-    result["note"] = (
-        "All 'similar' relationships removed (embedding space changed). "
-        "Run scan_relationships() to recompute. "
-        "Use list_embed_spaces_tool() to see all spaces."
-    )
-
-    return json.dumps(result)
-
-
-@mcp.tool()
 def list_embed_spaces_tool() -> str:
     """List all embedding spaces with status, progress, and chunk strategy."""
     conn = _get_conn()
@@ -83,43 +51,36 @@ def create_embed_space_tool(
     name: str,
     model: str,
     dim: int,
-    provider: str,
     chunk_strategy: str = "mechanical",
     matryoshka_base_dim: int | None = None,
-    element_type: str = "float32",
+    query_instruction: str | None = None,
 ) -> str:
-    """Create a new embedding space in 'populating' status.
+    """Create a new embedding space in 'populating' status, filled by the declared endpoint.
+
+    The provider and the served artifact are the declaration's. A space of another model is
+    accepted only when the declared endpoint serves the model a request names (Ollama, or
+    OpenAI at its canonical origin); otherwise only the declared model can be used.
 
     Args:
         name: Unique space name (alphanumeric + underscores only).
         model: Embedding model name (e.g. 'qwen3-embedding').
         dim: Embedding dimension (e.g. 768, 1024). For Matryoshka models,
             this is the truncated storage dimension.
-        provider: Embedding provider ('ollama', 'openai', 'onnx').
         chunk_strategy: Which chunks to embed ('mechanical' or 'semantic').
         matryoshka_base_dim: Native embedding dimension of the model when using
             Matryoshka truncation. The provider embeds at this dimension, then
             the system truncates to ``dim`` and L2 re-normalizes before storage.
             Must be greater than ``dim``. Only useful with MRL-capable models
             (e.g. Qwen3-Embedding, nomic-embed-text-v2-moe).
-        element_type: Vector element type for storage. ``'float32'`` (default)
-            stores full-precision vectors. ``'int8'`` uses sqlite-vec's scalar
-            quantization (4x storage reduction, typically <2% quality loss).
+        query_instruction: Text put before every query into this space. Omitted: the
+            model's default (KB's ADR-0015 instruction for Qwen3-Embedding, none
+            otherwise); ``""``: none.
     """
     conn = _get_conn()
     try:
-        result = create_space(
-            conn,
-            name,
-            model,
-            dim,
-            provider,
-            chunk_strategy,
-            matryoshka_base_dim,
-            element_type=element_type,
-        )
+        result = create_space(conn, name, model, dim, chunk_strategy, matryoshka_base_dim, query_instruction)
         return json.dumps(result)
-    except ValueError as e:
+    except (KnowledgeBaseError, ValueError) as e:
         return json.dumps({"error": str(e)})
 
 

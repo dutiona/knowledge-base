@@ -73,7 +73,7 @@ def test_re_embed_changes_model(mock_provider, tmp_path, monkeypatch):
 
     # Re-embed with new model
     _declare_new_model(monkeypatch)
-    result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
+    result = re_embed(conn)
 
     assert result["chunks_processed"] == old_count
 
@@ -102,7 +102,7 @@ def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path, monkeypatch):
     chunk_ids_before = [r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()]
 
     _declare_new_model(monkeypatch)
-    re_embed(conn, "mxbai-embed-large", NEW_DIM)
+    re_embed(conn)
 
     chunk_ids_after = [r["id"] for r in conn.execute("SELECT id FROM chunks").fetchall()]
     assert chunk_ids_before == chunk_ids_after
@@ -117,7 +117,7 @@ def test_re_embed_empty_db(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
     _declare_new_model(monkeypatch)
-    result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
+    result = re_embed(conn)
 
     assert result["chunks_processed"] == 0
     assert result["model"] == "mxbai-embed-large"
@@ -144,7 +144,7 @@ def test_re_embed_includes_folder_summaries(mock_provider, tmp_path, monkeypatch
     assert conn.execute("SELECT count(*) FROM folder_summaries_vec").fetchone()[0] == 1
 
     _declare_new_model(monkeypatch)
-    result = re_embed(conn, "mxbai-embed-large", NEW_DIM)
+    result = re_embed(conn)
 
     assert result["folders_processed"] == 1
     # Vec table rebuilt with new dim
@@ -235,7 +235,9 @@ def test_openai_api_key_is_never_an_embedding_key_source(tmp_path, monkeypatch, 
 def test_backfill_refuses_a_space_of_another_provider(kb_conn, http_requests):
     from knowledge_base.exceptions import ValidationError
 
-    create_space(kb_conn, "foreign", "m", 8, "openai_compat")
+    create_space(kb_conn, "foreign", "m", 8)
+    kb_conn.execute("UPDATE embed_spaces SET provider = 'openai_compat' WHERE name = 'foreign'")
+    kb_conn.commit()
     with pytest.raises(ValidationError, match="not the declared provider 'ollama'"):
         backfill_space(kb_conn, "foreign")
     assert http_requests == []
@@ -283,13 +285,11 @@ def test_promote_refuses_an_undeclared_identity(kb_conn, http_requests):
 
     import knowledge_base.routes.embeddings as emb
 
-    create_space(kb_conn, "other", "other-model", TEST_EMBED_DIM, "ollama")
+    create_space(kb_conn, "other", "other-model", TEST_EMBED_DIM)
     before = (_config_rows(kb_conn), _space_rows(kb_conn))
     with patch("knowledge_base.routes.embeddings._get_conn", return_value=kb_conn):
         promoted = json.loads(emb.promote_embed_space_tool("other"))
-        re_embedded = json.loads(emb.re_embed_tool(model="other-model", dim=8))
     assert "embed_model" in promoted["error"]
-    assert "embed_model" in re_embedded["error"]
     assert (_config_rows(kb_conn), _space_rows(kb_conn)) == before
     assert http_requests == []
 
@@ -327,7 +327,7 @@ def test_promote_is_all_or_nothing(kb_conn, failure):
     from knowledge_base.embed_swap import promote_space
 
     _two_folders(kb_conn)
-    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM)
     before = (_config_rows(kb_conn), _space_rows(kb_conn), _vec_state(kb_conn))
     provider = _provider()
     calls = {"n": 0}
@@ -362,7 +362,7 @@ def test_promote_refuses_a_pending_transaction(kb_conn):
     from knowledge_base.embed_swap import promote_space
     from knowledge_base.exceptions import KnowledgeBaseError
 
-    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM)
     kb_conn.execute("INSERT INTO papers (title) VALUES ('pending')")
     assert kb_conn.in_transaction
     with pytest.raises(KnowledgeBaseError, match="open transaction"):
@@ -376,7 +376,7 @@ def test_promote_re_embeds_a_summary_changed_after_the_snapshot(kb_conn):
     from knowledge_base.embed_swap import promote_space
 
     _two_folders(kb_conn)
-    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM)
     path = Path(kb_conn.execute("PRAGMA database_list").fetchone()["file"])
     seen: list[list[str]] = []
 
@@ -405,7 +405,7 @@ def test_failed_re_embed_leaves_no_orphan_space(kb_conn):
         patch("knowledge_base.embed_swap.backfill_space", side_effect=RuntimeError("embedder down")),
         pytest.raises(RuntimeError, match="embedder down"),
     ):
-        re_embed(kb_conn, TEST_EMBED_MODEL, TEST_EMBED_DIM)
+        re_embed(kb_conn)
     assert _space_rows(kb_conn) == before
 
 
@@ -432,7 +432,7 @@ def test_promote_refuses_a_target_removed_while_it_embedded(kb_conn):
     from knowledge_base.embed_swap import cleanup_space, deprecate_space, promote_space
 
     _two_folders(kb_conn)
-    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM, "ollama")
+    create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM)
     path = Path(kb_conn.execute("PRAGMA database_list").fetchone()["file"])
     before = (_config_rows(kb_conn), _space_rows(kb_conn))
 

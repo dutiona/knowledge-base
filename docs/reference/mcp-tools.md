@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Complete reference for the knowledge-base MCP tools: 48 tools over stdio, 3 over HTTP.
+Complete reference for the knowledge-base MCP tools: 47 tools over stdio, 3 over HTTP.
 
 ## Surfaces
 
@@ -653,18 +653,6 @@ Get current embedding model configuration (model name and dimension).
 { "model": "bge-m3", "dim": 1024 }
 ```
 
-### re_embed_tool
-
-Rebuild the active space for the declared embedding model: creates a new space, re-embeds all chunks and promotes it. `model` and `dim` must be the declared `KNOWLEDGE_BASE_EMBED_MODEL`/`_DIM` (changing the model is `knowledge-base-ingest re-embed` with the server stopped); its use is rebuilding with another `matryoshka_base_dim`. Expensive.
-
-| Parameter             | Type          | Required | Default | Description                                                                                                                                                                                                      |
-| --------------------- | ------------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`               | `str`         | yes      | --      | The declared embedding model (`KNOWLEDGE_BASE_EMBED_MODEL`)                                                                                                                                                      |
-| `dim`                 | `int`         | yes      | --      | The declared dimension (`KNOWLEDGE_BASE_EMBED_DIM`)                                                                                                                                                              |
-| `matryoshka_base_dim` | `int \| None` | no       | `None`  | Native model dimension for Matryoshka truncation. Embeds at this dim, truncates to `dim`, L2 re-normalizes. Must be > `dim`. MRL models only (e.g. Qwen3-Embedding, nomic-embed-text-v2-moe, mxbai-embed-large). |
-
-**Returns:** Summary with chunk count and timing.
-
 ### configure_chunking
 
 Configure the chunking strategy for PDF ingestion.
@@ -779,16 +767,16 @@ List all embedding spaces with status, progress, and chunk strategy.
 
 ### create_embed_space_tool
 
-Create a new embedding space in `populating` status.
+Create a new embedding space in `populating` status, filled by the declared endpoint: it records the declared provider and served artifact, and the shape given here. A space of another model than the declared one is accepted only when the endpoint serves the model a request names (`ollama`, or `openai` at exactly `https://api.openai.com`, with no served artifact declared); otherwise it is refused with the differing field.
 
 | Parameter             | Type          | Required | Default        | Description                                                                                                                                                                                                      |
 | --------------------- | ------------- | -------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`                | `str`         | yes      | --             | Unique space name (alphanumeric + underscores only)                                                                                                                                                              |
 | `model`               | `str`         | yes      | --             | Embedding model name (e.g. `bge-m3`, `qwen3-embedding`)                                                                                                                                                          |
 | `dim`                 | `int`         | yes      | --             | Embedding dimension (e.g. 768, 1024)                                                                                                                                                                             |
-| `provider`            | `str`         | yes      | --             | Embedding provider (`ollama`, `openai`, `onnx`)                                                                                                                                                                  |
 | `chunk_strategy`      | `str`         | no       | `"mechanical"` | Which chunks to embed: `mechanical` or `semantic` (from #100)                                                                                                                                                    |
 | `matryoshka_base_dim` | `int \| None` | no       | `None`         | Native model dimension for Matryoshka truncation. Embeds at this dim, truncates to `dim`, L2 re-normalizes. Must be > `dim`. MRL models only (e.g. Qwen3-Embedding, nomic-embed-text-v2-moe, mxbai-embed-large). |
+| `query_instruction`   | `str \| None` | no       | `None`         | Text put before every query into this space. `None`: the model's default (KB's ADR-0015 instruction for Qwen3-Embedding models, none otherwise); `""`: none                                                     |
 
 **Returns:**
 

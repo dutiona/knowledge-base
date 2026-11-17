@@ -28,7 +28,6 @@ __all__ = [
     "ELEMENT_QUERY_EXPR",
     "STOPWORDS",
     "TITLE_STOPWORDS",
-    "VALID_ELEMENT_TYPES",
     "DeadlineExceeded",
     "compute_file_hash",
     "content_hash",
@@ -428,8 +427,6 @@ ELEMENT_QUERY_EXPR: dict[str, str] = {
     "float32": "?",
     "int8": "vec_quantize_int8(vec_f32(?), 'unit')",
 }
-
-VALID_ELEMENT_TYPES: frozenset[str] = frozenset(ELEMENT_INSERT_EXPR.keys())
 
 
 # Common English stopwords — shared across keyword extraction and title matching.

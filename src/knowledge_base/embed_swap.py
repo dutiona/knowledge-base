@@ -20,8 +20,8 @@ from .db import (
 )
 from .embeddings import EmbeddingProvider, ProviderConfig, get_provider, truncate_embedding
 from .exceptions import KnowledgeBaseError, ValidationError
-from .settings import load_embed_settings
-from .utils import ELEMENT_INSERT_EXPR, VALID_ELEMENT_TYPES, loopback_opt_in
+from .settings import IDENTITY_FIELDS, load_embed_settings, require_identity, serving_identity
+from .utils import ELEMENT_INSERT_EXPR, loopback_opt_in
 
 logger = logging.getLogger(__name__)
 
@@ -127,14 +127,16 @@ def create_space(
     name: str,
     model: str,
     dim: int,
-    provider: str,
     chunk_strategy: str = "mechanical",
     matryoshka_base_dim: int | None = None,
-    element_type: str = "float32",
+    query_instruction: str | None = None,
 ) -> dict:
     """Create a new embedding space in 'populating' status.
 
-    Creates the registry entry and the backing vec0 virtual table.
+    Creates the registry entry and the backing vec0 virtual table. The caller chooses the shape
+    (*model*, *dim*, *matryoshka_base_dim*) and the query instruction (None: the model's default);
+    the provider and the served artifact are the declared endpoint's, which fills the space, so a
+    space that endpoint cannot serve is refused (ADR-0015 §4).
     """
     if not SPACE_NAME_RE.match(name):
         raise ValueError(f"Space name must be alphanumeric/underscore only, got: {name!r}")
@@ -142,8 +144,14 @@ def create_space(
         raise ValueError(f"chunk_strategy must be 'mechanical' or 'semantic', got: {chunk_strategy!r}")
     if matryoshka_base_dim is not None and matryoshka_base_dim <= dim:
         raise ValueError(f"matryoshka_base_dim ({matryoshka_base_dim}) must be greater than dim ({dim})")
-    if element_type not in VALID_ELEMENT_TYPES:
-        raise ValueError(f"element_type must be one of {sorted(VALID_ELEMENT_TYPES)}, got: {element_type!r}")
+    declared = load_embed_settings()
+    identity = serving_identity(declared, {"model": model, "dim": dim, "matryoshka_base_dim": matryoshka_base_dim})
+    require_identity(
+        {**identity, "model": model},
+        identity,
+        subject=f"the new space {name!r}",
+        remedy="the declared endpoint serves one model; create a space of the declared model",
+    )
 
     existing = conn.execute("SELECT 1 FROM embed_spaces WHERE name = ?", (name,)).fetchone()
     if existing:
@@ -162,24 +170,14 @@ def create_space(
 
     conn.execute(
         "INSERT INTO embed_spaces"
-        " (name, model, provider, dim, chunk_strategy, status, table_name,"
-        " total_chunks, matryoshka_base_dim, element_type)"
-        " VALUES (?, ?, ?, ?, ?, 'populating', ?, ?, ?, ?)",
-        (
-            name,
-            model,
-            provider,
-            dim,
-            chunk_strategy,
-            tbl,
-            total,
-            matryoshka_base_dim,
-            element_type,
-        ),
+        " (name, chunk_strategy, status, table_name, total_chunks, query_instruction, model, provider, dim,"
+        " matryoshka_base_dim, element_type, artifact_sha256, pooling, normalization, max_input_tokens)"
+        " VALUES (?, ?, 'populating', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, chunk_strategy, tbl, total, query_instruction, *(identity[field] for field in IDENTITY_FIELDS)),
     )
     conn.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS [{tbl}] USING vec0(
-            embedding {element_type}[{dim}],
+            embedding float[{dim}],
             +chunk_id INTEGER
         )
     """)
@@ -191,7 +189,7 @@ def create_space(
         "status": "populating",
         "total_chunks": total,
         "matryoshka_base_dim": matryoshka_base_dim,
-        "element_type": element_type,
+        "query_instruction": query_instruction,
     }
 
 
@@ -523,26 +521,15 @@ def get_space(conn: sqlite3.Connection, name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def re_embed(
-    conn: sqlite3.Connection,
-    new_model: str,
-    new_dim: int,
-    batch_size: int = 32,
-    provider: str | None = None,
-    matryoshka_base_dim: int | None = None,
-) -> dict:
-    """Re-embed all chunks with a new model via the space lifecycle.
+def re_embed(conn: sqlite3.Connection, batch_size: int = 32) -> dict:
+    """Re-embed all chunks to the declared identity via the space lifecycle (#569, #573).
 
-    Creates a new space, backfills it, promotes it, and re-embeds folder
-    summaries. The old space is left as 'deprecated' (not auto-cleaned). The target must be
-    the declared identity (#569), checked before anything is created; if the backfill or
-    the promotion fails, the new space is removed again and the error re-raised.
+    Creates a space of the declaration's whole identity, backfills it, promotes it, and
+    re-embeds folder summaries. The old space is left as 'deprecated' (not auto-cleaned). If
+    the backfill or the promotion fails, the new space is removed again and the error re-raised.
     """
-    if matryoshka_base_dim is not None and matryoshka_base_dim <= new_dim:
-        raise ValueError(f"matryoshka_base_dim ({matryoshka_base_dim}) must be greater than new_dim ({new_dim})")
-
-    resolved_provider = provider or load_embed_settings().provider
-    _assert_declared_identity(resolved_provider, new_model, new_dim)
+    declared = load_embed_settings()
+    new_model, new_dim = declared.model, declared.dim
 
     # Inherit chunk_strategy from current active space
     active = get_active_space(conn)
@@ -557,15 +544,7 @@ def re_embed(
     if existing:
         space_name = f"{space_name}_{int(time.time())}"
 
-    create_space(
-        conn,
-        space_name,
-        new_model,
-        new_dim,
-        resolved_provider,
-        strategy,
-        matryoshka_base_dim=matryoshka_base_dim,
-    )
+    create_space(conn, space_name, new_model, new_dim, strategy, matryoshka_base_dim=declared.matryoshka_base_dim)
     try:
         result = backfill_space(conn, space_name, batch_size)
         promote_space(conn, space_name)

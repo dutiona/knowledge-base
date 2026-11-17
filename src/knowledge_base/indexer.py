@@ -146,18 +146,9 @@ def cmd_ingest_url(args: argparse.Namespace) -> None:
 def cmd_re_embed(args: argparse.Namespace) -> None:
     """Re-embed to the declared identity (#569): set the new KNOWLEDGE_BASE_EMBED_* first, unit stopped."""
     from .embed_swap import re_embed
-    from .settings import load_embed_settings
 
     conn = open_declared_db(args.db, transition="re-embed")
-    declared = load_embed_settings()
-    result = re_embed(
-        conn,
-        declared.model,
-        declared.dim,
-        batch_size=args.batch_size,
-        provider=declared.provider,
-        matryoshka_base_dim=args.matryoshka_base_dim,
-    )
+    result = re_embed(conn, batch_size=args.batch_size)
     _print(result, quiet=args.quiet)
 
 
@@ -304,12 +295,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Re-embed all chunks to the declared KNOWLEDGE_BASE_EMBED_* identity (server stopped).",
     )
     p_embed.add_argument("--batch-size", type=int, default=32)
-    p_embed.add_argument(
-        "--matryoshka-base-dim",
-        dest="matryoshka_base_dim",
-        type=int,
-        default=None,
-    )
 
     # -- rebind ---------------------------------------------------------------
     sub.add_parser(

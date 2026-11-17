@@ -81,7 +81,7 @@ def _mock_provider(fake_fn):
 
 def _create_and_backfill(conn, name, model="test-model", dim=DIM, strategy="mechanical"):
     """Create a space and backfill it with fake embeddings."""
-    create_space(conn, name, model, dim, "ollama", chunk_strategy=strategy)
+    create_space(conn, name, model, dim, chunk_strategy=strategy)
     with patch(
         "knowledge_base.embed_swap.get_provider",
         return_value=_mock_provider(_fake_embed),
@@ -110,8 +110,8 @@ def test_compare_spaces_identical(mock_es, tmp_path):
 def test_compare_spaces_empty_results(mock_es, tmp_path):
     conn = _setup(tmp_path)
     # Create spaces with no chunks to embed
-    create_space(conn, "empty_a", "test-model", DIM, "ollama")
-    create_space(conn, "empty_b", "test-model", DIM, "ollama")
+    create_space(conn, "empty_a", "test-model", DIM)
+    create_space(conn, "empty_b", "test-model", DIM)
 
     result = compare_spaces(conn, "test query", "empty_a", "empty_b", top_k=10, mode="vec")
 
@@ -127,7 +127,7 @@ def test_compare_spaces_one_empty(mock_es, tmp_path):
         _add_chunk(conn, f"chunk {i}", index=i)
 
     _create_and_backfill(conn, "full_space")
-    create_space(conn, "empty_space", "test-model", DIM, "ollama")
+    create_space(conn, "empty_space", "test-model", DIM)
 
     result = compare_spaces(conn, "test query", "full_space", "empty_space", top_k=10, mode="vec")
 

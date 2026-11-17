@@ -230,7 +230,7 @@ uv run pytest tests/ -q
 
 ## MCP Tools
 
-48 tools over stdio, 3 over HTTP (`search_index`, `ingest_text`, `ingest_url`). The tables below list the stdio
+47 tools over stdio, 3 over HTTP (`search_index`, `ingest_text`, `ingest_url`). The tables below list the stdio
 tools; [the tool reference](docs/reference/mcp-tools.md) documents both surfaces.
 
 ### Ingest (6)
@@ -282,13 +282,12 @@ tools; [the tool reference](docs/reference/mcp-tools.md) documents both surfaces
 | `supersede_conclusion_tool` | Mark a conclusion as superseded by a new one                                                                                                                   |
 | `get_conclusion_chain_tool` | Trace a conclusion's supersession chain                                                                                                                        |
 
-### Embedding Management (11)
+### Embedding Management (10)
 
 | Tool                         | Description                                                         |
 | ---------------------------- | ------------------------------------------------------------------- |
 | `embed_config`               | Show current embedding model and dimension                          |
-| `re_embed_tool`              | Rebuild the active space for the declared model (atomic, no data loss) |
-| `create_embed_space_tool`    | Create a new embedding space with a different model                 |
+| `create_embed_space_tool`    | Create a space the declared endpoint can fill (model, dim, Matryoshka, query instruction) |
 | `backfill_embed_space_tool`  | Backfill an embedding space for existing chunks                     |
 | `list_embed_spaces_tool`     | List all embedding spaces with statistics                           |
 | `cleanup_embed_space_tool`   | Remove an embedding space                                           |

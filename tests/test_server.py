@@ -35,7 +35,6 @@ _INGESTION_TOOLS = {
 _SEARCH_TOOLS = {"search_index", "co_occurrence", "status"}
 _EMBEDDING_TOOLS = {
     "embed_config",
-    "re_embed_tool",
     "list_embed_spaces_tool",
     "create_embed_space_tool",
     "backfill_embed_space_tool",

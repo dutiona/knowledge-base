@@ -181,7 +181,7 @@ def test_no_document_carries_the_instruction(tmp_path, monkeypatch, embedder):
     stored = [row["content"] for row in conn.execute("SELECT content FROM chunks")]
     assert embedder.inputs() == stored
     assert update_folder_summary(conn, "/docs")
-    create_space(conn, "alt", QWEN, TEST_EMBED_DIM, "ollama")
+    create_space(conn, "alt", QWEN, TEST_EMBED_DIM)
     backfill_space(conn, "alt")
     promote_space(conn, "alt")
     assert len(embedder.bodies) >= 4
@@ -241,3 +241,80 @@ def test_a_store_recorded_before_the_served_artifact_keeps_it_absent(tmp_path, m
     assert [recorded[field] for field in ("artifact_sha256", "pooling", "normalization", "max_input_tokens")] == [
         None
     ] * 4
+
+
+# --- new spaces: the endpoint's fields from the declaration, the shape from the caller --
+
+
+def test_a_new_space_records_its_shape_and_the_endpoint(kb_conn):
+    import json
+
+    import knowledge_base.routes.embeddings as emb
+    from knowledge_base.embed_swap import create_space
+
+    create_space(kb_conn, "alt", "nomic-embed-text", 768)
+    assert _space_identity(kb_conn, "alt") == {
+        "model": "nomic-embed-text",
+        "provider": "ollama",
+        "dim": 768,
+        "matryoshka_base_dim": None,
+        "element_type": "float32",
+        "artifact_sha256": None,
+        "pooling": None,
+        "normalization": None,
+        "max_input_tokens": None,
+    }
+    assert kb_conn.execute("SELECT query_instruction FROM embed_spaces WHERE name = 'alt'").fetchone()[0] is None
+    with patch.object(emb, "_get_conn", return_value=kb_conn):
+        result = json.loads(
+            emb.create_embed_space_tool(name="alt2", model="nomic-embed-text", dim=768, query_instruction="")
+        )
+    assert "error" not in result
+    assert kb_conn.execute("SELECT query_instruction FROM embed_spaces WHERE name = 'alt2'").fetchone()[0] == ""
+
+
+_SINGLE_MODEL = {
+    "artifact": {**FULL},
+    "llama.cpp": {
+        "KNOWLEDGE_BASE_EMBED_PROVIDER": "llama.cpp",
+        "KNOWLEDGE_BASE_EMBED_URL": "https://embedder.example.test",
+    },
+    "openai_compat": {
+        "KNOWLEDGE_BASE_EMBED_PROVIDER": "openai_compat",
+        "KNOWLEDGE_BASE_EMBED_URL": "https://embedder.example.test",
+    },
+    "openai elsewhere": {
+        "KNOWLEDGE_BASE_EMBED_PROVIDER": "openai",
+        "KNOWLEDGE_BASE_EMBED_URL": "https://embedder.example.test",
+    },
+    "onnx": {"KNOWLEDGE_BASE_EMBED_PROVIDER": "onnx", "KNOWLEDGE_BASE_EMBED_URL": ""},
+}
+
+
+@pytest.mark.parametrize("endpoint", list(_SINGLE_MODEL))
+def test_a_single_model_endpoint_refuses_a_space_of_another_model(endpoint, kb_conn, monkeypatch, tmp_path):
+    from knowledge_base.embed_swap import create_space
+    from knowledge_base.exceptions import EmbeddingModelMismatchError
+
+    model_file = tmp_path / "model.onnx"
+    model_file.write_bytes(b"")
+    monkeypatch.setenv("ONNX_EMBED_MODEL_PATH", str(model_file))
+    for name, value in _SINGLE_MODEL[endpoint].items():
+        monkeypatch.setenv(name, value)
+    before = kb_conn.execute("SELECT COUNT(*) FROM embed_spaces").fetchone()[0]
+    with pytest.raises(EmbeddingModelMismatchError, match="model"):
+        create_space(kb_conn, "other", "nomic-embed-text", TEST_EMBED_DIM)
+    assert kb_conn.execute("SELECT COUNT(*) FROM embed_spaces").fetchone()[0] == before
+    create_space(kb_conn, "smaller", "bge-m3", 512, matryoshka_base_dim=TEST_EMBED_DIM)
+    assert _space_identity(kb_conn, "smaller")["model"] == "bge-m3"
+
+
+def test_re_embed_records_the_whole_declaration(kb_conn, monkeypatch, embedder):
+    from knowledge_base.embed_swap import re_embed
+    from knowledge_base.settings import declared_identity, load_embed_settings
+
+    _declare_full(monkeypatch, KNOWLEDGE_BASE_EMBED_MODEL=QWEN)
+    result = re_embed(kb_conn)
+    assert _space_identity(kb_conn, result["space"]) == declared_identity(load_embed_settings())
+    active = kb_conn.execute("SELECT name FROM embed_spaces WHERE status = 'active'").fetchone()[0]
+    assert active == result["space"]

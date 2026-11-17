@@ -180,10 +180,12 @@ def test_cli_migrate_backs_up_legacy_unversioned(tmp_path):
 
 
 def test_build_parser_re_embed_takes_its_identity_from_the_declaration():
-    """#569: --model/--dim/--provider are gone; the declaration supplies them."""
+    """#569/#573: --model/--dim/--provider/--matryoshka-base-dim are gone; the declaration supplies them."""
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["re-embed", "--model", "x"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["re-embed", "--matryoshka-base-dim", "2048"])
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +362,7 @@ def test_cmd_re_embed(mock_provider, tmp_path, monkeypatch):
 
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "mxbai-embed-large")
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_DIM", str(NEW_DIM))
-    cmd_re_embed(_make_args(tmp_path, batch_size=32, matryoshka_base_dim=None))
+    cmd_re_embed(_make_args(tmp_path, batch_size=32))
 
     conn = get_connection(db_path)
     rels = conn.execute("SELECT COUNT(*) AS n FROM relationships WHERE relation_type = 'similar'").fetchone()["n"]

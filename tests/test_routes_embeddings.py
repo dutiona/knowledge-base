@@ -173,27 +173,6 @@ def test_embed_config_with_custom_active_space_augments(kb_conn):
 
 
 # --------------------------------------------------------------------------- #
-# 2. re_embed_tool
-# --------------------------------------------------------------------------- #
-
-
-def test_re_embed_tool_adds_note(kb_conn):
-    """re_embed mocked → wrapper adds 'note' (promote_space itself drops the 'similar' rels)."""
-    with (
-        patch.object(emb, "_get_conn", return_value=kb_conn),
-        patch.object(emb, "re_embed", return_value={"chunks_processed": 3, "space": "m_512"}) as mock_re_embed,
-    ):
-        result = json.loads(emb.re_embed_tool("m", 512, matryoshka_base_dim=1024))
-
-    mock_re_embed.assert_called_once()
-    # matryoshka_base_dim forwarded as keyword.
-    assert mock_re_embed.call_args.kwargs["matryoshka_base_dim"] == 1024
-    assert result["chunks_processed"] == 3
-    assert "note" in result
-    assert "similar" in result["note"]
-
-
-# --------------------------------------------------------------------------- #
 # 3. list_embed_spaces_tool
 # --------------------------------------------------------------------------- #
 
@@ -224,10 +203,10 @@ def test_list_embed_spaces_passthrough(kb_conn):
 def test_create_embed_space_success(kb_conn):
     """Valid new space → success JSON with the documented shape."""
     with patch.object(emb, "_get_conn", return_value=kb_conn):
-        result = json.loads(emb.create_embed_space_tool(name="new_sp", model="m", dim=128, provider="ollama"))
+        result = json.loads(emb.create_embed_space_tool(name="new_sp", model="m", dim=128))
     assert result["space"] == "new_sp"
     assert result["status"] == "populating"
-    assert result["element_type"] == "float32"
+    assert result["query_instruction"] is None
     # Registry row really created.
     row = kb_conn.execute("SELECT status FROM embed_spaces WHERE name = 'new_sp'").fetchone()
     assert row["status"] == "populating"
@@ -236,8 +215,8 @@ def test_create_embed_space_success(kb_conn):
 def test_create_embed_space_duplicate_name_error(kb_conn):
     """Duplicate name → create_space raises ValueError → error mapping."""
     with patch.object(emb, "_get_conn", return_value=kb_conn):
-        emb.create_embed_space_tool(name="dup", model="m", dim=128, provider="ollama")
-        result = json.loads(emb.create_embed_space_tool(name="dup", model="m", dim=128, provider="ollama"))
+        emb.create_embed_space_tool(name="dup", model="m", dim=128)
+        result = json.loads(emb.create_embed_space_tool(name="dup", model="m", dim=128))
     assert "error" in result
     assert "already exists" in result["error"]
 
@@ -245,7 +224,7 @@ def test_create_embed_space_duplicate_name_error(kb_conn):
 def test_create_embed_space_invalid_name_error(kb_conn):
     """Non-alphanumeric name → ValueError → error mapping."""
     with patch.object(emb, "_get_conn", return_value=kb_conn):
-        result = json.loads(emb.create_embed_space_tool(name="bad name!", model="m", dim=128, provider="ollama"))
+        result = json.loads(emb.create_embed_space_tool(name="bad name!", model="m", dim=128))
     assert "error" in result
     assert "alphanumeric" in result["error"]
 
