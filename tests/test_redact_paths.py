@@ -7,6 +7,7 @@ A leak check looks at what was stored, what the FTS index answers and every text
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import sqlite3
 import sys
 from unittest.mock import MagicMock, patch
@@ -365,3 +366,41 @@ def test_folder_summary_is_a_fixpoint(kb_conn, stub_document_embedder, folder_em
     assert folder_embedder and all(t == scrub(t) for t in folder_embedder)
     assert "[REDACTED:machine-token]" in summary and "[REDACTED:hex-secret]" in summary
     assert "[REDACTED:high-entropy]" in summary
+
+
+#: Every function that inserts a chunk, and the test proving it redacts before it hashes or embeds.
+INSERT_SITES = {
+    "ingest._store_text_chunks": "test_ingest_text_neither_stores_nor_embeds_a_secret",
+    "ingest._produce_and_insert_chunks": "test_file_ingest_redacts_markdown_code_and_pdf",
+    "web._extract_html_images": "test_figure_text_is_neither_stored_nor_embedded[html-images]",
+    "web._extract_web_figures": "test_figure_text_is_neither_stored_nor_embedded[web-figures]",
+    "web._extract_element_captures": "test_figure_text_is_neither_stored_nor_embedded[element-captures]",
+    "vision._persist_figures": "test_figure_text_is_neither_stored_nor_embedded[pdf-figures]",
+}
+
+
+def test_every_chunk_insert_site_is_covered():
+    """A new caller of ``_insert_chunk`` (or a new raw INSERT) must scrub before it hashes and get a leak case here."""
+    import ast
+    import re
+
+    package = Path(ingest.__file__).parent
+    callers: set[str] = set()
+    raw_inserts: list[str] = []
+    for source in sorted(package.rglob("*.py")):
+        text = source.read_text(encoding="utf-8")
+        module = source.relative_to(package).with_suffix("").as_posix().replace("/", ".")
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                for call in ast.walk(node):
+                    if isinstance(call, ast.Call) and getattr(call.func, "id", None) == "_insert_chunk":
+                        callers.add(f"{module}.{node.name}")
+        for line in text.splitlines():
+            if re.search(r"INSERT\s+(?:OR\s+\w+\s+)?INTO\s+\[?chunks\b", line):
+                raw_inserts.append(module)  # only _insert_chunk's own statement
+    assert callers == set(INSERT_SITES), (
+        "chunk insert sites changed: scrub the text before it is hashed or embedded and add its leak case to "
+        f"INSERT_SITES (new: {sorted(callers - set(INSERT_SITES))}, gone: {sorted(set(INSERT_SITES) - callers)})"
+    )
+    assert raw_inserts == ["ingest"], raw_inserts
+    assert all(name.split("[")[0] in globals() for name in INSERT_SITES.values())
