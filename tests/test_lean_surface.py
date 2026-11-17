@@ -56,6 +56,16 @@ def _count(table: str) -> int:
         conn.close()
 
 
+def _vec_table() -> str:
+    from knowledge_base.db import get_connection, get_vec_table_name
+
+    conn = get_connection()
+    try:
+        return get_vec_table_name(conn)
+    finally:
+        conn.close()
+
+
 _DOCUMENT = "# Cross-machine notes\n\n" + "".join(
     f"Paragraph {i} explains why zanzibarquokka retrieval matters across machines. " for i in range(40)
 )
@@ -87,7 +97,7 @@ def test_ingest_fails_loudly_while_the_embedder_is_down(kb_http, stub_document_e
         assert failed["isError"] is True
         assert f"HTTP {status}" in _text(failed) and "nothing was stored" in _text(failed)
         assert not names_the_embedder(_text(failed))
-        assert (_count("chunks"), _count("chunk_sessions")) == (0, 0)
+        assert (_count("chunks"), _count("chunk_sessions"), _count(_vec_table())) == (0, 0, 0)
 
     stub_document_embedder.down = None
     assert _call(kb_http, "ingest_text", {"name": "down.md", "content": _DOCUMENT})["isError"] is False
@@ -100,8 +110,8 @@ def test_ingest_fails_loudly_while_the_embedder_is_down(kb_http, stub_document_e
         ("", "text"),
         ("  ", "text"),
         ("a\nb", "text"),
-        ("a‮b", "text"),
-        ("a b", "text"),
+        ("a\u202eb", "text"),
+        ("a\u2028b", "text"),
         ("/notes.md", "text"),
         ("n" * 256, "text"),
         ("ok.md", ""),
@@ -168,7 +178,7 @@ def test_a_concurrent_duplicate_rolls_back_and_a_retry_completes(kb_http, monkey
     lost = _call(kb_http, "ingest_text", {"name": "race.md", "content": _DOCUMENT})
     assert lost["isError"] is True
     assert "another ingest stored some of the same passages meanwhile" in _text(lost)
-    assert _count("chunks") == 1  # only the winner's passage
+    assert _count("chunks") == 1  # the winner's passage; the rollback itself is test_ingest's rolls_back test
 
     retried = json.loads(_text(_call(kb_http, "ingest_text", {"name": "race.md", "content": _DOCUMENT})))
     assert retried["chunks_skipped"] == 1
@@ -244,22 +254,16 @@ def test_http_refuses_to_build_while_vision_or_the_browser_is_on(monkeypatch, to
 
 
 def _snapshot(conn) -> dict[str, set[tuple]]:
-    """Every row of every regular table; the active space's chunk_count, which an insert may grow, left out.
-
-    Virtual tables and their shadow tables (FTS5, sqlite-vec) are internal storage an insert rewrites in place.
-    """
+    """Every row of every regular table. Virtual tables and their shadow tables (FTS5, sqlite-vec) are internal
+    storage an insert rewrites in place, so they are left out."""
     rows = conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'table'").fetchall()
     virtual = [name for name, sql in rows if (sql or "").upper().startswith("CREATE VIRTUAL")]
     tables = [name for name, _ in rows if not name.startswith(("sqlite_", *virtual))]
-    snapshot = {}
-    for table in tables:
-        columns = [
-            c[1]
-            for c in conn.execute(f"PRAGMA table_info({table})")
-            if (table, c[1]) != ("embed_spaces", "chunk_count")
-        ]
-        snapshot[table] = {tuple(r) for r in conn.execute(f"SELECT {', '.join(columns)} FROM {table}")}  # noqa: S608
-    return snapshot
+    return {t: {tuple(r) for r in conn.execute(f"SELECT * FROM {t}")} for t in tables}  # noqa: S608 -- schema names
+
+
+#: The only rows a network tool may add; every other table must be exactly as it was.
+_INSERT_ONLY = {"chunks", "chunk_sessions", "prediction_errors"}
 
 
 def test_no_http_tool_deletes(
@@ -319,7 +323,14 @@ def test_no_http_tool_deletes(
     asyncio.run(_run())
     after = _snapshot(conn)
     for table, rows in before.items():
-        assert rows <= after[table], table  # nothing deleted, nothing rewritten
+        if table in _INSERT_ONLY:
+            assert rows <= after[table], table  # rows added, none deleted or rewritten
+        elif table == "embed_spaces":  # only the active space's chunk_count, which may only grow
+            k = [c[1] for c in conn.execute("PRAGMA table_info(embed_spaces)")].index("chunk_count")
+            assert {r[:k] + r[k + 1 :] for r in after[table]} == {r[:k] + r[k + 1 :] for r in rows}
+            assert sum(r[k] for r in after[table]) >= sum(r[k] for r in rows)
+        else:
+            assert after[table] == rows, table  # e.g. no job queued, no relationship touched
     assert conn.execute("SELECT COUNT(*) FROM chunks WHERE source_type = 'figure'").fetchone()[0] == 1
 
     # Control: the same URL through the local tool with vision on replaces the page's figure chunk.

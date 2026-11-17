@@ -298,3 +298,16 @@ def test_an_embedder_failure_never_names_the_embedder(tmp_path, status, retry):
     assert f"HTTP {status}" in text
     assert not names_the_embedder(text)
     assert ("retry later" in text) is retry
+
+
+def test_an_unknown_space_is_refused_with_its_reason(tmp_path):
+    from fastmcp.exceptions import ToolError
+
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    with (
+        patch("knowledge_base.routes.search._get_conn", return_value=conn),
+        patch("knowledge_base.search.embed_single", return_value=[0.1] * TEST_EMBED_DIM),
+        pytest.raises(ToolError, match="nope"),
+    ):
+        search_index("q", space_name="nope")

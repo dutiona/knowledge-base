@@ -7,9 +7,10 @@ Complete reference for the knowledge-base MCP tools: 48 tools over stdio, 3 over
 - **stdio** (`knowledge-base`) serves every tool: the local and maintenance surface. Against a database the HTTP
   server uses, run it only with that server stopped.
 - **HTTP** (`knowledge-base --http`) serves only `search_index`, `ingest_text` and `ingest_url`, the same tools with
-  the same names and schemas. No HTTP tool takes, writes or reveals a server path, configures the server, or removes
+  the same names and schemas. No HTTP tool takes or writes a server path, configures the server, or removes
   or replaces a document. The server refuses to start while `KNOWLEDGE_BASE_VISION` or `KNOWLEDGE_BASE_BROWSER` is
-  on, logs the machine of every call, and refuses a request body over 4 MiB.
+  on, logs the machine of every call, and refuses a request body over 4 MiB. Search results still name a file
+  ingested over stdio by its server path (its `source_uri`): a document name no HTTP caller can make KB read.
 
 Every failure of `search_index`, `ingest_text` and `ingest_url` is an MCP tool error (`isError: true`) whose text KB
 wrote: a refusal gives its reason, an embedder failure gives its kind (`HTTP 503`, `ConnectError`) and never the
@@ -198,7 +199,7 @@ errors (see Surfaces); while the embedder is down, `mode="fts"` still answers.
 | `keyword_prefilter` | `bool`     | no       | `false`    | Match FTS on intent keywords extracted from the query instead of the raw query (strips stopwords and filler from verbose queries) |
 | `chunk_strategy` | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all.  |
 | `space_name`     | `str \| None` | no       | `None`     | Search a specific embedding space instead of the active one.                 |
-| `rerank`         | `bool`        | no       | `false`    | Enable cross-encoder reranking for improved relevance. Requires onnxruntime. |
+| `rerank`         | `bool`        | no       | `false`    | Enable cross-encoder reranking. Needs the reranker installed on the server; without it, results come back in fused order (`match_type` is not `reranked`). |
 
 **Returns:** Array of result objects:
 

@@ -61,11 +61,13 @@ def search_index(
             space_name=space_name,
             rerank=rerank,
         )
-    except KnowledgeBaseError as e:
+    except (KnowledgeBaseError, ValueError) as e:  # an unknown space_name is a ValueError from embed_swap
         raise ToolError(str(e)) from e
     except httpx.HTTPError as e:
         kind, retryable = embedder_failure(e)
-        raise ToolError(f"{kind}; retry later, or search with mode='fts'" if retryable else kind) from e
+        raise ToolError(
+            f"{kind}; retry later, or search with mode='fts'" if retryable else f"{kind}; search with mode='fts'"
+        ) from e
 
     detect_and_log(conn, query, results, source_type_filter=source_type, mode=mode)
 
