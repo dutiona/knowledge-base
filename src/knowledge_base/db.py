@@ -1244,9 +1244,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
     _run_migrations(conn, embed_dim, declared)
 
-    # Stamp the baseline version (#450). Reached only for a fresh/legacy-unversioned
-    # DB (an already-current DB early-returns above); the idempotent builds have
-    # converged it to the v1 contract.
+    # Stamp the current version (#450). Reached only for a fresh/legacy-unversioned
+    # DB (an already-current DB early-returns above); the idempotent builds and the
+    # version functions they share with `migrate` have converged it to the current contract.
     _migrate.set_schema_version(conn, _migrate.CURRENT_SCHEMA_VERSION)
     conn.commit()
 
