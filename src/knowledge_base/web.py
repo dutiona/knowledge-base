@@ -726,8 +726,8 @@ def _render_with_browser(
         subprocess.TimeoutExpired,
         subprocess.CalledProcessError,
         OSError,
-    ) as exc:
-        logger.warning("Browser rendering failed for %s: %s", url, exc)
+    ) as exc:  # the argv in its text holds the URL
+        logger.warning("Browser rendering failed for %s: %s", without_userinfo(url), _USERINFO.sub(r"\1", str(exc)))
         shutil.rmtree(tmpdir, ignore_errors=True)
         return None
 
@@ -735,7 +735,7 @@ def _render_with_browser(
     screenshot_path = tmpdir / "screenshot.png"
 
     if not html_path.exists():
-        logger.warning("Browser produced no HTML for %s", url)
+        logger.warning("Browser produced no HTML for %s", without_userinfo(url))
         shutil.rmtree(tmpdir, ignore_errors=True)
         return None
 
@@ -761,7 +761,7 @@ def _render_with_browser(
                         }
                     )
         except (json.JSONDecodeError, KeyError, TypeError):
-            logger.warning("Failed to parse elements.json for %s", url)
+            logger.warning("Failed to parse elements.json for %s", without_userinfo(url))
 
     return {
         "html": html,
@@ -1180,7 +1180,7 @@ def ingest_url(
     try:
         parsed = urlparse(url)
     except ValueError as e:  # an unclosed IPv6 bracket
-        raise ValidationError(f"Invalid URL {url!r}: {e}") from e
+        raise ValidationError(f"Invalid URL {without_userinfo(url)!r}: {e}") from e
     if parsed.scheme not in _ALLOWED_URL_SCHEMES:
         raise ValidationError(f"URL scheme must be http or https, got: {parsed.scheme!r}")
     if not parsed.hostname:

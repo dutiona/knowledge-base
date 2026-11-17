@@ -483,3 +483,31 @@ def test_a_failed_image_download_logs_no_userinfo(kb_conn, http_requests, fake_d
         )
     assert "Image download failed" in caplog.text
     assert "example-pass" not in caplog.text
+
+
+def test_a_failed_browser_render_logs_no_userinfo(caplog, monkeypatch, tmp_path):
+    """#592: the failed command's text holds its argv, the URL among it."""
+    import subprocess
+
+    from knowledge_base import web
+
+    url = "https://reader:example-pass@docs.example.test/p"
+
+    def fail(cmd, **kw):
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(web, "_find_venv_python", lambda venv: tmp_path / "python")
+    monkeypatch.setattr(web.subprocess, "run", fail)
+    with caplog.at_level("WARNING", logger="knowledge_base.web"):
+        assert web._render_with_browser(url, {"venv": str(tmp_path)}) is None
+    assert "Browser rendering failed" in caplog.text
+    assert "example-pass" not in caplog.text
+
+
+def test_a_malformed_url_error_names_no_userinfo(kb_conn):
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.web import ingest_url
+
+    with pytest.raises(ValidationError) as raised:
+        ingest_url(kb_conn, "https://reader:example-pass@[::1/p")
+    assert "example-pass" not in str(raised.value)
