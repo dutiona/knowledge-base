@@ -237,6 +237,10 @@ def test_a_blank_store_records_the_declaration(monkeypatch):
 
 def test_a_store_recorded_before_the_served_artifact_keeps_it_absent(tmp_path, monkeypatch):
     conn = _v1_database(tmp_path / "legacy.db")
+    conn.execute(  # a legacy store holds content; an empty one is a blank store (see the interrupted-init test)
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h1', 'some text', 'markdown', '/docs/a.md', 0)"
+    )
     conn.execute("DELETE FROM embed_spaces")
     conn.execute("DELETE FROM config WHERE key = 'schema_version'")
     conn.commit()
@@ -622,3 +626,19 @@ def test_the_comparison_tools_report_a_space_the_endpoint_cannot_serve(tool, kb_
         else:
             result = json.loads(emb.benchmark_spaces_tool(sample_queries=1))
     assert "provider" in json.dumps(result)
+
+# --- super-review round 1 (PR #612) -----------------------------------------------
+
+
+def test_an_interrupted_first_initialization_still_records_the_declaration(tmp_path, monkeypatch):
+    from knowledge_base.db import _seed_default_config
+    from knowledge_base.settings import declared_identity, load_embed_settings
+
+    _declare_full(monkeypatch, KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM="2048")
+    conn = get_connection(tmp_path / "kb.db")
+    _seed_default_config(conn)  # committed; the process dies before the schema is built
+    conn.close()
+    conn = get_connection(tmp_path / "kb.db")
+    init_schema(conn)
+    assert _space_identity(conn) == declared_identity(load_embed_settings())
+

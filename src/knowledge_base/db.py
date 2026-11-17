@@ -13,7 +13,7 @@ import sqlite_vec
 
 from . import migrate as _migrate  # schema-version framework (#450); read attrs live
 from .embeddings import default_query_instruction
-from .exceptions import KnowledgeBaseError
+from .exceptions import KnowledgeBaseError, ValidationError
 from .settings import (
     VARIABLES,
     EmbedSettings,
@@ -872,6 +872,25 @@ def embed_config_rows(declared: EmbedSettings) -> list[tuple[str, str]]:
     return rows
 
 
+def _declaration_of_an_empty_store(conn: sqlite3.Connection) -> EmbedSettings | None:
+    """The declaration a store holding no space and no chunk was seeded from, else None.
+
+    A first initialization interrupted after its config seed committed leaves exactly that: the
+    rows are the declaration's and nothing is recorded yet, so the bootstrap still records the
+    whole declared identity (#573). Any other store keeps its legacy bootstrap.
+    """
+    for table in ("embed_spaces", "chunks"):
+        if _table_sql(conn, table) is not None and conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():  # noqa: S608  # literal names
+            return None
+    try:
+        declared = load_embed_settings()
+    except ValidationError:
+        return None  # nothing declared: a maintenance command on an empty legacy store
+    recorded = dict(conn.execute("SELECT key, value FROM config WHERE key LIKE 'embed_%'").fetchall())
+    wanted = dict(embed_config_rows(declared))
+    return declared if all(recorded.get(key) == wanted[key] for key in _IDENTITY_KEYS) else None
+
+
 def _seed_default_config(conn: sqlite3.Connection) -> tuple[int, EmbedSettings | None]:
     """Create the config table and seed all default key/value rows.
 
@@ -903,6 +922,7 @@ def _seed_default_config(conn: sqlite3.Connection) -> tuple[int, EmbedSettings |
         # its recorded provider. Idempotent via INSERT OR IGNORE.
         conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES ('embed_provider', 'ollama')")
         conn.commit()
+        declared = _declaration_of_an_empty_store(conn)
 
     # These keys are seeded ahead of the base-schema DDL and the migration chain,
     # but none are read during DDL or by any migration (only embed_dim is read,
