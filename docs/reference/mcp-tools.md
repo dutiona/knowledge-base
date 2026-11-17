@@ -125,6 +125,7 @@ Search the research index using hybrid semantic + keyword search.
 | `top_k`          | `int`         | no       | `10`       | Number of results to return                                                  |
 | `source_type`    | `str \| None` | no       | `None`     | Filter results by type (`pdf`, `markdown`, `code`, `web`, `note`, `figure`)  |
 | `mode`           | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)           |
+| `keyword_prefilter` | `bool`     | no       | `false`    | Match FTS on intent keywords extracted from the query instead of the raw query (strips stopwords and filler from verbose queries) |
 | `chunk_strategy` | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all.  |
 | `space_name`     | `str \| None` | no       | `None`     | Search a specific embedding space instead of the active one.                 |
 | `rerank`         | `bool`        | no       | `false`    | Enable cross-encoder reranking for improved relevance. Requires onnxruntime. |
@@ -862,6 +863,42 @@ Batch-compare two embedding spaces with multiple queries. Returns aggregated sta
   "warnings": []
 }
 ```
+
+### benchmark_spaces_tool
+
+Benchmark every non-deprecated space against a baseline: samples stored chunk texts as queries, runs
+`batch_compare_spaces_tool` for each other space and adds a storage estimate.
+
+| Parameter        | Type          | Required | Default              | Description                                  |
+| ---------------- | ------------- | -------- | -------------------- | -------------------------------------------- |
+| `baseline_space` | `str \| None` | no       | `None` (active space) | The space every other space is compared with |
+| `sample_queries` | `int`         | no       | `50`                 | Number of random chunk texts used as queries |
+| `top_k`          | `int`         | no       | `10`                 | Number of results per space per query        |
+
+**Returns:**
+
+```json
+{
+  "baseline": "bge_m3_1024",
+  "baseline_element_type": "float32",
+  "queries_sampled": 50,
+  "top_k": 10,
+  "comparisons": [
+    {
+      "space": "qwen3_512",
+      "element_type": "int8",
+      "dim": 512,
+      "status": "populating",
+      "chunk_count": 1200,
+      "storage_ratio_vs_baseline": 0.125,
+      "metrics": { "overlap_at_k": {}, "jaccard": {}, "rank_correlation": {} },
+      "warnings": []
+    }
+  ]
+}
+```
+
+A space whose comparison fails appears as `{"space": ..., "error": ...}`.
 
 ---
 
