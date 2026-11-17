@@ -1104,7 +1104,7 @@ class _Fetched:
 
 
 def _fetch(client: httpx.Client, url: str) -> _Fetched:
-    """GET *url* with *client* (a floored client that follows no redirect) under the fetch limits.
+    """GET *url* with *client* (a floored client) under the fetch limits.
 
     Redirects are followed here, so a redirect's body is never read: httpx's own follower reads each one in full.
     The body is asked for uncompressed and counted as it streams; a server that compresses anyway is decoded
@@ -1117,7 +1117,7 @@ def _fetch(client: httpx.Client, url: str) -> _Fetched:
     try:
         with egress_deadline(limits.deadline):
             while True:
-                response = client.send(request, stream=True)
+                response = client.send(request, stream=True, follow_redirects=False)
                 try:
                     if response.next_request is not None:
                         redirects += 1

@@ -309,7 +309,6 @@ def egress_client(
     floor: bool,
     allow_loopback: bool = False,
     timeout: float | httpx.Timeout = 5.0,
-    follow_redirects: bool = False,
     headers: dict[str, str] | None = None,
 ) -> httpx.Client:
     """An HTTP client for KB's outbound requests; ``floor`` states whether the URL is tool-supplied.
@@ -321,13 +320,8 @@ def egress_client(
     the operator's environment declared.
     """
     if not floor:
-        return httpx.Client(timeout=timeout, follow_redirects=follow_redirects, headers=headers)
-    return httpx.Client(
-        transport=_PinnedTransport(allow_loopback=allow_loopback),
-        timeout=timeout,
-        follow_redirects=follow_redirects,
-        headers=headers,
-    )
+        return httpx.Client(timeout=timeout, headers=headers)
+    return httpx.Client(transport=_PinnedTransport(allow_loopback=allow_loopback), timeout=timeout, headers=headers)
 
 
 def loopback_opt_in(conn: sqlite3.Connection) -> bool:

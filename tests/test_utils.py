@@ -336,8 +336,8 @@ def test_pinned_redirect_to_another_scheme_is_refused(http_requests, fake_dns, p
     http_requests.handlers["page.example.test"] = lambda _r: httpx.Response(
         302, headers={"location": "ftp://files.example.test/x"}
     )
-    with egress_client(floor=True, follow_redirects=True) as client, pytest.raises(ValidationError, match="scheme"):
-        client.get("https://page.example.test/")
+    with egress_client(floor=True) as client, pytest.raises(ValidationError, match="scheme"):
+        client.get("https://page.example.test/", follow_redirects=True)
     assert len(http_requests) == 1
 
 

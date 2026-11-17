@@ -307,3 +307,13 @@ def test_a_body_in_tiny_chunks_costs_about_its_own_size(http_requests):
             tracemalloc.stop()
     assert len(body) == size
     assert peak < 4 * size  # one list item per 2-byte chunk would cost about 25 times the body
+
+
+def test_the_redirect_limit_holds_for_a_client_that_follows_redirects(http_requests, monkeypatch):
+    from knowledge_base.web import _fetch
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_FETCH_MAX_REDIRECTS", "0")
+    _serve(http_requests, _chain(1))
+    with httpx.Client(follow_redirects=True) as client, pytest.raises(ValidationError, match="more than 0 redirects"):
+        _fetch(client, _URL)
+    assert len(http_requests) == 1
