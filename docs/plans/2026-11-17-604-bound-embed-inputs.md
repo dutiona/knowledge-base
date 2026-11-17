@@ -109,7 +109,7 @@ built on `http_requests`. It declares `openai_compat` at `http://embedder.exampl
   per input at the declared dimension.
 
 It records each `/v1/embeddings` body. Every item's Green ends with the full suite (`uv run pytest tests/ -q -m "not
-slow"`, under `flock /run/user/1000/memlane-heavy.lock`), so each commit stands on its own.
+slow"`, one heavy run at a time on the host), so each commit stands on its own.
 
 **Baseline, before item 1:** the acceptance tests of items 2 and 3 run against master in a throwaway worktree at
 `master`, with only `tests/test_embed_limits.py` copied in. Each fails with `httpx.HTTPStatusError` 400, which is the
@@ -220,7 +220,7 @@ ingest.
    - `uv sync`;
    - `uv run ruff check src/ tests/`;
    - `uv run ruff format --check src/ tests/`;
-   - `flock /run/user/1000/memlane-heavy.lock uv run pytest tests/ -q -m "not slow"`;
+   - `uv run pytest tests/ -q -m "not slow"`;
    - `uv sync --all-groups`, then `uv run basedpyright src/ tests/`.
 2. `/super-review` at the confirmed Full gate, then `/finish-pr`.
 3. Before merge, run by the owner, because the embedder is not reachable from the worker: check the deployed
