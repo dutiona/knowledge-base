@@ -206,7 +206,7 @@ errors (see Surfaces); while the embedder is down, `mode="fts"` still answers.
 | `mode`           | `str`         | no       | `"hybrid"` | Search mode: `hybrid`, `fts` (keyword only), `vec` (semantic only)           |
 | `keyword_prefilter` | `bool`     | no       | `false`    | Match FTS on intent keywords extracted from the query instead of the raw query (strips stopwords and filler from verbose queries) |
 | `chunk_strategy` | `str \| None` | no       | `None`     | Filter by chunking strategy (`mechanical` or `semantic`). None returns all.  |
-| `space_name`     | `str \| None` | no       | `None`     | Search a specific embedding space instead of the active one.                 |
+| `space_name`     | `str \| None` | no       | `None`     | Search a specific embedding space instead of the active one; one the declared endpoint cannot serve is refused naming the field. |
 | `rerank`         | `bool`        | no       | `false`    | Enable cross-encoder reranking. Needs the reranker installed on the server; without it, results come back in fused order (`match_type` is not `reranked`). |
 
 **Returns:** Array of result objects:
@@ -953,11 +953,11 @@ Benchmark every non-deprecated space against a baseline: samples stored chunk te
   "comparisons": [
     {
       "space": "qwen3_512",
-      "element_type": "int8",
+      "element_type": "float32",
       "dim": 512,
       "status": "populating",
       "chunk_count": 1200,
-      "storage_ratio_vs_baseline": 0.125,
+      "storage_ratio_vs_baseline": 0.5,
       "metrics": { "overlap_at_k": {}, "jaccard": {}, "rank_correlation": {} },
       "warnings": []
     }

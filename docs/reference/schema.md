@@ -182,6 +182,11 @@ erDiagram
         INTEGER total_chunks
         INTEGER matryoshka_base_dim
         TEXT element_type
+        TEXT artifact_sha256
+        TEXT pooling
+        TEXT normalization
+        INTEGER max_input_tokens
+        TEXT query_instruction
     }
 
     chunks ||--o| chunks_vec : "embedding"
@@ -233,8 +238,12 @@ Additional keys set via configure tools: `llm_base_url`, `llm_api_key`, `vision_
 | `llm_base_url` / `llm_api_key` / `llm_model` | Chat counterparts (same semantics as the `embed_*` keys)                                 |
 | `allow_loopback_base_url`                    | `true`/`false` — **shared** opt-in permitting a loopback/`localhost` URL for every stored service URL (LLM, vision, OmniParser, CDP); never for ingest or image URLs |
 
-The `embed_spaces.provider` and `.model` columns carry the family name and model slug — the
-ADR-0015 embedding-identity tuple that the producer (ingest) must match before writing. An
+The `embed_spaces` columns `model`, `provider`, `dim`, `matryoshka_base_dim`, `element_type`,
+`artifact_sha256`, `pooling`, `normalization` and `max_input_tokens` are the ADR-0015 identity
+tuple. The served artifact (the last four) is recorded whole or not at all: NULL means the space
+was recorded before the served artifact existed (schema v1). The active space must equal the
+`KNOWLEDGE_BASE_EMBED_*` declaration at startup, and every embedding call checks the space it
+embeds into or queries. `config` mirrors only `embed_provider`, `embed_model` and `embed_dim`. An
 `env:` key spec is resolved at call time and is **never** stored as the resolved secret. An inline
 `llm_api_key` is stored plaintext-at-rest (local-only posture); an LLM key may name only
 `env:KNOWLEDGE_BASE_LLM_API_KEY`.
@@ -314,7 +323,7 @@ N:M join table mapping chunks to ingestion sessions. Introduced in #139 to repla
 | `embedding` | float[N] | Vector embedding (N = configured `embed_dim`, default 1024) |
 | `chunk_id`  | INTEGER  | Auxiliary column linking to `chunks.id`                     |
 
-Dimension is read from `config.embed_dim` at schema creation time. Dropped and recreated by `re_embed_tool`.
+Dimension is read from `config.embed_dim` at schema creation time. A re-embed creates a new space table rather than recreating this one.
 
 ---
 
@@ -326,7 +335,7 @@ Registry for embedding spaces. Each space owns a `sqlite-vec` virtual table and 
 | --------------------- | ------- | ---------------- | ----------------- | ----------------------------------------------------------------------- |
 | `name`                | TEXT    | PRIMARY KEY      | --                | Unique space identifier (alphanumeric/underscore)                       |
 | `model`               | TEXT    | NOT NULL         | --                | Embedding model name                                                    |
-| `provider`            | TEXT    | NOT NULL         | --                | Embedding provider (`ollama`, `openai`, `onnx`)                         |
+| `provider`            | TEXT    | NOT NULL         | --                | Embedding provider (`openai_compat`, `openai`, `llama.cpp`, `ollama`, `onnx`) |
 | `dim`                 | INTEGER | NOT NULL         | --                | Embedding dimension                                                     |
 | `chunk_strategy`      | TEXT    | NOT NULL, CHECK  | `'mechanical'`    | One of: `mechanical`, `semantic`                                        |
 | `status`              | TEXT    | NOT NULL, CHECK  | --                | One of: `active`, `populating`, `deprecated`                            |
@@ -335,7 +344,12 @@ Registry for embedding spaces. Each space owns a `sqlite-vec` virtual table and 
 | `chunk_count`         | INTEGER | --               | `0`               | Number of chunks backfilled so far                                      |
 | `total_chunks`        | INTEGER | --               | --                | Total chunks targeted for backfill                                      |
 | `matryoshka_base_dim` | INTEGER | --               | `NULL`            | Native model dimension for Matryoshka truncation (NULL = no truncation) |
-| `element_type`        | TEXT    | NOT NULL, CHECK  | `'float32'`       | Vector element storage type: `float32` or `int8` (quantized)            |
+| `element_type`        | TEXT    | NOT NULL, CHECK  | `'float32'`       | Vector element storage type; every space KB creates is `float32` (`int8` is reserved by ADR-0015 and may only appear in old rows) |
+| `artifact_sha256`     | TEXT    | --               | `NULL`            | Schema v2. SHA-256 of the served model file (ADR-0015 served artifact)  |
+| `pooling`             | TEXT    | --               | `NULL`            | Schema v2. Pooling the server applies (e.g. `last`)                     |
+| `normalization`       | TEXT    | --               | `NULL`            | Schema v2. Normalization of each output vector (e.g. `l2`)              |
+| `max_input_tokens`    | INTEGER | --               | `NULL`            | Schema v2. Maximum input length in tokens the server embeds             |
+| `query_instruction`   | TEXT    | --               | `NULL`            | Schema v2. Text put before each query into this space: NULL = the model's default (KB's ADR-0015 §6 instruction for Qwen3-Embedding, none otherwise), `''` = none. Not identity |
 
 **CHECK constraints:**
 

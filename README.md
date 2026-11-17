@@ -121,10 +121,12 @@ missing, unreadable or malformed token-hash file (named by path and line), and `
 
 | Variable | Required | Value |
 | --- | --- | --- |
-| `KNOWLEDGE_BASE_EMBED_PROVIDER` | always | `openai_compat`, `openai`, `ollama` or `onnx` |
-| `KNOWLEDGE_BASE_EMBED_MODEL` | always | the model slug |
+| `KNOWLEDGE_BASE_EMBED_PROVIDER` | always | `openai_compat`, `openai`, `llama.cpp` (the `openai_compat` wire), `ollama` or `onnx` |
+| `KNOWLEDGE_BASE_EMBED_MODEL` | always | the model slug; it also selects the default query instruction (KB's ADR-0015 one when it contains `qwen3-embedding`) |
 | `KNOWLEDGE_BASE_EMBED_DIM` | always | the stored dimension (after any Matryoshka truncation) |
-| `KNOWLEDGE_BASE_EMBED_URL` | for `openai_compat`, `openai`, `ollama`; refused for `onnx` | `http(s)://host[:port][/path]`, no userinfo, query or fragment |
+| `KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM` | optional | the native dimension the server embeds at before truncation to `_DIM`; greater than `_DIM` |
+| `KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256`, `_POOLING`, `_NORMALIZATION`, `_MAX_INPUT_TOKENS` | optional, all four or none | the served artifact (ADR-0015 §1): the model file's sha256 (64 lowercase hex digits), the server's pooling and normalization, and its maximum input in tokens |
+| `KNOWLEDGE_BASE_EMBED_URL` | for `openai_compat`, `openai`, `llama.cpp`, `ollama`; refused for `onnx` | `http(s)://host[:port][/path]`, no userinfo, query or fragment |
 | `ONNX_EMBED_MODEL_PATH` | for `onnx` | an existing model file |
 | `KNOWLEDGE_BASE_EMBED_API_KEY` | optional | the embedder's key; `config` records only `env:KNOWLEDGE_BASE_EMBED_API_KEY` |
 | `KNOWLEDGE_BASE_VISION`, `KNOWLEDGE_BASE_BROWSER`, `KNOWLEDGE_BASE_LLM` | optional | `on` or `off` (default `off`): figure extraction, the Playwright fallback, LLM extraction |
@@ -144,13 +146,16 @@ connects to the address it checked. Endpoints the operator's environment declare
 
 - **A blank database** is seeded from the declaration (its vector tables take the declared
   dimension).
-- **An existing database** must agree with it: provider, model, dimension, URL and the
-  active space. A database from before this check records its URL on its first start. The
+- **An existing database** must agree with it: the URL and the active space's whole ADR-0015
+  identity (model, provider, dimension, Matryoshka base dimension, element type and served
+  artifact); every differing field is named with its variable. A database from before this
+  check records its URL on its first start. The
   key row always follows the declaration (an inline key the old configure tool stored is
   replaced; rotate that key, since its bytes may survive in free pages, the WAL and earlier
   backups).
-- **Changing the model or provider** (server stopped): set the new `KNOWLEDGE_BASE_EMBED_*`
-  values, run `knowledge-base-ingest re-embed`, start the server. A failed run removes the
+- **Changing any identity field** (server stopped), adopting a served artifact included: set
+  the new `KNOWLEDGE_BASE_EMBED_*` values, run `knowledge-base-ingest re-embed` (`rebind`
+  refuses an identity change), start the server. A failed run removes the
   space it created and can be rerun; a killed one leaves a `populating` space to remove with
   `deprecate_embed_space_tool` then `cleanup_embed_space_tool`. Rolling back a model is a
   re-embed too. A failed or killed run has already recorded the new URL: to go back to the
@@ -158,6 +163,18 @@ connects to the address it checked. Endpoints the operator's environment declare
 - **Moving the embedder** (server stopped): set the new `KNOWLEDGE_BASE_EMBED_URL`, run
   `knowledge-base-ingest rebind`, start the server.
 - These two commands assume the server is stopped; nothing enforces it.
+
+**Upgrading to schema v2** (the served artifact and each space's query instruction): stop the
+unit and run `knowledge-base-ingest migrate`, which backs the database up first; until then the
+server exits 78 naming that command. The migrated spaces record no served artifact, so they
+start under a declaration without one; a store whose active space uses Matryoshka declares
+`KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM`, and one whose active space is `int8` is re-embedded.
+To roll back, restore the backup `migrate` wrote: an older build refuses the newer schema.
+
+**Queries carry their space's instruction.** A space records its own query instruction, or none
+(`""`), or the default for its model: KB's pinned ADR-0015 §6 instruction for Qwen3-Embedding
+models, nothing for others, so a bge-m3 quickstart sends exactly the query text. Documents never
+carry one.
 
 **Upgrading an existing install.** Declare what the database already holds: for the
 historical default, `ollama`, `bge-m3`, `1024` and the Ollama URL (on WSL2, the Windows host
@@ -393,7 +410,7 @@ database and checked at every start (see [Configuration](#configuration)).
 | `llm_provider`   | `ollama`      | LLM provider: `ollama` (native API) or `openai_compat` (OpenAI-compatible) |
 | `llm_model`      | `qwen3.5:27b` | Model name passed to the provider                                          |
 | `llm_base_url`   | _(unset)_     | Base URL for `openai_compat` provider (e.g. `http://192.168.1.41:1234`)    |
-| `schema_version` | `1`           | Applied DB schema version (managed by `migrate`; see Upgrading above)      |
+| `schema_version` | `2`           | Applied DB schema version (managed by `migrate`; see Upgrading above)      |
 
 ## Limitations
 

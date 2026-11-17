@@ -58,13 +58,12 @@ populating  -->  active  -->  deprecated  -->  (cleaned up)
     "name": "bge_m3_1024",
     "model": "bge-m3",
     "dim": 1024,
-    "provider": "ollama",
     "chunk_strategy": "mechanical"
   }
 }
 ```
 
-This creates the `embed_spaces` registry entry and the backing `chunks_vec_bge_m3_1024` virtual table. The space starts in `populating` status.
+This creates the `embed_spaces` registry entry and the backing `chunks_vec_bge_m3_1024` virtual table. The space starts in `populating` status. It records the shape given here (model, dim, `matryoshka_base_dim`, and an optional `query_instruction`: omitted, the model's default; `""`, none) and the declared endpoint's provider and served artifact, since that endpoint fills it. A space of another model than the declared one is accepted only when the endpoint serves the model a request names: `ollama`, or `openai` at exactly `https://api.openai.com`, with no served artifact declared. Under `llama.cpp`, `onnx` or `openai_compat`, or any declared served artifact, it is refused with the differing field. Vectors are stored as `float32`.
 
 The `chunk_strategy` parameter controls which chunks get embedded. When the `chunk_strategy` column exists on the `chunks` table (from #100), only chunks matching the specified strategy are selected. Otherwise all chunks are embedded.
 
@@ -97,11 +96,12 @@ Atomically:
 
 After promotion, all new ingestion and search queries use the promoted space's vec table.
 
-Only a space of the declared identity (`KNOWLEDGE_BASE_EMBED_PROVIDER`, `_MODEL`, `_DIM`) can be promoted, and only
-a space of the declared provider can be backfilled: the declaration is the active identity, and every space embeds
-against the declared endpoint. Promotion is all or nothing: the folder summaries are embedded first, then the status
-swap, the `config` rows and the folder-summary rebuild commit together, so a failure changes nothing. Spaces of another
-model (same provider) can still be created, backfilled and compared.
+Only a space of the whole declared identity (every ADR-0015 field the `KNOWLEDGE_BASE_EMBED_*` variables declare) can
+be promoted: the declaration is the active identity. Every other call into a space (backfill, search, comparison)
+checks that space against its own recorded identity and refuses one the declared endpoint cannot produce. Promotion is
+all or nothing: the folder summaries are embedded first, then the status swap, the `config` rows and the folder-summary
+rebuild commit together, so a failure changes nothing. Under a multi-model endpoint (Ollama), spaces of another model
+can still be created, backfilled and compared.
 
 #### 4. (Optional) Clean up deprecated spaces
 
@@ -132,23 +132,20 @@ When `chunks.chunk_strategy` exists, each embedding space is scoped to a single 
 
 If the `chunk_strategy` column does not exist (pre-#100 databases), all chunks are embedded regardless of the strategy parameter.
 
-### Interaction with re_embed_tool
+### Re-embedding the active identity
 
-The existing `re_embed_tool` is a convenience wrapper. Under the hood it:
+Changing the active identity is a maintenance step with the server stopped: set the new `KNOWLEDGE_BASE_EMBED_*`
+values (including `KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM` for a truncated active space), run
+`knowledge-base-ingest re-embed`, then start the server. Under the hood it:
 
-1. Creates a new space named `<model>_<dim>`
+1. Creates a new space named `<model>_<dim>` with the whole declared identity
 2. Backfills it
 3. Promotes it
 4. Re-embeds folder summaries
 
-The old space is left as `deprecated` (not auto-cleaned). Use `cleanup_embed_space_tool` to reclaim disk space.
-
-In a running server, `re_embed_tool` accepts only the declared model and dimension, so its use is rebuilding the
-active identity (for example with another `matryoshka_base_dim`). Changing the model is a maintenance step with the
-server stopped: set the new `KNOWLEDGE_BASE_EMBED_*` values, run `knowledge-base-ingest re-embed` (it takes the
-identity from the declaration), then start the server. A run that fails removes the space it created and can be
-rerun; a killed run leaves a `populating` space to remove with `deprecate_embed_space_tool` then
-`cleanup_embed_space_tool`.
+The old space is left as `deprecated` (not auto-cleaned). Use `cleanup_embed_space_tool` to reclaim disk space. A run
+that fails removes the space it created and can be rerun; a killed run leaves a `populating` space to remove with
+`deprecate_embed_space_tool` then `cleanup_embed_space_tool`.
 
 ### Deprecating without cleanup
 
@@ -193,7 +190,6 @@ Matryoshka Representation Learning (MRL) models produce embeddings where prefix 
     "name": "qwen3_512",
     "model": "qwen3-embedding",
     "dim": 512,
-    "provider": "ollama",
     "matryoshka_base_dim": 1024
   }
 }

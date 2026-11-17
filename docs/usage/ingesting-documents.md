@@ -290,23 +290,33 @@ The environment declares the embedding configuration; KB starts only with it (se
 README's Configuration section for every variable and rule):
 
 ```bash
-# A hosted or tailnet OpenAI-compatible embedder (vLLM, TEI, llama.cpp server, OpenRouter):
-export KNOWLEDGE_BASE_EMBED_PROVIDER=openai_compat
-export KNOWLEDGE_BASE_EMBED_MODEL=Qwen/Qwen3-Embedding-0.6B
+# A llama.cpp server serving ADR-0015 §5's model file (other OpenAI-compatible servers use openai_compat):
+export KNOWLEDGE_BASE_EMBED_PROVIDER=llama.cpp
+export KNOWLEDGE_BASE_EMBED_MODEL=Qwen/Qwen3-Embedding-0.6B   # the slug also selects KB's query instruction
 export KNOWLEDGE_BASE_EMBED_DIM=1024
 export KNOWLEDGE_BASE_EMBED_URL=https://embedder.example.test
 export KNOWLEDGE_BASE_EMBED_API_KEY=...   # read per request; config records only env:KNOWLEDGE_BASE_EMBED_API_KEY
+# The served artifact (ADR-0015 §1, all four or none), as the deployment measured it:
+export KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256=06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439
+export KNOWLEDGE_BASE_EMBED_POOLING=last
+export KNOWLEDGE_BASE_EMBED_NORMALIZATION=l2
+export KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS=2048
 ```
+
+Documents are embedded as they are, without an instruction; only queries carry one (see the
+searching guide). llama.cpp ignores the request's model name, so declare the slug of the file it
+serves: it selects the default query instruction.
 
 A blank database is seeded from the declaration; an existing one must agree with it, or the
 server exits naming the field. There is no default endpoint: nothing falls back to
 `https://api.openai.com`, and Ollama embeddings never auto-detect a host.
 
-**Changing the model or provider** is a maintenance step with the server stopped: set the new
+**Changing any identity field** (model, provider, dimension, Matryoshka base dimension or the
+served artifact) is a maintenance step with the server stopped: set the new
 `KNOWLEDGE_BASE_EMBED_*` values, run `knowledge-base-ingest re-embed`, start the server. A
-**moved embedder** (same model) is adopted with `knowledge-base-ingest rebind`. In a running
-server, `re_embed_tool` and `promote_embed_space_tool` accept only the declared identity, and
-backfilling a space of another provider than the declared one is refused.
+**moved embedder** (same identity) is adopted with `knowledge-base-ingest rebind`. In a running
+server, `promote_embed_space_tool` accepts only the declared identity, and every space is
+embedded into or queried only when the declared endpoint can produce its vectors.
 
 **SSRF safety.** Every `openai_compat` `base_url` is validated on each request (scheme,
 private/link-local/metadata/DNS-rebinding rejected; cross-host redirects refused), with one
