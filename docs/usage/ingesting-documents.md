@@ -23,6 +23,24 @@ Markdown (`.md`), plain text (`.txt`), Typst (`.typ`), and reStructuredText (`.r
 }
 ```
 
+## Text and Markdown Content
+
+Use the `ingest_text` tool to store a document you pass in, without a file: over HTTP it is how a document ingested
+from one machine becomes searchable from another.
+
+```json
+{
+  "name": "ingest_text",
+  "arguments": { "name": "notes/attention.md", "content": "# Attention\n\nNotes on attention." }
+}
+```
+
+The content is chunked like a markdown file and stored with `source_type` `markdown` under
+`content://<machine>/<name>` (the machine is the caller's token's; `content:///<name>` over stdio). Ingest only
+adds: identical text is skipped, and a passage already stored under any source is stored once, under the first
+document that brought it. Re-ingesting changed text under the same name stores it again from its first edit on, and
+the earlier version stays searchable beside it, so give each revision its own name.
+
 ## Code Files
 
 Python files (`.py`) use AST-aware chunking: the source is parsed with `ast.parse`, and each top-level function or class becomes its own chunk. Module-level code (imports, constants, etc.) is collected into a separate chunk. If a function or class exceeds the chunk size limit, it is split using fixed-size chunking. If `ast.parse` fails (syntax error), the file falls back to fixed-size chunking.
@@ -45,6 +63,7 @@ You can force a file to be treated as code (or any other type) with the `source_
 ## Web Pages
 
 Use the `ingest_url` tool. Content is extracted with trafilatura (strips boilerplate, extracts main text and tables).
+Over HTTP the server stores the page's text only: `--http` refuses to run with vision or the browser fallback on.
 
 Redirects are followed, and every hop keeps the SSRF floor: its host is resolved once, refused unless every answer is
 a public address outside `KNOWLEDGE_BASE_HOST_ADDRESSES`, and the request connects to the address it checked (TLS
@@ -130,6 +149,8 @@ The response includes per-file results:
 ```
 
 ## Re-Ingestion
+
+`reingest` is for files, over stdio. A document ingested by URL or by content has no replace or removal yet (#595).
 
 Use the `reingest` tool to force a full re-ingest. This deletes all existing chunks for the file and reinserts from scratch -- it does not compare content hashes. Use this after a file has been updated.
 

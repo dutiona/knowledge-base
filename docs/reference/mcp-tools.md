@@ -1,6 +1,29 @@
 # MCP Tools Reference
 
-Complete reference for all 43 MCP tools exposed by the knowledge-base server.
+Complete reference for the knowledge-base MCP tools: 48 tools over stdio, 3 over HTTP.
+
+## Surfaces
+
+- **stdio** (`knowledge-base`) serves every tool: the local and maintenance surface. Against a database the HTTP
+  server uses, run it only with that server stopped.
+- **HTTP** (`knowledge-base --http`) serves only `search_index`, `ingest_text` and `ingest_url`, the same tools with
+  the same names and schemas. No HTTP tool takes, writes or reveals a server path, configures the server, or removes
+  or replaces a document. The server refuses to start while `KNOWLEDGE_BASE_VISION` or `KNOWLEDGE_BASE_BROWSER` is
+  on, logs the machine of every call, and refuses a request body over 4 MiB.
+
+Every failure of `search_index`, `ingest_text` and `ingest_url` is an MCP tool error (`isError: true`) whose text KB
+wrote: a refusal gives its reason, an embedder failure gives its kind (`HTTP 503`, `ConnectError`) and never the
+endpoint, with "retry later" only when a retry can help. A failed ingest stored no text. Over HTTP, any other
+exception reads `Error calling tool '<name>'`; its detail goes only to the server log. The other tools return
+failures as `{"error": ...}` results.
+
+A document's `source_uri` names it in every result. It is an opaque identifier, never parsed as a URL:
+
+| Ingested by | `source_uri` |
+| --- | --- |
+| file (`ingest`, stdio) | the absolute path, `/...` |
+| web page (`ingest_url`) | the URL as given, `https://...` |
+| content (`ingest_text`) | `content://<machine>/<name>` over HTTP, `content:///<name>` over stdio |
 
 Return values are JSON strings unless noted otherwise.
 
@@ -57,13 +80,15 @@ Force re-ingest of a previously ingested file. Deletes old chunks and inserts ne
 
 ### ingest_url
 
-Ingest a web page by URL. Fetches the page, extracts main content, and indexes it.
+Ingest a web page by URL. Fetches the page, extracts main content, and indexes it. Served over stdio and HTTP; over
+HTTP it stores the page's text only (no rendering, no figures).
 
 Redirects are followed. Every hop keeps the SSRF floor and connects to the address it checked, so a redirect into a
 private, loopback, tailnet or host-owned address (`KNOWLEDGE_BASE_HOST_ADDRESSES`) fails the call before anything is
 sent there.
 
-Uses content-hash dedup -- unchanged pages are skipped on re-ingest.
+Uses content-hash dedup -- unchanged pages are skipped on re-ingest. Re-ingesting a changed page adds its new text
+passages beside the earlier ones; no tool replaces or removes a page's text. Failures are tool errors (see Surfaces).
 
 | Parameter    | Type          | Required | Default | Description                                    |
 | ------------ | ------------- | -------- | ------- | ---------------------------------------------- |
@@ -161,7 +186,8 @@ Tools for querying the index.
 
 ### search_index
 
-Search the research index using hybrid semantic + keyword search.
+Search the research index using hybrid semantic + keyword search. Served over stdio and HTTP. Failures are tool
+errors (see Surfaces); while the embedder is down, `mode="fts"` still answers.
 
 | Parameter        | Type          | Required | Default    | Description                                                                  |
 | ---------------- | ------------- | -------- | ---------- | ---------------------------------------------------------------------------- |

@@ -378,3 +378,9 @@ def test_a_body_at_the_cap_is_served(kb_http):
 def test_an_unauthenticated_oversized_body_meets_the_gate(kb_http):
     response = kb_http.request("POST", headers=_JSON_HEADERS, content=_oversized_ingest())
     assert response.status_code == 401
+
+
+def test_docs_state_the_counts_per_surface():
+    counts = f"{len(_names(server.mcp))} tools over stdio, {len(_names(server.network))} over HTTP"
+    for doc in ("README.md", "AGENTS.md", "GEMINI.md", "docs/reference/mcp-tools.md"):
+        assert counts in (_ROOT / doc).read_text(), doc

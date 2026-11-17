@@ -45,7 +45,7 @@ relied on and a CI status is never evidence.
 
 ## Architecture
 
-`server.py` is a thin hub (~40 LOC) that mounts 6 route sub-modules via `FastMCP.mount()`. Each route registers its own tools; domain logic lives in dedicated modules. All share a single SQLite file via thread-local connections (`_conn.py`) with double-checked locking for schema init.
+`server.py` builds two hubs from the same route functions: the stdio hub mounts the 6 route sub-modules via `FastMCP.mount()` (every tool), and the network hub `--http` serves is built from `NETWORK_TOOLS` (`search_index`, `ingest_text`, `ingest_url`). Each route registers its own tools; domain logic lives in dedicated modules. All share a single SQLite file via thread-local connections (`_conn.py`) with double-checked locking for schema init.
 
 Read these when the task touches the corresponding area:
 
@@ -53,7 +53,7 @@ Read these when the task touches the corresponding area:
 
 | Route      | Tools                                                                    | Module                                    |
 | ---------- | ------------------------------------------------------------------------ | ----------------------------------------- |
-| Ingestion  | ingest, reingest, ingest_url, configure_chunking, configure_browser_tool | `src/knowledge_base/routes/ingestion.py`  |
+| Ingestion  | ingest, reingest, ingest_text, ingest_url, configure_chunking, configure_browser_tool | `src/knowledge_base/routes/ingestion.py`  |
 | Search     | search_index, co_occurrence, status                                      | `src/knowledge_base/routes/search.py`     |
 | Embeddings | embed_config, re_embed_tool, space lifecycle, compare                    | `src/knowledge_base/routes/embeddings.py` |
 | Papers     | paper CRUD, relationships, conclusions, bibtex                           | `src/knowledge_base/routes/papers.py`     |

@@ -34,7 +34,7 @@ Part of a [four-layer cognitive architecture](https://github.com/dutiona/autonom
 └──────────────────┬──────────────────────────┘
                    │ MCP protocol
 ┌──────────────────▼──────────────────────────┐
-│              FastMCP Server (47 tools)        │
+│  FastMCP Server (stdio: all tools; HTTP: 3)   │
 ├──────────────────────────────────────────────┤
 │  ingestion.py  │ search.py    │ papers.py    │
 │  embeddings.py │ extraction.py│ operations.py│
@@ -106,8 +106,9 @@ Or serve stateless MCP over HTTP, with the same declaration exported, behind per
 uv run knowledge-base --http 127.0.0.1:<port> --token-file /path/to/token-hashes
 ```
 
-Plain `knowledge-base` serves stdio: the local and maintenance surface. Against a database the HTTP server uses, run
-it only with that server stopped; nothing enforces it.
+Plain `knowledge-base` serves stdio: the local and maintenance surface, with every tool. Against a database the HTTP
+server uses, run it only with that server stopped; nothing enforces it yet (#596). `--http` serves only the three
+network tools, `search_index`, `ingest_text` and `ingest_url`.
 
 ### Configuration
 
@@ -115,8 +116,8 @@ The environment is authoritative for the embedding configuration. A missing or i
 variable, or a database that disagrees with the declaration, stops the server before it
 serves: it prints the reason (naming the variable or the `config` field) and exits 78
 (`EX_CONFIG`). Empty values count as unset. So do a bad command line, `--http` without `--token-file`, and a
-missing, unreadable or malformed token-hash file (named by path and line), all checked before the database is
-opened.
+missing, unreadable or malformed token-hash file (named by path and line), and `--http` while
+`KNOWLEDGE_BASE_VISION` or `KNOWLEDGE_BASE_BROWSER` is on, all checked before the database is opened.
 
 | Variable | Required | Value |
 | --- | --- | --- |
@@ -195,7 +196,19 @@ transport is plain HTTP: keep the port reachable from the host only (a loopback 
 [published-port setup](docs/getting-started/installation.md#container-image)) behind a TLS proxy such as
 `tailscale serve`. Each tool call writes one stderr line naming the machine and the tool, and any token shape in any
 log line is written `me_[redacted]`. A stop lets calls already started finish, bounded by the unit's stop timeout.
-Only `knowledge-base --http` serves HTTP through the token check; any other HTTP server of the hub runs no tool.
+Only `knowledge-base --http` serves HTTP through the token check; any other HTTP server of either hub (the full stdio
+hub or the network hub) runs no tool.
+
+Over HTTP the model sees exactly three tools: `search_index`, `ingest_text` (a text or markdown document passed in,
+stored as `content://<machine>/<name>`) and `ingest_url` (a web page's text). None takes a server path, configures the
+server, or removes or replaces a document; every failure is a tool error that never names the embedder. A document
+ingested by content from one machine is found by a search from any other. With the header read from standard input
+as in the check below, the call's body is:
+
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+ "params": {"name": "ingest_text", "arguments": {"name": "notes/attention.md", "content": "# Attention\n\nNotes."}}}
+```
 
 A client sends the header itself (the Claude Code plugin's `headersHelper`, ADR-0020 §12), never in `.mcp.json` or on
 a command line. A manual check reads the header from standard input:
@@ -212,15 +225,19 @@ printf 'Authorization: Bearer %s\n' "$(cat ~/.config/memory-engine/secrets/token
 uv run pytest tests/ -q
 ```
 
-## MCP Tools (47)
+## MCP Tools
 
-### Ingest (5)
+48 tools over stdio, 3 over HTTP (`search_index`, `ingest_text`, `ingest_url`). The tables below list the stdio
+tools; [the tool reference](docs/reference/mcp-tools.md) documents both surfaces.
+
+### Ingest (6)
 
 | Tool                     | Description                                                                       |
 | ------------------------ | --------------------------------------------------------------------------------- |
 | `ingest`                 | Ingest a local file (PDF, markdown, code)                                         |
 | `reingest`               | Re-ingest a previously ingested file (deletes old chunks, preserves FK integrity) |
 | `ingest_url`             | Fetch and ingest a web page via trafilatura (with SSRF protection)                |
+| `ingest_text`            | Ingest a text or markdown document passed in, as `content://<machine>/<name>`      |
 | `configure_chunking`     | Configure chunking strategy parameters                                            |
 | `configure_browser_tool` | Configure browser-based web ingestion (needs `KNOWLEDGE_BASE_BROWSER=on`)        |
 
@@ -379,6 +396,8 @@ database and checked at every start (see [Configuration](#configuration)).
 ## Limitations
 
 - One process (SQLite WAL mode, no concurrent writers), shared over HTTP by every machine holding a token; each
-  reaches every tool until the lean tool map (#543)
+  reaches only the three network tools
+- No tool removes a document ingested by URL or by content yet (#595); re-ingesting changed text keeps the earlier
+  version searchable
 - AST-aware chunking only for Python files; other code uses fixed-size chunks
 - Embedding model swap re-embeds all chunks sequentially (can be slow for large indexes)

@@ -4,7 +4,7 @@
 
 ## What This Is
 
-Hybrid semantic search MCP server. Python 3.12+, FastMCP, single SQLite database with FTS5 (BM25) + sqlite-vec (cosine similarity) fused via Reciprocal Rank Fusion. Serves 33+ tools to AI assistants for managing research papers, code, and notes.
+Hybrid semantic search MCP server. Python 3.12+, FastMCP, single SQLite database with FTS5 (BM25) + sqlite-vec (cosine similarity) fused via Reciprocal Rank Fusion. Serves 48 tools over stdio, 3 over HTTP (search and ingest; see `docs/reference/mcp-tools.md`) to AI assistants for managing research papers, code, and notes.
 
 ## Commands
 
