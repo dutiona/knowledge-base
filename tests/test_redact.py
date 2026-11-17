@@ -23,6 +23,10 @@ FIXTURE = Path(__file__).parent / "fixtures" / "redaction-cases.jsonl"
 _LINES = FIXTURE.read_text(encoding="utf-8").split("\n")
 HEADER = json.loads(_LINES[0])
 CASES = [json.loads(line) for line in _LINES[1:] if line]
+# Example shapes built at run time, so no token literal is committed.
+AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE"
+GITHUB_TOKEN = "ghp_" + "0123456789abcdefghij" * 2
+OPENAI_KEY = "sk-" + "abcdefghijklmnopqrstuvwxyz0123"
 _SHORT = {'"': '\\"', "\\": "\\\\", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
 
 
@@ -73,7 +77,7 @@ def test_fixture_holds_no_secret():
 def test_no_email_case_and_no_email_rule():
     """Owner ruling, 2026-11-17: an email address is not a secret."""
     assert not any("@" in c["input"] and "://" not in c["input"] for c in CASES)
-    for text in ("contact craig@example.com please", '{"email":"a@b.com"}', "aws AKIAIOSFODNN7EXAMPLE and a@b.com"):
+    for text in ("contact craig@example.com please", '{"email":"a@b.com"}', f"aws {AWS_KEY} and a@b.com"):
         out, rules = redact(text)
         assert "@b.com" in out or "@example.com" in out
         assert "email" not in rules
@@ -88,9 +92,9 @@ def test_url_authority_ending_at_a_multibyte_space_does_not_crash():
 
 def test_redact_json_keeps_keys_and_non_strings():
     value = {
-        "description": "leaked AKIAIOSFODNN7EXAMPLE here",
-        "nested": {"note": "token ghp_0123456789abcdefghij0123456789abcdef"},
-        "list": ["sk-abcdefghijklmnopqrstuvwxyz0123", "harmless"],
+        "description": f"leaked {AWS_KEY} here",
+        "nested": {"note": f"token {GITHUB_TOKEN}"},
+        "list": [OPENAI_KEY, "harmless"],
         "count": 7,
         "flag": True,
     }
