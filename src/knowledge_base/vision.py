@@ -28,6 +28,7 @@ from PIL import Image
 from .embeddings import _get_ollama_url
 from .db import bump_chunk_count, delete_chunks_cascade, get_vec_table_name
 from .exceptions import NotFoundError, ValidationError
+from .redact import scrub
 from .settings import VISION_VAR, switch_on
 from .utils import _sanitize_url, egress_client, loopback_opt_in, validate_base_url
 from .ingest import (
@@ -1961,10 +1962,12 @@ def _persist_figures(
                     caption = page_caps[0]
 
             description = figure["description"] if not figure.get("_vision_failed") else None
-            content = _assemble_figure_content(
-                caption=caption,
-                description=description,
-                ocr_text=figure.get("_ocr_text"),
+            content = scrub(
+                _assemble_figure_content(
+                    caption=caption,
+                    description=description,
+                    ocr_text=figure.get("_ocr_text"),
+                )
             )
             if not content:
                 continue  # skip figures with no content at all

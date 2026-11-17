@@ -52,6 +52,7 @@ from .ingest import (
     _insert_chunk,
     ingest_text,
 )
+from .redact import scrub
 from .utils import content_hash as _content_hash
 
 logger = logging.getLogger(__name__)
@@ -458,7 +459,7 @@ def _extract_html_images(
                 continue
 
             for fig in figures:
-                desc = fig.get("description", "")
+                desc = scrub(fig.get("description", ""))
                 if not desc:
                     continue
                 meta = {
@@ -846,7 +847,7 @@ def _extract_web_figures(
         if omni_elements and len(figures) == 1:
             enriched = _merge_omniparser_elements(fig, omni_elements)
             desc = enriched.get("description", desc)
-        texts.append(desc)
+        texts.append(scrub(desc))
         valid_figures.append(fig)
 
     if not texts:
@@ -978,7 +979,7 @@ def _extract_element_captures(
             continue
 
         fig = figures[0]
-        desc = fig.get("description", "")
+        desc = scrub(fig.get("description", ""))
         if not desc:
             continue
 

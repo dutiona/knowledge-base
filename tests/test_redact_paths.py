@@ -272,3 +272,78 @@ def test_source_uris_keep_their_identity(
     uris = {r[0] for r in kb_conn.execute("SELECT source_uri FROM chunks")}
     assert uris == {url, doc.resolve().as_posix(), stored}
     assert ingest.reingest_file(kb_conn, doc, source_type="markdown")["chunks_added"] == 1
+
+
+_VISION = {"base_url": "http://vision.example.test:11434", "model": "llava"}
+
+
+def _figure_said() -> list[dict]:
+    return [
+        {
+            "description": f"A dashboard showing the token {GITHUB_TOKEN}",
+            "figure_type": "chart",
+            "title": f"Key {AWS_KEY}",
+        }
+    ]
+
+
+def _run_html_images(conn, tmp_path, http_requests):
+    from knowledge_base.web import _extract_html_images
+    from tests.test_ingest import _make_test_png
+
+    http_requests.handlers["img.example.test"] = lambda request: httpx.Response(200, content=_make_test_png())
+    html = '<html><body><img src="https://img.example.test/d.png" alt="diagram"></body></html>'
+    return _extract_html_images(conn, html, source_url="https://docs.example.test/page")
+
+
+def _run_web_figures(conn, tmp_path, _http):
+    from knowledge_base.web import _extract_web_figures
+
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n\x1a\nFAKE")
+    return _extract_web_figures(conn, "https://docs.example.test/page", shot)
+
+
+def _run_element_captures(conn, tmp_path, _http):
+    from knowledge_base.web import _extract_element_captures
+    from tests.test_ingest import _make_test_png
+
+    png = tmp_path / "element_0.png"
+    png.write_bytes(_make_test_png(400, 300))
+    return _extract_element_captures(
+        conn, "https://docs.example.test/page", [{"path": png, "tag": "canvas", "width": 400, "height": 300}]
+    )
+
+
+def _run_pdf_figures(conn, _tmp_path, _http):
+    from knowledge_base.vision import CaptionMap, _persist_figures
+
+    figure = {**_figure_said()[0], "entities_mentioned": [], "_ocr_text": f"terminal: export TOKEN={GITHUB_TOKEN}"}
+    return _persist_figures(
+        conn,
+        source_uri="/papers/p.pdf",
+        pages=None,
+        page_results={0: [figure]},
+        caption_map=CaptionMap(by_image={}, by_page={0: [f"Figure 1: key {AWS_KEY}"]}),
+        model="llava",
+        on_progress=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "site",
+    [_run_html_images, _run_web_figures, _run_element_captures, _run_pdf_figures],
+    ids=["html-images", "web-figures", "element-captures", "pdf-figures"],
+)
+def test_figure_text_is_neither_stored_nor_embedded(
+    kb_conn, stub_document_embedder, http_requests, fake_dns, public_net, tmp_path, site
+):
+    fake_dns.update({"img.example.test": ["203.0.113.11"]})
+    with (
+        patch("knowledge_base.vision._get_vision_config", return_value=_VISION),
+        patch("knowledge_base.vision._vision_call", return_value=_figure_said()),
+    ):
+        assert site(kb_conn, tmp_path, http_requests) == 1
+    _assert_clean(kb_conn, stub_document_embedder, GITHUB_TOKEN, AWS_KEY)
+    meta = kb_conn.execute("SELECT metadata FROM chunks").fetchone()["metadata"]
+    assert not _leaks(GITHUB_TOKEN, meta) and not _leaks(AWS_KEY, meta)
