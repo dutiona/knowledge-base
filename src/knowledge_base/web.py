@@ -296,7 +296,7 @@ def _parse_image_candidates(
     try:
         parser.feed(html_content)
     except Exception:
-        logger.warning("HTML parsing failed for %s", base_url, exc_info=True)
+        logger.warning("HTML parsing failed for %s", without_userinfo(base_url), exc_info=True)
         return None
 
     if not parser.images:
