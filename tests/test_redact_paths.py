@@ -463,3 +463,23 @@ def test_a_link_longer_than_four_windows_is_still_cut():
 
     text = "see https://data.example.org/" + "a" * (10 * CHUNK_SIZE) + " end"
     assert max(len(c) for c in chunk_text(text)) <= 4 * CHUNK_SIZE
+
+
+def test_a_failed_image_download_logs_no_userinfo(kb_conn, http_requests, fake_dns, public_net, caplog):
+    from knowledge_base.web import _extract_html_images
+
+    fake_dns.update({"docs.example.test": ["203.0.113.12"]})
+    http_requests.handlers["docs.example.test"] = lambda request: httpx.Response(404)
+    html = '<html><body><img src="/a.png" width="400" height="400"></body></html>'
+    with (
+        patch("knowledge_base.vision._get_vision_config", return_value=_VISION),
+        caplog.at_level("WARNING", logger="knowledge_base.web"),
+    ):
+        _extract_html_images(
+            kb_conn,
+            html,
+            source_url="https://docs.example.test/p",
+            base_url="https://reader:example-pass@docs.example.test/p",
+        )
+    assert "Image download failed" in caplog.text
+    assert "example-pass" not in caplog.text

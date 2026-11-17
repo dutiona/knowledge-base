@@ -427,8 +427,10 @@ def _extract_html_images(
         for image_url, alt_text in candidates:
             try:
                 image_bytes = bytes(_fetch(image_client, image_url).body)  # BytesIO would copy a bytearray again
-            except Exception:
-                logger.warning("Image download failed: %s", without_userinfo(image_url), exc_info=True)
+            except Exception as e:  # its text can name the URL, userinfo included: no traceback, the text cleaned
+                logger.warning(
+                    "Image download failed: %s: %s", without_userinfo(image_url), _USERINFO.sub(r"\1", str(e))
+                )
                 continue
 
             # Open with Pillow, check dimensions, convert to PNG
