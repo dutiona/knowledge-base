@@ -59,8 +59,8 @@ def _archive_check() -> str:
     return lines[checks[0]].removeprefix("RUN ")
 
 
-def _build_stage() -> list[str]:
-    """The build stage's instructions, FROM aside: comments dropped, continuations joined, whitespace collapsed."""
+def _stages() -> list[list[str]]:
+    """Each stage's instructions, FROM aside: comments dropped, continuations joined, whitespace collapsed."""
     instructions, current = [], ""
     for line in (REPO / "Containerfile").read_text().splitlines():
         if line.lstrip().startswith("#"):
@@ -71,7 +71,7 @@ def _build_stage() -> list[str]:
                 instructions.append(" ".join(current.split()))
             current = ""
     froms = [i for i, instruction in enumerate(instructions) if instruction.startswith("FROM ")]
-    return instructions[froms[0] + 1 : froms[1]]
+    return [instructions[a + 1 : b] for a, b in zip(froms, [*froms[1:], len(instructions)], strict=True)]
 
 
 def _run_check(marker: bytes, tmp_path: Path) -> subprocess.CompletedProcess[bytes]:
@@ -117,7 +117,9 @@ def test_dependency_code_runs_without_network() -> None:
     The archive check is matched by its text, not pinned: its body is #585's and the archive tests run it. So the
     static guard's residue is the base image and that one line.
     """
-    stage = _build_stage()
+    stages = _stages()
+    assert len(stages) == 2, "a build stage and a runtime stage"
+    stage, runtime = stages
     assert FETCH in stage, "the fetch is not the pinned wheels-only uv sync"
     fetch = stage.index(FETCH)
     before = [MARKER_CHECK if s.startswith("RUN ") and MARKER in s else s for s in stage[: fetch + 1]]
@@ -130,5 +132,9 @@ def test_dependency_code_runs_without_network() -> None:
     assert all("--offline" in c.split() for c in commands if c.startswith("uv ")), commands
     installs = [c for c in commands if c.startswith("uv pip install ")]
     assert installs and all("--no-deps" in c.split() for c in installs), installs
+    # Once the venv is in the runtime stage, a RUN there (an image smoke, say) would start its Python with network.
+    venv = runtime.index("COPY --from=build /app/.venv /app/.venv")
+    later = [s for s in runtime[venv + 1 :] if s.startswith("RUN ")]
+    assert all(s.startswith("RUN --network=none ") for s in later), later
     # The one setting outside the Containerfile that would make the fetch compile.
     assert "compile-bytecode" not in tomllib.loads((REPO / "pyproject.toml").read_text()).get("tool", {}).get("uv", {})
