@@ -39,6 +39,10 @@ class _StubStream(httpcore.NetworkStream):
     def __init__(self, calls: list[tuple[str, float | None]], fail: type[Exception] | None = None) -> None:
         self.calls = calls
         self.fail = fail
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
 
     def _record(self, name: str, timeout: float | None) -> None:
         self.calls.append((name, timeout))
@@ -111,6 +115,22 @@ def test_a_passed_deadline_sends_nothing(clock, stub):
         with pytest.raises(DeadlineExceeded):
             backend.connect_tcp("203.0.113.1", 443, timeout=30)
     assert inner.calls == []
+
+
+def test_a_deadline_between_connect_and_tls_closes_the_socket(clock, stub):
+    backend, _inner = stub
+    with egress_deadline(10):
+        stream = backend.connect_tcp("203.0.113.1", 443, timeout=30)
+        clock.now += 10
+        with pytest.raises(DeadlineExceeded):
+            stream.start_tls(None, "page.example.test", timeout=30)
+    assert stream._stream.closed  # httpcore closes the TCP stream only on a connect error
+
+
+def test_a_transport_without_its_pool_fails_loudly(monkeypatch):
+    monkeypatch.setattr(httpx.HTTPTransport, "__init__", lambda self, **_kwargs: None)
+    with pytest.raises(RuntimeError, match="_pool"):
+        egress_client(floor=True)
 
 
 def test_the_outer_deadline_comes_back_after_a_nested_one(clock):

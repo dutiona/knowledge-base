@@ -217,7 +217,11 @@ class _DeadlineStream(httpcore.NetworkStream):
     def start_tls(
         self, ssl_context: Any, server_hostname: str | None = None, timeout: float | None = None
     ) -> httpcore.NetworkStream:
-        return _DeadlineStream(_bounded(lambda t: self._stream.start_tls(ssl_context, server_hostname, t), timeout))
+        try:
+            return _DeadlineStream(_bounded(lambda t: self._stream.start_tls(ssl_context, server_hostname, t), timeout))
+        except DeadlineExceeded:
+            self._stream.close()  # httpcore closes the TCP stream only on a connect error
+            raise
 
     def get_extra_info(self, info: str) -> Any:
         return self._stream.get_extra_info(info)
@@ -263,12 +267,16 @@ class _PinnedTransport(httpx.BaseTransport):
         self._allow_loopback = allow_loopback
         # The inner pool is keyed by address: a kept-alive connection could carry one name's request over a
         # TLS session verified for another name on the same address, so no connection is ever reused.
-        self._inner = httpx.HTTPTransport()
+        ssl_context = httpx.create_ssl_context()
+        self._inner = httpx.HTTPTransport(verify=ssl_context)
         # httpx takes no network backend, so its pool is rebuilt on the deadline-aware one, with the values
-        # httpx.Limits(max_keepalive_connections=0) gave. tests/test_egress_deadline.py fails if httpx renames _pool.
+        # httpx.Limits(max_keepalive_connections=0) gave. A release that stops building on _pool must fail here,
+        # not leave the deadline silently unenforced.
+        if not isinstance(getattr(self._inner, "_pool", None), httpcore.ConnectionPool):
+            raise RuntimeError("httpx.HTTPTransport no longer has a _pool: the fetch deadline cannot be installed")
         self._inner._pool = httpcore.ConnectionPool(
-            ssl_context=httpx.create_ssl_context(),
-            max_connections=100,
+            ssl_context=ssl_context,
+            max_connections=None,
             max_keepalive_connections=0,
             keepalive_expiry=5.0,
             network_backend=_DeadlineBackend(),
