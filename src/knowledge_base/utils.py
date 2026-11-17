@@ -11,6 +11,7 @@ import struct
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from functools import partial
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -199,6 +200,17 @@ def _bounded[T](call: Callable[[float | None], T], timeout: float | None) -> T:
         raise DeadlineExceeded from exc
 
 
+def _send(sock: socket.socket, data: memoryview, timeout: float | None) -> int:
+    """One ``send``, with the error mapping of httpcore's ``SyncStream.write``."""
+    try:
+        sock.settimeout(timeout)
+        return sock.send(data)
+    except TimeoutError as exc:
+        raise httpcore.WriteTimeout(exc) from exc
+    except OSError as exc:
+        raise httpcore.WriteError(exc) from exc
+
+
 class _DeadlineStream(httpcore.NetworkStream):
     """A socket stream whose every read, write and TLS handshake ends by the deadline."""
 
@@ -209,7 +221,12 @@ class _DeadlineStream(httpcore.NetworkStream):
         return _bounded(lambda t: self._stream.read(max_bytes, t), timeout)
 
     def write(self, buffer: bytes, timeout: float | None = None) -> None:
-        _bounded(lambda t: self._stream.write(buffer, t), timeout)
+        # httpcore's own write loops send() under one timeout, so a slow reader could stretch it past the
+        # deadline; here each send gets the time left when it starts.
+        sock = self._stream.get_extra_info("socket")
+        data = memoryview(buffer)
+        while data:
+            data = data[_bounded(partial(_send, sock, data), timeout) :]
 
     def close(self) -> None:
         self._stream.close()

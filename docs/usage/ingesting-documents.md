@@ -92,8 +92,6 @@ decoded size counts. Any other encoding is refused. Where the bound stops:
   before the fetch is refused.
 - The browser fallback fetches with its own network and timeouts, and with vision on, each of a page's images has
   its own deadline after the page's.
-- A request that the kernel cannot take in one send (only a URL of megabytes does that) is written in several sends,
-  each with the time left when the write began, so a server reading it slowly can stretch the write past the deadline.
 
 ```json
 {

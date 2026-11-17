@@ -10,7 +10,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import httpcore
 import httpx
@@ -35,11 +35,36 @@ def clock(monkeypatch) -> _Clock:
     return fake
 
 
+class _StubSocket:
+    """The socket under a stub stream: each send takes ``per_send`` bytes and runs ``tick`` first."""
+
+    def __init__(self, calls: list[tuple[str, float | None]]) -> None:
+        self.calls = calls
+        self.timeout: float | None = None
+        self.per_send: int | None = None
+        self.tick: Callable[[], None] = lambda: None
+        self.error: OSError | None = None
+
+    def settimeout(self, timeout: float | None) -> None:
+        self.timeout = timeout
+
+    def send(self, data) -> int:
+        self.calls.append(("send", self.timeout))
+        self.tick()
+        if self.error is not None:
+            raise self.error
+        return len(data) if self.per_send is None else min(self.per_send, len(data))
+
+
 class _StubStream(httpcore.NetworkStream):
     def __init__(self, calls: list[tuple[str, float | None]], fail: type[Exception] | None = None) -> None:
         self.calls = calls
         self.fail = fail
         self.closed = False
+        self.socket = _StubSocket(calls)
+
+    def get_extra_info(self, info: str):
+        return self.socket if info == "socket" else None
 
     def close(self) -> None:
         self.closed = True
@@ -52,9 +77,6 @@ class _StubStream(httpcore.NetworkStream):
     def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
         self._record("read", timeout)
         return b""
-
-    def write(self, buffer: bytes, timeout: float | None = None) -> None:
-        self._record("write", timeout)
 
     def start_tls(self, ssl_context, server_hostname=None, timeout=None) -> httpcore.NetworkStream:
         self._record("start_tls", timeout)
@@ -87,7 +109,7 @@ def test_every_socket_operation_is_clipped_to_the_time_left(clock, stub):
         tls = stream.start_tls(None, "page.example.test", timeout=30)
         tls.write(b"GET", timeout=None)
         tls.read(10, timeout=5)
-    assert inner.calls == [("connect", 10), ("start_tls", 6), ("write", 6), ("read", 5)]
+    assert inner.calls == [("connect", 10), ("start_tls", 6), ("send", 6), ("read", 5)]
 
 
 def test_outside_a_deadline_the_timeouts_are_unchanged(clock, stub):
@@ -115,6 +137,33 @@ def test_a_passed_deadline_sends_nothing(clock, stub):
         with pytest.raises(DeadlineExceeded):
             backend.connect_tcp("203.0.113.1", 443, timeout=30)
     assert inner.calls == []
+
+
+def test_each_send_of_a_write_gets_the_time_left(clock, stub):
+    backend, _inner = stub
+    with egress_deadline(10):
+        stream = backend.connect_tcp("203.0.113.1", 443, timeout=30)
+        sock = stream._stream.socket
+        sock.per_send = 1
+
+        def _tick() -> None:
+            clock.now += 4
+
+        sock.tick = _tick
+        with pytest.raises(DeadlineExceeded):
+            stream.write(b"0123456789", timeout=30)  # a slow reader takes one byte per send
+    assert [call for call in sock.calls if call[0] == "send"] == [("send", 10), ("send", 6), ("send", 2)]
+
+
+def test_a_send_error_keeps_httpcore_s_mapping(clock, stub):
+    backend, _inner = stub
+    stream = backend.connect_tcp("203.0.113.1", 443, timeout=30)
+    stream._stream.socket.error = TimeoutError("timed out")
+    with pytest.raises(httpcore.WriteTimeout):
+        stream.write(b"x", timeout=5)
+    stream._stream.socket.error = ConnectionResetError("reset")
+    with pytest.raises(httpcore.WriteError):
+        stream.write(b"x", timeout=5)
 
 
 def test_a_deadline_between_connect_and_tls_closes_the_socket(clock, stub):
