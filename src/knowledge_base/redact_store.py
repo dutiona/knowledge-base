@@ -8,15 +8,25 @@ what changed, rebuilds the folder summaries and purges the old bytes from the fi
 from __future__ import annotations
 
 import json
+import posixpath
 import sqlite3
 from collections import Counter
 from collections.abc import Iterator
 from typing import Any
 
 from . import migrate as _migrate
-from .ingest import _WHOLE_URL, redact_metadata
+from .db import (
+    _batched_select,
+    delete_chunk_vecs,
+    get_vec_table_name,
+    held_exclusively,
+    insert_chunk_vec,
+    purge_deleted_content,
+)
+from .folder_summaries import update_folder_summary
+from .ingest import _WHOLE_URL, _embed_with_config, redact_metadata
 from .redact import findings, scrub
-from .utils import without_userinfo
+from .utils import content_hash, without_userinfo
 
 #: Present while a ``--rewrite`` has committed its rows but not yet rebuilt the summaries and purged the file.
 PENDING_KEY = "redact_rewrite_pending"
@@ -82,3 +92,125 @@ def report(conn: sqlite3.Connection) -> dict:
 
 def needs_rewrite(result: dict) -> bool:
     return bool(result["chunk_ids"] or result["folder_summaries_to_rebuild"] or result["rewrite_incomplete"])
+
+
+def _merge_into(conn: sqlite3.Connection, dup: int, keep: int) -> None:
+    """Move every reference from chunk ``dup`` to ``keep``, then delete ``dup``: ingest-time dedup's end state."""
+    refs = conn.execute(
+        'SELECT m.name AS t, p."from" AS c FROM sqlite_master AS m, pragma_foreign_key_list(m.name) AS p '
+        "WHERE m.type = 'table' AND p.\"table\" = 'chunks'"
+    ).fetchall()
+    for table, column in refs:
+        conn.execute(f"UPDATE OR IGNORE [{table}] SET [{column}] = ? WHERE [{column}] = ?", (keep, dup))  # noqa: S608  # names from sqlite_master
+        conn.execute(f"DELETE FROM [{table}] WHERE [{column}] = ?", (dup,))  # noqa: S608  # rows a UNIQUE constraint held back
+    for row in conn.execute(
+        "SELECT DISTINCT c.id, c.source_chunk_ids FROM conclusions c, json_each(c.source_chunk_ids) j"
+        " WHERE j.value = ?",
+        (dup,),
+    ).fetchall():
+        moved = [keep if cid == dup else cid for cid in json.loads(row["source_chunk_ids"])]
+        conn.execute(
+            "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
+            (json.dumps(list(dict.fromkeys(moved))), row["id"]),
+        )
+    conn.execute("DELETE FROM chunks WHERE id = ?", (dup,))
+
+
+def _plan(conn: sqlite3.Connection) -> tuple[list[dict], list[tuple[int, int]]]:
+    """Each row's new values, in id order; a row whose new hash another row holds merges into that row."""
+    rows = conn.execute("SELECT id, content, content_hash, metadata, source_uri FROM chunks ORDER BY id").fetchall()
+    owner = {r["content_hash"]: r["id"] for r in rows}
+    changes: list[dict] = []
+    merges: list[tuple[int, int]] = []
+    for r in rows:
+        content = scrub(r["content"])
+        metadata = redact_metadata(r["metadata"]) if r["metadata"] is not None else None
+        uri = without_userinfo(r["source_uri"])
+        if (content, metadata, uri) == (r["content"], r["metadata"], r["source_uri"]):
+            continue
+        new_hash = r["content_hash"]
+        if content != r["content"]:
+            new_hash = content_hash(content)
+            del owner[r["content_hash"]]
+            if new_hash in owner:
+                merges.append((r["id"], owner[new_hash]))
+                continue
+            owner[new_hash] = r["id"]
+        changes.append(
+            {
+                "id": r["id"],
+                "content": content,
+                "hash": new_hash,
+                "metadata": metadata,
+                "uri": uri,
+                "reembed": content != r["content"],
+            }
+        )
+    return changes, merges
+
+
+def _apply(conn: sqlite3.Connection, changes: list[dict], merges: list[tuple[int, int]], embedded: dict) -> dict:
+    """One transaction: rows, merges, vectors in every space, stale summaries, and the pending marker."""
+    tables = [r[0] for r in conn.execute("SELECT table_name FROM embed_spaces").fetchall()]
+    active = get_vec_table_name(conn)
+    dropped = [c["id"] for c in changes if c["reembed"]] + [dup for dup, _ in merges]
+    removed: dict[str, int] = {}
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for table in tables:
+            removed[table] = sum(
+                r[0]
+                for r in _batched_select(conn, f"SELECT COUNT(*) FROM [{table}] WHERE chunk_id IN ({{ph}})", dropped)  # noqa: S608
+            )
+            delete_chunk_vecs(conn, dropped, table_name=table)
+        for dup, keep in merges:
+            _merge_into(conn, dup, keep)
+        for c in changes:
+            conn.execute(
+                "UPDATE chunks SET content = ?, content_hash = ?, metadata = ?, source_uri = ? WHERE id = ?",
+                (c["content"], c["hash"], c["metadata"], c["uri"], c["id"]),
+            )
+            if c["reembed"] and embedded.get(c["id"]) is not None:
+                insert_chunk_vec(conn, c["id"], embedded[c["id"]], table_name=active)
+        stale = [r[0] for r in conn.execute("SELECT folder_path, summary FROM folder_summaries") if scrub(r[1]) != r[1]]
+        for path in stale:
+            conn.execute("DELETE FROM folder_summaries WHERE folder_path = ?", (path,))
+            conn.execute("DELETE FROM folder_summaries_vec WHERE folder_path = ?", (path,))
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, '1')", (PENDING_KEY,))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return removed
+
+
+def _rebuild_summaries(conn: sqlite3.Connection) -> int:
+    """Rebuild every file folder's summary that is missing or stale; each one commits on its own."""
+    folders = {
+        posixpath.dirname(u)
+        for (u,) in conn.execute("SELECT DISTINCT source_uri FROM chunks WHERE source_uri LIKE '/%'")
+    }
+    folders |= {p for (p,) in conn.execute("SELECT folder_path FROM folder_summaries")}
+    return sum(update_folder_summary(conn, folder) for folder in sorted(folders))
+
+
+def rewrite(conn: sqlite3.Connection, batch_size: int = 32) -> dict:
+    """Store every row as ingest now would, with the server stopped; a rerun finishes an interrupted run."""
+    with held_exclusively(conn):
+        changes, merges = _plan(conn)
+        reembed = [c for c in changes if c["reembed"]]
+        embedded: dict[int, list[float] | None] = {}
+        for i in range(0, len(reembed), batch_size):  # every vector before the first write
+            batch = reembed[i : i + batch_size]
+            embedded.update(
+                zip((c["id"] for c in batch), _embed_with_config(conn, [c["content"] for c in batch]), strict=True)
+            )
+        removed = _apply(conn, changes, merges, embedded)
+        rebuilt = _rebuild_summaries(conn)
+        purge_deleted_content(conn)
+        conn.execute("DELETE FROM config WHERE key = ?", (PENDING_KEY,))
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    result = report(conn)
+    result.update(rewritten=len(changes), merged=len(merges), vectors_removed=removed, folders_rebuilt=rebuilt)
+    return result

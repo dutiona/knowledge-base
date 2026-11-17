@@ -188,11 +188,17 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 def cmd_redact(args: argparse.Namespace) -> None:
     """Report stored rows that hold a secret (#592); ``--rewrite`` (server stopped) redacts them."""
-    from .redact_store import needs_rewrite, report
+    from .redact_store import needs_rewrite, report, rewrite
 
-    conn = get_connection(args.db)  # the report only reads: no declaration needed
-    init_schema(conn)
-    result = report(conn)
+    if args.rewrite:
+        conn = open_declared_db(args.db)  # it re-embeds: the declared embedder, as re-embed
+    else:
+        conn = get_connection(args.db)  # the report only reads: no declaration needed
+        init_schema(conn)
+    try:
+        result = rewrite(conn) if args.rewrite else report(conn)
+    finally:
+        conn.close()  # a held connection is what --rewrite refuses
     _print(result, quiet=args.quiet)
     sys.exit(1 if needs_rewrite(result) else 0)
 
