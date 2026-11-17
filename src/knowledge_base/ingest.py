@@ -244,7 +244,7 @@ def _extract_pdf_text(path: Path) -> str:
     doc = fitz.open(str(path))
     pages = []
     for page in doc:
-        pages.append(scrub(page.get_text()))
+        pages.append(scrub(cast("str", page.get_text())))  # "text" mode returns a str; the stub says more
     doc.close()
     return "\n\n".join(pages)
 
