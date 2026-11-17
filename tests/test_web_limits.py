@@ -215,7 +215,12 @@ def test_a_gzip_body_is_decoded_and_its_decoded_size_counts(kb_conn, http_reques
         ingest_url(kb_conn, _URL)
 
 
-@pytest.mark.parametrize("encoding", ["gzip, gzip", "br", "x-gzip"])
+def test_an_identity_encoding_is_read_as_is(kb_conn, http_requests):
+    _serve(http_requests, {"/start": _page(**{"content-encoding": "identity"})})
+    assert ingest_url(kb_conn, _URL)["chunks_added"] >= 1
+
+
+@pytest.mark.parametrize("encoding", ["gzip, gzip", "gzip, identity", "identity, gzip", "br", "x-gzip"])
 def test_a_stacked_or_unknown_encoding_is_refused(kb_conn, http_requests, encoding):
     _serve(http_requests, {"/start": _page(**{"content-encoding": encoding})})
     with pytest.raises(ValidationError) as refused:

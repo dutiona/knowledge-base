@@ -1130,10 +1130,8 @@ def _fetch(client: httpx.Client, url: str) -> _Fetched:
                         continue
                     response.raise_for_status()
                     encoding = response.headers.get("content-encoding", "")
-                    codings = [
-                        c for c in (part.strip().lower() for part in encoding.split(",")) if c not in ("", "identity")
-                    ]
-                    if codings not in ([], ["gzip"], ["deflate"]):
+                    codings = [c for c in (part.strip().lower() for part in encoding.split(",")) if c]
+                    if codings not in ([], ["identity"], ["gzip"], ["deflate"]):
                         raise ValidationError(f"Failed to fetch {url}: unsupported Content-Encoding {encoding!r}")
                     chunks: list[bytes] = []
                     size = 0
