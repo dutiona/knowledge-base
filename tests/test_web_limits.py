@@ -330,3 +330,10 @@ def test_an_invalid_url_is_a_validation_error(kb_conn, http_requests, url):
     with pytest.raises(ValidationError):
         ingest_url(kb_conn, url)
     assert http_requests == []
+
+
+@pytest.mark.parametrize("charset", ["punycode", "idna"])
+def test_a_hostname_codec_charset_reads_the_page_as_utf8(kb_conn, http_requests, charset):
+    # punycode decodes a run of digits in quadratic time, after the fetch and outside its deadline
+    _serve(http_requests, {"/start": _page(**{"content-type": f"text/html; charset={charset}"})})
+    assert ingest_url(kb_conn, _URL)["chunks_added"] >= 1

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import html.parser
 import ipaddress
 import json
@@ -1183,8 +1184,10 @@ def ingest_url(
     except (httpx.HTTPError, httpx.InvalidURL) as e:  # InvalidURL (a bad port, a control character) is no HTTPError
         raise ValidationError(f"Failed to fetch {url}: {e}") from e
 
+    # punycode is a hostname codec that decodes a run of digits in quadratic time, after the fetch's deadline
+    encoding = "utf-8" if codecs.lookup(fetched.encoding).name == "punycode" else fetched.encoding
     try:
-        html = fetched.body.decode(fetched.encoding, errors="replace")  # httpx's own .text rule
+        html = fetched.body.decode(encoding, errors="replace")  # httpx's own .text rule
     except (LookupError, UnicodeError):  # no text encoding (base64, rot13), or one refusing "replace" (idna, undefined)
         html = fetched.body.decode("utf-8", errors="replace")
     text = trafilatura.extract(html, include_links=False, include_tables=True) or ""
