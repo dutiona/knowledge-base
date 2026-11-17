@@ -110,6 +110,8 @@ class Embedder:
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
+        if request.url.path == "/tokenize":  # a served artifact's limit is counted first (#604); every input fits
+            return httpx.Response(200, json={"tokens": [0]})
         self.bodies.append(body)
         dim = body.get("dimensions") or self.dim
         vectors = [[1.0] + [0.0] * (dim - 1) for _ in body["input"]]

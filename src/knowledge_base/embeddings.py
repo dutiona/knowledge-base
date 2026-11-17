@@ -14,7 +14,7 @@ import os
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 if TYPE_CHECKING:
     from onnxruntime import InferenceSession
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 import httpx
 
 from .exceptions import ValidationError
-from .settings import declared_embed_host
+from .settings import VARIABLES, declared_embed_host
 from .utils import _resolve_api_key, _sanitize_url, validate_base_url
 
 logger = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ class EmbeddingProvider(Protocol):
 class ProviderConfig:
     """A resolved, hashable embedding-provider identity (ADR-0018 §2).
 
-    The frozen tuple ``(family, base_url, api_key, allow_loopback)`` is the provider
+    The frozen tuple ``(family, base_url, api_key, allow_loopback, max_input_tokens)`` is the provider
     *cache key* — replacing the old name-keyed cache that made two ``openai_compat``
     configs (different ``base_url``) collide. ``api_key`` holds the **raw** config
     spec (inline value or ``env:VARNAME`` indirection, never a resolved secret); it is
@@ -141,10 +141,14 @@ class ProviderConfig:
     base_url: str | None = None
     api_key: str | None = None
     allow_loopback: bool = False
+    max_input_tokens: int | None = None
 
     def __repr__(self) -> str:
         bu = _sanitize_url(self.base_url) if self.base_url else None
-        return f"ProviderConfig(family={self.family!r}, base_url={bu!r}, allow_loopback={self.allow_loopback})"
+        return (
+            f"ProviderConfig(family={self.family!r}, base_url={bu!r}, allow_loopback={self.allow_loopback}, "
+            f"max_input_tokens={self.max_input_tokens})"
+        )
 
 
 class OllamaProvider:
@@ -183,6 +187,40 @@ class OllamaProvider:
         return results
 
 
+_LIMIT_VAR = VARIABLES["max_input_tokens"]
+
+
+def _cut(text: str, limit: int, count: Callable[[str], int]) -> int:
+    """A position ``c > 0`` with ``count(text[:c]) <= limit``: just after whitespace when one fits (#604).
+
+    Counts need not grow with length, so the search only ever moves to a position it counted: ``c`` is a
+    verified fit, not necessarily the longest.
+    """
+    after_whitespace = [i + 1 for i, char in enumerate(text) if char.isspace()]
+    for candidates in (after_whitespace, range(1, len(text) + 1)):
+        best, lo, hi = 0, 0, len(candidates) - 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if count(text[: candidates[mid]]) <= limit:
+                best, lo = candidates[mid], mid + 1
+            else:
+                hi = mid - 1
+        if best:
+            return best
+    raise ValidationError(f"{_LIMIT_VAR}: not even one character of an embedding input fits in {limit} tokens")
+
+
+def split_to_limit(text: str, limit: int, count: Callable[[str], int]) -> list[str]:
+    """*text* as consecutive slices that each count at most *limit*; joined, they are *text* again."""
+    pieces = []
+    while count(text) > limit:
+        cut = _cut(text, limit, count)
+        pieces.append(text[:cut])
+        text = text[cut:]
+    pieces.append(text)
+    return pieces
+
+
 class OpenAICompatProvider:
     """Embedding provider for ANY OpenAI-compatible ``/v1/embeddings`` endpoint.
 
@@ -196,7 +234,14 @@ class OpenAICompatProvider:
     the raw spec (inline or ``env:VARNAME``), resolved at call time, never logged.
     """
 
-    def __init__(self, base_url: str | None, api_key: str | None = None, *, allow_loopback: bool = False) -> None:
+    def __init__(
+        self,
+        base_url: str | None,
+        api_key: str | None = None,
+        *,
+        allow_loopback: bool = False,
+        max_input_tokens: int | None = None,
+    ) -> None:
         if not base_url:
             raise ValidationError(
                 "an openai_compat embedding provider needs a base URL (KNOWLEDGE_BASE_EMBED_URL); "
@@ -205,9 +250,54 @@ class OpenAICompatProvider:
         self._base_url = base_url.rstrip("/").removesuffix("/v1")
         self._api_key = api_key  # raw spec; never logged
         self._allow_loopback = allow_loopback
+        self._max_input_tokens = max_input_tokens
 
     def __repr__(self) -> str:
         return f"OpenAICompatProvider(base_url={_sanitize_url(self._base_url)!r})"
+
+    def _headers(self) -> dict[str, str]:
+        # The floor on every call; the declared endpoint alone is exempt (#569), so a
+        # tailnet embedder works while any other private host is still refused.
+        validate_base_url(self._base_url, allow_loopback=self._allow_loopback, exempt_host=declared_embed_host())
+        api_key = _resolve_api_key(self._api_key)
+        return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    def token_counter(self) -> Callable[[str], int]:
+        """Count a text's tokens as llama-server's embeddings call does: its ``/tokenize`` with ``add_special``.
+
+        Both tokenize a string input with the same call (special tokens added and parsed), so the count
+        includes the EOS the server appends (llama.cpp b12048, measured 2026-11-17, #604).
+        """
+        headers = self._headers()
+
+        def count(text: str) -> int:
+            resp = httpx.post(
+                f"{self._base_url}/tokenize",
+                headers=headers,
+                json={"content": text, "add_special": True},
+                timeout=120,
+                follow_redirects=False,
+            )
+            if resp.status_code == 404:
+                raise ValidationError(f"{_LIMIT_VAR} needs an embedder that counts tokens at /tokenize (llama-server)")
+            resp.raise_for_status()
+            return len(resp.json()["tokens"])
+
+        return count
+
+    def _bounded(self, texts: list[str]) -> list[str]:
+        limit = self._max_input_tokens
+        if limit is None:
+            return texts
+        count = self.token_counter()
+        bounded = []
+        for text in texts:
+            tokens = count(text)
+            if tokens > limit:
+                logger.info("an embedding input of %d tokens is truncated to fit %s=%d", tokens, _LIMIT_VAR, limit)
+                text = text[: _cut(text, limit, count)]
+            bounded.append(text)
+        return bounded
 
     def embed(
         self,
@@ -215,15 +305,13 @@ class OpenAICompatProvider:
         model: str = "text-embedding-3-large",
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
-        # The floor on the embed path; the declared endpoint alone is exempt (#569), so a
-        # tailnet embedder works while any other private host is still refused.
-        validate_base_url(self._base_url, allow_loopback=self._allow_loopback, exempt_host=declared_embed_host())
-        api_key = _resolve_api_key(self._api_key)
+        texts = self._bounded(texts)
+        headers = self._headers()
         results = []
         batch_size = 512  # OpenAI supports up to 2048, 512 balances throughput/memory
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
-            raw_embeddings = self._call_api(api_key, batch, model, expected_dim)
+            raw_embeddings = self._call_api(headers, batch, model, expected_dim)
             for emb in raw_embeddings:
                 if expected_dim is not None and len(emb) != expected_dim:
                     raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
@@ -232,7 +320,7 @@ class OpenAICompatProvider:
 
     def _call_api(
         self,
-        api_key: str | None,
+        headers: dict[str, str],
         texts: list[str],
         model: str,
         dimensions: int | None,
@@ -240,7 +328,6 @@ class OpenAICompatProvider:
         body: dict = {"model": model, "input": texts}
         if dimensions is not None:
             body["dimensions"] = dimensions
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         resp = httpx.post(
             f"{self._base_url}/v1/embeddings",
             headers=headers,
@@ -358,7 +445,9 @@ def _build_provider(cfg: ProviderConfig) -> EmbeddingProvider:
     if family == "ollama":
         return OllamaProvider(cfg.base_url)
     if family in ("openai_compat", "openai", "llama.cpp"):
-        return OpenAICompatProvider(cfg.base_url, cfg.api_key, allow_loopback=cfg.allow_loopback)
+        return OpenAICompatProvider(
+            cfg.base_url, cfg.api_key, allow_loopback=cfg.allow_loopback, max_input_tokens=cfg.max_input_tokens
+        )
     if family == "onnx":
         return ONNXProvider()
     raise ValueError(
@@ -421,6 +510,16 @@ def embed(
     """
     provider = get_provider(cfg=_provider_cfg) if _provider_cfg is not None else get_provider(_provider_name)
     return provider.embed(texts, model=model, expected_dim=expected_dim)
+
+
+def split_inputs(texts: list[str], cfg: ProviderConfig) -> list[list[str]]:
+    """Each text as the pieces that fit *cfg*'s ``max_input_tokens``; one piece per text when it has none (#604)."""
+    limit = cfg.max_input_tokens
+    if limit is None:
+        return [[text] for text in texts]
+    # Settings declare a limit only for an endpoint that counts, which _build_provider makes an OpenAICompatProvider.
+    count = cast("OpenAICompatProvider", get_provider(cfg=cfg)).token_counter()
+    return [split_to_limit(text, limit, count) for text in texts]
 
 
 def embed_query(

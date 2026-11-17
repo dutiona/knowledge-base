@@ -727,3 +727,111 @@ class TestLlamaCppProvider:
         assert request.headers["Authorization"] == "Bearer sk-test-only"
         body = {"model": "Qwen/Qwen3-Embedding-0.6B", "input": ["hello"], "dimensions": 8}
         assert json.loads(request.content) == body
+
+
+# --- #604: every input bounded by max_input_tokens, counted as the server counts ---
+
+
+def _words(text: str) -> int:
+    """The acceptance stub's tokenizer: one token per whitespace-separated word, plus the EOS the server appends."""
+    return len(text.split()) + 1
+
+
+class TestSplitToLimit:
+    def _check(self, text: str, limit: int, count) -> list[str]:
+        from knowledge_base.embeddings import split_to_limit
+
+        pieces = split_to_limit(text, limit, count)
+        assert "".join(pieces) == text
+        assert all(piece and count(piece) <= limit for piece in pieces)
+        return pieces
+
+    def test_a_text_that_fits_comes_back_whole(self):
+        assert self._check("a b c", 4, _words) == ["a b c"]
+
+    def test_pieces_keep_newlines_indentation_and_trailing_whitespace(self):
+        text = "def f():\n    a = 1\n\n    return a  \n\t\n" * 5
+        assert len(self._check(text, 6, _words)) > 1
+
+    def test_a_non_monotone_count_still_yields_verified_pieces(self):
+        def count(text: str) -> int:  # every seventh length counts four less than its neighbours
+            return len(text) - (4 if len(text) % 7 == 0 else 0)
+
+        self._check("abcdefghij " * 10, 20, count)
+
+    def test_a_long_word_after_a_fitting_boundary_is_cut_inside_the_word(self):
+        pieces = self._check("aa bb " + "x" * 50 + " cc", 10, len)
+        assert pieces[0] == "aa bb "
+        assert pieces[1] == "x" * 10
+
+    def test_nothing_fits_names_the_variable(self):
+        from knowledge_base.embeddings import split_to_limit
+        from knowledge_base.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS"):
+            split_to_limit("abc", 0, len)
+
+
+class TestBoundedProvider:
+    """The provider counts at llama-server's ``/tokenize`` and never sends an input over the limit."""
+
+    @pytest.fixture
+    def server(self, monkeypatch, fake_dns, http_requests):
+        import json
+
+        import httpx
+
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "https://embedder.example.test")
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_API_KEY", "sk-test-only")
+        fake_dns["embedder.example.test"] = ["100.64.0.10"]
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            if request.url.path == "/tokenize":
+                return httpx.Response(200, json={"tokens": [0] * _words(body["content"])})
+            vectors = [[1.0] + [0.0] * 7 for _ in body["input"]]
+            return httpx.Response(200, json={"data": [{"index": i, "embedding": v} for i, v in enumerate(vectors)]})
+
+        http_requests.handlers["embedder.example.test"] = handle
+        return http_requests
+
+    def _provider(self, limit: int | None):
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        return OpenAICompatProvider(
+            "https://embedder.example.test", "env:KNOWLEDGE_BASE_EMBED_API_KEY", max_input_tokens=limit
+        )
+
+    def test_the_counter_posts_the_server_s_own_count_request(self, server):
+        import json
+
+        assert self._provider(8).token_counter()("one two three") == 4
+        (request,) = server
+        assert str(request.url) == "https://embedder.example.test/tokenize"
+        assert request.headers["Authorization"] == "Bearer sk-test-only"
+        assert json.loads(request.content) == {"content": "one two three", "add_special": True}
+
+    def test_a_server_without_tokenize_is_refused(self, server):
+        import httpx
+
+        from knowledge_base.exceptions import ValidationError
+
+        server.handlers["embedder.example.test"] = lambda request: httpx.Response(404, json={"error": "not found"})
+        with pytest.raises(ValidationError, match=r"KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS.*/tokenize"):
+            self._provider(8).token_counter()("one")
+
+    def test_embed_sends_an_input_that_fits_unchanged_and_truncates_one_that_does_not(self, server, caplog):
+        import json
+
+        long = "w " * 20
+        with caplog.at_level(logging.INFO, logger="knowledge_base.embeddings"):
+            self._provider(8).embed(["fits here", long], model="m", expected_dim=8)
+        (sent,) = [json.loads(r.content)["input"] for r in server if r.url.path == "/v1/embeddings"]
+        assert sent[0] == "fits here"
+        assert long.startswith(sent[1])
+        assert _words(sent[1]) <= 8
+        assert "21 tokens" in caplog.text
+
+    def test_without_a_limit_nothing_is_counted(self, server):
+        self._provider(None).embed(["w " * 20], model="m", expected_dim=8)
+        assert [r.url.path for r in server] == ["/v1/embeddings"]
