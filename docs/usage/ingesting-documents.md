@@ -84,7 +84,7 @@ A fetch past a limit fails with an error naming it, and nothing is stored. The d
 operation (connect, TLS handshake, every read and write of the headers and the body), so a server that sends one byte
 at a time cannot outlast it; each request also keeps its own timeout (30 s for a page, 15 s for an image). The body is
 asked for uncompressed; a server that compresses it anyway is decoded if it used one layer of gzip or deflate, and its
-decoded size counts. Any other encoding is refused. Three limits of the bound:
+decoded size counts. Any other encoding is refused. Where the bound stops:
 
 - Name lookups are outside the deadline: a lookup that starts before it can overrun it by the system resolver's own
   timeout (5 s per try, 2 tries, by default on glibc).
@@ -92,6 +92,8 @@ decoded size counts. Any other encoding is refused. Three limits of the bound:
   before the fetch is refused.
 - The browser fallback fetches with its own network and timeouts, and with vision on, each of a page's images has
   its own deadline after the page's.
+- A request that the kernel cannot take in one send (only a URL of megabytes does that) is written in several sends,
+  each with the time left when the write began, so a server reading it slowly can stretch the write past the deadline.
 
 ```json
 {
