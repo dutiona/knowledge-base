@@ -938,6 +938,7 @@ dependencies = [
     { name = "pymupdf4llm" },
     { name = "sqlite-vec" },
     { name = "trafilatura" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -978,6 +979,7 @@ requires-dist = [
     { name = "pymupdf4llm", specifier = ">=1.27.2,<1.27.2.2" },
     { name = "sqlite-vec", specifier = ">=0.1.6" },
     { name = "trafilatura", specifier = ">=2.0.0" },
+    { name = "uvicorn", specifier = ">=0.41.0" },
 ]
 
 [package.metadata.requires-dev]

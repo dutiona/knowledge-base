@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import sys
 
+import uvicorn
 from fastmcp import FastMCP
 
+from .auth import RequireMachine, TokenTable
 from .db import open_declared_db
 from .exceptions import KnowledgeBaseError
 
@@ -36,6 +38,35 @@ mcp.mount(_embeddings)
 mcp.mount(_papers)
 mcp.mount(_extraction)
 mcp.mount(_operations)
+
+
+def build_http_app(tokens: TokenTable) -> RequireMachine:
+    """What ``--http`` serves: the hub's stateless JSON streamable-HTTP app behind the machine-token gate.
+
+    Every option is explicit, so no ``FASTMCP_*`` variable changes the routes or the session mode.
+    """
+    return RequireMachine(mcp.http_app(path="/mcp", stateless_http=True, json_response=True), tokens)
+
+
+def uvicorn_config(app: RequireMachine, host: str, port: int) -> uvicorn.Config:
+    """The uvicorn configuration ``--http`` and the test harness share."""
+    return uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        lifespan="on",
+        # Under "auto", an upgrade request becomes a websocket scope that ends in uvicorn's own 403;
+        # with "none" it is a plain request that meets the gate's 401.
+        ws="none",
+        # uvicorn's dictConfig would replace the process's handlers, and its per-request warnings
+        # (upgrade attempts, malformed requests) let any client write to the journal; errors still show.
+        access_log=False,
+        log_config=None,
+        log_level="error",
+        server_header=False,
+        # timeout_graceful_shutdown stays unset (wait): a cut call's tool thread runs to its end anyway,
+        # so a deadline would only drop its answer and invite a retried write.
+    )
 
 
 def main():

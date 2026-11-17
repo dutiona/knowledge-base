@@ -20,6 +20,7 @@ dependencies = [
     "pymupdf4llm>=1.27.2,<1.27.2.2",
     "sqlite-vec>=0.1.6",
     "trafilatura>=2.0.0",
+    "uvicorn>=0.41.0",
 ]
 
 [project.scripts]
