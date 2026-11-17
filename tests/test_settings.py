@@ -256,6 +256,8 @@ def test_check_environment_validates_fetch_limits(monkeypatch):
     monkeypatch.setenv(FETCH_DEADLINE_VAR, "soon")
     with pytest.raises(ValidationError, match=rf"^{FETCH_DEADLINE_VAR}"):
         check_environment()
+
+
 # --- the whole ADR-0015 tuple (#573) ----------------------------------------------
 
 _ARTIFACT = {"artifact_sha256": "a" * 64, "pooling": "last", "normalization": "l2", "max_input_tokens": "2048"}
