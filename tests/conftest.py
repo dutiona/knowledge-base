@@ -280,13 +280,13 @@ def stub_embedder(monkeypatch) -> StubEmbedder:
 
     texts = StubEmbedder()
 
-    def _embed_single(text, *_args, **_kwargs):
+    def _embed_query(text, *_args, **_kwargs):  # records the query as search passes it, without its instruction
         if texts.down is not None:
             raise embedder_error(texts.down)
         texts.append(text)
         return [0.1] * TEST_EMBED_DIM
 
-    monkeypatch.setattr("knowledge_base.search.embed_single", _embed_single)
+    monkeypatch.setattr("knowledge_base.search.embed_query", _embed_query)
     return texts
 
 

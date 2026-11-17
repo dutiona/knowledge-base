@@ -89,7 +89,7 @@ def _create_and_backfill(conn, name, model="test-model", dim=DIM, strategy="mech
         backfill_space(conn, name)
 
 
-@patch("knowledge_base.search.embed_single", side_effect=_fake_embed_single)
+@patch("knowledge_base.search.embed_query", side_effect=_fake_embed_single)
 def test_compare_spaces_identical(mock_es, tmp_path):
     conn = _setup(tmp_path)
     # Add chunks
@@ -106,7 +106,7 @@ def test_compare_spaces_identical(mock_es, tmp_path):
     assert result["warnings"] == []
 
 
-@patch("knowledge_base.search.embed_single", side_effect=_fake_embed_single)
+@patch("knowledge_base.search.embed_query", side_effect=_fake_embed_single)
 def test_compare_spaces_empty_results(mock_es, tmp_path):
     conn = _setup(tmp_path)
     # Create spaces with no chunks to embed
@@ -120,7 +120,7 @@ def test_compare_spaces_empty_results(mock_es, tmp_path):
     assert result["metrics"]["jaccard"] == 0.0
 
 
-@patch("knowledge_base.search.embed_single", side_effect=_fake_embed_single)
+@patch("knowledge_base.search.embed_query", side_effect=_fake_embed_single)
 def test_compare_spaces_one_empty(mock_es, tmp_path):
     conn = _setup(tmp_path)
     for i in range(3):
@@ -134,7 +134,7 @@ def test_compare_spaces_one_empty(mock_es, tmp_path):
     assert result["metrics"]["overlap_at_k"] == 0.0
 
 
-@patch("knowledge_base.search.embed_single", side_effect=_fake_embed_single)
+@patch("knowledge_base.search.embed_query", side_effect=_fake_embed_single)
 def test_compare_spaces_cross_strategy_warning(mock_es, tmp_path):
     conn = _setup(tmp_path)
     for i in range(3):
@@ -156,7 +156,7 @@ def test_compare_spaces_invalid_name(tmp_path):
         compare_spaces(conn, "test query", "nonexistent_a", "nonexistent_b")
 
 
-@patch("knowledge_base.search.embed_single", side_effect=_fake_embed_single)
+@patch("knowledge_base.search.embed_query", side_effect=_fake_embed_single)
 def test_batch_compare_spaces(mock_es, tmp_path):
     conn = _setup(tmp_path)
     for i in range(5):

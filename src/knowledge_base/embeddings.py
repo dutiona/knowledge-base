@@ -27,6 +27,14 @@ from .utils import _resolve_api_key, _sanitize_url, validate_base_url
 
 logger = logging.getLogger(__name__)
 
+#: KB's query instruction, verbatim from ADR-0015 §6; ``default_query_instruction`` gives it to Qwen3-Embedding spaces.
+QUERY_INSTRUCTION = "Instruct: Given a search query, retrieve relevant document passages.\nQuery: "
+
+
+def default_query_instruction(model: str) -> str:
+    """A space's instruction when it records none (Michaël, #573): KB's pinned one for Qwen3-Embedding, else none."""
+    return QUERY_INSTRUCTION if "qwen3-embedding" in model.lower() else ""
+
 
 class ZeroNormError(ValueError):
     """Raised when a vector has zero norm and cannot be L2-normalized."""
@@ -415,19 +423,16 @@ def embed(
     return provider.embed(texts, model=model, expected_dim=expected_dim)
 
 
-def embed_single(
+def embed_query(
     text: str,
-    model: str = "bge-m3",
+    instruction: str,
+    model: str,
     expected_dim: int | None = None,
     *,
-    _provider_name: str = "ollama",
-    _provider_cfg: ProviderConfig | None = None,
+    _provider_cfg: ProviderConfig,
 ) -> list[float] | None:
-    """Embed a single text using the configured provider. Returns None for zero-norm."""
-    return embed(
-        [text],
-        model=model,
-        expected_dim=expected_dim,
-        _provider_name=_provider_name,
-        _provider_cfg=_provider_cfg,
-    )[0]
+    """Embed a search query as its space's *instruction* followed by *text*; None for zero-norm.
+
+    The only place a query input is built (ADR-0015 §6): document paths call ``embed``, which never adds one.
+    """
+    return embed([instruction + text], model=model, expected_dim=expected_dim, _provider_cfg=_provider_cfg)[0]

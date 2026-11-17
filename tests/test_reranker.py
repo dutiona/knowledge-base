@@ -103,7 +103,7 @@ def test_sigmoid():
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_disabled_by_default(tmp_path):
     """Search without rerank=True uses RRF ordering, no reranker called."""
     conn = _setup_db(tmp_path)
@@ -121,7 +121,7 @@ def test_rerank_disabled_by_default(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_reorders_results(tmp_path):
     """With rerank=True, mock reranker reorders results differently from RRF."""
     conn = _setup_db(tmp_path)
@@ -151,7 +151,7 @@ def test_rerank_reorders_results(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_top_n_limits_candidates(tmp_path):
     """Mock reranker receives at most rerank_top_n candidates."""
     conn = _setup_db(tmp_path)
@@ -178,7 +178,7 @@ def test_rerank_top_n_limits_candidates(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_with_empty_results(tmp_path):
     """Empty search returns [] even with rerank=True."""
     conn = _setup_db(tmp_path)
@@ -191,7 +191,7 @@ def test_rerank_with_empty_results(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_score_monotonic(tmp_path):
     """Within the reranked tier, scores are monotonically descending.
 
@@ -219,7 +219,7 @@ def test_rerank_score_monotonic(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_match_type(tmp_path):
     """Reranked results have match_type='reranked'."""
     conn = _setup_db(tmp_path)
@@ -238,7 +238,7 @@ def test_rerank_match_type(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_with_source_type_filter(tmp_path):
     """source_type filtering applies before reranking."""
     conn = _setup_db(tmp_path)
@@ -269,7 +269,7 @@ def test_rerank_with_source_type_filter(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_search_index_rerank_passthrough(tmp_path):
     """server.py passes rerank parameter through to search()."""
     conn = _setup_db(tmp_path)
@@ -310,7 +310,7 @@ def _insert_graded_chunks(conn, n):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_poor_scores_stay_above_unreranked_tail(tmp_path):
     """Reranked items rank above the un-reranked tail even with poor scores (#387).
 
@@ -337,7 +337,7 @@ def test_rerank_poor_scores_stay_above_unreranked_tail(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_orders_within_tiers(tmp_path):
     """Cross-encoder order wins inside the reranked tier; the tail keeps RRF order."""
     conn = _setup_db(tmp_path)
@@ -361,7 +361,7 @@ def test_rerank_orders_within_tiers(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_preserves_result_count(tmp_path):
     """Fixing #387 must not drop the un-reranked tail from the result set."""
     conn = _setup_db(tmp_path)
@@ -378,7 +378,7 @@ def test_rerank_preserves_result_count(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_tiering_with_source_type_filter(tmp_path):
     """Filtered pool: reranked hits stay above the filter-passing tail (#387).
 
@@ -423,7 +423,7 @@ def test_rerank_tiering_with_source_type_filter(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_error_falls_back_to_rrf(tmp_path):
     """Reranker raising RuntimeError degrades to pure RRF ordering."""
     conn = _setup_db(tmp_path)
@@ -441,7 +441,7 @@ def test_rerank_error_falls_back_to_rrf(tmp_path):
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_wrong_length_scores_clean_fallback(tmp_path):
     """A misbehaving provider returning too few scores must not leak state.
 
@@ -467,7 +467,7 @@ def test_rerank_wrong_length_scores_clean_fallback(tmp_path):
 @pytest.mark.parametrize("exc_type", [ImportError, RuntimeError, ValueError, OSError])
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.search.embed_single", _fake_embed_single)
+@patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_error_catch_set_locks_fallback(tmp_path, caplog, exc_type):
     """Every exception in the rerank catch set degrades to clean RRF + a logged warning.
 

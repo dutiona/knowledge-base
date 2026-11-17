@@ -172,7 +172,7 @@ def test_ingest_file_triggers_folder_summary(tmp_path):
 @patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)
 @patch(
-    "knowledge_base.search.embed_single",
+    "knowledge_base.search.embed_query",
     lambda text, model="bge-m3", **_kw: [0.1] * TEST_EMBED_DIM,
 )
 def test_search_folder_summaries_populated(tmp_path):

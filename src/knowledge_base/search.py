@@ -13,9 +13,10 @@ from .db import (
     get_active_space,
     get_space_element_type,
     get_vec_table_name,
+    space_query_instruction,
 )
 from .embed_swap import declared_provider_config, get_embed_config, get_space
-from .embeddings import embed_single, truncate_embedding
+from .embeddings import default_query_instruction, embed_query, truncate_embedding
 from .exceptions import ValidationError
 from .keywords import build_fts_query, extract_keywords
 from .utils import ELEMENT_QUERY_EXPR, serialize_f32 as _serialize_f32
@@ -266,6 +267,7 @@ def search(
             "provider": space["provider"],
         }
         space_base_dim = space.get("matryoshka_base_dim")
+        instruction = space_query_instruction(space)
         vec_table: str | None = space["table_name"]
         # Only skip folder boost if the space differs from the active one
         # (folder_summaries_vec is always at the active space's dim)
@@ -278,8 +280,10 @@ def search(
             # space's model, whatever the config rows say. Connection details come from this
             # process's declaration (declared_provider_config).
             space_cfg = {"model": active["model"], "dim": active["dim"], "provider": active["provider"]}
+            instruction = space_query_instruction(active)
         else:
             space_cfg = get_embed_config(conn)  # fresh DB / no active space
+            instruction = default_query_instruction(space_cfg["model"])
         space_base_dim = active.get("matryoshka_base_dim") if active else None
         vec_table = None  # use active space default
         skip_folder_boost = False
@@ -308,8 +312,9 @@ def search(
         query_provider_cfg = declared_provider_config(conn, space_cfg["provider"])
         # Use space-specific config for query embedding
         if space_base_dim:
-            query_embedding = embed_single(
+            query_embedding = embed_query(
                 query,
+                instruction=instruction,
                 model=space_cfg["model"],
                 expected_dim=space_base_dim,
                 _provider_cfg=query_provider_cfg,
@@ -317,8 +322,9 @@ def search(
             if query_embedding is not None:
                 query_embedding = truncate_embedding(query_embedding, space_cfg["dim"])
         else:
-            query_embedding = embed_single(
+            query_embedding = embed_query(
                 query,
+                instruction=instruction,
                 model=space_cfg["model"],
                 expected_dim=space_cfg["dim"],
                 _provider_cfg=query_provider_cfg,

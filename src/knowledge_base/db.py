@@ -12,6 +12,7 @@ from typing import Literal, TypedDict, cast
 import sqlite_vec
 
 from . import migrate as _migrate  # schema-version framework (#450); read attrs live
+from .embeddings import default_query_instruction
 from .exceptions import KnowledgeBaseError
 from .settings import VARIABLES, EmbedSettings, check_environment, load_embed_settings, normalize_embed_url
 from .utils import (
@@ -46,6 +47,7 @@ __all__ = [
     "insert_chunk_vec",
     "open_declared_db",
     "resolve_db_path",
+    "space_query_instruction",
     "space_table_name",
 ]
 
@@ -625,6 +627,12 @@ def get_active_space(conn: sqlite3.Connection) -> EmbedSpace | None:
     # Runtime value is a plain dict (identical to the previous ``dict(row)``); the
     # cast asserts it conforms to the EmbedSpace schema (SELECT * over the table).
     return cast("EmbedSpace", dict(row))
+
+
+def space_query_instruction(space: EmbedSpace | dict) -> str:
+    """The instruction a query into *space* carries: its recorded one, or its model's default when it records NULL."""
+    recorded = space.get("query_instruction")
+    return default_query_instruction(space["model"]) if recorded is None else recorded
 
 
 def get_vec_table_name(conn: sqlite3.Connection) -> str:
