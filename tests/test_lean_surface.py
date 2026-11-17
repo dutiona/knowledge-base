@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from knowledge_base import server
-from tests.conftest import machine_token
+from tests.conftest import machine_token, names_the_embedder
 
 _ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,16 +36,12 @@ def _text(result) -> str:
 
 
 def test_search_fails_loudly_while_the_embedder_is_down(kb_http, stub_embedder):
-    from urllib.parse import urlparse
-
-    from tests.declared_env import TEST_EMBED_URL
 
     stub_embedder.down = 503
     result = _call(kb_http, "search_index", {"query": "attention"})
-    endpoint = urlparse(TEST_EMBED_URL)
     assert result["isError"] is True
     assert "HTTP 503" in _text(result)
-    assert endpoint.hostname not in _text(result) and str(endpoint.port) not in _text(result)
+    assert not names_the_embedder(_text(result))
 
     assert _call(kb_http, "search_index", {"query": "attention", "mode": "fts"})["isError"] is False
 
@@ -85,17 +81,12 @@ def test_identical_text_is_stored_once(kb_http):
 
 
 def test_ingest_fails_loudly_while_the_embedder_is_down(kb_http, stub_document_embedder):
-    from urllib.parse import urlparse
-
-    from tests.declared_env import TEST_EMBED_URL
-
-    endpoint = urlparse(TEST_EMBED_URL)
     for status in (503, 401):
         stub_document_embedder.down = status
         failed = _call(kb_http, "ingest_text", {"name": "down.md", "content": _DOCUMENT})
         assert failed["isError"] is True
         assert f"HTTP {status}" in _text(failed) and "nothing was stored" in _text(failed)
-        assert endpoint.hostname not in _text(failed) and str(endpoint.port) not in _text(failed)
+        assert not names_the_embedder(_text(failed))
         assert (_count("chunks"), _count("chunk_sessions")) == (0, 0)
 
     stub_document_embedder.down = None

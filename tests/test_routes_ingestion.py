@@ -272,10 +272,8 @@ def test_ingest_url_maps_knowledgebase_error_to_a_tool_error(kb_conn):
 
 @pytest.mark.parametrize(("status", "retry"), [(503, True), (401, False)])
 def test_ingest_url_embedder_failure_never_names_the_embedder(kb_conn, status, retry):
-    from urllib.parse import urlparse
 
-    from tests.conftest import embedder_error
-    from tests.declared_env import TEST_EMBED_URL
+    from tests.conftest import embedder_error, names_the_embedder
 
     with (
         patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
@@ -285,9 +283,8 @@ def test_ingest_url_embedder_failure_never_names_the_embedder(kb_conn, status, r
         ingest_url("https://example.com")
 
     text = str(raised.value)
-    endpoint = urlparse(TEST_EMBED_URL)
     assert f"HTTP {status}" in text and "the page's text was not stored" in text
-    assert endpoint.hostname not in text and str(endpoint.port) not in text
+    assert not names_the_embedder(text)
     assert ("retry later" in text) is retry
 
 

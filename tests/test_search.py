@@ -280,12 +280,10 @@ def test_search_index_tool_raises_a_tool_error(tmp_path):
 
 @pytest.mark.parametrize(("status", "retry"), [(503, True), (429, True), (401, False)])
 def test_an_embedder_failure_never_names_the_embedder(tmp_path, status, retry):
-    from urllib.parse import urlparse
 
     from fastmcp.exceptions import ToolError
 
-    from tests.conftest import embedder_error
-    from tests.declared_env import TEST_EMBED_URL
+    from tests.conftest import embedder_error, names_the_embedder
 
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
@@ -297,7 +295,6 @@ def test_an_embedder_failure_never_names_the_embedder(tmp_path, status, retry):
         search_index("q")
 
     text = str(raised.value)
-    endpoint = urlparse(TEST_EMBED_URL)
     assert f"HTTP {status}" in text
-    assert endpoint.hostname not in text and str(endpoint.port) not in text
+    assert not names_the_embedder(text)
     assert ("retry later" in text) is retry

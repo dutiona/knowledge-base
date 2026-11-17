@@ -254,6 +254,16 @@ def embedder_error(status: int = 503) -> httpx.HTTPStatusError:
     return httpx.HTTPStatusError(f"Server error '{status}' for url '{request.url}'", request=request, response=response)
 
 
+def names_the_embedder(text: str) -> bool:
+    """Whether *text* carries the test embedder's host or port, as httpx's own error text does."""
+    from urllib.parse import urlparse
+
+    from tests.declared_env import TEST_EMBED_URL
+
+    endpoint = urlparse(TEST_EMBED_URL)
+    return str(endpoint.hostname) in text or str(endpoint.port) in text
+
+
 class StubEmbedder(list):
     """The texts an embedding stub received; while ``down`` it raises what a real endpoint raises."""
 
