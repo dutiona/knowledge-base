@@ -810,11 +810,13 @@ def _migrate_extraction_source(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
+def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int, declared: EmbedSettings | None) -> None:
     """Register the default embedding space if embed_spaces is empty.
 
     Works for both fresh DBs (chunks_vec just created, 0 rows) and legacy
     DBs (chunks_vec has data). Idempotent — skips if any space already exists.
+    A blank database records the whole *declared* identity; a legacy one records
+    its config rows, with no served artifact (ADR-0015: recorded before it existed).
     """
     existing = conn.execute("SELECT 1 FROM embed_spaces LIMIT 1").fetchone()
     if existing:
@@ -843,6 +845,19 @@ def _bootstrap_embed_spaces(conn: sqlite3.Connection, embed_dim: int) -> None:
         " VALUES (?, ?, ?, ?, ?, 'active', 'chunks_vec', ?)",
         ("default", model, provider, embed_dim, strategy, count),
     )
+    if declared is not None:
+        conn.execute(
+            "UPDATE embed_spaces SET matryoshka_base_dim = ?, element_type = ?, artifact_sha256 = ?, pooling = ?,"
+            " normalization = ?, max_input_tokens = ? WHERE name = 'default'",
+            (
+                declared.matryoshka_base_dim,
+                declared.element_type,
+                declared.artifact_sha256,
+                declared.pooling,
+                declared.normalization,
+                declared.max_input_tokens,
+            ),
+        )
     conn.commit()
 
 
@@ -860,7 +875,7 @@ def embed_config_rows(declared: EmbedSettings) -> list[tuple[str, str]]:
     return rows
 
 
-def _seed_default_config(conn: sqlite3.Connection) -> int:
+def _seed_default_config(conn: sqlite3.Connection) -> tuple[int, EmbedSettings | None]:
     """Create the config table and seed all default key/value rows.
 
     Consolidates the two historically-split config-seeding spots: the embed_* rows
@@ -871,7 +886,7 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
     tables (which embed it) are built.
 
     Returns the configured ``embed_dim`` for the caller to thread into the base
-    schema DDL.
+    schema DDL, and the declaration a blank database was seeded from (None otherwise).
     """
     conn.execute("""
         CREATE TABLE IF NOT EXISTS config (
@@ -880,8 +895,10 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
         )
     """)
     existing = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
+    declared = None
     if not existing:
-        conn.executemany("INSERT INTO config (key, value) VALUES (?, ?)", embed_config_rows(load_embed_settings()))
+        declared = load_embed_settings()
+        conn.executemany("INSERT INTO config (key, value) VALUES (?, ?)", embed_config_rows(declared))
         conn.commit()
     else:
         # Upgraded pre-provider DB (embed_model present, embed_provider possibly absent): every
@@ -903,7 +920,7 @@ def _seed_default_config(conn: sqlite3.Connection) -> int:
     dim_row = conn.execute("SELECT value FROM config WHERE key = 'embed_dim'").fetchone()
     if dim_row is None:
         raise KnowledgeBaseError("config has embed_model but no embed_dim; KB cannot size its vector tables")
-    return int(dim_row["value"])
+    return int(dim_row["value"]), declared
 
 
 def _create_base_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
@@ -1146,7 +1163,7 @@ def _create_base_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
     )
 
 
-def _run_migrations(conn: sqlite3.Connection, embed_dim: int) -> None:
+def _run_migrations(conn: sqlite3.Connection, embed_dim: int, declared: EmbedSettings | None) -> None:
     """Drive the ordered legacy-migration chain over the just-built base schema.
 
     The order is **load-bearing** and must be preserved exactly: e.g.
@@ -1172,7 +1189,7 @@ def _run_migrations(conn: sqlite3.Connection, embed_dim: int) -> None:
         _migrate_embed_spaces_matryoshka,
         _migrate_embed_spaces_element_type,
         lambda c: _migrate.add_v2_space_columns(c),
-        lambda c: _bootstrap_embed_spaces(c, embed_dim),
+        lambda c: _bootstrap_embed_spaces(c, embed_dim, declared),
         _migrate_normalize_source_uri,
         _migrate_extraction_source,
     )
@@ -1205,10 +1222,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
             f"database schema v{version} is behind v{current}; run `knowledge-base-ingest migrate`"
         )
 
-    embed_dim = _seed_default_config(conn)
+    embed_dim, declared = _seed_default_config(conn)
     _create_base_schema(conn, embed_dim)
     conn.commit()
-    _run_migrations(conn, embed_dim)
+    _run_migrations(conn, embed_dim, declared)
 
     # Stamp the baseline version (#450). Reached only for a fresh/legacy-unversioned
     # DB (an already-current DB early-returns above); the idempotent builds have

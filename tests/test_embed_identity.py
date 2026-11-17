@@ -26,13 +26,14 @@ def _columns(conn: sqlite3.Connection) -> dict[str, tuple]:
     return {row[1]: (row[2], row[3], row[4]) for row in conn.execute("PRAGMA table_info(embed_spaces)")}
 
 
-def _v1_database(path, monkeypatch) -> sqlite3.Connection:
-    """A database built by the v1 code path: no v2 columns, stamped 1."""
-    with monkeypatch.context() as patched:
-        patched.setattr(migrate, "CURRENT_SCHEMA_VERSION", 1)
-        patched.setattr(migrate, "add_v2_space_columns", lambda _conn: None)
-        conn = get_connection(path)
-        init_schema(conn)
+def _v1_database(path) -> sqlite3.Connection:
+    """A v1 database: today's schema without the v2 columns, stamped 1 (the v1 code wrote none of them)."""
+    conn = get_connection(path)
+    init_schema(conn)
+    for column in V2_COLUMNS:
+        conn.execute(f"ALTER TABLE embed_spaces DROP COLUMN {column}")
+    migrate.set_schema_version(conn, 1)
+    conn.commit()
     assert not set(V2_COLUMNS) & set(_columns(conn))
     assert migrate.get_schema_version(conn) == 1
     return conn
@@ -41,14 +42,14 @@ def _v1_database(path, monkeypatch) -> sqlite3.Connection:
 # --- schema v2 ------------------------------------------------------------------
 
 
-def test_every_origin_converges_to_one_v2_shape(tmp_path, monkeypatch):
+def test_every_origin_converges_to_one_v2_shape(tmp_path):
     fresh = get_connection(tmp_path / "fresh.db")
     init_schema(fresh)
 
-    stamped_v1 = _v1_database(tmp_path / "v1.db", monkeypatch)
+    stamped_v1 = _v1_database(tmp_path / "v1.db")
     migrate.migrate(stamped_v1, backup_dir=tmp_path / "backups")
 
-    legacy = _v1_database(tmp_path / "legacy.db", monkeypatch)
+    legacy = _v1_database(tmp_path / "legacy.db")
     legacy.execute("DELETE FROM config WHERE key = 'schema_version'")
     legacy.commit()
     init_schema(legacy)
@@ -68,7 +69,7 @@ def test_a_v1_database_refuses_to_start_until_migrated(monkeypatch, capsys, stub
 
     db = resolve_db_path()
     db.parent.mkdir(parents=True, exist_ok=True)
-    conn = _v1_database(db, monkeypatch)
+    conn = _v1_database(db)
     ingest_text(conn, "A chunk stored before the upgrade.", source_uri="/docs/a.md", source_type="markdown")
     conn.close()
 
@@ -194,3 +195,49 @@ def test_the_instruction_is_the_adrs():
     row = re.search(r"^\| Knowledge layer \| `(.+)` \|$", adr.read_text(), re.MULTILINE)
     assert row is not None
     assert row.group(1).replace("\\n", "\n") == QUERY_INSTRUCTION == LITERAL
+
+
+# --- the bootstrap space records the declaration ----------------------------------
+
+FULL = {
+    "KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256": "a" * 64,
+    "KNOWLEDGE_BASE_EMBED_POOLING": "last",
+    "KNOWLEDGE_BASE_EMBED_NORMALIZATION": "l2",
+    "KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS": "2048",
+}
+
+
+def _declare_full(monkeypatch, **extra: str) -> None:
+    for name, value in {**FULL, **extra}.items():
+        monkeypatch.setenv(name, value)
+
+
+def _space_identity(conn: sqlite3.Connection, name: str = "default") -> dict[str, object]:
+    from knowledge_base.settings import IDENTITY_FIELDS
+
+    row = conn.execute("SELECT * FROM embed_spaces WHERE name = ?", (name,)).fetchone()
+    return {field: row[field] for field in IDENTITY_FIELDS}
+
+
+def test_a_blank_store_records_the_declaration(monkeypatch):
+    from knowledge_base.db import open_declared_db
+    from knowledge_base.settings import declared_identity, load_embed_settings
+
+    _declare_full(monkeypatch, KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM="2048")
+    conn = open_declared_db()
+    assert _space_identity(conn) == declared_identity(load_embed_settings())
+    assert conn.execute("SELECT query_instruction FROM embed_spaces").fetchone()[0] is None
+    conn.close()
+
+
+def test_a_store_recorded_before_the_served_artifact_keeps_it_absent(tmp_path, monkeypatch):
+    conn = _v1_database(tmp_path / "legacy.db")
+    conn.execute("DELETE FROM embed_spaces")
+    conn.execute("DELETE FROM config WHERE key = 'schema_version'")
+    conn.commit()
+    _declare_full(monkeypatch)
+    init_schema(conn)
+    recorded = _space_identity(conn)
+    assert [recorded[field] for field in ("artifact_sha256", "pooling", "normalization", "max_input_tokens")] == [
+        None
+    ] * 4

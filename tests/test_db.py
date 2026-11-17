@@ -1506,7 +1506,7 @@ def test_char_bootstrap_counts_existing_vecs_and_forces_mechanical(tmp_path):
         )
     conn.commit()
 
-    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM, None)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space is not None
@@ -1528,7 +1528,7 @@ def test_char_bootstrap_picks_up_custom_config_model_provider(tmp_path):
     conn.execute("UPDATE config SET value = 'openai' WHERE key = 'embed_provider'")
     conn.commit()
 
-    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM, None)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space["model"] == "custom-model"
@@ -1565,7 +1565,7 @@ def test_char_bootstrap_count_falls_back_to_zero_without_chunks_vec(tmp_path):
     conn.commit()
 
     # No raise despite chunks_vec being absent.
-    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM, None)
 
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone()
     assert space is not None
@@ -1582,7 +1582,7 @@ def test_char_bootstrap_idempotent_second_call_is_noop(tmp_path):
     assert before == 1
     orig = dict(conn.execute("SELECT * FROM embed_spaces WHERE name = 'default'").fetchone())
 
-    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM)
+    _bootstrap_embed_spaces(conn, TEST_EMBED_DIM, None)
 
     after = conn.execute("SELECT COUNT(*) FROM embed_spaces").fetchone()[0]
     assert after == 1
