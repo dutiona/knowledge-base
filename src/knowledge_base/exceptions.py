@@ -7,6 +7,7 @@ Caught by the MCP tool wrappers in ``routes/`` and serialized to JSON for the cl
 from __future__ import annotations
 
 __all__ = [
+    "EmbeddingModelMismatchError",
     "ExtractionError",
     "KnowledgeBaseError",
     "NotFoundError",
@@ -32,6 +33,10 @@ class NotFoundError(KnowledgeBaseError):
 
 class ValidationError(KnowledgeBaseError):
     """Input parameter fails validation."""
+
+
+class EmbeddingModelMismatchError(KnowledgeBaseError):
+    """ADR-0015 §3: an embedding identity differs from the recorded one (ME: ``EmbeddingModelMismatch``)."""
 
 
 class ExtractionError(KnowledgeBaseError):
