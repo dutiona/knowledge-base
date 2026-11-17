@@ -181,3 +181,56 @@ def test_a_concurrent_duplicate_rolls_back_and_a_retry_completes(kb_http, monkey
     retried = json.loads(_text(_call(kb_http, "ingest_text", {"name": "race.md", "content": _DOCUMENT})))
     assert retried["chunks_skipped"] == 1
     assert retried["chunks_added"] == len(set(chunk_text(_DOCUMENT))) - 1
+
+
+# --- the HTTP surface is exactly the approved map ---
+
+_APPROVED = {"search_index", "ingest_text", "ingest_url"}
+
+
+def test_http_serves_exactly_the_approved_tools(kb_http):
+    response = kb_http.rpc("tools/list")
+    assert response.status_code == 200
+    assert {tool["name"] for tool in response.json()["result"]["tools"]} == _APPROVED
+
+
+def test_every_http_tool_is_its_stdio_tool():
+    stdio = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+    for tool in asyncio.run(server.network.list_tools()):
+        assert tool.parameters == stdio[tool.name].parameters
+        assert tool.description == stdio[tool.name].description
+
+
+def test_no_stdio_only_tool_is_reachable_over_http(kb_http, tmp_path, stub_document_embedder):
+    canary = tmp_path / "canary.md"
+    canary.write_text("ultraviolet canary word")
+    for name in _names(server.mcp) - _APPROVED:
+        arguments = {"path": str(canary)} if name in ("ingest", "reingest") else {}
+        assert _call(kb_http, name, arguments)["isError"] is True, name
+    assert _call(kb_http, "ingest", {"path": "/proc/self/environ"})["isError"] is True
+    assert (_count("chunks"), list(stub_document_embedder)) == (0, [])
+
+
+def test_no_http_tool_takes_a_path():
+    for tool in asyncio.run(server.network.list_tools()):
+        for prop in tool.parameters.get("properties", {}):
+            assert prop != "path" and not prop.endswith(("_path", "_dir")), (tool.name, prop)
+
+
+def test_an_unexpected_failure_reveals_nothing_over_http(kb_http, monkeypatch):
+    def _broken(*_args, **_kwargs):
+        raise RuntimeError("marker-7f3a internal detail")
+
+    monkeypatch.setattr("knowledge_base.routes.search.search", _broken)
+    result = _call(kb_http, "search_index", {"query": "q"})
+    assert result["isError"] is True
+    assert "marker-7f3a" not in _text(result)
+
+
+@pytest.mark.parametrize("hub", ["mcp", "network"])
+def test_each_hubs_instructions_name_its_real_tools(hub):
+    instructions = getattr(server, hub).instructions
+    quoted = set(re.findall(r"'([a-z_]+)'", instructions))
+    assert quoted <= _names(getattr(server, hub))
+    if hub == "network":
+        assert quoted == _APPROVED

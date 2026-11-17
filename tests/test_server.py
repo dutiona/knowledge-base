@@ -96,14 +96,6 @@ def test_mcp_is_fastmcp_instance():
     assert isinstance(server.mcp, FastMCP)
 
 
-def test_instructions_present_and_mentions_core_tools():
-    """The hub advertises its core tools in the instructions string."""
-    instructions = server.mcp.instructions
-    assert instructions is not None and instructions.strip()
-    for phrase in ("search", "ingest", "status"):
-        assert phrase in instructions
-
-
 def test_all_routes_are_mounted():
     """Every tool from all six route modules is exposed by the hub."""
     assert _registered_tool_names() == _ALL_EXPECTED_TOOLS
@@ -421,14 +413,14 @@ def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_fil
                 assert time.monotonic() < deadline, err.read_text()
                 time.sleep(0.1)
 
-            assert call("status", {}).status_code == 200
+            assert call("search_index", {"query": "q", "mode": "fts"}).status_code == 200
             size = err.stat().st_size
             call(token, {})
             assert "me_[redacted]" in added_after(size, "me_[redacted]")
             # FastMCP logs the rejected argument's name and value in a traceback today; the whole-output
             # assertion below holds whether or not a later release keeps logging it.
-            assert call("status", {token: token}).json()["result"]["isError"] is True
-            forged = "INFO knowledge_base.auth: machine desktop called 'status'"
+            assert call("search_index", {"query": "q", "mode": "fts", token: token}).json()["result"]["isError"] is True
+            forged = "INFO knowledge_base.auth: machine desktop called 'search_index'"
             for name in (f"x\n{forged}", f"x\x00{forged}", "a" * 2000 + forged):
                 call(name, {})
         finally:
@@ -440,7 +432,7 @@ def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_fil
                 raise
 
     lines = err.read_text().split("\n")
-    assert sum(line.startswith("INFO knowledge_base.auth: machine laptop called 'status'") for line in lines) == 2
+    assert sum(line.startswith("INFO knowledge_base.auth: machine laptop called 'search_index'") for line in lines) == 2
     assert not any(line.startswith("INFO knowledge_base.auth: machine desktop") for line in lines)
     assert all(len(line) <= 2002 for line in lines)
     for path in (out, err):
