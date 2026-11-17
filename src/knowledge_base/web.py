@@ -423,7 +423,7 @@ def _extract_html_images(
     with egress_client(floor=True, timeout=15.0) as image_client:
         for image_url, alt_text in candidates:
             try:
-                image_bytes = _fetch(image_client, image_url).body
+                image_bytes = bytes(_fetch(image_client, image_url).body)  # BytesIO would copy a bytearray again
             except Exception:
                 logger.warning("Image download failed: %s", image_url, exc_info=True)
                 continue
