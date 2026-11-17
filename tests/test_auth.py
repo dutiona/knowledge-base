@@ -121,7 +121,7 @@ def test_a_pasted_token_is_refused_without_being_quoted():
         "bearer {t}",
         "Basic {t}",
         "Bearer  {t}",
-        "Bearer {t} ",
+        "Bearer {t} ",  # the value as the gate gets it: HTTP strips surrounding whitespace first (RFC 9110 OWS)
         "Bearer {short}",
         "Bearer {t}L",
         "Bearer ME_{tail}",
@@ -216,6 +216,12 @@ def test_the_gate_admits_a_valid_token_and_hands_on_the_machine_without_the_head
     assert scope["headers"] == headers
     assert scope["state"] == {"kept": 1}
     assert sent[0]["status"] == 204
+
+
+def test_the_gate_closes_a_websocket_without_a_valid_token():
+    inner, sent, _ = _call_gate([], scope_type="websocket")
+    assert inner.scopes == []
+    assert sent == [{"type": "websocket.close"}]
 
 
 def test_the_gate_forwards_a_lifespan_scope_untouched():
