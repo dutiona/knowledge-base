@@ -37,7 +37,7 @@ graph LR
 
 ## Module Responsibilities
 
-**`server.py`** -- FastMCP entry point. Registers all MCP tools, manages thread-local database connections via `threading.local()`, and protects schema initialization with a `threading.Lock` using double-checked locking. Handles argument validation and JSON serialization for tool responses.
+**`server.py`** -- FastMCP entry point. Builds the hub and mounts the six `routes/` modules, which register the MCP tools, validate their arguments and serialize their responses. `main()` runs the startup gate (the embedding declaration the database must agree with) and then serves stdio. Thread-local database connections and the double-checked schema initialization live in `_conn.py`.
 
 **`db.py`** -- Database schema creation, migrations, and shared SQL helpers. Defines the complete schema (chunks, papers, relationships, conclusions, methods, datasets, metrics, entities, jobs, config tables) along with FTS5 virtual tables and sqlite-vec vector tables. Provides `get_connection()` which loads the sqlite-vec extension and enables WAL mode. Includes `_batched_execute` and `_batched_select` helpers that batch IN-clause queries to stay under SQLite's 999 variable limit.
 
