@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from knowledge_base.db import get_connection, init_schema
+from knowledge_base.migrate import CURRENT_SCHEMA_VERSION
 from knowledge_base.indexer import (
     _drain_jobs,
     build_parser,
@@ -111,7 +112,7 @@ def test_cli_migrate_bootstraps_fresh_db(tmp_path, capsys):
     main(["--db", str(db), "migrate"])
     out = json.loads(capsys.readouterr().out)
     assert out["bootstrapped"] is True
-    assert out["schema_version"] == 1
+    assert out["schema_version"] == CURRENT_SCHEMA_VERSION
     assert db.is_file()
 
 
@@ -124,7 +125,7 @@ def test_cli_schema_reports_current(tmp_path, capsys):
     assert exc.value.code == 0
     out = json.loads(capsys.readouterr().out)
     assert out["matches"] is True
-    assert out["schema_version"] == 1
+    assert out["schema_version"] == CURRENT_SCHEMA_VERSION
 
 
 def test_cli_schema_mismatch_exits_nonzero(tmp_path):
@@ -153,7 +154,7 @@ def test_cli_migrate_check_up_to_date_exit_zero(tmp_path):
 def test_cli_migrate_check_pending_exit_nonzero(tmp_path, monkeypatch):
     db = tmp_path / "k.db"
     _bootstrap(db)
-    monkeypatch.setattr("knowledge_base.migrate.CURRENT_SCHEMA_VERSION", 2)
+    monkeypatch.setattr("knowledge_base.migrate.CURRENT_SCHEMA_VERSION", CURRENT_SCHEMA_VERSION + 1)
     with pytest.raises(SystemExit) as exc:
         main(["--db", str(db), "--quiet", "migrate", "--check"])
     assert exc.value.code == 1
@@ -175,7 +176,7 @@ def test_cli_migrate_backs_up_legacy_unversioned(tmp_path):
     c.close()
     main(["--db", str(db), "--quiet", "migrate"])  # legacy → backup + re-stamp
     assert (tmp_path / "backups").exists(), "legacy bootstrap must take a backup"
-    assert mm.peek_schema_version(db) == 1  # re-stamped
+    assert mm.peek_schema_version(db) == mm.CURRENT_SCHEMA_VERSION  # re-stamped
 
 
 def test_build_parser_re_embed_takes_its_identity_from_the_declaration():

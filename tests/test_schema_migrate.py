@@ -62,21 +62,21 @@ def test_init_schema_early_returns_when_current(tmp_path):
     conn = get_connection(tmp_path / "k.db")
     init_schema(conn)
     init_schema(conn)  # second call: version == CURRENT → no-op
-    assert m.get_schema_version(conn) == 1
+    assert m.get_schema_version(conn) == m.CURRENT_SCHEMA_VERSION
 
 
 def test_init_schema_raises_on_newer_db(tmp_path, monkeypatch):
     conn = get_connection(tmp_path / "k.db")
-    init_schema(conn)  # stamps 1
-    monkeypatch.setattr(m, "CURRENT_SCHEMA_VERSION", 0)  # pretend code is older
+    init_schema(conn)  # stamps the current version
+    monkeypatch.setattr(m, "CURRENT_SCHEMA_VERSION", m.CURRENT_SCHEMA_VERSION - 1)  # pretend code is older
     with pytest.raises(KnowledgeBaseError, match="newer"):
         init_schema(conn)
 
 
 def test_init_schema_raises_when_behind(tmp_path, monkeypatch):
     conn = get_connection(tmp_path / "k.db")
-    init_schema(conn)  # stamps 1
-    monkeypatch.setattr(m, "CURRENT_SCHEMA_VERSION", 2)  # pretend code is newer
+    init_schema(conn)  # stamps the current version
+    monkeypatch.setattr(m, "CURRENT_SCHEMA_VERSION", m.CURRENT_SCHEMA_VERSION + 1)  # pretend code is newer
     with pytest.raises(KnowledgeBaseError, match=r"behind|migrate"):
         init_schema(conn)
 
@@ -155,8 +155,9 @@ def test_migrate_aborts_when_db_busy(tmp_path, monkeypatch):  # E (offline guard
     db = tmp_path / "k.db"
     conn = get_connection(db)
     init_schema(conn)
-    monkeypatch.setattr(m, "CURRENT_SCHEMA_VERSION", 2)
-    monkeypatch.setattr(m, "_MIGRATIONS", {2: (lambda c: None, False)})
+    nxt = m.CURRENT_SCHEMA_VERSION + 1
+    monkeypatch.setattr(m, "CURRENT_SCHEMA_VERSION", nxt)
+    monkeypatch.setattr(m, "_MIGRATIONS", {nxt: (lambda c: None, False)})
     conn.execute("PRAGMA busy_timeout=0")  # don't wait on the lock
     holder = sqlite3.connect(db)  # a second "server" holds a write lock
     holder.execute("BEGIN IMMEDIATE")
@@ -180,8 +181,9 @@ def test_failed_migration_restores_backup(tmp_path, monkeypatch):  # AC-4 keysto
         c.execute("DELETE FROM chunks")  # destructive mutation
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(m, "CURRENT_SCHEMA_VERSION", 2)
-    monkeypatch.setattr(m, "_MIGRATIONS", {2: (boom, False)})
+    current = m.CURRENT_SCHEMA_VERSION
+    monkeypatch.setattr(m, "CURRENT_SCHEMA_VERSION", current + 1)
+    monkeypatch.setattr(m, "_MIGRATIONS", {current + 1: (boom, False)})
 
     with pytest.raises(RuntimeError, match="boom"):
         m.migrate(conn, backup_dir=tmp_path / "bk")
@@ -193,7 +195,7 @@ def test_failed_migration_restores_backup(tmp_path, monkeypatch):  # AC-4 keysto
 
     conn2 = get_connection(db)  # migrate closed the original conn on failure
     try:
-        assert m.get_schema_version(conn2) == 1, "version must NOT advance"
+        assert m.get_schema_version(conn2) == current, "version must NOT advance"
         assert conn2.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == before
         assert conn2.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
@@ -214,7 +216,7 @@ def test_peek_reads_stamped_version(tmp_path):
     conn = get_connection(db)
     init_schema(conn)
     conn.close()
-    assert m.peek_schema_version(db) == 1
+    assert m.peek_schema_version(db) == m.CURRENT_SCHEMA_VERSION
 
 
 def test_schema_report_matches(tmp_path):  # AC-3
@@ -224,7 +226,7 @@ def test_schema_report_matches(tmp_path):  # AC-3
     conn.close()
     r = m.schema_report(db)
     assert r["matches"] is True
-    assert r["schema_version"] == 1
+    assert r["schema_version"] == m.CURRENT_SCHEMA_VERSION
     assert r["newer"] is False
 
 
