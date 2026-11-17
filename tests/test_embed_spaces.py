@@ -276,6 +276,8 @@ def test_promote_updates_config(mock_prov, tmp_path, monkeypatch):
     assert config["model"] == "new_model"
     assert config["dim"] == 4
     assert config["provider"] == "ollama"
+    identity_keys = {key for (key,) in conn.execute("SELECT key FROM config WHERE key LIKE 'embed_%'")}
+    assert identity_keys - {"embed_base_url", "embed_api_key"} == {"embed_provider", "embed_model", "embed_dim"}
 
 
 def test_promote_empty_space_blocked(tmp_path, monkeypatch):

@@ -421,14 +421,6 @@ def _swap_active(conn: sqlite3.Connection, space: sqlite3.Row) -> str | None:
         "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', ?)",
         (space["chunk_strategy"],),
     )
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_matryoshka_base_dim', ?)",
-        (str(space["matryoshka_base_dim"] or ""),),
-    )
-    conn.execute(
-        "INSERT OR REPLACE INTO config (key, value) VALUES ('embed_element_type', ?)",
-        (space["element_type"] or "float32",),
-    )
     # Invalidate similarity relationships (embedding space changed)
     conn.execute("DELETE FROM relationships WHERE relation_type = 'similar'")
     return old_name
