@@ -12,6 +12,7 @@ import posixpath
 import sqlite3
 from collections import Counter
 from collections.abc import Iterator
+from itertools import chain
 from typing import Any
 
 from . import migrate as _migrate
@@ -24,8 +25,9 @@ from .db import (
     purge_deleted_content,
 )
 from .folder_summaries import update_folder_summary
+from .chunking import CHUNK_OVERLAP
 from .ingest import _WHOLE_URL, _embed_with_config, redact_metadata
-from .redact import findings, scrub
+from .redact import findings, redact_in_context, scrub
 from .utils import content_hash, without_userinfo
 
 #: Present while a ``--rewrite`` has committed its rows but not yet rebuilt the summaries and purged the file.
@@ -52,18 +54,57 @@ def _strings(value: Any) -> Iterator[str]:
             yield from _strings(v)
 
 
+#: How much of a neighbouring chunk is read as a chunk's context: past any secret a rule matches.
+_CONTEXT = 4096
+
+
+def _contents(conn: sqlite3.Connection) -> dict[int, tuple[str, list[str]]]:
+    """Each chunk whose content a rewrite changes: its new content, and the rules that change it.
+
+    Before #592 the fixed-window chunker cut a secret where a window ended, so one row can hold a fragment no rule
+    matches alone. A row is read between its neighbours when they overlap it as that chunker's windows do, which
+    gives the rules the whole secret.
+    """
+    changed: dict[int, tuple[str, list[str]]] = {}
+
+    def settle(row: sqlite3.Row, before: str, after: str) -> None:
+        edged, rules = redact_in_context(row["content"], before, after)
+        content = scrub(edged)
+        if content != row["content"]:
+            changed[row["id"]] = (content, rules + findings(edged))
+
+    def windowed(a: sqlite3.Row, b: sqlite3.Row) -> bool:
+        return (
+            a["source_uri"] == b["source_uri"]
+            and a["chunk_index"] + 1 == b["chunk_index"]
+            and len(a["content"]) > CHUNK_OVERLAP
+            and a["content"][-CHUNK_OVERLAP:] == b["content"][:CHUNK_OVERLAP]
+        )
+
+    rows = conn.execute("SELECT id, content, source_uri, chunk_index FROM chunks ORDER BY source_uri, chunk_index, id")
+    prev = cur = None
+    for nxt in chain(rows, [None]):
+        if cur is not None:
+            before = prev["content"][:-CHUNK_OVERLAP][-_CONTEXT:] if prev is not None and windowed(prev, cur) else ""
+            after = nxt["content"][CHUNK_OVERLAP:][:_CONTEXT] if nxt is not None and windowed(cur, nxt) else ""
+            settle(cur, before, after)
+        prev, cur = cur, nxt
+    return changed
+
+
 def report(conn: sqlite3.Connection) -> dict:
     """What a rewrite would change: counts and chunk ids only, never stored text."""
     to_rewrite = Counter[str]()
     spans = Counter[str]()
     ids: list[int] = []
     scanned = 0
-    for row in conn.execute("SELECT id, content, metadata, source_uri FROM chunks ORDER BY id"):
+    contents = _contents(conn)
+    for row in conn.execute("SELECT id, metadata, source_uri FROM chunks ORDER BY id"):
         scanned += 1
         dirty = False
-        if scrub(row["content"]) != row["content"]:
+        if row["id"] in contents:
             to_rewrite["content"] += 1
-            spans.update(findings(row["content"]))
+            spans.update(contents[row["id"]][1])
             dirty = True
         metadata = row["metadata"] or "{}"
         if redact_metadata(metadata) != metadata:
@@ -117,19 +158,20 @@ def _merge_into(conn: sqlite3.Connection, dup: int, keep: int) -> None:
 
 
 def _plan(conn: sqlite3.Connection) -> tuple[list[dict], list[tuple[int, int]]]:
-    """Each row's new values, in id order; a row whose new hash another row holds merges into that row."""
-    rows = conn.execute("SELECT id, content, content_hash, metadata, source_uri FROM chunks ORDER BY id").fetchall()
-    owner = {r["content_hash"]: r["id"] for r in rows}
+    """Each row's new values, in id order (``content`` None when it stays); a row whose new hash another row holds
+    merges into that row."""
+    contents = _contents(conn)
+    owner = dict(conn.execute("SELECT content_hash, id FROM chunks").fetchall())
     changes: list[dict] = []
     merges: list[tuple[int, int]] = []
-    for r in rows:
-        content = scrub(r["content"])
+    for r in conn.execute("SELECT id, content_hash, metadata, source_uri FROM chunks ORDER BY id"):
+        content = contents.get(r["id"], (None,))[0]
         metadata = redact_metadata(r["metadata"]) if r["metadata"] is not None else None
         uri = without_userinfo(r["source_uri"])
-        if (content, metadata, uri) == (r["content"], r["metadata"], r["source_uri"]):
+        if (content, metadata, uri) == (None, r["metadata"], r["source_uri"]):
             continue
         new_hash = r["content_hash"]
-        if content != r["content"]:
+        if content is not None:
             new_hash = content_hash(content)
             del owner[r["content_hash"]]
             if new_hash in owner:
@@ -143,7 +185,7 @@ def _plan(conn: sqlite3.Connection) -> tuple[list[dict], list[tuple[int, int]]]:
                 "hash": new_hash,
                 "metadata": metadata,
                 "uri": uri,
-                "reembed": content != r["content"],
+                "reembed": content is not None,
             }
         )
     return changes, merges
@@ -167,7 +209,8 @@ def _apply(conn: sqlite3.Connection, changes: list[dict], merges: list[tuple[int
             _merge_into(conn, dup, keep)
         for c in changes:
             conn.execute(
-                "UPDATE chunks SET content = ?, content_hash = ?, metadata = ?, source_uri = ? WHERE id = ?",
+                "UPDATE chunks SET content = coalesce(?, content), content_hash = ?, metadata = ?, source_uri = ?"
+                " WHERE id = ?",
                 (c["content"], c["hash"], c["metadata"], c["uri"], c["id"]),
             )
             if c["reembed"] and embedded.get(c["id"]) is not None:

@@ -491,3 +491,32 @@ def test_rewrite_rebuilds_a_summary_that_alone_holds_a_secret(kb_conn, tmp_path,
     kb_conn.close()
     assert _run(db, "redact", "--rewrite") == 0
     assert _run(db, "redact") == 0
+
+
+def _legacy_windows(text: str, size: int = 1000, overlap: int = 200) -> list[str]:
+    """The fixed windows KB's chunker stored before #592, cut wherever they ended."""
+    return [text[start : start + size] for start in range(0, len(text) - overlap, size - overlap)]
+
+
+@pytest.mark.parametrize(
+    "at", [988, 996, 1580], ids=["fragment-ends-a-window", "prefix-ends-a-window", "fragment-starts-one"]
+)
+def test_rewrite_redacts_a_secret_the_old_chunker_cut_between_windows(kb_conn, tmp_path, vectors, capsys, at):
+    """#592: a window can end, or start, inside a secret; that row's fragment matches no rule alone."""
+    db = tmp_path / "test.db"
+    text = ("lorem ipsum " * 200)[:at] + SECRET + " " + "dolor sit amet " * 80
+    windows = _legacy_windows(text)
+    holding = [i for i, w in enumerate(windows) if 800 * i < at + len(SECRET) and at < 800 * i + len(w)]
+    assert sum(SECRET in windows[i] for i in holding) < len(holding), "a window must cut the secret"
+    for i, window in enumerate(windows):
+        _with_vector(kb_conn, window, uri="/d/long.md", index=i)
+    kb_conn.commit()
+    kb_conn.close()
+
+    assert _run(db, "redact") == 1
+    assert len(json.loads(capsys.readouterr().out)["chunk_ids"]) == len(holding)
+    assert _run(db, "redact", "--rewrite") == 0
+    assert not _windows(SECRET.encode(), 8) & _windows(_file_bytes(db), 8)
+    capsys.readouterr()
+    assert _run(db, "redact") == 0
+

@@ -140,3 +140,17 @@ def test_redaction_is_linear_on_hostile_input(text):
     started = time.monotonic()
     scrub(text)
     assert time.monotonic() - started < 6
+
+
+def test_a_text_is_read_between_its_neighbours():
+    """#592: a fragment no rule matches alone, or a secret whose context word precedes it, is redacted in context."""
+    from knowledge_base.redact import redact_in_context
+
+    token = "ghp_" + "Zq7Xw3Rt9Lp2Vb6Nm4Kc8Hd1Fs5Gj0Ay"
+    assert redact_in_context("see " + token[:12], "", token[12:] + " end") == (
+        "see [REDACTED:github-pat]",
+        ["github-pat"],
+    )
+    hexed = "0123456789abcdef" * 2
+    assert redact_in_context(hexed + " ok", "the api_key=", "") == ("[REDACTED:hex-secret] ok", ["hex-secret"])
+    assert redact_in_context("plain words", "before ", " after") == ("plain words", [])
