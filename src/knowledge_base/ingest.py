@@ -524,20 +524,40 @@ def ingest_text(
 ) -> dict[str, int]:
     """Store *text* as chunks of one document: the single path for text stored by content or by URL.
 
-    Insert-only: a chunk whose hash is already stored, under any source, is skipped (and linked to
-    *session_id*); nothing stored is deleted or updated. Every new chunk is embedded before the
-    first write, so an embedder failure stores nothing. Commits once.
+    Insert-only: a chunk repeated within *text*, or whose hash is already stored under any source, is
+    skipped (a stored one is linked to *session_id*); nothing stored is deleted or updated. Every new
+    chunk is embedded before the first write, so an embedder failure stores nothing. Commits once; any
+    failure rolls back, so the thread's reused connection never carries half a document (#554).
     """
     chunks = _chunk_text(text)
     if not chunks:
         return {"chunks_added": 0, "chunks_skipped": 0}
+    try:
+        return _store_text_chunks(conn, chunks, source_uri, source_type, session_id, metadata)
+    except BaseException:
+        conn.rollback()
+        raise
 
+
+def _store_text_chunks(
+    conn: sqlite3.Connection,
+    chunks: list[str],
+    source_uri: str,
+    source_type: str,
+    session_id: str | None,
+    metadata: dict | None,
+) -> dict[str, int]:
     # Defer chunk_sessions writes until after embeddings succeed (#180).
     new_chunks: list[tuple[int, str, str]] = []
     skipped = 0
     deferred_session_links: list[int] = []
+    seen: set[str] = set()
     for i, chunk in enumerate(chunks):
         h = _content_hash(chunk)
+        if h in seen:  # chunks.content_hash is UNIQUE: a repeat within the text is stored once (#553)
+            skipped += 1
+            continue
+        seen.add(h)
         existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
         if existing:
             if session_id is not None:

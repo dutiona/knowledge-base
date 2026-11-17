@@ -3,6 +3,7 @@
 import contextlib
 import json
 import socket
+import sqlite3
 import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -4372,3 +4373,41 @@ def test_ingest_text_stores_nothing_when_the_embedder_fails(kb_conn):
     assert kb_conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
     assert kb_conn.execute("SELECT COUNT(*) FROM chunk_sessions").fetchone()[0] == 0
     assert not kb_conn.in_transaction
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_text_stores_repeated_chunks_once(kb_conn):
+    from knowledge_base.ingest import ingest_text
+
+    text = "word " * 1000  # period 5: the fixed windows at 0, 800, 1600, ... are identical
+    chunks = _chunk_text(text)
+    distinct = len(set(chunks))
+    assert distinct < len(chunks)
+
+    result = ingest_text(kb_conn, text, source_uri="content:///rep", source_type="markdown")
+
+    assert result == {"chunks_added": distinct, "chunks_skipped": len(chunks) - distinct}
+    assert len(_rows(kb_conn, "content:///rep")) == distinct
+    assert not kb_conn.in_transaction
+
+
+@patch("knowledge_base.ingest.embed", _fake_embed)
+def test_ingest_text_rolls_back_a_failed_write(kb_conn):
+    import knowledge_base.ingest as ingest_mod
+
+    real_insert = ingest_mod._insert_chunk
+    calls = []
+
+    def _fail_second(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real_insert(*args, **kwargs)
+
+    text = "".join(f"distinct passage number {i}. " for i in range(120))
+    with patch.object(ingest_mod, "_insert_chunk", _fail_second), pytest.raises(sqlite3.OperationalError):
+        ingest_mod.ingest_text(kb_conn, text, source_uri="content:///rb", source_type="markdown")
+
+    assert not kb_conn.in_transaction
+    kb_conn.commit()
+    assert _rows(kb_conn, "content:///rb") == []
