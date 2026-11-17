@@ -1185,7 +1185,7 @@ def ingest_url(
 
     try:
         html = fetched.body.decode(fetched.encoding, errors="replace")  # httpx's own .text rule
-    except LookupError:  # a codec that is no text encoding (charset=base64, rot13)
+    except (LookupError, UnicodeError):  # no text encoding (base64, rot13), or one refusing "replace" (idna, undefined)
         html = fetched.body.decode("utf-8", errors="replace")
     text = trafilatura.extract(html, include_links=False, include_tables=True) or ""
     extracted_title = None

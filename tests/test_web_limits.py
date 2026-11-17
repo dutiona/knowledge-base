@@ -319,7 +319,7 @@ def test_the_redirect_limit_holds_for_a_client_that_follows_redirects(http_reque
     assert len(http_requests) == 1
 
 
-@pytest.mark.parametrize("charset", ["base64", "rot13"])
+@pytest.mark.parametrize("charset", ["base64", "rot13", "idna", "undefined"])
 def test_a_charset_that_is_no_text_encoding_reads_as_utf8(kb_conn, http_requests, charset):
     _serve(http_requests, {"/start": _page(**{"content-type": f"text/html; charset={charset}"})})
     assert ingest_url(kb_conn, _URL)["chunks_added"] >= 1
