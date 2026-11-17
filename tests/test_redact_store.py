@@ -527,3 +527,32 @@ def test_redact_refuses_a_missing_database_instead_of_creating_it(tmp_path, caps
     assert _run(db, *argv) == 1
     assert "no database" in capsys.readouterr().err
     assert not db.exists()
+
+
+def test_rewrite_pairs_a_window_with_its_own_revision(kb_conn, tmp_path, vectors, capsys):
+    """#592: a re-ingested source keeps several revisions under one URI, and their windows interleave by index."""
+    db = tmp_path / "test.db"
+    first = ("lorem ipsum " * 200)[:988] + SECRET + " " + "dolor sit amet " * 80
+    second = "an edited revision " * 150
+    for text in (first, second):
+        for i, window in enumerate(_legacy_windows(text)):
+            _with_vector(kb_conn, window, uri="content://notes/edited", index=i)
+    kb_conn.commit()
+    kb_conn.close()
+
+    assert _run(db, "redact", "--rewrite") == 0
+    assert not _windows(SECRET.encode(), 8) & _windows(_file_bytes(db), 8)
+
+
+def test_report_reads_a_document_stored_by_the_new_chunker_as_clean(kb_conn, tmp_path, capsys):
+    """#592: reading rows between their neighbours finds nothing in text ingest already redacted whole."""
+    from knowledge_base.ingest import ingest_text
+
+    db = tmp_path / "test.db"
+    text = " ".join(f"word{i} https://data.example.test/t?api_key={'ab' * 16}&n={i} {SECRET}" for i in range(60))
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr("knowledge_base.ingest._embed_with_config", lambda conn, texts: [None] * len(texts))
+        ingest_text(kb_conn, text, source_uri="content://notes/long", source_type="markdown")
+    assert kb_conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] > 3
+    kb_conn.close()
+    assert _run(db, "redact") == 0

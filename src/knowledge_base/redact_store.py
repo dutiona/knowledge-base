@@ -12,7 +12,7 @@ import posixpath
 import sqlite3
 from collections import Counter
 from collections.abc import Iterator
-from itertools import chain
+from itertools import groupby
 from typing import Any
 
 from . import migrate as _migrate
@@ -74,21 +74,22 @@ def _contents(conn: sqlite3.Connection) -> dict[int, tuple[str, list[str]]]:
             changed[row["id"]] = (content, rules + findings(edged))
 
     def windowed(a: sqlite3.Row, b: sqlite3.Row) -> bool:
-        return (
-            a["source_uri"] == b["source_uri"]
-            and a["chunk_index"] + 1 == b["chunk_index"]
-            and len(a["content"]) > CHUNK_OVERLAP
-            and a["content"][-CHUNK_OVERLAP:] == b["content"][:CHUNK_OVERLAP]
-        )
+        return len(a["content"]) > CHUNK_OVERLAP and a["content"][-CHUNK_OVERLAP:] == b["content"][:CHUNK_OVERLAP]
 
     rows = conn.execute("SELECT id, content, source_uri, chunk_index FROM chunks ORDER BY source_uri, chunk_index, id")
-    prev = cur = None
-    for nxt in chain(rows, [None]):
-        if cur is not None:
-            before = prev["content"][:-CHUNK_OVERLAP][-_CONTEXT:] if prev is not None and windowed(prev, cur) else ""
-            after = nxt["content"][CHUNK_OVERLAP:][:_CONTEXT] if nxt is not None and windowed(cur, nxt) else ""
-            settle(cur, before, after)
-        prev, cur = cur, nxt
+    for _uri, document in groupby(rows, key=lambda r: r["source_uri"]):
+        # Re-ingesting a source can leave several revisions under it: a row's neighbour is the window at the
+        # next index that overlaps it.
+        by_index: dict[int, list[sqlite3.Row]] = {}
+        for row in document:
+            by_index.setdefault(row["chunk_index"], []).append(row)
+        for index, here in by_index.items():
+            for cur in here:
+                prev = next((r for r in by_index.get(index - 1, ()) if windowed(r, cur)), None)
+                nxt = next((r for r in by_index.get(index + 1, ()) if windowed(cur, r)), None)
+                before = prev["content"][:-CHUNK_OVERLAP][-_CONTEXT:] if prev is not None else ""
+                after = nxt["content"][CHUNK_OVERLAP:][:_CONTEXT] if nxt is not None else ""
+                settle(cur, before, after)
     return changed
 
 
