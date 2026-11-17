@@ -28,7 +28,7 @@ import regex
 
 from .exceptions import KnowledgeBaseError
 
-__all__ = ["TOKEN_SHAPE", "findings", "redact", "redact_json", "scrub"]
+__all__ = ["TOKEN_SHAPE", "findings", "link_extents", "redact", "redact_json", "scrub"]
 
 #: ``me_`` followed by 32 base62 characters (ADR-0020 §4).
 TOKEN_SHAPE = "me_[0-9A-Za-z]{32}"  # noqa: S105 -- a pattern, not a secret
@@ -81,6 +81,7 @@ class _Spans:
         self.ends: list[int] = []
         self.rules: list[str] = []
         self._pending: list[tuple[int, int, str]] = []
+        self.extents: list[tuple[int, int]] = []  # whole links, userinfo included (only _links fills it)
 
     def overlaps(self, start: int, end: int) -> bool:
         i = bisect_left(self.starts, end)
@@ -145,6 +146,7 @@ def _links(text: str) -> _Spans:
                 links.add(at, end, "link")
             else:
                 links.add(start, end, "link")
+            links.extents.append((start, end))
         pos = max(end, sep + 3)
     links.flush()
     return links
@@ -311,6 +313,11 @@ def redact(text: str) -> tuple[str, list[str]]:
         cursor = end
     out.append(text[cursor:])
     return "".join(out), list(spans.rules)
+
+
+def link_extents(text: str) -> list[tuple[int, int]]:
+    """Each link's span, userinfo included, in order: what a chunker must not cut."""
+    return _links(text).extents
 
 
 def findings(text: str) -> list[str]:

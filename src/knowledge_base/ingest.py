@@ -432,6 +432,9 @@ def _produce_and_insert_chunks(
             return (0, 0, [])
         items = [(i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)]
 
+    # A cut can start a chunk mid-word, which a rule reads as a boundary: every stored chunk is a fixpoint (#592).
+    items = [(i, (clean := scrub(t)), h if clean == t else _content_hash(clean), m) for i, t, h, m in items]
+
     # --- Deduplication ---
     # The intra-document (in-batch) hash collapse ALWAYS runs: two identical chunks
     # in one document share a content_hash and the second would hit the
@@ -564,8 +567,9 @@ def ingest_text(
     chunk is embedded before the first write, so an embedder failure stores nothing. Commits once; any
     failure rolls back, so the thread's reused connection never carries half a document (#554).
     """
-    # Redact the whole text before chunking: a 1000-character window can cut a token in two.
-    chunks = _chunk_text(scrub(text))
+    # Redact the whole text before chunking (a 1000-character window can cut a token in two), then each chunk:
+    # a window can start mid-word, which a rule reads as a boundary, so every stored chunk is a fixpoint.
+    chunks = [scrub(c) for c in _chunk_text(scrub(text))]
     if not chunks:
         return {"chunks_added": 0, "chunks_skipped": 0}
     chunks = [piece for pieces in _bounded_chunks(conn, chunks) for piece in pieces]

@@ -404,3 +404,37 @@ def test_every_chunk_insert_site_is_covered():
     )
     assert raw_inserts == ["ingest"], raw_inserts
     assert all(name.split("[")[0] in globals() for name in INSERT_SITES.values())
+
+
+def test_a_link_across_a_chunk_window_is_kept_whole_and_the_report_stays_clean(
+    kb_conn, stub_document_embedder, tmp_path, capsys
+):
+    """Ruling 2026-11-17: a link is not redacted. A window cut inside one would leave a fragment, no longer a link,
+    that the report flags and the rewrite redacts; so no window starts or ends inside a link."""
+    from knowledge_base.chunking import chunk_text
+    from knowledge_base.indexer import main
+
+    link = "https://data.example.org/get?api_key=a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6&set=7"
+    # The second window starts at 800, which is where this link's query begins.
+    query_at = len("https://data.example.org/get?")
+    text = "a" * (800 - query_at - 1) + " " + link + " " + "b" * 1600
+    assert text.index(link) + query_at == 800
+    for chunk in chunk_text(text):
+        assert link[query_at:] not in chunk.replace(link, ""), "a window cut the link"
+    ingest.ingest_text(kb_conn, text, source_uri="content:///links", source_type="markdown")
+    contents = [r[0] for r in kb_conn.execute("SELECT content FROM chunks")]
+    assert all(c == scrub(c) for c in contents)
+    assert any(link in c for c in contents)
+    kb_conn.close()
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as done:
+        main(["--db", str(tmp_path / "test.db"), "redact"])
+    assert done.value.code == 0
+
+
+def test_every_stored_chunk_is_a_fixpoint(kb_conn, stub_document_embedder):
+    """A window can start mid-word, which a rule then reads as a boundary: each chunk is scrubbed again."""
+    zero = "me_" + "0" * 32
+    text = "x" * 799 + "_" + zero + " " + "y" * 1500
+    ingest.ingest_text(kb_conn, text, source_uri="content:///edge", source_type="markdown")
+    assert all(r[0] == scrub(r[0]) for r in kb_conn.execute("SELECT content FROM chunks"))
