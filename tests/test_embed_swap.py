@@ -154,69 +154,6 @@ def test_re_embed_includes_folder_summaries(mock_provider, tmp_path, monkeypatch
 # --- Slice D: producer-side identity hard-reject (AC6, #516) ---
 
 
-def test_assert_identity_match_passes_when_aligned(tmp_path):
-    from knowledge_base.embed_swap import assert_embed_identity_match
-
-    conn = _setup(tmp_path)  # default: active space + config both (ollama, bge-m3)
-    assert_embed_identity_match(conn)  # no raise
-
-
-def test_assert_identity_match_rejects_family_change(tmp_path):
-    from knowledge_base.embed_swap import assert_embed_identity_match
-    from knowledge_base.exceptions import ValidationError
-
-    conn = _setup(tmp_path)
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
-    conn.commit()
-    # active space still (ollama, bge-m3); config now openai_compat → mismatch
-    with pytest.raises(ValidationError, match="identity"):
-        assert_embed_identity_match(conn)
-
-
-def test_assert_identity_match_rejects_model_change(tmp_path):
-    from knowledge_base.embed_swap import assert_embed_identity_match
-    from knowledge_base.exceptions import ValidationError
-
-    conn = _setup(tmp_path)
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_model', 'other-model')")
-    conn.commit()
-    with pytest.raises(ValidationError, match="identity"):
-        assert_embed_identity_match(conn)
-
-
-def test_assert_identity_match_allows_base_url_swap_same_family(tmp_path):
-    """tei→vllm: both openai_compat, same model — only base_url differs → allowed."""
-    from knowledge_base.embed_swap import assert_embed_identity_match
-
-    conn = _setup(tmp_path)
-    conn.execute("UPDATE embed_spaces SET provider = 'openai_compat' WHERE status = 'active'")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_base_url', 'https://vllm.example.com')")
-    conn.commit()
-    assert_embed_identity_match(conn)  # same family + model → no raise
-
-
-def test_assert_identity_match_noop_without_active_space(tmp_path):
-    from knowledge_base.embed_swap import assert_embed_identity_match
-
-    conn = _setup(tmp_path)
-    conn.execute("DELETE FROM embed_spaces")
-    conn.commit()
-    assert_embed_identity_match(conn)  # no active space → nothing to mismatch
-
-
-def test_embed_with_config_rejects_identity_mismatch(tmp_path):
-    from knowledge_base.exceptions import ValidationError
-    from knowledge_base.ingest import _embed_with_config
-
-    conn = _setup(tmp_path)
-    conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('embed_provider', 'openai_compat')")
-    conn.commit()
-    # active space (ollama, bge-m3) vs configured openai_compat → reject before any HTTP call
-    with pytest.raises(ValidationError, match="identity"):
-        _embed_with_config(conn, ["hello"])
-
-
 @pytest.mark.parametrize("provider", ["openai_compat", "openai"])
 def test_openai_api_key_is_never_an_embedding_key_source(tmp_path, monkeypatch, provider):
     """#569: the declared KNOWLEDGE_BASE_EMBED_API_KEY source is the only embedding key source."""
@@ -233,29 +170,29 @@ def test_openai_api_key_is_never_an_embedding_key_source(tmp_path, monkeypatch, 
 
 
 def test_backfill_refuses_a_space_of_another_provider(kb_conn, http_requests):
-    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.exceptions import EmbeddingModelMismatchError
 
     create_space(kb_conn, "foreign", "m", 8)
     kb_conn.execute("UPDATE embed_spaces SET provider = 'openai_compat' WHERE name = 'foreign'")
     kb_conn.commit()
-    with pytest.raises(ValidationError, match="not the declared provider 'ollama'"):
+    with pytest.raises(EmbeddingModelMismatchError, match="provider 'openai_compat'"):
         backfill_space(kb_conn, "foreign")
     assert http_requests == []
 
 
 def test_search_refuses_an_active_space_of_another_provider(kb_conn, http_requests):
-    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.exceptions import EmbeddingModelMismatchError
     from knowledge_base.search import search
 
     kb_conn.execute("UPDATE embed_spaces SET provider = 'openai_compat' WHERE status = 'active'")
     kb_conn.commit()
-    with pytest.raises(ValidationError, match="not the declared provider 'ollama'"):
+    with pytest.raises(EmbeddingModelMismatchError, match="provider 'openai_compat'"):
         search(kb_conn, "attention", mode="vec")
     assert http_requests == []
 
 
 def test_folder_summary_refuses_an_active_space_of_another_provider(kb_conn, http_requests):
-    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.exceptions import EmbeddingModelMismatchError
     from knowledge_base.folder_summaries import update_folder_summary
 
     kb_conn.execute(
@@ -264,7 +201,7 @@ def test_folder_summary_refuses_an_active_space_of_another_provider(kb_conn, htt
     )
     kb_conn.execute("UPDATE embed_spaces SET provider = 'onnx' WHERE status = 'active'")
     kb_conn.commit()
-    with pytest.raises(ValidationError, match="not the declared provider 'ollama'"):
+    with pytest.raises(EmbeddingModelMismatchError, match="provider 'onnx'"):
         update_folder_summary(kb_conn, "/docs")
     assert http_requests == []
 
@@ -289,7 +226,7 @@ def test_promote_refuses_an_undeclared_identity(kb_conn, http_requests):
     before = (_config_rows(kb_conn), _space_rows(kb_conn))
     with patch("knowledge_base.routes.embeddings._get_conn", return_value=kb_conn):
         promoted = json.loads(emb.promote_embed_space_tool("other"))
-    assert "embed_model" in promoted["error"]
+    assert "KNOWLEDGE_BASE_EMBED_MODEL" in promoted["error"]
     assert (_config_rows(kb_conn), _space_rows(kb_conn)) == before
     assert http_requests == []
 

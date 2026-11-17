@@ -175,7 +175,7 @@ def compare_spaces_tool(
     try:
         result = compare_spaces(conn, query, space_a, space_b, top_k, mode)
         return json.dumps(result)
-    except ValueError as e:
+    except (KnowledgeBaseError, ValueError) as e:
         return json.dumps({"error": str(e)})
 
 
@@ -202,7 +202,7 @@ def batch_compare_spaces_tool(
     try:
         result = batch_compare_spaces(conn, space_a, space_b, queries, top_k, mode)
         return json.dumps(result)
-    except ValueError as e:
+    except (KnowledgeBaseError, ValueError) as e:
         return json.dumps({"error": str(e)})
 
 
@@ -270,7 +270,7 @@ def benchmark_spaces_tool(
 
         try:
             comparison = batch_compare_spaces(conn, baseline_name, space["name"], queries, top_k, mode="vec")
-        except (ValueError, RuntimeError, ImportError, OSError) as e:
+        except (KnowledgeBaseError, ValueError, RuntimeError, ImportError, OSError) as e:
             results.append({"space": space["name"], "error": str(e)})
             continue
 

@@ -10,6 +10,7 @@ import logging
 import re
 import sqlite3
 import time
+from collections.abc import Mapping
 
 
 from .db import (
@@ -19,8 +20,8 @@ from .db import (
     space_table_name,
 )
 from .embeddings import EmbeddingProvider, ProviderConfig, get_provider, truncate_embedding
-from .exceptions import KnowledgeBaseError, ValidationError
-from .settings import IDENTITY_FIELDS, load_embed_settings, require_identity, serving_identity
+from .exceptions import KnowledgeBaseError
+from .settings import IDENTITY_FIELDS, declared_identity, load_embed_settings, require_identity, serving_identity
 from .utils import ELEMENT_INSERT_EXPR, loopback_opt_in
 
 logger = logging.getLogger(__name__)
@@ -57,58 +58,33 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     }
 
 
-def declared_provider_config(conn: sqlite3.Connection, family: str) -> ProviderConfig:
-    """The provider for embedding with a space of *family*: always the declared endpoint (#569).
+_REMEDY_ACTIVE = "re-embed under the declaration with `knowledge-base-ingest re-embed` (unit stopped)"
+_REMEDY_SPACE = "the declared endpoint cannot produce this space's vectors; use it under a declaration that serves it"
 
-    The URL and key source come from this process's own declaration, not from the
-    ``config`` rows, so another process rewriting those rows (a ``rebind`` run while the
-    server is up) cannot redirect it. A space of another family than the declared provider
-    is refused, so no tool-created or deprecated space is embedded with the wrong wire
-    format, or against an auto-detected Ollama.
+
+def declared_provider_config(conn: sqlite3.Connection, space: Mapping[str, object]) -> ProviderConfig:
+    """The provider for embedding into or querying *space*, after checking it can serve it (ADR-0015 §3, #573).
+
+    Every embedding call takes its provider here, so nothing embeds without the check. The active
+    space is the store's identity and must equal the whole declaration; any other space must equal
+    what the declared endpoint produces for it (``settings.serving_identity``). The URL and key
+    source are this process's own declaration, never the ``config`` rows, so another process
+    rewriting those rows (a ``rebind`` run while the server is up) cannot redirect it (#569).
     """
     declared = load_embed_settings()
-    if family != declared.provider:
-        raise ValidationError(
-            f"the space's provider {family!r} is not the declared provider {declared.provider!r}; "
-            "re-embed under the declaration"
-        )
+    active = space["status"] == "active"
+    require_identity(
+        space,
+        declared_identity(declared) if active else serving_identity(declared, space),
+        subject=f"the {'active ' if active else ''}space {space['name']!r}",
+        remedy=_REMEDY_ACTIVE if active else _REMEDY_SPACE,
+    )
     return ProviderConfig(
-        family=family,
+        family=declared.provider,
         base_url=declared.base_url,
         api_key=declared.api_key_source,
-        allow_loopback=get_embed_config(conn)["allow_loopback"],
+        allow_loopback=loopback_opt_in(conn),
     )
-
-
-def assert_embed_identity_match(conn: sqlite3.Connection) -> None:
-    """Reject a configured embed identity that differs from the active space's (AC6).
-
-    The active ``embed_spaces`` row's ``(provider, model)`` is the authoritative
-    identity (ADR-0015 / ADR-0018 §5). The ``provider`` field is the API *family*
-    (``openai_compat``/``ollama``/``onnx``), not the backend host — so a ``base_url``
-    swap within the same family (e.g. ``tei`` → ``vllm``, both ``openai_compat``, same
-    model) keeps the identity and is allowed. Changing the family or the model without
-    creating a new space (``re_embed``) would silently write mismatched vectors into the
-    active space — hard-rejected here, at the producer seam.
-
-    This is the *steady-state ingest* guard only; ``backfill_space`` is deliberately NOT
-    guarded — during ``re_embed`` (create → backfill → promote) the config still holds the
-    old identity while a new-identity space is backfilled, so a config-vs-space check
-    there would break the swap. Provider-only swap does NOT invalidate any metric:
-    whitening is gated on *model* change (ADR-0017), and KB ships no whitening, so this is
-    satisfied by inaction.
-    """
-    active = get_active_space(conn)
-    if active is None:
-        return  # fresh DB / bootstrap — no recorded identity to mismatch
-    cfg = get_embed_config(conn)
-    if cfg["provider"] != active["provider"] or cfg["model"] != active["model"]:
-        raise ValidationError(
-            f"Configured embedding identity ({cfg['provider']}, {cfg['model']}) does not match the active "
-            f"space's recorded identity ({active['provider']}, {active['model']}). A provider-family or model "
-            "change requires a new space — run re_embed() rather than corrupting the active space "
-            "(ADR-0015 mismatch rule). A base_url change within the same family is allowed."
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -208,13 +184,12 @@ def backfill_space(
     tbl = space["table_name"]
     model = space["model"]
     dim = space["dim"]
-    provider_name = space["provider"]
     chunk_strategy = space["chunk_strategy"]
     matryoshka_base_dim = space["matryoshka_base_dim"]
     element_type = space["element_type"] or "float32"
     embed_dim = matryoshka_base_dim or dim
 
-    embed_provider = get_provider(cfg=declared_provider_config(conn, provider_name))
+    embed_provider = get_provider(cfg=declared_provider_config(conn, dict(space)))
 
     # Build chunk selection query — strategy-aware
     has_strategy = _has_chunk_strategy_column(conn)
@@ -277,21 +252,6 @@ def backfill_space(
     }
 
 
-def _assert_declared_identity(provider: str, model: str, dim: int) -> None:
-    """Refuse an active identity other than the declaration (#569): only re-embed moves it."""
-    declared = load_embed_settings()
-    for key, value, wanted in (
-        ("embed_provider", provider, declared.provider),
-        ("embed_model", model, declared.model),
-        ("embed_dim", dim, declared.dim),
-    ):
-        if value != wanted:
-            raise ValidationError(
-                f"{key} {value!r} is not the declared {wanted!r}; only the declared identity can be "
-                "active (change the declaration, then run `knowledge-base-ingest re-embed`)"
-            )
-
-
 _FolderVectors = dict[tuple[str, str], "list[float] | None"]
 
 
@@ -345,11 +305,17 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
         raise ValueError(f"Embedding space {space_name!r} not found")
     if space["status"] not in ("populating", "deprecated"):
         raise ValueError(f"Can only promote spaces in 'populating' or 'deprecated' status, got: {space['status']!r}")
-    _assert_declared_identity(space["provider"], space["model"], space["dim"])
+    # Only the declared identity becomes active, so the next start's bind passes.
+    require_identity(
+        dict(space),
+        declared_identity(load_embed_settings()),
+        subject=f"the space {space_name!r}",
+        remedy="only a space of the declared identity can be promoted",
+    )
     if conn.in_transaction:
         raise KnowledgeBaseError("promote_space needs a connection with no open transaction; commit or roll back first")
     _check_promotable(conn, space)  # fail fast; rechecked under the lock
-    provider = get_provider(cfg=declared_provider_config(conn, space["provider"]))
+    provider = get_provider(cfg=declared_provider_config(conn, dict(space)))
     shape = (space["model"], space["dim"], space["matryoshka_base_dim"])
     snapshot = _embed_folder_summaries(provider, _folder_rows(conn), *shape)
 

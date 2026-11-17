@@ -55,6 +55,7 @@ __all__ = [
     "init_schema",
     "insert_chunk_vec",
     "open_declared_db",
+    "require_active_space",
     "resolve_db_path",
     "space_query_instruction",
     "space_table_name",
@@ -642,6 +643,14 @@ def space_query_instruction(space: EmbedSpace | dict) -> str:
     """The instruction a query into *space* carries: its recorded one, or its model's default when it records NULL."""
     recorded = space.get("query_instruction")
     return default_query_instruction(space["model"]) if recorded is None else recorded
+
+
+def require_active_space(conn: sqlite3.Connection) -> EmbedSpace:
+    """The active embedding space; a store without one refuses (the startup bind's rule, #569)."""
+    active = get_active_space(conn)
+    if active is None:
+        raise KnowledgeBaseError(f"the database has no active embedding space; {_REMEDY_RE_EMBED}")
+    return active
 
 
 def get_vec_table_name(conn: sqlite3.Connection) -> str:

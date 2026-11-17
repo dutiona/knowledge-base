@@ -10,8 +10,8 @@ import hashlib
 import posixpath
 import sqlite3
 
-from .db import escape_like, get_active_space
-from .embed_swap import declared_provider_config, get_embed_config
+from .db import escape_like, require_active_space
+from .embed_swap import declared_provider_config
 from .embeddings import embed, truncate_embedding
 from .utils import serialize_f32 as _serialize_f32
 
@@ -108,15 +108,11 @@ def update_folder_summary(
     if not summary:
         return False
 
-    cfg = get_embed_config(conn)
-    active = get_active_space(conn)
-    base_dim = active.get("matryoshka_base_dim") if active else None
-    # folder_summaries_vec is at the ACTIVE space's dim, so embed with the active space's
-    # (model, provider, dim), at the declared endpoint (#569).
-    fam = active["provider"] if active else cfg["provider"]
-    model = active["model"] if active else cfg["model"]
-    dim = active["dim"] if active else cfg["dim"]
-    provider_cfg = declared_provider_config(conn, fam)
+    # folder_summaries_vec is at the ACTIVE space's dim, so embed with the active space's shape, at the
+    # declared endpoint, after the identity check (#569, #573).
+    active = require_active_space(conn)
+    provider_cfg = declared_provider_config(conn, active)
+    base_dim, model, dim = active["matryoshka_base_dim"], active["model"], active["dim"]
     if base_dim:
         embedding = embed([summary], model=model, expected_dim=base_dim, _provider_cfg=provider_cfg)[0]
         if embedding is not None:

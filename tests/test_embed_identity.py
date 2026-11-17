@@ -30,6 +30,10 @@ def _v1_database(path) -> sqlite3.Connection:
     """A v1 database: today's schema without the v2 columns, stamped 1 (the v1 code wrote none of them)."""
     conn = get_connection(path)
     init_schema(conn)
+    return _downgrade_to_v1(conn)
+
+
+def _downgrade_to_v1(conn: sqlite3.Connection) -> sqlite3.Connection:
     for column in V2_COLUMNS:
         conn.execute(f"ALTER TABLE embed_spaces DROP COLUMN {column}")
     migrate.set_schema_version(conn, 1)
@@ -69,9 +73,10 @@ def test_a_v1_database_refuses_to_start_until_migrated(monkeypatch, capsys, stub
 
     db = resolve_db_path()
     db.parent.mkdir(parents=True, exist_ok=True)
-    conn = _v1_database(db)
+    conn = get_connection(db)
+    init_schema(conn)
     ingest_text(conn, "A chunk stored before the upgrade.", source_uri="/docs/a.md", source_type="markdown")
-    conn.close()
+    _downgrade_to_v1(conn).close()
 
     with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exit_info:
         server.main([])
@@ -435,3 +440,185 @@ def test_adopting_a_served_artifact_is_a_re_embed(monkeypatch, capsys, embedder)
     assert _space_identity(conn, active)["artifact_sha256"] == "a" * 64
     assert _space_identity(conn, "default")["artifact_sha256"] is None
     conn.close()
+
+
+# --- every embedding boundary checks the space against its own identity -----------
+
+
+def _call_boundary(boundary: str, conn: sqlite3.Connection, space: str) -> None:
+    from knowledge_base.embed_swap import backfill_space, promote_space
+    from knowledge_base.folder_summaries import update_folder_summary
+    from knowledge_base.ingest import ingest_text
+    from knowledge_base.search import search
+
+    if boundary == "ingest_text":
+        ingest_text(conn, "A new document.", source_uri="/docs/new.md", source_type="markdown")
+    elif boundary == "update_folder_summary":
+        update_folder_summary(conn, "/docs")
+    elif boundary == "search":
+        search(conn, "attention", mode="vec", space_name=None if space == "default" else space)
+    elif boundary == "backfill_space":
+        backfill_space(conn, space)
+    else:
+        promote_space(conn, space)
+
+
+def _drift_store(tmp_path, monkeypatch, *, named: bool, provider_env: dict[str, str] | None = None):
+    from knowledge_base.embed_swap import create_space
+
+    for name, value in (provider_env or {}).items():
+        monkeypatch.setenv(name, value)
+    conn = _store(tmp_path)
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h1', 'some text', 'markdown', '/docs/a.md', 0)"
+    )
+    conn.commit()
+    if named:
+        create_space(conn, "alt", "bge-m3", TEST_EMBED_DIM)
+    return conn, ("alt" if named else "default")
+
+
+_ACTIVE_BOUNDARIES = ["ingest_text", "update_folder_summary", "search"]
+_NAMED_BOUNDARIES = ["search", "backfill_space", "promote_space"]
+_DRIFT = [
+    ("provider", "provider = 'onnx'"),
+    ("artifact_sha256", f"artifact_sha256 = '{'b' * 64}'"),
+]
+_ACTIVE_ONLY_DRIFT = [
+    ("model", "model = 'other-model'"),
+    ("dim", "dim = 768"),
+    ("matryoshka_base_dim", "matryoshka_base_dim = 2048"),
+]
+
+
+def _snapshot(conn: sqlite3.Connection) -> tuple:
+    return (
+        conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
+        conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0],
+        [tuple(row) for row in conn.execute("SELECT * FROM embed_spaces ORDER BY name")],
+        sorted(tuple(row) for row in conn.execute("SELECT key, value FROM config")),
+    )
+
+
+@pytest.mark.parametrize(
+    ("boundary", "named", "field", "change"),
+    [(b, False, f, c) for b in _ACTIVE_BOUNDARIES for f, c in _DRIFT + _ACTIVE_ONLY_DRIFT]
+    + [(b, True, f, c) for b in _NAMED_BOUNDARIES for f, c in _DRIFT],
+)
+def test_every_embedding_boundary_refuses_a_space_the_endpoint_cannot_serve(
+    boundary, named, field, change, tmp_path, monkeypatch, http_requests
+):
+    from knowledge_base.exceptions import EmbeddingModelMismatchError
+
+    conn, space = _drift_store(tmp_path, monkeypatch, named=named)
+    conn.execute(f"UPDATE embed_spaces SET {change} WHERE name = ?", (space,))  # noqa: S608  # literal cases
+    conn.commit()
+    before = _snapshot(conn)
+    with pytest.raises(EmbeddingModelMismatchError, match=field):
+        _call_boundary(boundary, conn, space)
+    assert http_requests == []
+    assert _snapshot(conn) == before
+
+
+@pytest.mark.parametrize("endpoint", ["onnx", "artifact"])
+@pytest.mark.parametrize("boundary", _NAMED_BOUNDARIES)
+def test_a_single_model_endpoint_refuses_a_named_space_of_another_model(
+    endpoint, boundary, tmp_path, monkeypatch, http_requests
+):
+    from knowledge_base.exceptions import EmbeddingModelMismatchError
+
+    conn, space = _drift_store(tmp_path, monkeypatch, named=True)
+    conn.execute("UPDATE embed_spaces SET model = 'nomic-embed-text' WHERE name = 'alt'")
+    conn.commit()
+    if endpoint == "onnx":
+        model_file = tmp_path / "model.onnx"
+        model_file.write_bytes(b"")
+        monkeypatch.setenv("ONNX_EMBED_MODEL_PATH", str(model_file))
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_PROVIDER", "onnx")
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "")
+        conn.execute("UPDATE embed_spaces SET provider = 'onnx'")
+    else:
+        _declare_full(monkeypatch)
+        conn.execute(
+            "UPDATE embed_spaces SET artifact_sha256 = ?, pooling = 'last', normalization = 'l2',"
+            " max_input_tokens = 2048",
+            ("a" * 64,),
+        )
+    conn.commit()
+    before = _snapshot(conn)
+    with pytest.raises(EmbeddingModelMismatchError, match="model"):
+        _call_boundary(boundary, conn, space)
+    assert http_requests == []
+    assert _snapshot(conn) == before
+
+
+def test_cross_model_comparison_keeps_each_space_whole(kb_conn, embedder):
+    """A guard: green before and after the gate, it proves the gate does not refuse a servable space (ruling 1)."""
+    import json
+
+    import knowledge_base.routes.embeddings as emb
+    from knowledge_base.embed_swap import backfill_space, create_space
+    from knowledge_base.ingest import ingest_text
+
+    ingest_text(kb_conn, "Attention is all you need.", source_uri="/docs/a.md", source_type="markdown")
+    create_space(kb_conn, "qwen", "qwen3-embedding:0.6b", TEST_EMBED_DIM)
+    backfill_space(kb_conn, "qwen")
+    embedder.bodies.clear()
+    with patch.object(emb, "_get_conn", return_value=kb_conn):
+        result = json.loads(emb.compare_spaces_tool(query="attention", space_a="default", space_b="qwen", mode="vec"))
+    assert "error" not in result
+    assert sorted((body["model"], body["input"][0]) for body in embedder.bodies) == [
+        ("bge-m3", "attention"),
+        ("qwen3-embedding:0.6b", LITERAL + "attention"),
+    ]
+    assert kb_conn.execute("SELECT COUNT(*) FROM chunks_vec_qwen").fetchone()[0] == 1
+
+
+def test_promote_requires_the_declared_identity(kb_conn, embedder):
+    from knowledge_base.embed_swap import backfill_space, create_space, promote_space
+    from knowledge_base.exceptions import EmbeddingModelMismatchError
+
+    create_space(kb_conn, "qwen", "qwen3-embedding:0.6b", TEST_EMBED_DIM)
+    backfill_space(kb_conn, "qwen")
+    with pytest.raises(EmbeddingModelMismatchError, match="model"):
+        promote_space(kb_conn, "qwen")
+
+
+def test_a_keyword_search_embeds_nothing_and_checks_nothing(tmp_path, monkeypatch, http_requests):
+    from knowledge_base.ingest import ingest_text
+    from knowledge_base.search import search
+
+    conn = _store(tmp_path)
+    with patch("knowledge_base.ingest.embed", lambda texts, **_kw: [[0.1] * TEST_EMBED_DIM for _ in texts]):
+        ingest_text(conn, "Attention is all you need.", source_uri="/docs/a.md", source_type="markdown")
+    conn.execute("UPDATE embed_spaces SET provider = 'onnx'")
+    conn.commit()
+    assert search(conn, "attention", mode="fts")
+    assert http_requests == []
+
+
+@pytest.mark.parametrize("tool", ["compare", "batch", "benchmark"])
+def test_the_comparison_tools_report_a_space_the_endpoint_cannot_serve(tool, kb_conn, embedder):
+    import json
+
+    import knowledge_base.routes.embeddings as emb
+    from knowledge_base.embed_swap import create_space
+
+    create_space(kb_conn, "alt", "bge-m3", TEST_EMBED_DIM)
+    kb_conn.execute("UPDATE embed_spaces SET provider = 'onnx' WHERE name = 'alt'")
+    kb_conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h1', 'some text', 'markdown', '/docs/a.md', 0)"
+    )
+    kb_conn.commit()
+    with patch.object(emb, "_get_conn", return_value=kb_conn):
+        if tool == "compare":
+            result = json.loads(emb.compare_spaces_tool(query="q", space_a="default", space_b="alt", mode="vec"))
+        elif tool == "batch":
+            result = json.loads(
+                emb.batch_compare_spaces_tool(queries=["q"], space_a="default", space_b="alt", mode="vec")
+            )
+        else:
+            result = json.loads(emb.benchmark_spaces_tool(sample_queries=1))
+    assert "provider" in json.dumps(result)
