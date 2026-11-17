@@ -219,3 +219,15 @@ def operator_ollama(monkeypatch) -> str:
     monkeypatch.setenv("OLLAMA_HOST", "http://ollama.example.test:11434")
     monkeypatch.setattr("knowledge_base.embeddings._OLLAMA_URL", None)
     return "ollama.example.test"
+
+
+def machine_token(machine: str) -> str:
+    """A well-shaped ADR-0020 token for ``machine``, built at run time so no token literal is committed."""
+    return "me_" + machine.rjust(32, "0")
+
+
+def token_line(machine: str, token: str | None = None) -> str:
+    """The token-hash file line for ``machine`` (its own token unless ``token`` is given)."""
+    import hashlib
+
+    return f"{machine} {hashlib.sha256((token or machine_token(machine)).encode()).hexdigest()}\n"
