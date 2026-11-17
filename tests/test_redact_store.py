@@ -520,3 +520,10 @@ def test_rewrite_redacts_a_secret_the_old_chunker_cut_between_windows(kb_conn, t
     capsys.readouterr()
     assert _run(db, "redact") == 0
 
+
+@pytest.mark.parametrize("argv", [["redact"], ["redact", "--rewrite"]])
+def test_redact_refuses_a_missing_database_instead_of_creating_it(tmp_path, capsys, argv):
+    db = tmp_path / "typo.db"
+    assert _run(db, *argv) == 1
+    assert "no database" in capsys.readouterr().err
+    assert not db.exists()

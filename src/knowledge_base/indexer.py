@@ -190,6 +190,8 @@ def cmd_redact(args: argparse.Namespace) -> None:
     """Report stored rows that hold a secret (#592); ``--rewrite`` (server stopped) redacts them."""
     from .redact_store import needs_rewrite, report, rewrite
 
+    if not args.db.is_file():  # a mistyped path would otherwise be created, and reported clean
+        raise KnowledgeBaseError(f"no database at {args.db}")
     if args.rewrite:
         conn = open_declared_db(args.db)  # it re-embeds: the declared embedder, as re-embed
     else:
