@@ -6,8 +6,8 @@
 # backend, starts with RUN --network=none, so code that only builds cannot open a connection from the build host.
 
 FROM docker.io/library/python:3.12-slim-trixie AS build
-# uv is the one tool that runs the fetch with network, and it tracks upstream unpinned: an accepted risk (the owner's
-# ruling on #600), since uv is widely used and maintained and a pin would have to be bumped by hand.
+# uv is the one tool that runs the fetch with network, and it tracks upstream unpinned: an accepted risk, by the
+# owner's ruling quoted in #619 (uv is widely used and secured, so pulling upstream is accepted).
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # A uv-managed interpreter would leave the venv pointing at a Python the runtime stage lacks.
 ENV UV_PYTHON_DOWNLOADS=never

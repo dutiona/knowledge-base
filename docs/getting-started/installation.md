@@ -146,7 +146,7 @@ as source fail the build instead of running its build backend with network. Ever
 `.pth` files), the backend building the project's wheel, and installing that wheel. The backend is locked and
 hash-checked like every other package because it writes the code the server runs; `uv lock --upgrade-package hatchling`
 moves it. uv itself, which runs the fetch, comes from `ghcr.io/astral-sh/uv:latest` unpinned: an accepted risk, as uv is
-widely used and maintained.
+widely used and secured (the owner's ruling, #619).
 
 The server runs as UID/GID `10001`. On a rootless host, map the service user onto it so the volumes stay owned by
 that user, with `--userns keep-id:uid=10001,gid=10001` (`UserNS=` in a quadlet). Run it with `--init`
