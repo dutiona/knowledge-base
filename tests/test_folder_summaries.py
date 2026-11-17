@@ -408,8 +408,8 @@ def test_ingest_directory_batches_folder_summaries(tmp_path):
     with patch("knowledge_base.ingest.update_folder_summary") as mock_update:
         ingest_directory(conn, folder)
 
-    # Should be called exactly once for the folder (batch), not 3 times (per-file)
-    assert mock_update.call_count == 1
+    # Called exactly once (batch, not per file), for the folder that was ingested, not its parent
+    mock_update.assert_called_once_with(conn, folder.resolve().as_posix())
 
 
 # ---------- Windows path normalization (#158) ----------

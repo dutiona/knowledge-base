@@ -42,12 +42,12 @@ from .utils import content_hash as _content_hash
 logger = logging.getLogger(__name__)
 
 
-def _update_folder_summary_safe(conn: sqlite3.Connection, path: Path) -> None:
-    """Update folder summary for the parent directory, swallowing errors."""
+def _update_folder_summary_safe(conn: sqlite3.Connection, folder: str) -> None:
+    """Update *folder*'s summary, swallowing errors."""
     try:
-        update_folder_summary(conn, path.parent.as_posix())
+        update_folder_summary(conn, folder)
     except Exception:
-        logger.warning("Failed to update folder summary for %s", path.parent, exc_info=True)
+        logger.warning("Failed to update folder summary for %s", folder, exc_info=True)
 
 
 __all__ = [
@@ -494,7 +494,7 @@ def ingest_file(
                 result["duplicate_of_paper_id"] = existing_paper["paper_id"]
 
     if added > 0 and not _skip_folder_summary:
-        _update_folder_summary_safe(conn, path)
+        _update_folder_summary_safe(conn, path.parent.as_posix())
 
     return result
 
@@ -774,7 +774,7 @@ def reingest_file(
     except Exception:
         conn.rollback()
         raise
-    _update_folder_summary_safe(conn, path)
+    _update_folder_summary_safe(conn, path.parent.as_posix())
 
     return {
         "file": source_uri,
@@ -801,10 +801,10 @@ def ingest_directory(
         if f.is_file() and f.suffix.lower() in extensions:
             result = ingest_file(conn, f, session_id=session_id, _skip_folder_summary=True)
             results.append(result)
-            affected_folders.add(str(f.resolve().parent))
+            affected_folders.add(f.resolve().parent.as_posix())
 
     # Batch-update folder summaries once per affected folder
     for folder in sorted(affected_folders):
-        _update_folder_summary_safe(conn, Path(folder))
+        _update_folder_summary_safe(conn, folder)
 
     return results
