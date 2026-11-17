@@ -164,3 +164,50 @@ def test_pdf_page_map_counts_redacted_text(tmp_path):
     assert page_map == {0: 1, len(scrub(page1)) + 2: 2}
     assert text[len(scrub(page1)) + 2 :].startswith("## Results")
     assert not _leaks(AWS_KEY, text)
+
+
+QUERY_VALUE = "Xk9Lp2Rt5Yv8Bn1Cx4Df6Qw7Zz0Aa"  # a dotless high-entropy value, as a signed URL carries
+
+
+def test_chunk_metadata_is_redacted_keys_kept(kb_conn, stub_document_embedder):
+    meta = {"title": f"Deploy {GITHUB_TOKEN}", "pages": [1, 2], "nested": {"alt": f"aws {AWS_KEY}"}}
+    ingest.ingest_text(kb_conn, "ordinary prose", source_uri="content:///m", source_type="markdown", metadata=meta)
+    stored = json.loads(kb_conn.execute("SELECT metadata FROM chunks").fetchone()["metadata"])
+    assert stored == {
+        "title": "Deploy [REDACTED:github-pat]",
+        "pages": [1, 2],
+        "nested": {"alt": "aws [REDACTED:aws-access-key]"},
+    }
+
+
+def test_clean_metadata_is_stored_byte_for_byte(kb_conn):
+    raw = '{"extractor": "pymupdf4llm@1.27.2.1", "pages": [3]}'
+    ingest._insert_chunk(
+        kb_conn, content_hash="h", content="c", source_type="pdf", source_uri="/p.pdf", chunk_index=0, metadata=raw
+    )
+    assert kb_conn.execute("SELECT metadata FROM chunks").fetchone()["metadata"] == raw
+
+
+def test_metadata_urls_keep_their_query(kb_conn):
+    """Ruling 2026-11-17: a stored URL is a reference; it loses its userinfo and keeps the rest."""
+    meta = {
+        "source_url": f"https://reader:example-pass@docs.example.test/a?sig={QUERY_VALUE}",
+        "image_url": f"HTTPS://{GITHUB_TOKEN}@docs.example.test/i.png?sig={QUERY_VALUE}",
+        "other_url": "Http://reader:example-pass@x.example.test/p?k=v",
+        "url_with_newline": "https://reader:example-pass@x.example.test/p\n",
+    }
+    ingest._insert_chunk(
+        kb_conn,
+        content_hash="h",
+        content="c",
+        source_type="figure",
+        source_uri="https://docs.example.test/a",
+        chunk_index=0,
+        metadata=json.dumps(meta),
+    )
+    stored = json.loads(kb_conn.execute("SELECT metadata FROM chunks").fetchone()["metadata"])
+    assert stored["source_url"] == f"https://docs.example.test/a?sig={QUERY_VALUE}"
+    assert stored["image_url"] == f"HTTPS://docs.example.test/i.png?sig={QUERY_VALUE}"
+    assert stored["other_url"] == "Http://x.example.test/p?k=v"
+    # Not a whole URL (a trailing newline): ordinary text, whose link keeps all but its password.
+    assert stored["url_with_newline"] == "https://reader:[REDACTED:connection-string-password]@x.example.test/p\n"

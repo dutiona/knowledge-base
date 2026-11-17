@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import hashlib
 import ipaddress
 import os
@@ -350,6 +352,20 @@ def loopback_opt_in(conn: sqlite3.Connection) -> bool:
     """The shared ``allow_loopback_base_url`` opt-in (ADR-0018 §4) for every URL a tool stored."""
     row = conn.execute("SELECT value FROM config WHERE key = 'allow_loopback_base_url'").fetchone()
     return bool(row) and row["value"].strip().lower() == "true"
+
+
+_HTTP_AUTHORITY = re.compile(r"(?i)(https?://)([^/?#]*)")
+
+
+def without_userinfo(url: str) -> str:
+    """An ``http``/``https`` URL with its userinfo (up to the authority's last ``@``) removed, else ``url`` unchanged.
+
+    A stored URL is a reference (#592, owner ruling 2026-11-17): it keeps every other byte, its query included.
+    """
+    m = _HTTP_AUTHORITY.match(url)
+    if m is None or "@" not in m.group(2):
+        return url
+    return m.group(1) + m.group(2).rsplit("@", 1)[1] + url[m.end() :]
 
 
 def _sanitize_url(url: str) -> str:

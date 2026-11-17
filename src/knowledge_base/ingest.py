@@ -33,12 +33,13 @@ from .db import (
     require_active_space,
 )
 from .migrate import _main_db_path
-from .redact import scrub
+from .redact import redact_json, scrub
 from .embed_swap import declared_provider_config
 from .embeddings import embed, split_inputs, truncate_embedding
 from .exceptions import NotFoundError
 from .folder_summaries import update_folder_summary
 from .utils import content_hash as _content_hash
+from .utils import without_userinfo
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,21 @@ def _bounded_chunks(conn: sqlite3.Connection, texts: list[str]) -> list[list[str
     return [[text] if known else next(split) for text, known in zip(texts, stored, strict=True)]
 
 
+_WHOLE_URL = re.compile(r"(?i)https?://\S+")
+
+
+def _metadata_leaf(value: str) -> str:
+    """A whole URL is a stored reference and keeps all but its userinfo (owner ruling); other text is scrubbed."""
+    return without_userinfo(value) if _WHOLE_URL.fullmatch(value) else scrub(value)
+
+
+def redact_metadata(metadata: str) -> str:
+    """A chunk's metadata JSON with every string value redacted, or ``metadata`` itself when nothing changes."""
+    value = json.loads(metadata)
+    clean = redact_json(value, _metadata_leaf)
+    return metadata if clean == value else json.dumps(clean)
+
+
 def _flush_deferred_session_links(conn: sqlite3.Connection, chunk_ids: list[int], session_id: str | None) -> None:
     """Batch-insert deferred chunk_sessions rows for deduped chunks."""
     if chunk_ids and session_id is not None:
@@ -194,7 +210,7 @@ def _insert_chunk(
         source_uri,
         chunk_index,
         session_id,
-        metadata,
+        redact_metadata(metadata),  # neither hashed nor embedded, so the insert is its one complete point
     ]
     if chunk_strategy is not None:
         columns.append("chunk_strategy")
