@@ -22,7 +22,7 @@ from .db import (
 from .embeddings import EmbeddingProvider, ProviderConfig, get_provider, truncate_embedding
 from .exceptions import KnowledgeBaseError
 from .settings import IDENTITY_FIELDS, declared_identity, load_embed_settings, require_identity, serving_identity
-from .utils import ELEMENT_INSERT_EXPR, loopback_opt_in
+from .utils import loopback_opt_in
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +186,6 @@ def backfill_space(
     dim = space["dim"]
     chunk_strategy = space["chunk_strategy"]
     matryoshka_base_dim = space["matryoshka_base_dim"]
-    element_type = space["element_type"] or "float32"
     embed_dim = matryoshka_base_dim or dim
 
     embed_provider = get_provider(cfg=declared_provider_config(conn, dict(space)))
@@ -228,12 +227,11 @@ def backfill_space(
         if matryoshka_base_dim:
             embeddings = [truncate_embedding(e, dim) if e is not None else None for e in embeddings]
 
-        insert_expr = ELEMENT_INSERT_EXPR[element_type]
         for chunk_id, emb_vec in zip(ids, embeddings, strict=True):
             if emb_vec is None:
                 continue
             conn.execute(
-                f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, {insert_expr}, ?)",  # noqa: S608  # trusted internal identifier, not user input
+                f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",  # noqa: S608  # trusted internal identifier, not user input
                 (chunk_id, _serialize_f32(emb_vec), chunk_id),
             )
         processed += len(batch)

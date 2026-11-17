@@ -206,14 +206,6 @@ def batch_compare_spaces_tool(
         return json.dumps({"error": str(e)})
 
 
-# --- Storage size helpers ---------------------------------------------------
-
-_BYTES_PER_ELEMENT: dict[str, int] = {
-    "float32": 4,
-    "int8": 1,
-}
-
-
 @mcp.tool()
 def benchmark_spaces_tool(
     baseline_space: str | None = None,
@@ -274,12 +266,8 @@ def benchmark_spaces_tool(
             results.append({"space": space["name"], "error": str(e)})
             continue
 
-        # Storage estimate: bytes per vector = bytes_per_element * dim
-        bpe = _BYTES_PER_ELEMENT.get(space.get("element_type", "float32"), 4)
-        baseline_bpe = _BYTES_PER_ELEMENT.get(baseline.get("element_type", "float32"), 4)
-        vec_bytes = bpe * space["dim"]
-        baseline_vec_bytes = baseline_bpe * baseline["dim"]
-        storage_ratio = vec_bytes / baseline_vec_bytes if baseline_vec_bytes else 1.0
+        # Storage estimate: every space stores float32 vectors, so the ratio is the dim ratio.
+        storage_ratio = space["dim"] / baseline["dim"] if baseline["dim"] else 1.0
 
         results.append(
             {

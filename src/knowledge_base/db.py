@@ -25,7 +25,6 @@ from .settings import (
     require_identity,
 )
 from .utils import (
-    ELEMENT_INSERT_EXPR,
     _sanitize_url,
     serialize_f32 as _serialize_f32,
 )  # shared vec serialization
@@ -50,7 +49,6 @@ __all__ = [
     "get_active_space",
     "get_connection",
     "get_index_stats",
-    "get_space_element_type",
     "get_vec_table_name",
     "init_schema",
     "insert_chunk_vec",
@@ -678,18 +676,6 @@ def get_active_chunk_strategy(conn: sqlite3.Connection) -> str:
     return row["chunk_strategy"]
 
 
-def get_space_element_type(
-    conn: sqlite3.Connection,
-    table_name: str | None = None,
-) -> str:
-    """Return the element_type for the given (or active) space, defaulting to 'float32'."""
-    tbl = _resolve_vec_table(conn, table_name)
-    row = conn.execute("SELECT element_type FROM embed_spaces WHERE table_name = ?", (tbl,)).fetchone()
-    if row is None:
-        return "float32"
-    return row["element_type"] or "float32"
-
-
 def bump_chunk_count(conn: sqlite3.Connection, table_name: str, delta: int) -> None:
     """Increment ``embed_spaces.chunk_count`` for the active space by *delta* (#392).
 
@@ -712,13 +698,9 @@ def insert_chunk_vec(
     chunk_id: int,
     embedding: list[float],
     table_name: str | None = None,
-    element_type: str | None = None,
     bump_count: bool = True,
 ) -> None:
     """Insert a single chunk embedding into the specified (or active) vec table.
-
-    If *element_type* is ``None`` (the default), it is auto-resolved from the
-    space registry so callers never need to look it up themselves.
 
     When *bump_count* is ``True`` (the default), the per-row
     ``embed_spaces.chunk_count`` UPDATE fires exactly as before, preserving behavior
@@ -728,11 +710,8 @@ def insert_chunk_vec(
     write amplification while keeping the resulting ``chunk_count`` identical.
     """
     tbl = _resolve_vec_table(conn, table_name)
-    if element_type is None:
-        element_type = get_space_element_type(conn, tbl)
-    expr = ELEMENT_INSERT_EXPR[element_type]
     conn.execute(
-        f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, {expr}, ?)",  # noqa: S608  # trusted internal identifier (vec table name + fixed expr), not user input
+        f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",  # noqa: S608  # trusted internal identifier (vec table name), not user input
         (chunk_id, _serialize_f32(embedding), chunk_id),
     )
     # Keep embed_spaces.chunk_count in sync for the active space (per-row path).

@@ -439,65 +439,6 @@ def test_benchmark_no_chunks(kb_conn):
     assert "No chunks" in result["error"]
 
 
-def test_benchmark_happy_storage_ratio_int8_quarter(kb_conn):
-    """Happy path: int8 space at same dim as float32 baseline → ratio 0.25.
-
-    Verifies the storage-ratio math against the source:
-    (bpe_space * dim_space) / (bpe_baseline * dim_baseline)
-    = (1 * 256) / (4 * 256) = 0.25.
-    """
-    _insert_chunk(kb_conn, "some content to sample as a query")
-
-    spaces = [
-        {
-            "name": "base",
-            "dim": 256,
-            "status": "active",
-            "element_type": "float32",
-            "chunk_count": 10,
-        },
-        {
-            "name": "quant",
-            "dim": 256,
-            "status": "populating",
-            "element_type": "int8",
-            "chunk_count": 10,
-        },
-    ]
-    comparison = {
-        "overlap_at_k": {"mean": 0.8},
-        "jaccard": {"mean": 0.7},
-        "rank_correlation": {"mean": 0.9, "valid_count": 1},
-        "warnings": ["w1"],
-    }
-    with (
-        patch.object(emb, "_get_conn", return_value=kb_conn),
-        patch.object(emb, "list_spaces", return_value=spaces),
-        patch.object(emb, "batch_compare_spaces", return_value=comparison) as mock_bcs,
-    ):
-        result = json.loads(emb.benchmark_spaces_tool(baseline_space="base"))
-
-    assert result["baseline"] == "base"
-    assert result["baseline_element_type"] == "float32"
-    assert result["queries_sampled"] == 1
-    assert result["top_k"] == 10
-    assert len(result["comparisons"]) == 1
-
-    comp = result["comparisons"][0]
-    assert comp["space"] == "quant"
-    assert comp["element_type"] == "int8"
-    assert comp["dim"] == 256
-    # int8(1 byte) vs float32(4 bytes) at equal dim → 0.25.
-    assert comp["storage_ratio_vs_baseline"] == 0.25
-    assert comp["metrics"] == {
-        "overlap_at_k": {"mean": 0.8},
-        "jaccard": {"mean": 0.7},
-        "rank_correlation": {"mean": 0.9, "valid_count": 1},
-    }
-    assert comp["warnings"] == ["w1"]
-    mock_bcs.assert_called_once()
-
-
 def test_benchmark_skips_deprecated_and_baseline(kb_conn):
     """Deprecated spaces and the baseline itself are excluded from comparisons."""
     _insert_chunk(kb_conn, "query content")

@@ -13,7 +13,6 @@ from knowledge_base.db import (
     get_active_chunk_strategy,
     get_active_space,
     get_connection,
-    get_space_element_type,
     get_vec_table_name,
     init_schema,
     insert_chunk_vec,
@@ -468,9 +467,3 @@ def test_migration_adds_element_type(tmp_path):
     conn = _setup(tmp_path)
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()}
     assert "element_type" in columns
-
-
-def test_get_space_element_type_default(tmp_path):
-    conn = _setup(tmp_path)
-    # Default space is float32
-    assert get_space_element_type(conn) == "float32"

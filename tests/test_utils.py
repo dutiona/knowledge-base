@@ -175,17 +175,6 @@ def test_sanitize_url_strips_userinfo_and_query():
 # --- element_type constants ---
 
 
-def test_element_type_constants():
-    from knowledge_base.utils import (
-        ELEMENT_INSERT_EXPR,
-        ELEMENT_QUERY_EXPR,
-    )
-
-    assert set(ELEMENT_INSERT_EXPR.keys()) == set(ELEMENT_QUERY_EXPR.keys())
-    assert ELEMENT_INSERT_EXPR["float32"] == "?"
-    assert ELEMENT_QUERY_EXPR["float32"] == "?"
-
-
 # --- #569: the declared embedding host, and only it, is exempt from the floor ---
 
 _TAILNET = ["100.64.0.10", "fd7a:115c:a1e0::10"]
