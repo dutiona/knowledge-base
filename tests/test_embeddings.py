@@ -782,10 +782,10 @@ class TestSplitToLimit:
         assert min(map(_words, pieces)) > 64 // 4
 
     def test_a_character_too_big_for_the_even_share_still_fits_the_limit(self):
-        def count(text: str) -> int:  # "X" alone counts 3 with its EOS: over the even share of 2, within the limit 3
-            return text.count("X") * 2 + text.count("a") + 1
+        def count(text: str) -> int:  # "Y" alone counts 8 with its EOS: over the share of 7, within the limit 11
+            return text.count("Y") * 7 + text.count("a") + 1
 
-        self._check("Xa", 3, count)
+        assert self._check("Yaaaa", 11, count) == ["Yaaa", "a"]
 
     def test_probes_stay_near_the_piece_they_cut(self):
         probed: list[int] = []
