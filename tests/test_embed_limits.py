@@ -275,3 +275,23 @@ def test_the_limit_split_does_not_cut_a_link_that_fits(before, repeat):
         cuts.append(at)
     assert all(not (s < c < e) for c in cuts for s, e in link_extents(text))
     assert all(by_chars(p) <= 100 and len(p) > 1 for p in pieces)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "w" * 50 + "(" + "https://maps.example.test/api?key=" + "Ab3dE5fG7hI9jK1lM2nO" * 30 + ")" + "v" * 300,
+        "w" * 50 + "(" + "https://maps.example.test/api?key=" + "Ab3dE5fG7hI9jK1lM2nO" * 300 + ")",
+    ],
+    ids=["a-link-over-the-limit", "a-link-past-the-lookahead"],
+)
+def test_the_limit_split_still_ends_when_a_link_cannot_be_kept_whole(text):
+    """#592: when neither edge of a link fits, the split keeps its own cut, so it ends and every piece fits."""
+    from knowledge_base.embeddings import split_to_limit
+
+    def by_chars(t: str) -> int:
+        return len(t) // 4 + 1
+
+    pieces = split_to_limit(text, 100, by_chars)
+    assert "".join(pieces) == text
+    assert all(by_chars(p) <= 100 for p in pieces)
