@@ -249,3 +249,29 @@ def test_re_ingesting_a_file_whose_chunk_redaction_changed_counts_nothing(
     before = len(http_requests)
     assert ingest_file(conn, path)["chunks_added"] == 0
     assert [r.url.path for r in http_requests[before:]] == []
+
+
+@pytest.mark.parametrize(
+    ("before", "repeat"),
+    [("w" * 329 + "(", 4), ("(", 16), ("", 16)],
+    ids=["cut-before-the-link", "cut-after-a-link-near-the-start", "cut-after-a-leading-link"],
+)
+def test_the_limit_split_does_not_cut_a_link_that_fits(before, repeat):
+    """#592: a link is not redacted, so the input-limit split moves a cut out of a link, to its start or its end."""
+    from knowledge_base.embeddings import split_to_limit
+    from knowledge_base.redact import link_extents
+
+    link = "https://maps.example.test/api?key=" + "Ab3dE5fG7hI9jK1lM2nO" * repeat
+    text = before + link + ")" + "v" * 600  # no whitespace for _fit's own pull-back to reach
+
+    def by_chars(t: str) -> int:  # cuts anywhere, as a subword tokenizer can
+        return len(t) // 4 + 1
+
+    pieces = split_to_limit(text, 100, by_chars)
+    assert "".join(pieces) == text
+    cuts, at = [], 0
+    for piece in pieces[:-1]:
+        at += len(piece)
+        cuts.append(at)
+    assert all(not (s < c < e) for c in cuts for s, e in link_extents(text))
+    assert all(by_chars(p) <= 100 and len(p) > 1 for p in pieces)
