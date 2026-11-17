@@ -1,9 +1,10 @@
-"""Tests for the server hub: route mounting and the stdio entry point.
+"""Tests for the server hub: route mounting and the entry point, stdio or ``--http``.
 
-``server.py`` is a thin hub — its only logic is mounting the six route
-sub-modules and exposing ``main()``. These tests guard that wiring: if a route
-fails to mount (bad import, renamed ``mcp`` export, forgotten ``mcp.mount``
-call), the tool set shrinks and the assertions below catch it.
+``server.py`` is a thin hub: it mounts the six route sub-modules and exposes
+``main()``, which serves stdio or, with ``--http``, the gated HTTP app. These
+tests guard that wiring: if a route fails to mount (bad import, renamed ``mcp``
+export, forgotten ``mcp.mount`` call), the tool set shrinks and the assertions
+below catch it.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import pytest
 from fastmcp import FastMCP
 
 from knowledge_base import server
+from tests.conftest import token_line
 
 # The full tool surface, grouped by the route module that registers it. Keeping
 # the groups explicit makes a dropped mount point obvious: a missing route shows
@@ -134,7 +136,7 @@ def test_each_route_block_is_fully_mounted():
 def test_main_runs_stdio_transport():
     """main() starts the server over the stdio transport."""
     with patch.object(server.mcp, "run") as mock_run:
-        server.main()
+        server.main([])
     mock_run.assert_called_once_with(transport="stdio")
 
 
@@ -157,7 +159,7 @@ def test_main_exits_before_serving_when_a_variable_is_missing(missing, monkeypat
         monkeypatch.setenv(name, value)
     monkeypatch.delenv(missing)
     with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exit_info:
-        server.main()
+        server.main([])
     assert exit_info.value.code == 78
     assert missing in capsys.readouterr().err
     run.assert_not_called()
@@ -171,7 +173,7 @@ def test_main_refuses_a_database_that_disagrees(monkeypatch, capsys):
     open_declared_db().close()
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_MODEL", "other-model")
     with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exit_info:
-        server.main()
+        server.main([])
     assert exit_info.value.code == 78
     err = capsys.readouterr().err
     assert "embed_model" in err
@@ -188,7 +190,7 @@ def test_main_records_a_legacy_endpoint_and_serves(monkeypatch):
     conn.commit()
     conn.close()
     with patch.object(server.mcp, "run") as run:
-        server.main()
+        server.main([])
     run.assert_called_once_with(transport="stdio")
     conn = get_connection()
     url = conn.execute("SELECT value FROM config WHERE key = 'embed_base_url'").fetchone()["value"]
@@ -199,7 +201,7 @@ def test_main_records_a_legacy_endpoint_and_serves(monkeypatch):
 def test_main_refuses_a_bad_switch(monkeypatch, capsys):
     monkeypatch.setenv("KNOWLEDGE_BASE_VISION", "yes")
     with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exit_info:
-        server.main()
+        server.main([])
     assert exit_info.value.code == 78
     assert "KNOWLEDGE_BASE_VISION" in capsys.readouterr().err
     run.assert_not_called()
@@ -232,3 +234,215 @@ def test_server_process_serves_under_a_declaration(tmp_path):
     proc = _run_server(env)
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "kb.db").exists()
+
+
+# --- #571: --http and --token-file ---
+
+
+@pytest.fixture
+def served(monkeypatch):
+    """Patch both transports; the HTTP one records each server it runs and marks it started."""
+    import uvicorn
+
+    runs: list[uvicorn.Server] = []
+
+    def _run(self, *_args, **_kwargs):
+        runs.append(self)
+        self.started = True
+
+    monkeypatch.setattr(uvicorn.Server, "run", _run)
+    monkeypatch.setattr(server, "log_to_stderr", lambda: None)
+    with patch.object(server.mcp, "run") as stdio:
+        yield runs, stdio
+
+
+def _exit_code(argv: list[str]) -> int | str | None:
+    with pytest.raises(SystemExit) as info:
+        server.main(argv)
+    return info.value.code
+
+
+def test_main_serves_http_through_the_gate(served, token_file):
+    from knowledge_base.auth import RequireMachine
+
+    runs, stdio = served
+    server.main(["--http", "127.0.0.1:65000", "--token-file", str(token_file)])
+    (run,) = runs
+    assert isinstance(run.config.app, RequireMachine)
+    assert (run.config.host, run.config.port) == ("127.0.0.1", 65000)
+    stdio.assert_not_called()
+
+
+def test_a_bracketed_ipv6_host_is_served_without_its_brackets(served, token_file):
+    runs, _ = served
+    server.main(["--http", "[::1]:8000", "--token-file", str(token_file)])
+    assert runs[0].config.host == "::1"
+
+
+def test_http_needs_a_token_file(served, capsys, tmp_path):
+    runs, stdio = served
+    assert _exit_code(["--http", "127.0.0.1:8000"]) == 78
+    assert "--token-file" in capsys.readouterr().err
+    assert runs == [] and not stdio.called
+    assert not (tmp_path / "kb-data" / "knowledge.db").exists()
+
+
+def test_a_token_file_needs_http(served, capsys, token_file):
+    runs, stdio = served
+    assert _exit_code(["--token-file", str(token_file)]) == 78
+    assert "--http" in capsys.readouterr().err
+    assert runs == [] and not stdio.called
+
+
+_UPPERCASE_LINE_2 = token_line("laptop") + token_line("desktop").upper()
+
+
+@pytest.mark.parametrize("content", [None, _UPPERCASE_LINE_2], ids=["missing", "bad"])
+def test_a_bad_token_file_exits_78_before_the_database(served, capsys, tmp_path, content):
+    runs, stdio = served
+    path = tmp_path / "token-hashes"
+    if content is not None:
+        path.write_text(content)
+    assert _exit_code(["--http", "127.0.0.1:8000", "--token-file", str(path)]) == 78
+    err = capsys.readouterr().err
+    assert str(path) in err
+    assert content is None or "line 2" in err
+    assert runs == [] and not stdio.called
+    assert not (tmp_path / "kb-data" / "knowledge.db").exists()
+
+
+def test_the_declaration_gate_runs_before_http_is_served(served, capsys, monkeypatch, token_file):
+    runs, _ = served
+    monkeypatch.delenv("KNOWLEDGE_BASE_EMBED_MODEL")
+    assert _exit_code(["--http", "127.0.0.1:8000", "--token-file", str(token_file)]) == 78
+    assert "KNOWLEDGE_BASE_EMBED_MODEL" in capsys.readouterr().err
+    assert runs == []
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--http", "nope"],
+        ["--http", "127.0.0.1:"],
+        ["--http", ":80"],
+        ["--http", "127.0.0.1:0"],
+        ["--http", "127.0.0.1:65536"],
+        ["--http", "127.0.0.1:+80"],
+        ["--http", "::1:80"],
+        ["--http", "[::1"],
+        ["--http", "127.0.0.l:80"],
+        ["--http", "localhost:80"],
+        ["--http", "127.0.0.1:\uff18\uff10"],
+        ["--http"],
+        ["--bogus"],
+    ],
+)
+def test_a_bad_command_line_exits_78(served, capsys, token_file, argv):
+    runs, stdio = served
+    if argv[0] == "--http" and len(argv) == 2:
+        argv = [*argv, "--token-file", str(token_file)]
+    assert _exit_code(argv) == 78
+    err = capsys.readouterr().err
+    assert argv[0] in err
+    assert runs == [] and not stdio.called
+
+
+def test_a_server_that_never_starts_exits_1(served, monkeypatch, token_file):
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn.Server, "run", lambda self, *a, **k: None)
+    assert _exit_code(["--http", "127.0.0.1:8000", "--token-file", str(token_file)]) == 1
+
+
+def test_help_exits_0(served, capsys):
+    assert _exit_code(["--help"]) == 0
+    assert "--http" in capsys.readouterr().out
+
+
+def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_file):
+    """Only a real process shows what reaches stderr: caplog sees records before any handler formats them."""
+    import json
+    import signal
+    import socket
+    import time
+
+    import httpx
+
+    from tests.conftest import machine_token
+
+    with socket.create_server(("127.0.0.1", 0)) as probe:
+        port = probe.getsockname()[1]
+    env = dict(os.environ, KNOWLEDGE_BASE_DB=str(tmp_path / "kb.db"))
+    out, err = tmp_path / "stdout", tmp_path / "stderr"
+    token = machine_token("laptop")
+    url = f"http://127.0.0.1:{port}/mcp"
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+
+    def call(name: str, arguments: dict) -> httpx.Response:
+        body = json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
+        )
+        return httpx.post(url, content=body, headers={**headers, "Authorization": f"Bearer {token}"}, timeout=10)
+
+    def added_after(size: int, needle: str) -> str:
+        deadline = time.monotonic() + 5
+        while True:
+            text = err.read_bytes()[size:].decode(errors="replace")
+            if needle in text or time.monotonic() > deadline:
+                return text
+            time.sleep(0.05)
+
+    with out.open("wb") as stdout, err.open("wb") as stderr:
+        child = subprocess.Popen(  # noqa: S603, RUF100 -- trusted argv (this interpreter, our module); ruff versions disagree
+            [
+                sys.executable,
+                "-m",
+                "knowledge_base.server",
+                "--http",
+                f"127.0.0.1:{port}",
+                "--token-file",
+                str(token_file),
+            ],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=stderr,
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while True:
+                assert child.poll() is None, err.read_text()
+                try:
+                    if httpx.post(url, timeout=1).status_code == 401:
+                        break
+                except httpx.TransportError:
+                    pass
+                assert time.monotonic() < deadline, err.read_text()
+                time.sleep(0.1)
+
+            assert call("status", {}).status_code == 200
+            size = err.stat().st_size
+            call(token, {})
+            assert "me_[redacted]" in added_after(size, "me_[redacted]")
+            # FastMCP logs the rejected argument's name and value in a traceback today; the whole-output
+            # assertion below holds whether or not a later release keeps logging it.
+            assert call("status", {token: token}).json()["result"]["isError"] is True
+            forged = "INFO knowledge_base.auth: machine desktop called 'status'"
+            for name in (f"x\n{forged}", f"x\x00{forged}", "a" * 2000 + forged):
+                call(name, {})
+        finally:
+            child.send_signal(signal.SIGTERM)
+            try:
+                child.wait(15)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                raise
+
+    lines = err.read_text().split("\n")
+    assert sum(line.startswith("INFO knowledge_base.auth: machine laptop called 'status'") for line in lines) == 2
+    assert not any(line.startswith("INFO knowledge_base.auth: machine desktop") for line in lines)
+    assert all(len(line) <= 2002 for line in lines)
+    for path in (out, err):
+        data = path.read_bytes()
+        assert token.encode() not in data
+        assert b"\x00" not in data

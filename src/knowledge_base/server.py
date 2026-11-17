@@ -1,11 +1,18 @@
-"""FastMCP server exposing knowledge-base tools."""
+"""FastMCP server exposing knowledge-base tools: over stdio, or stateless HTTP behind machine tokens with ``--http``."""
 
 from __future__ import annotations
 
+import argparse
+import ipaddress
 import sys
+from collections.abc import Sequence
+from pathlib import Path
+from typing import NoReturn
 
+import uvicorn
 from fastmcp import FastMCP
 
+from .auth import CallingMachine, RequireMachine, TokenTable, log_to_stderr
 from .db import open_declared_db
 from .exceptions import KnowledgeBaseError
 
@@ -28,6 +35,7 @@ mcp = FastMCP(
         "Use 'export_bibtex_tool' to export papers for Typst bibliography. "
         "Use 'suggest_relationships_tool' to auto-detect citations."
     ),
+    middleware=[CallingMachine()],
 )
 
 mcp.mount(_ingestion)
@@ -38,16 +46,99 @@ mcp.mount(_extraction)
 mcp.mount(_operations)
 
 
-def main():
-    # The startup gate (#569): serve only with an explicit embedding declaration the
-    # database agrees with. 78 is EX_CONFIG, so a unit can set RestartPreventExitStatus=78
-    # instead of restart-looping on a configuration error.
+def build_http_app(tokens: TokenTable) -> RequireMachine:
+    """What ``--http`` serves: the hub's stateless JSON streamable-HTTP app behind the machine-token gate.
+
+    Every option is explicit, so no ``FASTMCP_*`` variable changes the routes or the session mode.
+    """
+    return RequireMachine(mcp.http_app(path="/mcp", stateless_http=True, json_response=True), tokens)
+
+
+def uvicorn_config(app: RequireMachine, host: str, port: int) -> uvicorn.Config:
+    """The uvicorn configuration ``--http`` and the test harness share."""
+    return uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        lifespan="on",
+        # Under "auto", an upgrade request becomes a websocket scope that ends in uvicorn's own 403;
+        # with "none" it is a plain request that meets the gate's 401.
+        ws="none",
+        # uvicorn's dictConfig would replace the process's handlers, and its per-request warnings
+        # (upgrade attempts, malformed requests) let any client write to the journal; errors still show.
+        access_log=False,
+        log_config=None,
+        log_level="error",
+        server_header=False,
+        # timeout_graceful_shutdown stays unset (wait): a cut call's tool thread runs to its end anyway,
+        # so a deadline would only drop its answer and invite a retried write.
+    )
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    """A command-line error is a configuration error: exit 78 like the startup gate, not argparse's 2."""
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: {message}", file=sys.stderr)
+        sys.exit(78)
+
+
+def _host_port(value: str) -> tuple[str, int]:
+    """``IP:PORT``, IPv6 in brackets. A host name is refused: it would fail inside uvicorn and restart-loop the unit."""
+    host, _, port = value.rpartition(":")
+    bracketed = host.startswith("[") and host.endswith("]")
     try:
+        address = ipaddress.ip_address(host[1:-1] if bracketed else host)
+    except ValueError:
+        address = None
+    if (
+        address is None
+        or bracketed != (address.version == 6)
+        or not (port.isascii() and port.isdigit() and len(port) <= 5 and 1 <= int(port) <= 65535)
+    ):
+        raise argparse.ArgumentTypeError(f"expected IP:PORT (IPv6 in brackets, port 1-65535), got {value!r}")
+    return str(address), int(port)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = _ArgumentParser(prog="knowledge-base", description="Serve knowledge-base over MCP: stdio by default.")
+    parser.add_argument(
+        "--http",
+        type=_host_port,
+        metavar="IP:PORT",
+        help="serve stateless streamable HTTP on POST /mcp at this address instead of stdio",
+    )
+    parser.add_argument(
+        "--token-file",
+        type=Path,
+        metavar="PATH",
+        help="with --http: the machine token-hash file (memory-engine ADR-0020 section 4)",
+    )
+    args = parser.parse_args(argv)
+    token_file: Path | None = args.token_file
+    if args.http and token_file is None:
+        parser.error("--http needs --token-file")
+    if token_file is not None and not args.http:
+        parser.error("--token-file needs --http")
+    # The startup gate (#569), after the token file so a bad file never touches the database: serve only
+    # with an explicit embedding declaration the database agrees with. 78 is EX_CONFIG, so a unit can set
+    # RestartPreventExitStatus=78 instead of restart-looping on a configuration error.
+    try:
+        tokens = TokenTable.load(token_file) if token_file is not None else None
         open_declared_db().close()
     except KnowledgeBaseError as exc:
         print(f"knowledge-base: {exc}", file=sys.stderr)
         sys.exit(78)
-    mcp.run(transport="stdio")
+    if tokens is None:
+        mcp.run(transport="stdio")
+        return
+    host, port = args.http
+    log_to_stderr()
+    http = uvicorn.Server(uvicorn_config(build_http_app(tokens), host, port))
+    http.run()
+    if not http.started:  # run() returns normally after a failed startup; uvicorn's own CLI exits 3 here
+        sys.exit(1)
 
 
 if __name__ == "__main__":

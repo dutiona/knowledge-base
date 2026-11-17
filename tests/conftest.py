@@ -9,8 +9,12 @@ data-dir redirect (#391) and the embedding declaration (#569).
 from __future__ import annotations
 
 import ipaddress
+import socket
 import sqlite3
+import threading
+import time
 from collections.abc import Callable, Iterator
+from typing import Any
 
 import httpx
 import pytest
@@ -219,3 +223,146 @@ def operator_ollama(monkeypatch) -> str:
     monkeypatch.setenv("OLLAMA_HOST", "http://ollama.example.test:11434")
     monkeypatch.setattr("knowledge_base.embeddings._OLLAMA_URL", None)
     return "ollama.example.test"
+
+
+def machine_token(machine: str) -> str:
+    """A well-shaped ADR-0020 token for ``machine``, built at run time so no token literal is committed."""
+    return "me_" + machine.rjust(32, "0")
+
+
+def token_line(machine: str, token: str | None = None) -> str:
+    """The token-hash file line for ``machine`` (its own token unless ``token`` is given)."""
+    import hashlib
+
+    return f"{machine} {hashlib.sha256((token or machine_token(machine)).encode()).hexdigest()}\n"
+
+
+@pytest.fixture
+def token_file(tmp_path):
+    """A token-hash file admitting ``laptop`` and ``desktop`` (tokens from ``machine_token``)."""
+    path = tmp_path / "token-hashes"
+    path.write_text(token_line("laptop") + token_line("desktop"))
+    return path
+
+
+@pytest.fixture
+def stub_embedder(monkeypatch) -> list[str]:
+    """Answer the query embedding ``search_index`` asks for; the fixture is the list of texts it received."""
+    from tests.declared_env import TEST_EMBED_DIM
+
+    texts: list[str] = []
+
+    def _embed_single(text, *_args, **_kwargs):
+        texts.append(text)
+        return [0.1] * TEST_EMBED_DIM
+
+    monkeypatch.setattr("knowledge_base.search.embed_single", _embed_single)
+    return texts
+
+
+@pytest.fixture
+def declared_db() -> None:
+    """Run the #569 startup gate on the per-test database, as ``main()`` does before serving."""
+    from knowledge_base.db import open_declared_db
+
+    open_declared_db().close()
+
+
+class KbHttp:
+    """A KB HTTP server on an ephemeral loopback port, served exactly as ``knowledge-base --http`` serves it.
+
+    One listening socket is held for the object's life and each server gets a duplicate, so a restart never
+    leaves the port free. Never combine with ``http_requests``: it patches the transport this client uses.
+    """
+
+    def __init__(self, app_factory: Callable[[], Any]) -> None:
+        self._app_factory = app_factory
+        self._socket = socket.create_server(("127.0.0.1", 0))
+        self.port: int = self._socket.getsockname()[1]
+        self.url = f"http://127.0.0.1:{self.port}"
+        self._server: Any = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        import uvicorn
+
+        from knowledge_base.server import uvicorn_config
+
+        server = uvicorn.Server(uvicorn_config(self._app_factory(), "127.0.0.1", self.port))
+        errors: list[BaseException] = []
+
+        def _run() -> None:
+            try:
+                server.run(sockets=[self._socket.dup()])
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 10
+        while not server.started:
+            if not thread.is_alive():
+                raise RuntimeError("the KB HTTP server ended before it started") from (errors[0] if errors else None)
+            if time.monotonic() > deadline:
+                raise TimeoutError("the KB HTTP server did not start within 10 s")
+            time.sleep(0.01)
+        self._server, self._thread = server, thread
+
+    def stop(self) -> None:
+        if self._server is None or self._thread is None:
+            return
+        self._server.should_exit = True
+        self._thread.join(10)
+        if self._thread.is_alive():
+            raise TimeoutError("the KB HTTP server did not stop within 10 s")
+        self._server = self._thread = None
+
+    def restart(self) -> None:
+        self.stop()
+        self.start()
+
+    def close(self) -> None:
+        self.stop()
+        self._socket.close()
+
+    def request(
+        self,
+        method: str,
+        path: str = "/mcp",
+        *,
+        authorization: str | list[str] | None = None,
+        headers: dict[str, str] | None = None,
+        content: bytes | None = None,
+    ) -> httpx.Response:
+        """One request on a fresh connection; ``authorization`` is sent as that many headers."""
+        values = [authorization] if isinstance(authorization, str) else authorization or []
+        sent = [("Authorization", value) for value in values] + list((headers or {}).items())
+        return httpx.request(method, self.url + path, headers=sent, content=content, timeout=10)
+
+    def rpc(
+        self, method: str, params: dict | None = None, *, machine: str | None = "laptop", headers=None
+    ) -> httpx.Response:
+        """POST one JSON-RPC request to ``/mcp`` as ``machine`` (``None`` sends no token)."""
+        import json
+
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
+        return self.request(
+            "POST",
+            authorization=f"Bearer {machine_token(machine)}" if machine else None,
+            headers={"Accept": "application/json", "Content-Type": "application/json", **(headers or {})},
+            content=body,
+        )
+
+
+@pytest.fixture
+def kb_http(declared_db, token_file, stub_embedder) -> Iterator[KbHttp]:
+    """KB served over HTTP behind the machine-token gate, with ``laptop`` and ``desktop`` admitted."""
+    from knowledge_base.auth import TokenTable
+    from knowledge_base.server import build_http_app
+
+    server = KbHttp(lambda: build_http_app(TokenTable.load(token_file)))
+    server.start()
+    try:
+        yield server
+    finally:
+        server.close()

@@ -34,7 +34,8 @@ relied on and a CI status is never evidence.
 
 ```
 src/knowledge_base/
-  server.py        # FastMCP entry point, registers all MCP tools
+  server.py        # entry point: stdio, or stateless HTTP behind the gate with --http
+  auth.py          # machine tokens: the token-hash file, the Bearer gate, the per-call log
   db.py            # SQLite schema, migrations, connection helpers
   ingest.py        # PDF/code/web/markdown ingestion pipeline
   search.py        # Hybrid search (FTS5 + sqlite-vec + RRF)
