@@ -20,6 +20,7 @@ from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
 from .exceptions import ValidationError
+from .redact import TOKEN_SHAPE
 
 __all__ = [
     "TOKEN_SHAPE",
@@ -33,8 +34,6 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-#: ``me_`` followed by 32 base62 characters.
-TOKEN_SHAPE = "me_[0-9A-Za-z]{32}"  # noqa: S105 -- a pattern, not a secret
 _TOKEN = re.compile(TOKEN_SHAPE.encode())
 _LINE = re.compile(rb"([^ ]*) ([^ ]*)")
 _MACHINE = re.compile(rb"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
