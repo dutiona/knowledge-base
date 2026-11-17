@@ -7,6 +7,7 @@ import json
 import re
 from pathlib import Path
 
+import httpx
 import pytest
 
 from knowledge_base import server
@@ -234,3 +235,104 @@ def test_each_hubs_instructions_name_its_real_tools(hub):
     assert quoted <= _names(getattr(server, hub))
     if hub == "network":
         assert quoted == _APPROVED
+
+
+# --- no HTTP tool deletes: the vision/browser refusal, and the behaviour it protects ---
+
+
+@pytest.mark.parametrize("var", ["KNOWLEDGE_BASE_VISION", "KNOWLEDGE_BASE_BROWSER"])
+def test_http_refuses_to_build_while_vision_or_the_browser_is_on(monkeypatch, token_file, var):
+    from knowledge_base.auth import TokenTable
+    from knowledge_base.exceptions import ValidationError
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_VISION", "off")
+    monkeypatch.setenv("KNOWLEDGE_BASE_BROWSER", "off")
+    monkeypatch.setenv(var, "on")
+    with pytest.raises(ValidationError, match=var):
+        server.build_http_app(TokenTable.load(token_file))
+
+
+def _snapshot(conn) -> dict[str, set[tuple]]:
+    """Every row of every regular table; the active space's chunk_count, which an insert may grow, left out.
+
+    Virtual tables and their shadow tables (FTS5, sqlite-vec) are internal storage an insert rewrites in place.
+    """
+    rows = conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'table'").fetchall()
+    virtual = [name for name, sql in rows if (sql or "").upper().startswith("CREATE VIRTUAL")]
+    tables = [name for name, _ in rows if not name.startswith(("sqlite_", *virtual))]
+    snapshot = {}
+    for table in tables:
+        columns = [
+            c[1]
+            for c in conn.execute(f"PRAGMA table_info({table})")
+            if (table, c[1]) != ("embed_spaces", "chunk_count")
+        ]
+        snapshot[table] = {tuple(r) for r in conn.execute(f"SELECT {', '.join(columns)} FROM {table}")}  # noqa: S608
+    return snapshot
+
+
+def test_no_http_tool_deletes(
+    declared_db,
+    monkeypatch,
+    http_requests,
+    fake_dns,
+    public_net,
+    stub_embedder,
+    stub_document_embedder,
+    operator_ollama,
+):
+    from fastmcp import Client
+
+    from knowledge_base.conclusions import record_conclusion
+    from knowledge_base.db import get_connection
+    from knowledge_base.ingest import ingest_text
+    from knowledge_base.papers import register_paper
+    from knowledge_base.utils import content_hash
+    from knowledge_base.web import ingest_url
+
+    url = "https://page.example.test/article"
+    fake_dns["page.example.test"] = ["203.0.113.10"]
+    page = "<html><head><title>T</title></head><body><article><h1>A</h1>{}</article></body></html>"
+
+    def _serve(text):
+        http_requests.handlers["page.example.test"] = lambda request: httpx.Response(
+            200, html=page.format(f"<p>{text}</p>")
+        )
+
+    conn = get_connection()
+    ingest_text(conn, "the original notes about quokkas", source_uri="content:///notes.md", source_type="markdown")
+    ingest_text(conn, "the original page about quokkas " * 30, source_uri=url, source_type="web")
+    conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
+        " VALUES (?, ?, 'figure', ?, ?)",
+        (content_hash("a figure"), "a figure", url, 2_000_000),
+    )
+    conn.commit()
+    register_paper(conn, "A paper", source_uri=url)
+    ids = [r[0] for r in conn.execute("SELECT id FROM chunks ORDER BY id LIMIT 2")]
+    record_conclusion(conn, "quokkas are happy", 0.9, ids)
+    before = _snapshot(conn)
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_VISION", "off")
+    monkeypatch.setenv("KNOWLEDGE_BASE_BROWSER", "off")
+    _serve("an edited page about quokkas, now with other words entirely")
+
+    async def _run():
+        async with Client(server.network) as client:
+            for mode in ("hybrid", "fts", "vec"):
+                await client.call_tool("search_index", {"query": "quokkas", "mode": mode})
+            await client.call_tool("ingest_text", {"name": "notes.md", "content": "edited notes about quokkas"})
+            await client.call_tool("ingest_text", {"name": "notes.md", "content": "the original notes about quokkas"})
+            await client.call_tool("ingest_url", {"url": url})
+
+    asyncio.run(_run())
+    after = _snapshot(conn)
+    for table, rows in before.items():
+        assert rows <= after[table], table  # nothing deleted, nothing rewritten
+    assert conn.execute("SELECT COUNT(*) FROM chunks WHERE source_type = 'figure'").fetchone()[0] == 1
+
+    # Control: the same URL through the local tool with vision on replaces the page's figure chunk.
+    monkeypatch.setenv("KNOWLEDGE_BASE_VISION", "on")
+    ingest_url(conn, url)
+    assert conn.execute("SELECT COUNT(*) FROM chunks WHERE source_type = 'figure'").fetchone()[0] == 0
+    conn.close()

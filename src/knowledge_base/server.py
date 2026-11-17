@@ -15,7 +15,8 @@ from fastmcp import FastMCP
 
 from .auth import CallingMachine, RequireMachine, TokenTable, log_to_stderr
 from .db import open_declared_db
-from .exceptions import KnowledgeBaseError
+from .exceptions import KnowledgeBaseError, ValidationError
+from .settings import BROWSER_VAR, VISION_VAR, switch_on
 
 from .routes.embeddings import mcp as _embeddings
 from .routes.extraction import mcp as _extraction
@@ -74,8 +75,16 @@ network = FastMCP(
 def build_http_app(tokens: TokenTable) -> RequireMachine:
     """What ``--http`` serves: the network hub's stateless JSON streamable-HTTP app behind the machine-token gate.
 
-    Every option is explicit, so no ``FASTMCP_*`` variable changes the routes or the session mode.
+    Every option is explicit, so no ``FASTMCP_*`` variable changes the routes or the session mode. Refused while vision
+    or the browser fallback is on: they gate every phase of ``ingest_url`` that replaces a page's figure chunks, and the
+    renderer runs page JavaScript whose requests KB's SSRF floor never sees.
     """
+    for var in (VISION_VAR, BROWSER_VAR):
+        if switch_on(var):
+            raise ValidationError(
+                f"{var} must be off with --http: over the network, ingest_url must not run page JavaScript "
+                "or replace a page's figures"
+            )
     return RequireMachine(network.http_app(path="/mcp", stateless_http=True, json_response=True), tokens)
 
 
@@ -150,17 +159,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     # with an explicit embedding declaration the database agrees with. 78 is EX_CONFIG, so a unit can set
     # RestartPreventExitStatus=78 instead of restart-looping on a configuration error.
     try:
-        tokens = TokenTable.load(token_file) if token_file is not None else None
+        app = build_http_app(TokenTable.load(token_file)) if token_file is not None else None
         open_declared_db().close()
     except KnowledgeBaseError as exc:
         print(f"knowledge-base: {exc}", file=sys.stderr)
         sys.exit(78)
-    if tokens is None:
+    if app is None:
         mcp.run(transport="stdio")
         return
     host, port = args.http
     log_to_stderr()
-    http = uvicorn.Server(uvicorn_config(build_http_app(tokens), host, port))
+    http = uvicorn.Server(uvicorn_config(app, host, port))
     http.run()
     if not http.started:  # run() returns normally after a failed startup; uvicorn's own CLI exits 3 here
         sys.exit(1)

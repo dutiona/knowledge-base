@@ -245,6 +245,9 @@ def served(monkeypatch):
 
     monkeypatch.setattr(uvicorn.Server, "run", _run)
     monkeypatch.setattr(server, "log_to_stderr", lambda: None)
+    # --http refuses vision and the browser fallback, which the suite's declaration switches on.
+    monkeypatch.setenv("KNOWLEDGE_BASE_VISION", "off")
+    monkeypatch.setenv("KNOWLEDGE_BASE_BROWSER", "off")
     with patch.object(server.mcp, "run") as stdio:
         yield runs, stdio
 
@@ -365,7 +368,9 @@ def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_fil
 
     with socket.create_server(("127.0.0.1", 0)) as probe:
         port = probe.getsockname()[1]
-    env = dict(os.environ, KNOWLEDGE_BASE_DB=str(tmp_path / "kb.db"))
+    env = dict(
+        os.environ, KNOWLEDGE_BASE_DB=str(tmp_path / "kb.db"), KNOWLEDGE_BASE_VISION="off", KNOWLEDGE_BASE_BROWSER="off"
+    )
     out, err = tmp_path / "stdout", tmp_path / "stderr"
     token = machine_token("laptop")
     url = f"http://127.0.0.1:{port}/mcp"
@@ -439,3 +444,15 @@ def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_fil
         data = path.read_bytes()
         assert token.encode() not in data
         assert b"\x00" not in data
+
+
+@pytest.mark.parametrize("var", ["KNOWLEDGE_BASE_VISION", "KNOWLEDGE_BASE_BROWSER"])
+def test_http_exits_78_while_vision_or_the_browser_is_on(served, token_file, capsys, monkeypatch, var):
+    from knowledge_base.db import resolve_db_path
+
+    runs, _ = served
+    monkeypatch.setenv(var, "on")
+    assert _exit_code(["--http", "127.0.0.1:65000", "--token-file", str(token_file)]) == 78
+    assert var in capsys.readouterr().err
+    assert runs == []
+    assert not resolve_db_path().exists()

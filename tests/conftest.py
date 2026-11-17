@@ -389,8 +389,11 @@ class KbHttp:
 
 
 @pytest.fixture
-def kb_http(declared_db, token_file, stub_embedder, stub_document_embedder) -> Iterator[KbHttp]:
+def kb_http(declared_db, token_file, stub_embedder, stub_document_embedder, monkeypatch) -> Iterator[KbHttp]:
     """KB served over HTTP behind the machine-token gate, with ``laptop`` and ``desktop`` admitted."""
+    # --http refuses vision and the browser fallback, which the suite's declaration switches on.
+    monkeypatch.setenv("KNOWLEDGE_BASE_VISION", "off")
+    monkeypatch.setenv("KNOWLEDGE_BASE_BROWSER", "off")
     from knowledge_base.auth import TokenTable
     from knowledge_base.server import build_http_app
 
