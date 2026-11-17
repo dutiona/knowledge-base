@@ -222,6 +222,7 @@ class _DeadlineStream(httpcore.NetworkStream):
         if self._socket is None or (
             ssl_object is not None and getattr(self._socket, "_sslobj", None) is not ssl_object
         ):
+            stream.close()
             raise RuntimeError("httpcore's stream no longer sends through a socket carrying its TLS")
         self._stream = stream
 

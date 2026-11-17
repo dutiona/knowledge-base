@@ -172,6 +172,7 @@ def test_a_stream_whose_socket_does_not_carry_its_tls_is_refused():
     stream.ssl_object = object()  # TLS held somewhere the raw socket does not reach: a send there would be plaintext
     with pytest.raises(RuntimeError, match="TLS"):
         utils._DeadlineStream(stream)
+    assert stream.closed
 
 
 def test_a_deadline_between_connect_and_tls_closes_the_socket(clock, stub):
