@@ -655,3 +655,12 @@ def test_re_embed_keeps_the_instruction_of_the_same_model(next_model, kept, tmp_
     recorded = conn.execute("SELECT query_instruction FROM embed_spaces WHERE name = ?", (result["space"],)).fetchone()
     assert recorded[0] == kept
 
+def test_a_keyword_search_needs_no_space(kb_conn, http_requests):
+    from knowledge_base.ingest import ingest_text
+    from knowledge_base.search import search
+
+    with patch("knowledge_base.ingest.embed", lambda texts, **_kw: [[0.1] * TEST_EMBED_DIM for _ in texts]):
+        ingest_text(kb_conn, "Attention is all you need.", source_uri="/docs/a.md", source_type="markdown")
+    assert search(kb_conn, "attention", mode="fts", space_name="no_such_space")
+    assert http_requests == []
+

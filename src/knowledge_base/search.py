@@ -256,21 +256,20 @@ def search(
 
     fetch_limit = top_k * SEARCH_OVERFETCH_MULTIPLIER
 
-    # Resolve space configuration — either specific space or active
-    # The queried space: the named one, else the active one. folder_summaries_vec is always at the
-    # active space's dim, so the folder boost applies only when the active space is queried.
-    active = get_active_space(conn)
-    space: dict | None = dict(active) if active is not None else None
+    # Only the embedding legs need a space (#573): the named one, else the active one, resolved and
+    # checked before either leg runs. folder_summaries_vec is always at the active space's dim, so the
+    # folder boost applies only when the active space is queried. fts mode resolves and checks nothing.
+    queried: dict | None = None
     vec_table: str | None = None
     skip_folder_boost = False
-    if space_name:
-        space = get_space(conn, space_name)
-        vec_table = space["table_name"]
-        skip_folder_boost = active is None or space["name"] != active["name"]
-    queried = None
     if mode in ("hybrid", "vec"):
-        # The query provider, after the space's identity check (#573): before either leg runs.
-        queried = space if space is not None else require_active_space(conn)
+        active = get_active_space(conn)
+        if space_name:
+            queried = get_space(conn, space_name)
+            vec_table = queried["table_name"]
+            skip_folder_boost = active is None or queried["name"] != active["name"]
+        else:
+            queried = dict(active if active is not None else require_active_space(conn))
         query_provider_cfg = declared_provider_config(conn, queried)
 
     # Strategy filtering: only apply when the caller explicitly requests it.
