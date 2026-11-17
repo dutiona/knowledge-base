@@ -67,6 +67,7 @@ Read these when the task touches the corresponding area:
 | Thread-local DB connections                                     | `src/knowledge_base/_conn.py`             | `docs/design/architecture-overview.md`    |
 | Chunking (text, markdown, Python AST)                           | `src/knowledge_base/chunking.py`          | `docs/usage/ingesting-documents.md`       |
 | Ingestion (PDF, code, markdown)                                 | `src/knowledge_base/ingest.py`            | `docs/usage/ingesting-documents.md`       |
+| Redaction (secrets before storage and embedding)                | `src/knowledge_base/redact.py`            | `docs/usage/ingesting-documents.md`       |
 | Web ingestion (URL, SSRF, browser)                              | `src/knowledge_base/web.py`               | `docs/usage/ingesting-documents.md`       |
 | SSRF floor and pinned client (`egress_client`)                  | `src/knowledge_base/utils.py`             | `docs/usage/ingesting-documents.md`       |
 | Hybrid search (FTS5 + vec + RRF)                                | `src/knowledge_base/search.py`            | `docs/usage/searching.md`                 |
@@ -98,6 +99,7 @@ Read these when the task touches the corresponding area:
 - **Content-hash deduplication**: SHA-256 on chunk content prevents duplicate ingestion
 - **Thread-local connections**: each thread gets its own `sqlite3.Connection`, never shared
 - **Batched SQL**: IN-clause queries batched to stay under SQLite's 999 variable limit (`db.py:_batched_execute`)
+- **Redaction**: text stored as chunk content passes `redact.scrub()` before it is hashed or embedded; a new insert site needs a leak case in `tests/test_redact_paths.py`. `tests/fixtures/redaction-cases.jsonl` is shared byte for byte with memory-engine: change it only through a linked pair of PRs
 - **Map-reduce extraction**: short docs (<8000 chars) get single LLM call; longer docs split into per-chunk extraction then entity resolution
 
 ## Roadmap

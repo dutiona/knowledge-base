@@ -23,7 +23,7 @@ A document's `source_uri` names it in every result. It is an opaque identifier, 
 | Ingested by | `source_uri` |
 | --- | --- |
 | file (`ingest`, stdio) | the absolute path, `/...` |
-| web page (`ingest_url`) | the URL as given, `https://...` |
+| web page (`ingest_url`) | the URL as given without its `user:pass@`, `https://...` |
 | content (`ingest_text`) | `content://<machine>/<name>` over HTTP, `content:///<name>` over stdio |
 
 Return values are JSON strings unless noted otherwise.
@@ -98,6 +98,8 @@ one, the call fails with one of these texts and stores nothing:
 
 Uses content-hash dedup -- unchanged pages are skipped on re-ingest. Re-ingesting a changed page adds its new text
 passages beside the earlier ones; no tool replaces or removes a page's text. Failures are tool errors (see Surfaces).
+Token-shaped secrets and URL passwords are stored as `[REDACTED:<rule>]`, and the page is stored under its URL without
+its userinfo (see [Redaction](../usage/ingesting-documents.md#redaction)).
 
 | Parameter    | Type          | Required | Default | Description                                    |
 | ------------ | ------------- | -------- | ------- | ---------------------------------------------- |
@@ -130,6 +132,9 @@ HTTP.
 | --------- | ----- | -------- | ------- | ----------------------------------------------------------------------------------- |
 | `name`    | `str` | yes      | --      | The document's name, for example `notes/attention.md`: an opaque label, never a path |
 | `content` | `str` | yes      | --      | The text or markdown to store                                                        |
+
+Token-shaped secrets and URL passwords in `content` are stored as `[REDACTED:<rule>]` (see
+[Redaction](../usage/ingesting-documents.md#redaction)).
 
 The document is stored with `source_type` `markdown` and `source_uri` `content://<machine>/<name>`, the machine being
 the caller's token's (`content:///<name>` over stdio). A `name` is stripped and must hold 1 to 255 characters, with no

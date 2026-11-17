@@ -38,6 +38,7 @@ src/knowledge_base/
   auth.py          # machine tokens: the token-hash file, the Bearer gate, the per-call log
   db.py            # SQLite schema, migrations, connection helpers
   ingest.py        # PDF/code/web/markdown ingestion pipeline
+  redact.py        # Secret redaction (memory-engine's rules); redact_store.py: the redact command
   search.py        # Hybrid search (FTS5 + sqlite-vec + RRF)
   extraction.py    # LLM-powered structured extraction (map-reduce)
   vision.py        # Vision-based figure extraction from PDFs
@@ -62,6 +63,7 @@ docs/              # Sphinx-compatible documentation
 6. **Mock external services** — tests must not call Ollama or any LLM. Use `unittest.mock.patch` on `knowledge_base.embeddings.embed` (or the caller's `embed` name), or the `http_requests` fixture, which records every httpx request at the transport. Fake outbound HTTP with `http_requests`, names with `fake_dns` and public hosts with `public_net`; never patch `httpx` inside a module, since a floored call builds its own pinned client (`utils.egress_client`) and the patch would miss it.
 7. **Content-hash dedup** — ingestion uses SHA-256 hashes. If adding new content types, maintain this pattern.
 8. **Batched SQL** — use `_batched_execute`/`_batched_select` from `db.py` for any IN-clause query to stay under SQLite's 999 variable limit.
+9. **Redaction** — text stored as chunk content passes `redact.scrub()` before it is hashed or embedded; a new insert site needs a leak case in `tests/test_redact_paths.py` (its tripwire fails until it has one). `tests/fixtures/redaction-cases.jsonl` is shared byte for byte with memory-engine: change it only through a linked pair of PRs, memory-engine first.
 
 ## Issue & PR Labels
 
