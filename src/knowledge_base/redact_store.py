@@ -84,7 +84,13 @@ def _contents(conn: sqlite3.Connection) -> dict[int, tuple[str, list[str]]]:
         A window stored stripped (the markdown chunker's oversized sections) overlaps by less than 200.
         """
         top = min(CHUNK_OVERLAP, len(a) - 1, len(b) - 1)
-        return next((m for m in range(top, _MIN_OVERLAP - 1, -1) if a.endswith(b[:m])), 0)
+        if top < _MIN_OVERLAP:
+            return 0
+        probe = b[:_MIN_OVERLAP]
+        k = a.find(probe, len(a) - top)  # the first occurrence is the largest overlap
+        while k >= 0 and not a.endswith(b[: len(a) - k]):
+            k = a.find(probe, k + 1)
+        return len(a) - k if k >= 0 else 0
 
     rows = conn.execute("SELECT id, content, source_uri, chunk_index FROM chunks ORDER BY source_uri, chunk_index, id")
     for _uri, document in groupby(rows, key=lambda r: r["source_uri"]):
