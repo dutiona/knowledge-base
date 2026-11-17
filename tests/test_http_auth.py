@@ -103,7 +103,7 @@ def test_the_first_request_may_be_a_tool_call(kb_http, stub_embedder):
 
 
 def test_the_tailnet_host_is_served(kb_http):
-    proxied = {"Host": "kb.example-tailnet.ts.net", "X-Forwarded-For": "100.64.0.9", "X-Forwarded-Proto": "https"}
+    proxied = {"Host": "kb.example-tailnet.ts.net", "X-Forwarded-For": "192.0.2.9", "X-Forwarded-Proto": "https"}
     assert kb_http.rpc("tools/list", headers=proxied).status_code == 200
 
 
