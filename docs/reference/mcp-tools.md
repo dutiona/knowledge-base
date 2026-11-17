@@ -88,6 +88,14 @@ Redirects are followed. Every hop keeps the SSRF floor and connects to the addre
 private, loopback, tailnet or host-owned address (`KNOWLEDGE_BASE_HOST_ADDRESSES`) fails the call before anything is
 sent there.
 
+The fetch keeps three operator limits (see [Ingesting Documents](../usage/ingesting-documents.md#web-pages)); past
+one, the call fails with one of these texts and stores nothing:
+
+- `Failed to fetch <url>: the response is over the <n>-byte cap (KNOWLEDGE_BASE_FETCH_MAX_BYTES)`
+- `Failed to fetch <url>: more than <n> redirects (KNOWLEDGE_BASE_FETCH_MAX_REDIRECTS)`
+- `Failed to fetch <url>: not done within the <n> s deadline (KNOWLEDGE_BASE_FETCH_DEADLINE)`
+- `Failed to fetch <url>: unsupported Content-Encoding '<value>'`
+
 Uses content-hash dedup -- unchanged pages are skipped on re-ingest. Re-ingesting a changed page adds its new text
 passages beside the earlier ones; no tool replaces or removes a page's text. Failures are tool errors (see Surfaces).
 
