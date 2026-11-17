@@ -347,3 +347,21 @@ def test_figure_text_is_neither_stored_nor_embedded(
     _assert_clean(kb_conn, stub_document_embedder, GITHUB_TOKEN, AWS_KEY)
     meta = kb_conn.execute("SELECT metadata FROM chunks").fetchone()["metadata"]
     assert not _leaks(GITHUB_TOKEN, meta) and not _leaks(AWS_KEY, meta)
+
+
+def test_folder_summary_is_a_fixpoint(kb_conn, stub_document_embedder, folder_embedder, tmp_path):
+    """A summary joins file names (kept as identity), 200-character cuts and joined lines: each can make a match."""
+    from tests.conftest import machine_token
+
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    (folder / f"{machine_token('laptop')}.md").write_text("ordinary prose about attention")
+    (folder / "keys.md").write_text("api_key:\n" + "a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6" + "\n")
+    (folder / "cut.md").write_text("word " * 36 + "Ab3dE5fG7hI9jK1lM2nO.txt and more")
+    for f in sorted(folder.iterdir()):
+        ingest.ingest_file(kb_conn, f)
+    summary = kb_conn.execute("SELECT summary FROM folder_summaries").fetchone()["summary"]
+    assert summary == scrub(summary)
+    assert folder_embedder and all(t == scrub(t) for t in folder_embedder)
+    assert "[REDACTED:machine-token]" in summary and "[REDACTED:hex-secret]" in summary
+    assert "[REDACTED:high-entropy]" in summary
