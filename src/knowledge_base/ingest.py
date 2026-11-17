@@ -33,6 +33,7 @@ from .db import (
     require_active_space,
 )
 from .migrate import _main_db_path
+from .redact import scrub
 from .embed_swap import declared_provider_config
 from .embeddings import embed, split_inputs, truncate_embedding
 from .exceptions import NotFoundError
@@ -243,7 +244,7 @@ def _extract_pdf_text(path: Path) -> str:
     doc = fitz.open(str(path))
     pages = []
     for page in doc:
-        pages.append(page.get_text())
+        pages.append(scrub(page.get_text()))
     doc.close()
     return "\n\n".join(pages)
 
@@ -298,9 +299,11 @@ def _extract_pdf_markdown(path: Path, image_dir: Path | None = None) -> tuple[st
         for pno, p in enumerate(pages):
             meta = p.get("metadata", {})
             page_num = meta.get("page_number") or meta.get("page") or pno + 1
+            # Redact each page before its length moves the next offset, so page_map stays exact.
+            page_text = scrub(p["text"])
             page_map[offset] = page_num
-            texts.append(p["text"])
-            offset += len(p["text"]) + len(_PAGE_SEPARATOR)
+            texts.append(page_text)
+            offset += len(page_text) + len(_PAGE_SEPARATOR)
         return _PAGE_SEPARATOR.join(texts), page_map
     except (RuntimeError, OSError) as exc:
         logger.warning("pymupdf4llm failed (%s), falling back to flat extraction", exc)
@@ -308,8 +311,8 @@ def _extract_pdf_markdown(path: Path, image_dir: Path | None = None) -> tuple[st
 
 
 def _extract_markdown_text(path: Path) -> str:
-    """Read a markdown/text file as UTF-8, replacing undecodable bytes."""
-    return path.read_text(encoding="utf-8", errors="replace")
+    """Read a markdown/text file as UTF-8, replacing undecodable bytes, and redact it."""
+    return scrub(path.read_text(encoding="utf-8", errors="replace"))
 
 
 def _produce_and_insert_chunks(
@@ -548,7 +551,8 @@ def ingest_text(
     chunk is embedded before the first write, so an embedder failure stores nothing. Commits once; any
     failure rolls back, so the thread's reused connection never carries half a document (#554).
     """
-    chunks = _chunk_text(text)
+    # Redact the whole text before chunking: a 1000-character window can cut a token in two.
+    chunks = _chunk_text(scrub(text))
     if not chunks:
         return {"chunks_added": 0, "chunks_skipped": 0}
     chunks = [piece for pieces in _bounded_chunks(conn, chunks) for piece in pieces]

@@ -1,0 +1,166 @@
+"""Every path that stores a chunk or embeds one redacts first (#592).
+
+A leak check looks at what was stored, what the FTS index answers and every text the embedder received, by
+12-character windows, so a fragment of a secret fails as surely as the whole of it.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from unittest.mock import MagicMock, patch
+
+import fitz
+import httpx
+import pytest
+
+from knowledge_base import ingest
+from knowledge_base.db import get_connection, resolve_db_path
+from knowledge_base.redact import scrub
+from knowledge_base.utils import content_hash
+from tests.conftest import StubEmbedder
+from tests.declared_env import TEST_EMBED_DIM
+
+# Example shapes built at run time, so no token literal is committed.
+GITHUB_TOKEN = "ghp_" + "Zq7Xw3Rt9Lp2Vb6Nm4Kc8Hd1Fs5Gj0Ay" + "Ab3d"
+AWS_KEY = "AKIA" + "QX7RT9LP2VB6NM4K"
+
+
+def _windows(text: str, size: int = 12) -> set[str]:
+    return {text[i : i + size] for i in range(len(text) - size + 1)}
+
+
+def _leaks(secret: str, *texts: str) -> bool:
+    return any(_windows(secret) & _windows(t) for t in texts)
+
+
+def _assert_clean(conn: sqlite3.Connection, embedded: list[str], *secrets: str) -> None:
+    rows = conn.execute("SELECT content, content_hash FROM chunks").fetchall()
+    assert rows
+    for secret in secrets:
+        assert not _leaks(secret, *(r["content"] for r in rows), *embedded)
+        term = secret.split("_", 1)[-1]  # unicode61 splits on "_": the body is the searchable term
+        assert not conn.execute("SELECT 1 FROM chunks_fts WHERE chunks_fts MATCH ?", (f'"{term}"',)).fetchone()
+    for r in rows:
+        assert r["content_hash"] == content_hash(r["content"])
+
+
+@pytest.fixture
+def folder_embedder(monkeypatch) -> StubEmbedder:
+    texts = StubEmbedder()
+
+    def _embed(batch, *_args, expected_dim=None, **_kwargs):
+        texts.extend(batch)
+        return [[0.1] * (expected_dim or TEST_EMBED_DIM) for _ in batch]
+
+    monkeypatch.setattr("knowledge_base.folder_summaries.embed", _embed)
+    return texts
+
+
+def _document(secret: str) -> str:
+    return f"# Notes\n\nThe deploy reads {secret} from the vault.\n\nThe rest is ordinary prose about attention.\n"
+
+
+def test_ingest_text_neither_stores_nor_embeds_a_secret(kb_conn, stub_document_embedder):
+    from knowledge_base.routes.ingestion import ingest_text
+
+    with patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn):
+        result = json.loads(ingest_text("notes/deploy.md", _document(GITHUB_TOKEN) + f"aws {AWS_KEY}\n"))
+    assert result["chunks_added"] == 1
+    _assert_clean(kb_conn, stub_document_embedder, GITHUB_TOKEN, AWS_KEY)
+    assert "[REDACTED:github-pat]" in kb_conn.execute("SELECT content FROM chunks").fetchone()["content"]
+
+
+def test_ingest_text_over_http_neither_stores_nor_embeds_a_secret(kb_http, stub_document_embedder):
+    arguments = {"name": "notes/deploy.md", "content": _document(GITHUB_TOKEN)}
+    response = kb_http.rpc("tools/call", {"name": "ingest_text", "arguments": arguments})
+    assert response.status_code == 200
+    assert not response.json()["result"].get("isError")
+    conn = get_connection(resolve_db_path())
+    try:
+        _assert_clean(conn, stub_document_embedder, GITHUB_TOKEN)
+    finally:
+        conn.close()
+
+
+def test_ingest_url_neither_stores_nor_embeds_a_secret(
+    kb_conn, stub_document_embedder, http_requests, fake_dns, public_net, monkeypatch
+):
+    from knowledge_base.web import ingest_url
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_BROWSER")
+    monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
+    fake_dns.update({"page.example.test": ["203.0.113.10"]})
+    body = (
+        "<html><head><title>Deploy</title></head><body><article><h1>Deploy</h1><p>"
+        + "The deploy reads the token from the vault and ships the service to production. " * 6
+        + f"The token is {GITHUB_TOKEN} today."
+        + "</p></article></body></html>"
+    ).encode()
+    http_requests.handlers["page.example.test"] = lambda request: httpx.Response(
+        200, content=body, headers={"content-type": "text/html"}
+    )
+    assert ingest_url(kb_conn, "https://page.example.test/deploy")["chunks_added"] >= 1
+    _assert_clean(kb_conn, stub_document_embedder, GITHUB_TOKEN)
+
+
+def test_a_token_across_a_chunk_window_never_survives(kb_conn, stub_document_embedder):
+    """``chunk_text`` cuts fixed 1000-character windows: redacting each chunk would keep the token's head."""
+    text = "a" * 985 + " " + GITHUB_TOKEN + " " + "b" * 1200
+    assert ingest.ingest_text(kb_conn, text, source_uri="content:///cut", source_type="markdown")["chunks_added"] >= 2
+    _assert_clean(kb_conn, stub_document_embedder, GITHUB_TOKEN)
+
+
+def test_documents_identical_after_redaction_store_one_chunk(kb_conn, stub_document_embedder):
+    other = "ghp_" + "Yq7Xw3Rt9Lp2Vb6Nm4Kc8Hd1Fs5Gj0Ay" + "Ab3d"
+    first = ingest.ingest_text(kb_conn, _document(GITHUB_TOKEN), source_uri="content:///a", source_type="markdown")
+    second = ingest.ingest_text(kb_conn, _document(other), source_uri="content:///b", source_type="markdown")
+    assert (first["chunks_added"], second["chunks_added"], second["chunks_skipped"]) == (1, 0, 1)
+
+
+def _pdf_module(pages: list[dict]) -> MagicMock:
+    module = MagicMock()
+    module.__version__ = "1.27.2.1"
+    module.to_markdown.return_value = pages
+    return module
+
+
+def test_file_ingest_redacts_markdown_code_and_pdf(kb_conn, stub_document_embedder, folder_embedder, tmp_path):
+    md = tmp_path / "deploy.md"
+    md.write_text(_document(GITHUB_TOKEN))
+    code = tmp_path / "settings.py"
+    code.write_text(f'API_KEY = "{GITHUB_TOKEN}"\n\n\ndef region():\n    return "eu-west-1"\n')
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    pages = [{"metadata": {"page": 1}, "text": f"## Setup\nThe key is {AWS_KEY}.\n"}]
+    ingest.ingest_file(kb_conn, md)
+    ingest.ingest_file(kb_conn, code)
+    with patch.dict(sys.modules, {"pymupdf4llm": _pdf_module(pages)}):
+        ingest.ingest_file(kb_conn, pdf, source_type="pdf")
+    _assert_clean(kb_conn, [*stub_document_embedder, *folder_embedder], GITHUB_TOKEN, AWS_KEY)
+    names = [json.loads(r["metadata"]).get("name") for r in kb_conn.execute("SELECT metadata FROM chunks")]
+    assert "region" in names  # the redacted code still parses into its AST chunks
+
+
+def test_flat_pdf_fallback_is_redacted(tmp_path):
+    pdf = tmp_path / "flat.pdf"
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 72), f"The key is {AWS_KEY} here")
+    doc.save(str(pdf))
+    doc.close()
+    text = ingest._extract_pdf_text(pdf)
+    assert "[REDACTED:aws-access-key]" in text
+    assert not _leaks(AWS_KEY, text)
+
+
+def test_pdf_page_map_counts_redacted_text(tmp_path):
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    page1 = f"## Setup\nThe key is {AWS_KEY}.\n"
+    pages = [{"metadata": {"page": 1}, "text": page1}, {"metadata": {"page": 2}, "text": "## Results\nGood.\n"}]
+    with patch.dict(sys.modules, {"pymupdf4llm": _pdf_module(pages)}):
+        text, page_map = ingest._extract_pdf_markdown(pdf)
+    assert page_map == {0: 1, len(scrub(page1)) + 2: 2}
+    assert text[len(scrub(page1)) + 2 :].startswith("## Results")
+    assert not _leaks(AWS_KEY, text)
