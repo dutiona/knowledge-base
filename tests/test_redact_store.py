@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 import sqlite3
 from pathlib import Path
@@ -135,3 +136,85 @@ def test_purge_refuses_an_open_transaction(kb_conn):
     kb_conn.execute("UPDATE chunks SET content = content")
     with pytest.raises(KnowledgeBaseError, match="no open transaction"):
         purge_deleted_content(kb_conn)
+
+
+# ---------------------------------------------------------------------------
+# knowledge-base-ingest redact: the report
+# ---------------------------------------------------------------------------
+
+AWS_KEY = "AKIA" + "QX7RT9LP2VB6NM4K"
+QUERY_VALUE = "Xk9Lp2Rt5Yv8Bn1Cx4Df6Qw7Zz0Aa"
+
+
+def _raw_chunk(conn, content: str, *, uri: str = "/d/doc.md", metadata: str = "{}", index: int = 0) -> int:
+    """A row as stored before #592: no redaction on the way in."""
+    cur = conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index, metadata) "
+        "VALUES (?, ?, 'markdown', ?, ?, ?)",
+        (content_hash(content), content, uri, index, metadata),
+    )
+    return int(cur.lastrowid or 0)
+
+
+def _run(db: Path, *argv: str) -> int:
+    from knowledge_base.indexer import main
+
+    with pytest.raises(SystemExit) as done:
+        main(["--db", str(db), *argv])
+    return int(done.value.code or 0)
+
+
+def _seed_dirty(conn) -> dict[str, int]:
+    ids = {
+        "content": _raw_chunk(conn, f"the deploy key is {SECRET}", uri="/d/a.md"),
+        "metadata": _raw_chunk(conn, "plain one", uri="/d/b.md", metadata=json.dumps({"title": f"aws {AWS_KEY}"})),
+        "uri": _raw_chunk(conn, "plain two", uri="https://reader:example-pass@docs.example.test/p"),
+        "clean": _raw_chunk(conn, "plain three", uri="/d/c.md"),
+    }
+    conn.execute(
+        "INSERT INTO folder_summaries (folder_path, summary, content_hash) VALUES ('/d', ?, 'x')", (f"a.md: {SECRET}",)
+    )
+    conn.commit()
+    return ids
+
+
+def test_report_counts_without_printing_matches(kb_conn, tmp_path, capsys):
+    ids = _seed_dirty(kb_conn)
+    before = list(kb_conn.iterdump())
+    assert _run(tmp_path / "test.db", "redact") == 1
+    out, err = capsys.readouterr()
+    report = json.loads(out)
+    assert report["rows_scanned"] == 4
+    assert report["rows_to_rewrite"] == {"content": 1, "metadata": 1, "source_uri": 1}
+    assert report["chunk_ids"] == sorted([ids["content"], ids["metadata"], ids["uri"]])
+    assert report["spans"] == {"github-pat": 1, "aws-access-key": 1}
+    assert report["folder_summaries_to_rebuild"] == 1
+    assert report["rewrite_incomplete"] is False
+    for secret in (SECRET, AWS_KEY, "example-pass"):
+        assert not _windows(secret.encode(), 8) & _windows((out + err).encode(), 8)
+    assert list(kb_conn.iterdump()) == before
+
+
+def test_report_on_a_clean_database_exits_zero(kb_conn, tmp_path, capsys):
+    meta = json.dumps({"image_url": f"https://docs.example.test/i.png?sig={QUERY_VALUE}"})
+    _insert_chunk(
+        kb_conn,
+        content_hash=content_hash("c"),
+        content="c",
+        source_type="figure",
+        source_uri="https://docs.example.test/p",
+        chunk_index=0,
+        metadata=meta,
+    )
+    kb_conn.commit()
+    assert _run(tmp_path / "test.db", "redact") == 0
+    assert json.loads(capsys.readouterr().out)["chunk_ids"] == []
+
+
+def test_report_flags_a_metadata_url_with_userinfo(kb_conn, tmp_path, capsys):
+    meta = json.dumps({"image_url": f"https://reader:example-pass@docs.example.test/i.png?sig={QUERY_VALUE}"})
+    cid = _raw_chunk(kb_conn, "c", uri="https://docs.example.test/p", metadata=meta)
+    kb_conn.commit()
+    assert _run(tmp_path / "test.db", "redact") == 1
+    report = json.loads(capsys.readouterr().out)
+    assert (report["chunk_ids"], report["rows_to_rewrite"]["metadata"]) == ([cid], 1)

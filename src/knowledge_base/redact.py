@@ -28,7 +28,7 @@ import regex
 
 from .exceptions import KnowledgeBaseError
 
-__all__ = ["TOKEN_SHAPE", "redact", "redact_json", "scrub"]
+__all__ = ["TOKEN_SHAPE", "findings", "redact", "redact_json", "scrub"]
 
 #: ``me_`` followed by 32 base62 characters (ADR-0020 §4).
 TOKEN_SHAPE = "me_[0-9A-Za-z]{32}"  # noqa: S105 -- a pattern, not a secret
@@ -255,8 +255,7 @@ def _detect_high_entropy(text: str, spans: _Spans, links: _Spans) -> None:
             spans.add(m.start(), m.end(), "high-entropy")
 
 
-def redact(text: str) -> tuple[str, list[str]]:
-    """One pass: ``text`` with each match replaced by ``[REDACTED:<rule>]``, and the rules in text order."""
+def _collect(text: str) -> _Spans:
     links = _links(text)
     spans = _Spans()
     _detect_machine_token(text, spans, links)
@@ -265,6 +264,12 @@ def redact(text: str) -> tuple[str, list[str]]:
         spans.add(start, end, "connection-string-password")
     _detect_hex_in_context(text, spans, links)
     _detect_high_entropy(text, spans, links)
+    return spans
+
+
+def redact(text: str) -> tuple[str, list[str]]:
+    """One pass: ``text`` with each match replaced by ``[REDACTED:<rule>]``, and the rules in text order."""
+    spans = _collect(text)
     out: list[str] = []
     cursor = 0
     for start, end, rule in zip(spans.starts, spans.ends, spans.rules, strict=True):
@@ -273,6 +278,16 @@ def redact(text: str) -> tuple[str, list[str]]:
         cursor = end
     out.append(text[cursor:])
     return "".join(out), list(spans.rules)
+
+
+def findings(text: str) -> list[str]:
+    """The rules of one pass's matches, leaving out a match that is already its own placeholder."""
+    spans = _collect(text)
+    return [
+        rule
+        for start, end, rule in zip(spans.starts, spans.ends, spans.rules, strict=True)
+        if text[start:end] != f"[REDACTED:{rule}]"
+    ]
 
 
 def scrub(text: str) -> str:

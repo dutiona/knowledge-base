@@ -91,6 +91,7 @@ def test_build_parser_subcommands():
         "status": ["status"],
         "migrate": ["migrate", "--check"],
         "schema": ["schema"],
+        "redact": ["redact", "--rewrite"],
     }
     for subcmd, argv in test_args.items():
         args = parser.parse_args(argv)
