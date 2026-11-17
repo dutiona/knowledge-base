@@ -65,9 +65,9 @@ def _redirect(location: str) -> Callable[[], httpx.Response]:
     return lambda: httpx.Response(302, headers={"location": location})
 
 
-def _page(body: bytes = _ARTICLE, **headers: str) -> Callable[[], httpx.Response]:
+def _page(body: bytes = _ARTICLE, headers: dict[str, str] | None = None) -> Callable[[], httpx.Response]:
     """A streamed page: httpx decodes a bytes body when the response is built, a real response only as it is read."""
-    return lambda: httpx.Response(200, content=iter([body]), headers={"content-type": "text/html", **headers})
+    return lambda: httpx.Response(200, content=iter([body]), headers={"content-type": "text/html", **(headers or {})})
 
 
 def _chain(hops: int) -> dict[str, Callable[[], httpx.Response]]:
@@ -204,25 +204,25 @@ def test_every_hop_asks_for_an_uncompressed_body(kb_conn, http_requests):
 
 
 def test_a_gzip_body_is_decoded_and_its_decoded_size_counts(kb_conn, http_requests, monkeypatch):
-    _serve(http_requests, {"/start": _page(gzip.compress(_ARTICLE), **{"content-encoding": "gzip"})})
+    _serve(http_requests, {"/start": _page(gzip.compress(_ARTICLE), headers={"content-encoding": "gzip"})})
     assert ingest_url(kb_conn, _URL)["chunks_added"] >= 1
 
     monkeypatch.setenv("KNOWLEDGE_BASE_FETCH_MAX_BYTES", "4096")
     bomb = gzip.compress(b" " * 100_000)
     assert len(bomb) < 4096
-    _serve(http_requests, {"/start": _page(bomb, **{"content-encoding": "gzip"})})
+    _serve(http_requests, {"/start": _page(bomb, headers={"content-encoding": "gzip"})})
     with pytest.raises(ValidationError, match="4096-byte cap"):
         ingest_url(kb_conn, _URL)
 
 
 def test_an_identity_encoding_is_read_as_is(kb_conn, http_requests):
-    _serve(http_requests, {"/start": _page(**{"content-encoding": "identity"})})
+    _serve(http_requests, {"/start": _page(headers={"content-encoding": "identity"})})
     assert ingest_url(kb_conn, _URL)["chunks_added"] >= 1
 
 
 @pytest.mark.parametrize("encoding", ["gzip, gzip", "gzip, identity", "identity, gzip", "br", "x-gzip"])
 def test_a_stacked_or_unknown_encoding_is_refused(kb_conn, http_requests, encoding):
-    _serve(http_requests, {"/start": _page(**{"content-encoding": encoding})})
+    _serve(http_requests, {"/start": _page(headers={"content-encoding": encoding})})
     with pytest.raises(ValidationError) as refused:
         ingest_url(kb_conn, _URL)
     assert str(refused.value) == f"Failed to fetch {_URL}: unsupported Content-Encoding {encoding!r}"
@@ -321,7 +321,7 @@ def test_the_redirect_limit_holds_for_a_client_that_follows_redirects(http_reque
 
 @pytest.mark.parametrize("charset", ["base64", "rot13", "idna", "undefined", "no-such-charset"])
 def test_a_charset_that_is_no_text_encoding_reads_as_utf8(kb_conn, http_requests, charset):
-    _serve(http_requests, {"/start": _page(**{"content-type": f"text/html; charset={charset}"})})
+    _serve(http_requests, {"/start": _page(headers={"content-type": f"text/html; charset={charset}"})})
     assert ingest_url(kb_conn, _URL)["chunks_added"] >= 1
 
 
@@ -335,5 +335,5 @@ def test_an_invalid_url_is_a_validation_error(kb_conn, http_requests, url):
 @pytest.mark.parametrize("charset", ["punycode", "idna"])
 def test_a_hostname_codec_charset_reads_the_page_as_utf8(kb_conn, http_requests, charset):
     # punycode decodes a run of digits in quadratic time, after the fetch and outside its deadline
-    _serve(http_requests, {"/start": _page(**{"content-type": f"text/html; charset={charset}"})})
+    _serve(http_requests, {"/start": _page(headers={"content-type": f"text/html; charset={charset}"})})
     assert ingest_url(kb_conn, _URL)["chunks_added"] >= 1
