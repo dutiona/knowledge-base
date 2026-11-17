@@ -16,7 +16,11 @@ disable/error paths) run against the real ``kb_conn`` temp DB with no mocks.
 from __future__ import annotations
 
 import json
+import sqlite3
 from unittest.mock import patch
+
+import pytest
+from fastmcp.exceptions import ToolError
 
 from knowledge_base.exceptions import NotFoundError, ValidationError
 from knowledge_base.routes.ingestion import (
@@ -255,16 +259,46 @@ def test_ingest_url_passthrough_success(kb_conn):
     assert kwargs["session_id"] == "s-9"
 
 
-def test_ingest_url_maps_knowledgebase_error_to_json(kb_conn):
-    """A KnowledgeBaseError from _ingest_url → {"error": str(e), **e.details}."""
+def test_ingest_url_maps_knowledgebase_error_to_a_tool_error(kb_conn):
+    """A KnowledgeBaseError from _ingest_url is an MCP tool error carrying its reason."""
     exc = ValidationError("URL must include a hostname", details={"url": "ftp://x"})
     with (
         patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
         patch("knowledge_base.routes.ingestion._ingest_url", side_effect=exc),
+        pytest.raises(ToolError, match="URL must include a hostname"),
     ):
-        result = json.loads(ingest_url("ftp://x"))
+        ingest_url("ftp://x")
 
-    assert result == {"error": str(exc), "url": "ftp://x"}
+
+@pytest.mark.parametrize(("status", "retry"), [(503, True), (401, False)])
+def test_ingest_url_embedder_failure_never_names_the_embedder(kb_conn, status, retry):
+    from urllib.parse import urlparse
+
+    from tests.conftest import embedder_error
+    from tests.declared_env import TEST_EMBED_URL
+
+    with (
+        patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
+        patch("knowledge_base.routes.ingestion._ingest_url", side_effect=embedder_error(status)),
+        pytest.raises(ToolError) as raised,
+    ):
+        ingest_url("https://example.com")
+
+    text = str(raised.value)
+    endpoint = urlparse(TEST_EMBED_URL)
+    assert f"HTTP {status}" in text and "the page's text was not stored" in text
+    assert endpoint.hostname not in text and str(endpoint.port) not in text
+    assert ("retry later" in text) is retry
+
+
+def test_ingest_url_concurrent_duplicate_says_retry(kb_conn):
+    race = sqlite3.IntegrityError("UNIQUE constraint failed: chunks.content_hash")
+    with (
+        patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
+        patch("knowledge_base.routes.ingestion._ingest_url", side_effect=race),
+        pytest.raises(ToolError, match="another ingest stored some of the same passages meanwhile"),
+    ):
+        ingest_url("https://example.com")
 
 
 # ---------------------------------------------------------------------------

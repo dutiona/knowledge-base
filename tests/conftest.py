@@ -245,14 +245,31 @@ def token_file(tmp_path):
     return path
 
 
+def embedder_error(status: int = 503) -> httpx.HTTPStatusError:
+    """The error a real embedding endpoint raises: httpx puts the endpoint URL in its message."""
+    from tests.declared_env import TEST_EMBED_URL
+
+    request = httpx.Request("POST", f"{TEST_EMBED_URL}/v1/embeddings")
+    response = httpx.Response(status, request=request)
+    return httpx.HTTPStatusError(f"Server error '{status}' for url '{request.url}'", request=request, response=response)
+
+
+class StubEmbedder(list):
+    """The texts an embedding stub received; while ``down`` it raises what a real endpoint raises."""
+
+    down: int | None = None  # the HTTP status to fail with, or None
+
+
 @pytest.fixture
-def stub_embedder(monkeypatch) -> list[str]:
+def stub_embedder(monkeypatch) -> StubEmbedder:
     """Answer the query embedding ``search_index`` asks for; the fixture is the list of texts it received."""
     from tests.declared_env import TEST_EMBED_DIM
 
-    texts: list[str] = []
+    texts = StubEmbedder()
 
     def _embed_single(text, *_args, **_kwargs):
+        if texts.down is not None:
+            raise embedder_error(texts.down)
         texts.append(text)
         return [0.1] * TEST_EMBED_DIM
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 
+import httpx
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from .._conn import _get_conn
 from ..db import co_occurrence_pairs, get_index_stats
@@ -12,6 +14,7 @@ from ..embed_swap import get_embed_config
 from ..exceptions import KnowledgeBaseError
 from ..prediction_errors import detect_and_log, get_prediction_error_count
 from ..search import search
+from . import embedder_failure
 
 mcp = FastMCP("search-routes")
 
@@ -59,7 +62,10 @@ def search_index(
             rerank=rerank,
         )
     except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e), **e.details})
+        raise ToolError(str(e)) from e
+    except httpx.HTTPError as e:
+        kind, retryable = embedder_failure(e)
+        raise ToolError(f"{kind}; retry later, or search with mode='fts'" if retryable else kind) from e
 
     detect_and_log(conn, query, results, source_type_filter=source_type, mode=mode)
 

@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
+import httpx
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from .._conn import _get_conn
 from ..exceptions import KnowledgeBaseError
 from ..ingest import ingest_directory, ingest_file, reingest_file
 from ..web import configure_browser, ingest_url as _ingest_url
+from . import RACE, embedder_failure
 
 mcp = FastMCP("ingestion-routes")
 
@@ -114,8 +118,12 @@ def ingest_url(url: str, session_id: str | None = None) -> str:
     try:
         return json.dumps(_ingest_url(conn, url, session_id=session_id))
     except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+        raise ToolError(str(e)) from e
+    except sqlite3.IntegrityError as e:
+        raise ToolError(f"{RACE}; the page's text was not stored, retry") from e
+    except httpx.HTTPError as e:  # ingest_url reports every page-fetch failure as ValidationError: this is the embedder
+        kind, retryable = embedder_failure(e)
+        raise ToolError(f"{kind}; the page's text was not stored" + (", retry later" if retryable else "")) from e
 
 
 @mcp.tool()
