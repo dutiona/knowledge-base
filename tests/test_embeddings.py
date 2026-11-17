@@ -754,10 +754,30 @@ class TestSplitToLimit:
         assert len(self._check(text, 6, _words)) > 1
 
     def test_a_non_monotone_count_still_yields_verified_pieces(self):
-        def count(text: str) -> int:  # every seventh length counts four less than its neighbours
-            return len(text) - (4 if len(text) % 7 == 0 else 0)
+        probed: list[int] = []
 
-        self._check("abcdefghij " * 10, 20, count)
+        def count(text: str) -> int:  # 16 characters count far over the limit, though 20 fit
+            probed.append(len(text))
+            return 999 if len(text) == 16 else len(text)
+
+        pieces = self._check("a " * 30, 20, count)
+        assert 16 in probed
+        assert len(pieces[0]) < 16
+
+    def test_a_cut_keeps_at_least_half_a_piece_rather_than_a_lone_heading(self):
+        pieces = self._check("## References\n\n" + "x" * 100, 50, len)
+        assert len(pieces[0]) == 50
+
+    def test_probes_stay_near_the_piece_they_cut(self):
+        probed: list[int] = []
+
+        def count(text: str) -> int:
+            probed.append(len(text))
+            return _words(text)
+
+        text = "word " * 2000
+        pieces = self._check(text, 11, count)
+        assert max(probed[1:]) <= 2 * max(map(len, pieces)) + 1  # the first count is the whole text
 
     def test_a_long_word_after_a_fitting_boundary_is_cut_inside_the_word(self):
         pieces = self._check("aa bb " + "x" * 50 + " cc", 10, len)
@@ -809,14 +829,18 @@ class TestBoundedProvider:
         (request,) = server
         assert str(request.url) == "https://embedder.example.test/tokenize"
         assert request.headers["Authorization"] == "Bearer sk-test-only"
-        assert json.loads(request.content) == {"content": "one two three", "add_special": True}
+        assert json.loads(request.content) == {"content": "one two three", "add_special": True, "parse_special": True}
 
-    def test_a_server_without_tokenize_is_refused(self, server):
+    @pytest.mark.parametrize(
+        ("status", "body"),
+        [(404, {"error": "not found"}), (422, {"detail": "prompt missing"}), (400, {}), (200, {"count": 1})],
+    )
+    def test_a_server_without_llama_server_s_tokenize_is_refused(self, server, status, body):
         import httpx
 
         from knowledge_base.exceptions import ValidationError
 
-        server.handlers["embedder.example.test"] = lambda request: httpx.Response(404, json={"error": "not found"})
+        server.handlers["embedder.example.test"] = lambda request: httpx.Response(status, json=body)
         with pytest.raises(ValidationError, match=r"KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS.*/tokenize"):
             self._provider(8).token_counter()("one")
 
@@ -830,7 +854,7 @@ class TestBoundedProvider:
         assert sent[0] == "fits here"
         assert long.startswith(sent[1])
         assert _words(sent[1]) <= 8
-        assert "21 tokens" in caplog.text
+        assert "of 21 tokens is truncated to 8 tokens" in caplog.text
 
     def test_without_a_limit_nothing_is_counted(self, server):
         self._provider(None).embed(["w " * 20], model="m", expected_dim=8)

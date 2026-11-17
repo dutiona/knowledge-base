@@ -190,34 +190,44 @@ class OllamaProvider:
 _LIMIT_VAR = VARIABLES["max_input_tokens"]
 
 
-def _cut(text: str, limit: int, count: Callable[[str], int]) -> int:
-    """A position ``c > 0`` with ``count(text[:c]) <= limit``: just after whitespace when one fits (#604).
+def _fit(text: str, limit: int, count: Callable[[str], int]) -> int:
+    """The length of a prefix of *text* that counts at most *limit*; ``len(text)`` when all of it fits (#604).
 
-    Counts need not grow with length, so the search only ever moves to a position it counted: ``c`` is a
-    verified fit, not necessarily the longest.
+    It gallops from the start (1, 2, 4, ... characters), then bisects, so it never sends much more than twice the
+    piece it cuts. It only returns a length it counted: a count that does not grow with length can shorten a piece,
+    never overfill one. The cut moves back to just after the last whitespace when that keeps at least half of it.
     """
-    after_whitespace = [i + 1 for i, char in enumerate(text) if char.isspace()]
-    for candidates in (after_whitespace, range(1, len(text) + 1)):
-        best, lo, hi = 0, 0, len(candidates) - 1
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            if count(text[: candidates[mid]]) <= limit:
-                best, lo = candidates[mid], mid + 1
-            else:
-                hi = mid - 1
-        if best:
+    best, probe = 0, 1
+    while True:
+        probe = min(probe, len(text))
+        if count(text[:probe]) > limit:
+            break
+        best = probe
+        if probe == len(text):
             return best
-    raise ValidationError(f"{_LIMIT_VAR}: not even one character of an embedding input fits in {limit} tokens")
+        probe *= 2
+    lo, hi = best + 1, probe - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if count(text[:mid]) <= limit:
+            best, lo = mid, mid + 1
+        else:
+            hi = mid - 1
+    if not best:
+        raise ValidationError(f"{_LIMIT_VAR}: not even one character of an embedding input fits in {limit} tokens")
+    space = next((i + 1 for i in range(best - 1, best // 2 - 1, -1) if text[i].isspace()), best)
+    return space if space == best or count(text[:space]) <= limit else best
 
 
 def split_to_limit(text: str, limit: int, count: Callable[[str], int]) -> list[str]:
     """*text* as consecutive slices that each count at most *limit*; joined, they are *text* again."""
+    if count(text) <= limit:
+        return [text]
     pieces = []
-    while count(text) > limit:
-        cut = _cut(text, limit, count)
+    while text:
+        cut = _fit(text, limit, count)
         pieces.append(text[:cut])
         text = text[cut:]
-    pieces.append(text)
     return pieces
 
 
@@ -251,6 +261,7 @@ class OpenAICompatProvider:
         self._api_key = api_key  # raw spec; never logged
         self._allow_loopback = allow_loopback
         self._max_input_tokens = max_input_tokens
+        self._http = httpx.Client(timeout=120, follow_redirects=False)  # keep-alive for the per-input counts
 
     def __repr__(self) -> str:
         return f"OpenAICompatProvider(base_url={_sanitize_url(self._base_url)!r})"
@@ -266,22 +277,20 @@ class OpenAICompatProvider:
         """Count a text's tokens as llama-server's embeddings call does: its ``/tokenize`` with ``add_special``.
 
         Both tokenize a string input with the same call (special tokens added and parsed), so the count
-        includes the EOS the server appends (llama.cpp b12048, measured 2026-11-17, #604).
+        includes the EOS the server appends (llama.cpp b12048, measured 2026-11-17 against the served model, #604).
         """
         headers = self._headers()
+        body = {"add_special": True, "parse_special": True}
 
         def count(text: str) -> int:
-            resp = httpx.post(
-                f"{self._base_url}/tokenize",
-                headers=headers,
-                json={"content": text, "add_special": True},
-                timeout=120,
-                follow_redirects=False,
-            )
-            if resp.status_code == 404:
-                raise ValidationError(f"{_LIMIT_VAR} needs an embedder that counts tokens at /tokenize (llama-server)")
-            resp.raise_for_status()
-            return len(resp.json()["tokens"])
+            resp = self._http.post(f"{self._base_url}/tokenize", headers=headers, json={**body, "content": text})
+            if resp.status_code not in (400, 404, 405, 422):  # what a server without llama-server's /tokenize answers
+                resp.raise_for_status()
+                data = resp.json()
+                tokens = data.get("tokens") if isinstance(data, dict) else None
+                if isinstance(tokens, list):
+                    return len(tokens)
+            raise ValidationError(f"{_LIMIT_VAR} needs an embedder that counts tokens at /tokenize (llama-server)")
 
         return count
 
@@ -294,8 +303,14 @@ class OpenAICompatProvider:
         for text in texts:
             tokens = count(text)
             if tokens > limit:
-                logger.info("an embedding input of %d tokens is truncated to fit %s=%d", tokens, _LIMIT_VAR, limit)
-                text = text[: _cut(text, limit, count)]
+                text = text[: _fit(text, limit, count)]
+                logger.info(
+                    "an embedding input of %d tokens is truncated to %d tokens to fit %s=%d",
+                    tokens,
+                    count(text),
+                    _LIMIT_VAR,
+                    limit,
+                )
             bounded.append(text)
         return bounded
 
