@@ -12,7 +12,7 @@ from typing import NoReturn
 import uvicorn
 from fastmcp import FastMCP
 
-from .auth import RequireMachine, TokenTable
+from .auth import CallingMachine, RequireMachine, TokenTable, log_to_stderr
 from .db import open_declared_db
 from .exceptions import KnowledgeBaseError
 
@@ -35,6 +35,7 @@ mcp = FastMCP(
         "Use 'export_bibtex_tool' to export papers for Typst bibliography. "
         "Use 'suggest_relationships_tool' to auto-detect citations."
     ),
+    middleware=[CallingMachine()],
 )
 
 mcp.mount(_ingestion)
@@ -133,6 +134,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         mcp.run(transport="stdio")
         return
     host, port = args.http
+    log_to_stderr()
     http = uvicorn.Server(uvicorn_config(build_http_app(tokens), host, port))
     http.run()
     if not http.started:  # run() returns normally after a failed startup; uvicorn's own CLI exits 3 here

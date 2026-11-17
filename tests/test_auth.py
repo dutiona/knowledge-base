@@ -222,3 +222,51 @@ def test_the_gate_forwards_a_lifespan_scope_untouched():
     inner, sent, scope = _call_gate([], scope_type="lifespan")
     assert inner.scopes == [scope]
     assert sent == []
+
+
+# --- the log formatter ---
+
+
+def _format(msg: str, *args, exc: BaseException | None = None) -> str:
+    import logging
+
+    from knowledge_base.auth import RedactingFormatter
+
+    record = logging.LogRecord("lib", logging.WARNING, __file__, 1, msg, args, None)
+    if exc is not None:
+        try:
+            raise exc
+        except BaseException:
+            import sys
+
+            record.exc_info = sys.exc_info()
+    return RedactingFormatter().format(record)
+
+
+def test_the_formatter_redacts_every_token_shape():
+    token = machine_token("laptop")
+    assert token not in _format(f"name {token}")
+    assert token not in _format("name %s", token)
+    traced = _format("failed", exc=ValueError(f"input_value='{token}'"))
+    assert token not in traced
+    assert traced.count("me_[redacted]") == 1
+    assert _format("ok %s", "me_[redacted]") == "WARNING lib: ok me_[redacted]"
+
+
+def test_the_formatter_keeps_one_record_per_line():
+    out = _format("a\nINFO knowledge_base.auth: forged\rb\x00c\x1bd\x7fe\tf")
+    first, second = out.split("\n")
+    assert first == "WARNING lib: a"
+    assert second == "  INFO knowledge_base.auth: forged\\x0db\\x00c\\x1bd\\x7fe\tf"
+
+
+def test_the_formatter_breaks_long_lines_after_redacting():
+    token = machine_token("laptop")
+    out = _format("x" * 1980 + token + "y" * 2500)
+    lines = out.split("\n")
+    # Broken first, the token would be split, escape the shape and survive in the rejoined text.
+    rejoined = out.replace("\n  ", "")
+    assert token not in rejoined and "me_[redacted]" in rejoined
+    assert all(len(line) <= 2002 for line in lines)
+    assert all(line.startswith("  ") for line in lines[1:])
+    assert len(lines) == 3

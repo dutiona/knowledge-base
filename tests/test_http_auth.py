@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 
@@ -156,3 +157,44 @@ def test_a_stop_answers_the_call_in_flight(kb_http, monkeypatch):
     (answer,) = answers
     assert answer.status_code == 200
     assert answer.json()["result"]["isError"] is False
+
+
+# --- the calling machine, per call ---
+
+
+def test_each_tool_call_logs_its_machine(kb_http, caplog):
+    caplog.set_level(logging.INFO, logger="knowledge_base.auth")
+    kb_http.rpc(*_CALLS[0])
+    kb_http.rpc("tools/list")
+    kb_http.rpc("tools/call", {"name": "status", "arguments": {}}, machine=None)
+    kb_http.rpc("tools/call", {"name": "search_index", "arguments": {"query": "q"}})
+    kb_http.rpc("tools/call", {"name": "status", "arguments": {}}, machine="desktop")
+    records = [r.getMessage() for r in caplog.records if r.name == "knowledge_base.auth"]
+    assert records == ["machine laptop called 'search_index'", "machine desktop called 'status'"]
+
+
+def test_a_gate_less_http_app_runs_no_tool(declared_db, stub_embedder):
+    from tests.conftest import KbHttp
+
+    bare = KbHttp(lambda: server.mcp.http_app(path="/mcp", stateless_http=True, json_response=True))
+    bare.start()
+    try:
+        response = bare.rpc("tools/call", {"name": "register_paper_tool", "arguments": {"title": "T"}}, machine=None)
+    finally:
+        bare.close()
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert _papers() == 0
+
+
+def test_an_in_memory_call_still_runs(declared_db, caplog):
+    from fastmcp import Client
+
+    caplog.set_level(logging.INFO, logger="knowledge_base.auth")
+
+    async def _call():
+        async with Client(server.mcp) as client:
+            return await client.call_tool("status", {})
+
+    assert asyncio.run(_call()).is_error is False
+    assert [r for r in caplog.records if r.name == "knowledge_base.auth"] == []

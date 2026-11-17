@@ -8,14 +8,22 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from fastmcp.exceptions import ToolError
+from fastmcp.server.dependencies import get_http_request
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+
 from .exceptions import ValidationError
 
-__all__ = ["TOKEN_SHAPE", "RequireMachine", "TokenTable"]
+__all__ = ["TOKEN_SHAPE", "CallingMachine", "RedactingFormatter", "RequireMachine", "TokenTable", "log_to_stderr"]
+
+logger = logging.getLogger(__name__)
 
 #: ``me_`` followed by 32 base62 characters.
 TOKEN_SHAPE = "me_[0-9A-Za-z]{32}"  # noqa: S105 -- a pattern, not a secret
@@ -122,3 +130,62 @@ class RequireMachine:
         inner["headers"] = [(name, value) for name, value in scope["headers"] if name != b"authorization"]
         inner["state"] = {**scope.get("state", {}), "machine": machine}
         await self.app(inner, receive, send)
+
+
+class CallingMachine(Middleware):
+    """Log the machine of every tool call over HTTP; refuse a call that reached the hub over HTTP without one.
+
+    The refusal makes serving the hub any other way than through ``RequireMachine`` (``fastmcp run`` over
+    HTTP, a refactor that drops the gate) run no tool. A call with no HTTP request behind it (stdio,
+    in-memory) runs unlogged.
+    """
+
+    async def on_call_tool(self, context: MiddlewareContext, call_next: CallNext) -> Any:
+        try:
+            request = get_http_request()
+        except RuntimeError:
+            return await call_next(context)
+        machine = getattr(request.state, "machine", None)
+        if machine is None:
+            raise ToolError("refused: this call reached KB over HTTP without a machine token")
+        logger.info("machine %s called %r", machine, context.message.name)
+        return await call_next(context)
+
+
+_TOKEN_TEXT = re.compile(TOKEN_SHAPE)
+# Every C0 control but tab and LF, and DEL: journald also ends a record at NUL.
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+# journald forces a record boundary after LineMax (48K); escaped text keeps a piece at most 8,000 bytes.
+_LINE_MAX = 2000
+
+
+class RedactingFormatter(logging.Formatter):
+    """One record, one line at column 0, with no token in it: whatever library logged it, traceback included.
+
+    Client data reaches the log through code KB does not own (the MCP SDK logs an unknown tool's raw
+    name; FastMCP logs argument values in validation tracebacks). Every token shape is redacted (more
+    widely than ADR-0020's boundary rule: in a log, over-redaction is the safe side), controls are
+    escaped, long lines are broken, and every continuation line is indented, so no client text can
+    start what looks like a record.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("%(levelname)s %(name)s: %(message)s")
+
+    def format(self, record: logging.LogRecord) -> str:
+        text = _TOKEN_TEXT.sub("me_[redacted]", super().format(record))
+        text = _CONTROL.sub(lambda m: f"\\x{ord(m[0]):02x}", text)
+        pieces = [line[i : i + _LINE_MAX] for line in text.split("\n") for i in range(0, max(len(line), 1), _LINE_MAX)]
+        return "\n  ".join(pieces)
+
+
+def log_to_stderr() -> None:
+    """HTTP mode's logging: one redacting stderr handler on the root, FastMCP's records routed through it."""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(RedactingFormatter())
+    logging.basicConfig(handlers=[handler], force=True)
+    logging.getLogger(__name__).setLevel(logging.INFO)
+    fastmcp_logger = logging.getLogger("fastmcp")
+    for existing in fastmcp_logger.handlers[:]:
+        fastmcp_logger.removeHandler(existing)
+    fastmcp_logger.propagate = True

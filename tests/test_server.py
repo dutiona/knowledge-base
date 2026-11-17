@@ -251,7 +251,7 @@ def served(monkeypatch):
         self.started = True
 
     monkeypatch.setattr(uvicorn.Server, "run", _run)
-    monkeypatch.setattr(server, "log_to_stderr", lambda: None, raising=False)
+    monkeypatch.setattr(server, "log_to_stderr", lambda: None)
     with patch.object(server.mcp, "run") as stdio:
         yield runs, stdio
 
@@ -357,3 +357,89 @@ def test_a_server_that_never_starts_exits_1(served, monkeypatch, token_file):
 def test_help_exits_0(served, capsys):
     assert _exit_code(["--help"]) == 0
     assert "--http" in capsys.readouterr().out
+
+
+def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_file):
+    """Only a real process shows what reaches stderr: caplog sees records before any handler formats them."""
+    import json
+    import signal
+    import socket
+    import time
+
+    import httpx
+
+    from tests.conftest import machine_token
+
+    with socket.create_server(("127.0.0.1", 0)) as probe:
+        port = probe.getsockname()[1]
+    env = dict(os.environ, KNOWLEDGE_BASE_DB=str(tmp_path / "kb.db"))
+    out, err = tmp_path / "stdout", tmp_path / "stderr"
+    token = machine_token("laptop")
+    url = f"http://127.0.0.1:{port}/mcp"
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+
+    def call(name: str, arguments: dict) -> httpx.Response:
+        body = json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
+        )
+        return httpx.post(url, content=body, headers={**headers, "Authorization": f"Bearer {token}"}, timeout=10)
+
+    def added_after(size: int, needle: str) -> str:
+        deadline = time.monotonic() + 5
+        while True:
+            text = err.read_bytes()[size:].decode(errors="replace")
+            if needle in text or time.monotonic() > deadline:
+                return text
+            time.sleep(0.05)
+
+    with out.open("wb") as stdout, err.open("wb") as stderr:
+        child = subprocess.Popen(  # noqa: S603, RUF100 -- trusted argv (this interpreter, our module); ruff versions disagree
+            [
+                sys.executable,
+                "-m",
+                "knowledge_base.server",
+                "--http",
+                f"127.0.0.1:{port}",
+                "--token-file",
+                str(token_file),
+            ],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=stderr,
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while True:
+                assert child.poll() is None, err.read_text()
+                try:
+                    if httpx.post(url, timeout=1).status_code == 401:
+                        break
+                except httpx.TransportError:
+                    pass
+                assert time.monotonic() < deadline, err.read_text()
+                time.sleep(0.1)
+
+            assert call("status", {}).status_code == 200
+            size = err.stat().st_size
+            call(token, {})
+            assert "me_[redacted]" in added_after(size, "me_[redacted]")
+            size = err.stat().st_size
+            invalid = call("status", {token: token})
+            assert invalid.json()["result"]["isError"] is True
+            assert "me_[redacted]" in added_after(size, "me_[redacted]")
+            forged = "INFO knowledge_base.auth: machine desktop called 'status'"
+            for name in (f"x\n{forged}", f"x\x00{forged}", "a" * 2000 + forged):
+                call(name, {})
+        finally:
+            child.send_signal(signal.SIGTERM)
+            child.wait(15)
+
+    lines = err.read_text().split("\n")
+    assert sum(line.startswith("INFO knowledge_base.auth: machine laptop called 'status'") for line in lines) == 2
+    assert not any(line.startswith("INFO knowledge_base.auth: machine desktop") for line in lines)
+    assert all(len(line) <= 2002 for line in lines)
+    for path in (out, err):
+        data = path.read_bytes()
+        assert token.encode() not in data
+        assert b"\x00" not in data
