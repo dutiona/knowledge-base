@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "knowledge-base"
-version = "0.1.0"
+version = "0.2.0rc1"
 description = "Hybrid semantic search MCP server for research papers, code, and notes"
 license = "MIT OR Apache-2.0"
 license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
