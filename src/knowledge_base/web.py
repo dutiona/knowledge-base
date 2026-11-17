@@ -1106,6 +1106,10 @@ class _Fetched:
     encoding: str
 
 
+#: The userinfo of an http(s) URL inside a message, up to the authority's last "@".
+_USERINFO = re.compile(r"(?i)(https?://)[^\s/?#]*@")
+
+
 def _fetch(client: httpx.Client, url: str) -> _Fetched:
     """GET *url* with *client* (a floored client) under the fetch limits.
 
@@ -1114,6 +1118,7 @@ def _fetch(client: httpx.Client, url: str) -> _Fetched:
     (gzip or deflate, one layer) and its decoded bytes count. The deadline covers every hop and socket operation.
     A limit raises ``ValidationError``; any other failure is the ``httpx.HTTPError`` it was.
     """
+    shown = without_userinfo(url)  # an error is returned and logged, never with the URL's credentials
     limits = fetch_limits()
     request = client.build_request("GET", url, headers={"Accept-Encoding": "identity"})
     redirects = 0
@@ -1126,7 +1131,7 @@ def _fetch(client: httpx.Client, url: str) -> _Fetched:
                         redirects += 1
                         if redirects > limits.max_redirects:
                             raise ValidationError(
-                                f"Failed to fetch {url}: more than {limits.max_redirects} redirects "
+                                f"Failed to fetch {shown}: more than {limits.max_redirects} redirects "
                                 f"({FETCH_MAX_REDIRECTS_VAR})"
                             )
                         request = response.next_request
@@ -1135,12 +1140,12 @@ def _fetch(client: httpx.Client, url: str) -> _Fetched:
                     encoding = response.headers.get("content-encoding", "")
                     codings = [c for c in (part.strip().lower() for part in encoding.split(",")) if c]
                     if codings not in ([], ["identity"], ["gzip"], ["deflate"]):
-                        raise ValidationError(f"Failed to fetch {url}: unsupported Content-Encoding {encoding!r}")
+                        raise ValidationError(f"Failed to fetch {shown}: unsupported Content-Encoding {encoding!r}")
                     body = bytearray()  # one buffer: a list of many tiny chunks costs far more than their bytes
                     for chunk in response.iter_bytes():
                         if len(body) + len(chunk) > limits.max_bytes:
                             raise ValidationError(
-                                f"Failed to fetch {url}: the response is over the {limits.max_bytes}-byte cap "
+                                f"Failed to fetch {shown}: the response is over the {limits.max_bytes}-byte cap "
                                 f"({FETCH_MAX_BYTES_VAR})"
                             )
                         body += chunk
@@ -1151,7 +1156,7 @@ def _fetch(client: httpx.Client, url: str) -> _Fetched:
                     response.close()
     except DeadlineExceeded:
         raise ValidationError(
-            f"Failed to fetch {url}: not done within the {limits.deadline} s deadline ({FETCH_DEADLINE_VAR})"
+            f"Failed to fetch {shown}: not done within the {limits.deadline} s deadline ({FETCH_DEADLINE_VAR})"
         ) from None
 
 
@@ -1186,7 +1191,7 @@ def ingest_url(
         with egress_client(floor=True, timeout=30.0) as client:
             fetched = _fetch(client, url)
     except (httpx.HTTPError, httpx.InvalidURL) as e:  # InvalidURL (a bad port, a control character) is no HTTPError
-        raise ValidationError(f"Failed to fetch {source_uri}: {e}") from e
+        raise ValidationError(f"Failed to fetch {source_uri}: {_USERINFO.sub(r'\1', str(e))}") from e
 
     # punycode is a hostname codec that decodes a run of digits in quadratic time, after the fetch's deadline
     encoding = "utf-8" if codecs.lookup(fetched.encoding).name == "punycode" else fetched.encoding

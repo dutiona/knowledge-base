@@ -438,3 +438,20 @@ def test_every_stored_chunk_is_a_fixpoint(kb_conn, stub_document_embedder):
     text = "x" * 799 + "_" + zero + " " + "y" * 1500
     ingest.ingest_text(kb_conn, text, source_uri="content:///edge", source_type="markdown")
     assert all(r[0] == scrub(r[0]) for r in kb_conn.execute("SELECT content FROM chunks"))
+
+
+@pytest.mark.parametrize("status", [401, 500])
+def test_a_failed_fetch_names_the_url_without_userinfo(
+    kb_conn, stub_document_embedder, http_requests, fake_dns, public_net, monkeypatch, status
+):
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.web import ingest_url
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_BROWSER")
+    monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
+    fake_dns.update({"docs.example.test": ["203.0.113.12"]})
+    http_requests.handlers["docs.example.test"] = lambda request: httpx.Response(status)
+    with pytest.raises(ValidationError) as failed:
+        ingest_url(kb_conn, "https://reader:example-pass@docs.example.test/page")
+    assert "example-pass" not in str(failed.value) and "reader" not in str(failed.value)
+    assert "https://docs.example.test/page" in str(failed.value)
