@@ -234,3 +234,18 @@ def test_a_piece_the_limit_split_cuts_is_still_a_redaction_fixpoint(conn, bounde
     contents = [r[0] for r in conn.execute("SELECT content FROM chunks WHERE source_uri = '/docs/cut.md'")]
     assert len(contents) == 2
     assert all(c == scrub(c) for c in contents)
+
+
+def test_re_ingesting_a_file_whose_chunk_redaction_changed_counts_nothing(
+    conn, bounded_embedder, http_requests, tmp_path
+):
+    """#592 with #604: the split's stored-chunk lookup hashes the text that is stored, the scrubbed one."""
+    from knowledge_base.ingest import ingest_file
+
+    path = tmp_path / "edge.md"
+    # The second 1000-character window starts at "me_", which the per-chunk scrub then redacts.
+    path.write_text("x" * 799 + "_me_" + "0" * 32 + " " + "word " * 40)  # each chunk fits the limit
+    ingest_file(conn, path)
+    before = len(http_requests)
+    assert ingest_file(conn, path)["chunks_added"] == 0
+    assert [r.url.path for r in http_requests[before:]] == []

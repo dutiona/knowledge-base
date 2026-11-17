@@ -374,7 +374,9 @@ def _produce_and_insert_chunks(
         # A piece keeps its function's line range and is named like chunk_python_ast's own oversize split.
         ast_chunks = [
             {**ac, "text": piece, "name": f"{ac['name']}[{k}]" if len(pieces) > 1 else ac["name"]}
-            for ac, pieces in zip(ast_chunks, _bounded_chunks(conn, [ac["text"] for ac in ast_chunks]), strict=True)
+            for ac, pieces in zip(
+                ast_chunks, _bounded_chunks(conn, [scrub(ac["text"]) for ac in ast_chunks]), strict=True
+            )
             for k, piece in enumerate(pieces)
         ]
         items: list[tuple[int, str, str, str]] = []
@@ -403,6 +405,8 @@ def _produce_and_insert_chunks(
             )
         if not md_chunks:
             return (0, 0, [])
+        # The split counts, and looks up, the text that is stored (#592).
+        md_chunks = [(scrub(chunk_text), pages) for chunk_text, pages in md_chunks]
         # A piece keeps its parent's pages and lists the images whose reference starts in it. They are read from
         # the whole parent, because a cut can fall inside a reference's caption.
         split: list[tuple[str, list[int], list[str]]] = []
@@ -427,7 +431,9 @@ def _produce_and_insert_chunks(
                 chunk_meta["images"] = images
             items.append((i, chunk_text, _content_hash(chunk_text), json.dumps(chunk_meta)))
     else:
-        fixed_chunks = [piece for pieces in _bounded_chunks(conn, _chunk_text(text)) for piece in pieces]
+        fixed_chunks = [
+            piece for pieces in _bounded_chunks(conn, [scrub(c) for c in _chunk_text(text)]) for piece in pieces
+        ]
         if not fixed_chunks:
             return (0, 0, [])
         items = [(i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)]
