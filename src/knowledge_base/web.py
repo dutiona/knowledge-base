@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
 
@@ -25,8 +26,24 @@ from .db import (
     get_vec_table_name,
 )
 from .exceptions import ValidationError
-from .settings import BROWSER_VAR, switch_on
-from .utils import _is_allowed_loopback, egress_client, is_private_ip, loopback_opt_in, validate_base_url
+from .settings import (
+    BROWSER_VAR,
+    FETCH_DEADLINE_VAR,
+    FETCH_MAX_BYTES_VAR,
+    FETCH_MAX_REDIRECTS_VAR,
+    fetch_limits,
+    switch_on,
+)
+from .utils import (
+    DeadlineExceeded,
+    _is_allowed_loopback,
+    deadline_left,
+    egress_client,
+    egress_deadline,
+    is_private_ip,
+    loopback_opt_in,
+    validate_base_url,
+)
 from .ingest import (
     _cleanup_conclusion_refs,
     _embed_with_config,
@@ -342,7 +359,7 @@ def _extract_html_images(
 
     *base_url* is used for resolving relative ``<img src>`` attributes via
     ``urljoin``.  Defaults to *source_url* when not provided.  Pass
-    ``str(response.url)`` when the page redirected so relative paths resolve
+    the fetched page's final URL when it redirected so relative paths resolve
     against the final location.
 
     *extra_html_sources* is an optional list of ``(html, base_url)`` pairs
@@ -1097,6 +1114,71 @@ def _cleanup_stale_inline_images(conn: sqlite3.Connection, source_uri: str) -> i
 
 
 # ---------------------------------------------------------------------------
+# Fetching a tool-supplied URL under the fetch limits (#588)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _Fetched:
+    body: bytes
+    url: httpx.URL
+    encoding: str
+
+
+def _fetch(client: httpx.Client, url: str) -> _Fetched:
+    """GET *url* with *client* (a floored client that follows no redirect) under the fetch limits.
+
+    Redirects are followed here, so a redirect's body is never read: httpx's own follower reads each one in full.
+    The body is asked for uncompressed and counted as it streams; a server that compresses anyway is decoded
+    (gzip or deflate, one layer) and its decoded bytes count. The deadline covers every hop and socket operation.
+    A limit raises ``ValidationError``; any other failure is the ``httpx.HTTPError`` it was.
+    """
+    limits = fetch_limits()
+    request = client.build_request("GET", url, headers={"Accept-Encoding": "identity"})
+    redirects = 0
+    try:
+        with egress_deadline(limits.deadline):
+            while True:
+                response = client.send(request, stream=True)
+                try:
+                    if response.next_request is not None:
+                        redirects += 1
+                        if redirects > limits.max_redirects:
+                            raise ValidationError(
+                                f"Failed to fetch {url}: more than {limits.max_redirects} redirects "
+                                f"({FETCH_MAX_REDIRECTS_VAR})"
+                            )
+                        request = response.next_request
+                        continue
+                    response.raise_for_status()
+                    encoding = response.headers.get("content-encoding", "")
+                    codings = [
+                        c for c in (part.strip().lower() for part in encoding.split(",")) if c not in ("", "identity")
+                    ]
+                    if codings not in ([], ["gzip"], ["deflate"]):
+                        raise ValidationError(f"Failed to fetch {url}: unsupported Content-Encoding {encoding!r}")
+                    chunks: list[bytes] = []
+                    size = 0
+                    for chunk in response.iter_bytes():
+                        size += len(chunk)
+                        if size > limits.max_bytes:
+                            raise ValidationError(
+                                f"Failed to fetch {url}: the response is over the {limits.max_bytes}-byte cap "
+                                f"({FETCH_MAX_BYTES_VAR})"
+                            )
+                        chunks.append(chunk)
+                        deadline_left()
+                    deadline_left()
+                    return _Fetched(b"".join(chunks), response.url, response.encoding or "utf-8")
+                finally:
+                    response.close()
+    except DeadlineExceeded:
+        raise ValidationError(
+            f"Failed to fetch {url}: not done within the {limits.deadline} s deadline ({FETCH_DEADLINE_VAR})"
+        ) from None
+
+
+# ---------------------------------------------------------------------------
 # URL ingestion
 # ---------------------------------------------------------------------------
 
@@ -1117,15 +1199,14 @@ def ingest_url(
     if not parsed.hostname:
         raise ValidationError("URL must include a hostname")
     # The client floors and pins the first request and every redirect hop, so a refused hop is never sent and
-    # raises ValidationError (#572).
+    # raises ValidationError (#572); _fetch bounds the fetch's size, redirects and time (#588).
     try:
-        with egress_client(floor=True, follow_redirects=True, timeout=30.0) as client:
-            response = client.get(url)
-            response.raise_for_status()
+        with egress_client(floor=True, timeout=30.0) as client:
+            fetched = _fetch(client, url)
     except httpx.HTTPError as e:
         raise ValidationError(f"Failed to fetch {url}: {e}") from e
 
-    html = response.text
+    html = fetched.body.decode(fetched.encoding, errors="replace")  # httpx's own .text rule
     text = trafilatura.extract(html, include_links=False, include_tables=True) or ""
     extracted_title = None
     metadata = trafilatura.extract_metadata(html)
@@ -1135,7 +1216,7 @@ def ingest_url(
     browser_rendered = False
     figures_extracted = 0
     rendered_html_for_phase2: str | None = None
-    rendered_base_url: str = str(response.url)
+    rendered_base_url: str = str(fetched.url)
 
     # Browser fallback: if trafilatura got insufficient content, try rendering
     if len(text.strip()) < _BROWSER_FALLBACK_MIN_CHARS:
@@ -1166,12 +1247,12 @@ def ingest_url(
                     # better than static (browser_rendered stays False).
                     rendered_html_for_phase2 = render_result["html"]
                     # Use browser's final URL for resolving relative <img src>
-                    # (may differ from httpx response.url after client-side nav).
+                    # (may differ from the fetched URL after client-side nav).
                     final = render_result.get("final_url") or ""
                     if final and urlparse(final).scheme in ("http", "https"):
                         rendered_base_url = final
                     else:
-                        rendered_base_url = str(response.url)
+                        rendered_base_url = str(fetched.url)
 
                     # Extract figures from screenshot (isolated from text ingest)
                     screenshot = render_result.get("screenshot_path")
@@ -1214,7 +1295,7 @@ def ingest_url(
             conn,
             html,
             source_url=url,
-            base_url=str(response.url),
+            base_url=str(fetched.url),
             extra_html_sources=extra_sources,
         )
         figures_extracted += inline_figures
