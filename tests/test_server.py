@@ -424,16 +424,19 @@ def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_fil
             size = err.stat().st_size
             call(token, {})
             assert "me_[redacted]" in added_after(size, "me_[redacted]")
-            size = err.stat().st_size
-            invalid = call("status", {token: token})
-            assert invalid.json()["result"]["isError"] is True
-            assert "me_[redacted]" in added_after(size, "me_[redacted]")
+            # FastMCP logs the rejected argument's name and value in a traceback today; the whole-output
+            # assertion below holds whether or not a later release keeps logging it.
+            assert call("status", {token: token}).json()["result"]["isError"] is True
             forged = "INFO knowledge_base.auth: machine desktop called 'status'"
             for name in (f"x\n{forged}", f"x\x00{forged}", "a" * 2000 + forged):
                 call(name, {})
         finally:
             child.send_signal(signal.SIGTERM)
-            child.wait(15)
+            try:
+                child.wait(15)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                raise
 
     lines = err.read_text().split("\n")
     assert sum(line.startswith("INFO knowledge_base.auth: machine laptop called 'status'") for line in lines) == 2
