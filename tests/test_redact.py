@@ -118,12 +118,21 @@ def test_token_shape_is_the_adr_shape():
 
 
 @pytest.mark.parametrize(
-    "unit",
-    ["=eyJ", "://u:p@", "token=a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6 ", "-----BEGIN ", "_a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6"],
+    "text",
+    [
+        "=eyJ" * (2**21 // 4),
+        "://u:p@" * (2**21 // 7),
+        "token=a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6 " * (2**21 // 39),
+        "-----BEGIN " * (2**21 // 11),
+        "_a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6" * (2**21 // 33),
+        # One word, one underscore: a copied context-word tail made this quadratic (15 s at 8 MiB, now 0.6 s).
+        "_" + ("g" + "0" * 32) * (2**23 // 33),
+        ("me_" + "0" * 32 + " Ab3dE5fG7hI9jK1lM2nO ") * (2**21 // 57),  # two detectors' spans interleave
+    ],
+    ids=["jwt-prefix", "url-authority", "hex-context", "pem-line", "hex-words", "one-long-word", "interleaved"],
 )
-def test_redaction_is_linear_on_hostile_input(unit):
-    """``ingest_text`` takes 4 MiB over HTTP; a literal port of the reference scans is quadratic on these."""
-    text = unit * (2**20 // len(unit))
+def test_redaction_is_linear_on_hostile_input(text):
+    """``ingest_text`` takes 4 MiB over HTTP. At 2 MiB a quadratic shape that costs 2.5 s at 1 MiB takes 10 s."""
     started = time.monotonic()
-    redact(text)
-    assert time.monotonic() - started < 10
+    scrub(text)
+    assert time.monotonic() - started < 6

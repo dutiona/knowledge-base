@@ -64,27 +64,40 @@ _HEX_RUN = regex.compile(r"[0-9A-Fa-f]+")
 _AUTHORITY_END = regex.compile(r"[/?#\p{White_Space}]")
 _ENTROPY_TOKEN = regex.compile(r"[^\p{White_Space}\"'`{}\[\]():,;=]+")
 _SECRET_CHARSET = regex.compile(r"[A-Za-z0-9+/=_\-]+")
-_LINK_RUN = regex.compile(r"[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]*")
+# RFC 3986 characters except ' ( ) , ;, which in prose and code end a link more often than they continue one.
+_LINK_RUN = regex.compile(r"[A-Za-z0-9\-._~:/?#\[\]@!$&*+=%]*")
 _MACHINE_TOKEN = regex.compile(rf"(?<![0-9A-Za-z_]){TOKEN_SHAPE}(?![0-9A-Za-z_])")
 
 
 class _Spans:
-    """Sorted, non-overlapping half-open spans with a logarithmic overlap test."""
+    """Sorted, non-overlapping half-open spans with a logarithmic overlap test.
+
+    A detector adds its spans in increasing order to a pending run, merged in by :meth:`flush`, so no span is
+    ever inserted mid-list (that memmove made interleaved detectors quadratic).
+    """
 
     def __init__(self) -> None:
         self.starts: list[int] = []
         self.ends: list[int] = []
         self.rules: list[str] = []
+        self._pending: list[tuple[int, int, str]] = []
 
     def overlaps(self, start: int, end: int) -> bool:
         i = bisect_left(self.starts, end)
-        return i > 0 and self.ends[i - 1] > start
+        if i > 0 and self.ends[i - 1] > start:
+            return True
+        return bool(self._pending) and self._pending[-1][1] > start and self._pending[-1][0] < end
 
     def add(self, start: int, end: int, rule: str) -> None:
-        i = bisect_right(self.starts, start)
-        self.starts.insert(i, start)
-        self.ends.insert(i, end)
-        self.rules.insert(i, rule)
+        self._pending.append((start, end, rule))
+
+    def flush(self) -> None:
+        if self._pending:
+            merged = sorted([*zip(self.starts, self.ends, self.rules, strict=True), *self._pending])
+            self.starts = [m[0] for m in merged]
+            self.ends = [m[1] for m in merged]
+            self.rules = [m[2] for m in merged]
+            self._pending = []
 
 
 class _Runs:
@@ -110,7 +123,10 @@ def _is_ws(c: str) -> bool:
 
 
 def _links(text: str) -> _Spans:
-    """``scheme://`` plus RFC 3986 characters: no rule but url-credential redacts inside one."""
+    """``scheme://`` plus link characters: no rule but url-credential redacts inside one.
+
+    The userinfo is no reference, so it is left out and stays subject to every rule.
+    """
     links = _Spans()
     pos = 0
     while (sep := text.find("://", pos)) >= 0:
@@ -122,21 +138,30 @@ def _links(text: str) -> _Spans:
         run = _LINK_RUN.match(text, sep + 3)
         end = run.end() if run else sep + 3
         if start < sep:
-            links.add(start, end, "link")
+            authority_end = next((k for k in range(sep + 3, end) if text[k] in "/?#"), end)
+            at = text.rfind("@", sep + 3, authority_end)
+            if at >= 0:
+                links.add(start, sep + 3, "link")
+                links.add(at, end, "link")
+            else:
+                links.add(start, end, "link")
         pos = max(end, sep + 3)
+    links.flush()
     return links
 
 
-def _detect_machine_token(text: str, spans: _Spans, links: _Spans) -> None:
+def _detect_machine_token(text: str, spans: _Spans) -> None:
+    """The exact ADR-0020 shape, inside a link too: it is never a published reference."""
     for m in _MACHINE_TOKEN.finditer(text):
-        if not spans.overlaps(m.start(), m.end()) and not links.overlaps(m.start(), m.end()):
+        if not spans.overlaps(m.start(), m.end()):
             spans.add(m.start(), m.end(), "machine-token")
+    spans.flush()
 
 
 def _detect_provider_prefix(text: str, spans: _Spans, links: _Spans) -> None:
     bodies = _Runs(_BODY_RUN, text)
-    dots = [i for i, c in enumerate(text) if c == "."] if "." in text else []
-    newlines = [i for i, c in enumerate(text) if c == "\n"] if "\n" in text else []
+    dots = [m.start() for m in regex.finditer(r"\.", text)]
+    newlines = [m.start() for m in regex.finditer("\n", text)]
     for rule, prefix in SECRET_PREFIXES:
         pos = 0
         while (start := text.find(prefix, pos)) >= 0:
@@ -148,6 +173,9 @@ def _detect_provider_prefix(text: str, spans: _Spans, links: _Spans) -> None:
                 end = newlines[j] if j < len(newlines) else len(text)
                 if end > start and text[end - 1] == "\r":
                     end -= 1
+                k = bisect_right(links.starts, start)  # a link on the line ends the header's span
+                if k < len(links.starts) and links.starts[k] < end:
+                    end = links.starts[k]
             else:
                 body = start + len(prefix)
                 run = bodies.run_at(body)
@@ -159,6 +187,7 @@ def _detect_provider_prefix(text: str, spans: _Spans, links: _Spans) -> None:
                     continue
             if not spans.overlaps(start, end) and not links.overlaps(start, end):
                 spans.add(start, end, rule)
+        spans.flush()  # each prefix's matches come in order; prefixes interleave
 
 
 def _detect_url_credential(text: str, spans: _Spans) -> list[tuple[int, int]]:
@@ -208,8 +237,9 @@ class _Words:
         """Whether ``text[word_start:end]``, split on ``_``, has a part that is a key."""
         i = bisect_left(self.underscores, end) - 1
         if i >= 0 and self.underscores[i] >= word_start:
-            return self.key_before[i] or _is_key(self.text[self.underscores[i] + 1 : end])
-        return _is_key(self.text[word_start:end]) if end - word_start <= _LONGEST_KEY else False
+            tail = self.underscores[i] + 1
+            return self.key_before[i] or (end - tail <= _LONGEST_KEY and _is_key(self.text[tail:end]))
+        return end - word_start <= _LONGEST_KEY and _is_key(self.text[word_start:end])
 
 
 def _detect_hex_in_context(text: str, spans: _Spans, links: _Spans) -> None:
@@ -225,6 +255,7 @@ def _detect_hex_in_context(text: str, spans: _Spans, links: _Spans) -> None:
             spans.overlaps(start, end) or links.overlaps(start, end)
         ):
             spans.add(start, end, "hex-secret")
+    spans.flush()
 
 
 def _has_hex_context_key(text: str, hex_start: int, line_start: int, words: _Words) -> bool:
@@ -253,15 +284,17 @@ def _detect_high_entropy(text: str, spans: _Spans, links: _Spans) -> None:
             and not links.overlaps(m.start(), m.end())
         ):
             spans.add(m.start(), m.end(), "high-entropy")
+    spans.flush()
 
 
 def _collect(text: str) -> _Spans:
     links = _links(text)
     spans = _Spans()
-    _detect_machine_token(text, spans, links)
+    _detect_machine_token(text, spans)
     _detect_provider_prefix(text, spans, links)
     for start, end in _detect_url_credential(text, spans):
         spans.add(start, end, "connection-string-password")
+    spans.flush()
     _detect_hex_in_context(text, spans, links)
     _detect_high_entropy(text, spans, links)
     return spans
