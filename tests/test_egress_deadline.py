@@ -121,10 +121,17 @@ def test_the_outer_deadline_comes_back_after_a_nested_one(clock):
     assert utils.deadline_left() is None
 
 
+class _Script:
+    """What the loopback server answers: ``prompt`` at once, then ``drip`` one byte every 50 ms."""
+
+    def __init__(self) -> None:
+        self.prompt = b""
+        self.drip = b""
+
+
 @pytest.fixture
-def drip_server() -> Iterator[tuple[int, list[bytes]]]:
-    """A loopback server that sends ``script`` (set by the test) one byte every 50 ms to each connection."""
-    script: list[bytes] = []
+def drip_server() -> Iterator[tuple[int, _Script]]:
+    script = _Script()
     server = socket.create_server(("127.0.0.1", 0))
     server.settimeout(5)
     done = threading.Event()
@@ -135,14 +142,15 @@ def drip_server() -> Iterator[tuple[int, list[bytes]]]:
         except OSError:
             return
         with conn:
-            conn.recv(65536)
-            for byte in b"".join(script):
-                if done.wait(0.05):
-                    return
-                try:
+            try:
+                conn.recv(65536)
+                conn.sendall(script.prompt)
+                for byte in script.drip:
+                    if done.wait(0.05):
+                        return
                     conn.sendall(bytes([byte]))
-                except OSError:
-                    return
+            except OSError:
+                return
 
     thread = threading.Thread(target=_serve, daemon=True)
     thread.start()
@@ -154,7 +162,7 @@ def drip_server() -> Iterator[tuple[int, list[bytes]]]:
 
 def test_a_header_drip_ends_at_the_deadline(drip_server):
     port, script = drip_server
-    script.append(b"HTTP/1.1 200 OK\r\n" + b"X-Drip: " + b"a" * 400 + b"\r\n\r\n")
+    script.drip = b"HTTP/1.1 200 OK\r\n" + b"X-Drip: " + b"a" * 400 + b"\r\n\r\n"
     started = time.monotonic()
     with (
         egress_client(floor=True, allow_loopback=True, timeout=30.0) as client,
@@ -167,16 +175,20 @@ def test_a_header_drip_ends_at_the_deadline(drip_server):
 
 def test_a_body_drip_ends_at_the_deadline(drip_server):
     port, script = drip_server
-    script.append(b"HTTP/1.1 200 OK\r\nContent-Length: 400\r\n\r\n" + b"a" * 400)
+    script.prompt = b"HTTP/1.1 200 OK\r\nContent-Length: 400\r\n\r\n"
+    script.drip = b"a" * 400
+    received = 0
     started = time.monotonic()
     with (
         egress_client(floor=True, allow_loopback=True, timeout=30.0) as client,
         egress_deadline(0.5),
-        pytest.raises(DeadlineExceeded),
         client.stream("GET", f"http://127.0.0.1:{port}/") as response,
     ):
-        for _chunk in response.iter_bytes():
-            pass
+        assert response.status_code == 200  # the headers arrived: the deadline must stop the body
+        with pytest.raises(DeadlineExceeded):
+            for chunk in response.iter_bytes():
+                received += len(chunk)
+    assert 0 < received < 400
     assert time.monotonic() - started < 1.5
 
 
