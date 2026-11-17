@@ -42,6 +42,7 @@ from .utils import (
     egress_client,
     egress_deadline,
     is_private_ip,
+    without_userinfo,
     loopback_opt_in,
     validate_base_url,
 )
@@ -1176,13 +1177,15 @@ def ingest_url(
         raise ValidationError(f"URL scheme must be http or https, got: {parsed.scheme!r}")
     if not parsed.hostname:
         raise ValidationError("URL must include a hostname")
+    # The page is stored and logged under its URL without userinfo; it is fetched with all of it (#592).
+    source_uri = without_userinfo(url)
     # The client floors and pins the first request and every redirect hop, so a refused hop is never sent and
     # raises ValidationError (#572); _fetch bounds the fetch's size, redirects and time (#588).
     try:
         with egress_client(floor=True, timeout=30.0) as client:
             fetched = _fetch(client, url)
     except (httpx.HTTPError, httpx.InvalidURL) as e:  # InvalidURL (a bad port, a control character) is no HTTPError
-        raise ValidationError(f"Failed to fetch {url}: {e}") from e
+        raise ValidationError(f"Failed to fetch {source_uri}: {e}") from e
 
     # punycode is a hostname codec that decodes a run of digits in quadratic time, after the fetch's deadline
     encoding = "utf-8" if codecs.lookup(fetched.encoding).name == "punycode" else fetched.encoding
@@ -1241,11 +1244,11 @@ def ingest_url(
                     screenshot = render_result.get("screenshot_path")
                     if screenshot and screenshot.exists():
                         try:
-                            figures_extracted = _extract_web_figures(conn, url, screenshot)
+                            figures_extracted = _extract_web_figures(conn, source_uri, screenshot)
                         except Exception:
                             logger.warning(
                                 "Figure extraction failed for %s",
-                                url,
+                                source_uri,
                                 exc_info=True,
                             )
                             figures_extracted = 0
@@ -1254,11 +1257,11 @@ def ingest_url(
                     element_captures = render_result.get("element_captures")
                     if element_captures:
                         try:
-                            figures_extracted += _extract_element_captures(conn, url, element_captures)
+                            figures_extracted += _extract_element_captures(conn, source_uri, element_captures)
                         except Exception:
                             logger.warning(
                                 "Element capture extraction failed for %s",
-                                url,
+                                source_uri,
                                 exc_info=True,
                             )
                 finally:
@@ -1277,17 +1280,17 @@ def ingest_url(
         inline_figures = _extract_html_images(
             conn,
             html,
-            source_url=url,
+            source_url=source_uri,
             base_url=str(fetched.url),
             extra_html_sources=extra_sources,
         )
         figures_extracted += inline_figures
     except Exception:
-        logger.warning("Inline image extraction failed for %s", url, exc_info=True)
+        logger.warning("Inline image extraction failed for %s", source_uri, exc_info=True)
 
     _base_result: dict = {
         "url": url,
-        "source_uri": url,
+        "source_uri": source_uri,
         "source_type": "web",
         "browser_rendered": browser_rendered,
         "figures_extracted": figures_extracted,
@@ -1299,7 +1302,7 @@ def ingest_url(
     stored = ingest_text(
         conn,
         text,
-        source_uri=url,
+        source_uri=source_uri,
         source_type="web",
         session_id=session_id,
         metadata={"title": extracted_title} if extracted_title else None,

@@ -211,3 +211,64 @@ def test_metadata_urls_keep_their_query(kb_conn):
     assert stored["other_url"] == "Http://x.example.test/p?k=v"
     # Not a whole URL (a trailing newline): ordinary text, whose link keeps all but its password.
     assert stored["url_with_newline"] == "https://reader:[REDACTED:connection-string-password]@x.example.test/p\n"
+
+
+def _serve_article(http_requests, fake_dns, text: str) -> None:
+    fake_dns.update({"docs.example.test": ["203.0.113.12"]})
+    body = (
+        "<html><head><title>Docs</title></head><body><article><h1>Docs</h1><p>"
+        + "The service reads its settings from the environment and logs to the journal. " * 6
+        + text
+        + "</p></article></body></html>"
+    ).encode()
+    http_requests.handlers["docs.example.test"] = lambda request: httpx.Response(
+        200, content=body, headers={"content-type": "text/html"}
+    )
+
+
+@pytest.mark.parametrize("userinfo", ["reader:example-pass@", GITHUB_TOKEN + "@"])
+def test_ingest_url_stores_the_url_without_userinfo(
+    kb_conn, stub_document_embedder, http_requests, fake_dns, public_net, monkeypatch, userinfo
+):
+    from knowledge_base import web
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_BROWSER")
+    monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
+    seen: list[str] = []
+    monkeypatch.setattr(
+        web, "_extract_html_images", lambda conn, html, *, source_url, **_kw: seen.append(source_url) or 0
+    )
+    _serve_article(http_requests, fake_dns, "Plain text.")
+    url = f"https://{userinfo}docs.example.test/page?v=2"
+    result = web.ingest_url(kb_conn, url)
+    assert result["url"] == url  # the caller's own input, echoed
+    assert result["source_uri"] == "https://docs.example.test/page?v=2"
+    assert seen == ["https://docs.example.test/page?v=2"]
+    uris = {r[0] for r in kb_conn.execute("SELECT source_uri FROM chunks")}
+    assert uris == {"https://docs.example.test/page?v=2"}
+    again = web.ingest_url(kb_conn, url)
+    assert (again["chunks_added"], again["source_uri"]) == (0, "https://docs.example.test/page?v=2")
+
+
+def test_source_uris_keep_their_identity(
+    kb_conn, stub_document_embedder, folder_embedder, http_requests, fake_dns, public_net, monkeypatch, tmp_path
+):
+    """Ruling 2026-11-17: links are not redacted; file paths and document names are identity."""
+    from knowledge_base.routes.ingestion import ingest_text
+    from knowledge_base.web import ingest_url
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_BROWSER")
+    monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
+    _serve_article(http_requests, fake_dns, "Plain text.")
+    url = f"https://docs.example.test/d?id={QUERY_VALUE}"
+    assert ingest_url(kb_conn, url)["source_uri"] == url
+    folder = tmp_path / "sk-abcdefghijklmnopqrstuv"
+    folder.mkdir()
+    doc = folder / f"{QUERY_VALUE}"
+    doc.write_text("ordinary notes")
+    ingest.ingest_file(kb_conn, doc, source_type="markdown")
+    with patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn):
+        stored = json.loads(ingest_text(f"notes/{GITHUB_TOKEN}.md", "other notes"))["source_uri"]
+    uris = {r[0] for r in kb_conn.execute("SELECT source_uri FROM chunks")}
+    assert uris == {url, doc.resolve().as_posix(), stored}
+    assert ingest.reingest_file(kb_conn, doc, source_type="markdown")["chunks_added"] == 1
