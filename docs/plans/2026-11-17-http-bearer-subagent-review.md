@@ -414,3 +414,27 @@ So that call's stderr always carries a full token shape that the formatter must 
 ## Resolution (round 5)
 
 LGTM, no finding: no change required.
+
+# Round 6 (binding confirmation, same subagent)
+
+Michaël, here is the round-6 review of the #571 HTTP Bearer plan, a binding confirmation of the one-phrase change.
+
+**Verdict: LGTM. There are no findings.** I have high confidence: I checked the change against the full plan, not only the diff.
+
+Altitude report SHA-256: 0a1fde183dc0452cd6981313ad25037efab001d9379224ca044641179635fc5c
+
+## Altitude (assessed first)
+
+- **Digests.** The plan's SHA-256 is `61434ebe…428e`, the same in the review tree and the worktree, and it is the digest the altitude report is bound to.
+- **Disposition "proceed": I agree.** The change is 24 bytes on one line and is recorded as "round 6 one phrase". There is no new content and no new duplication.
+
+## The change
+
+- **Only one line changed.** Comparing the full plan against the round-5 version shows a single difference, at line 380.
+- **The meaning is kept.** That line in item 8's real-process test now says "a NUL character (U+0000) in place of the newline" instead of the literal `\u0000` escape. It still asks for the same tool name: `x`, a NUL, then the forged `INFO knowledge_base.auth: …` text.
+- **The checks that depend on it are unchanged.** "Neither file contains … a NUL byte" still proves that decision d2 escapes NUL to `\x00`, and the formatter's unit test still covers NUL separately.
+- **The file is clean for publication.** The plan contains no NUL byte, no other control character, and no `\uNNNN` escape left for GitHub to alter on read-back.
+
+## Resolution (round 6)
+
+LGTM, no finding: no change required.

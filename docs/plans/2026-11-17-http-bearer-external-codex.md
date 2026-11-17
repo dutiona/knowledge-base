@@ -50,4 +50,10 @@ This was a read-only review; no tests or gates were run.
 
 Altitude report SHA-256: 4ba0933cd4e386eea3704e3b40a8ef7b2bb602256cde0449d6ad534a67107a65
 
+## Round 6
+
+Michaël, **LGTM**. The wording change preserves the intended NUL-character test. Confidence is high.
+
+Altitude report SHA-256: 0a1fde183dc0452cd6981313ad25037efab001d9379224ca044641179635fc5c
+
 REVIEW COMPLETE

@@ -1,8 +1,8 @@
-Plan SHA-256: 4555291c4acbf5a61bb91941848461599e8c9d4e1c6766983bbdddd2769a4893
+Plan SHA-256: 61434ebe86cf44c91eebe73cba3466f666403f615771284218e9bd3de1b5428e
 
 # Altitude checkpoint: docs/plans/2026-11-17-http-bearer.md
 
-Round 5: the round-4 candidate (`3682a0f3…42a2`) revised for its findings (Codex LGTM; agy 1 MEDIUM, refuted by measurement, its hardening adopted; clean-slate subagent LGTM with 4 LOW), itself the round-3 candidate (`8a2c381e…cfdc`) revised for its findings (Codex 1 MEDIUM; agy 1 LOW, the same; clean-slate subagent 2 MEDIUM, 2 LOW), itself the round-2 candidate (`e3ceb6b4…c1e`) revised for its findings (Codex 2 HIGH; clean-slate subagent 1 HIGH, 1 MEDIUM, 2 LOW; agy LGTM), itself the round-1 candidate (`c110bd30…83be4`, synthesis of the mvp-first, risk-first and architecture-first lens
+Round 6: the round-5 candidate (`4555291c…4893`, LGTM from all three reviewers) with one phrase reworded for publication (GitHub altered the literal `\u` escape in item 8 on read-back, so it now names a NUL character in words), itself the round-4 candidate (`3682a0f3…42a2`) revised for its findings (Codex LGTM; agy 1 MEDIUM, refuted by measurement, its hardening adopted; clean-slate subagent LGTM with 4 LOW), itself the round-3 candidate (`8a2c381e…cfdc`) revised for its findings (Codex 1 MEDIUM; agy 1 LOW, the same; clean-slate subagent 2 MEDIUM, 2 LOW), itself the round-2 candidate (`e3ceb6b4…c1e`) revised for its findings (Codex 2 HIGH; clean-slate subagent 1 HIGH, 1 MEDIUM, 2 LOW; agy LGTM), itself the round-1 candidate (`c110bd30…83be4`, synthesis of the mvp-first, risk-first and architecture-first lens
 drafts kept under `docs/plans/2026-11-17-http-bearer-drafts/` as ephemeral working files) revised for the round-1
 findings (Codex 1 HIGH, 1 MEDIUM; clean-slate subagent 6 MEDIUM, 7 LOW; agy LGTM). The earlier reports are retained
 outside the tree at `~/.local/state/super-plan/2026-11-17-http-bearer/altitude-r1.md`, `altitude-r2.md` and `altitude-r3.md`.
@@ -12,7 +12,7 @@ outside the tree at `~/.local/state/super-plan/2026-11-17-http-bearer/altitude-r
 Counting method: `wc -l -c` for size; `awk` counting lines that start `- [ ] **` outside fenced blocks for items;
 `awk` toggling on lines that start with three backticks for fenced volume.
 
-- Plan: 499 physical lines, 45,295 bytes (round 4: 493, 44,701; round 3: 480, 43,267; round 2: 454, 40,561; round 1: 417, 36,434); 13 top-level implementation items (0 to 12), of which items 0, 1, 10, 11
+- Plan: 499 physical lines, 45,319 bytes (round 5: 499, 45,295; round 4: 493, 44,701; round 3: 480, 43,267; round 2: 454, 40,561; round 1: 417, 36,434); 13 top-level implementation items (0 to 12), of which items 0, 1, 10, 11
   and 12 are operational (baseline, plan issue, PR, review, merge), items 2, 3 and 9 are documentation-only commits,
   and items 4 to 8 carry executable behaviour.
 - Fenced literals: one block, lines 476 to 484, 7 body lines, 184 bytes: the AGENTS.md merge-gate command list, a
@@ -50,7 +50,7 @@ catalogue. A reviewed-amendment or design split is not warranted; the plan is re
 adds decision d2 (one formatter for every log line) and rewrites item 8's tests around it: again decisions and test
 rows, no product literal. The formatter is specified by its rules, not transcribed. Round 4 adds
 two formatter rules (control escapes, long-line breaks), test rows and residuals: the same kind of content. Round 5 changes
-wording and two test assertions only.
+wording and two test assertions only; round 6 one phrase.
 
 Disposition: **proceed**.
 

@@ -61,3 +61,13 @@ Altitude report SHA-256: 4ba0933cd4e386eea3704e3b40a8ef7b2bb602256cde0449d6ad534
 
 Confirmation round on the final plan bytes (`4555291c4acbf5a61bb91941848461599e8c9d4e1c6766983bbdddd2769a4893`): Codex LGTM, agy LGTM,
 clean-slate subagent LGTM. No change required.
+
+## Resolution (round 6)
+
+Altitude report SHA-256: 0a1fde183dc0452cd6981313ad25037efab001d9379224ca044641179635fc5c
+
+Publishing the round-5 plan failed its byte-for-byte read-back: GitHub altered the literal backslash-u escape for NUL in
+item 8 (the incomplete archive, issue #590, is closed as superseded). Item 8 now names the character in words; nothing
+else changed (plan `61434ebe86cf44c91eebe73cba3466f666403f615771284218e9bd3de1b5428e`). Binding confirmation: Codex
+LGTM; clean-slate subagent LGTM; agy LGTM on `gemini-3.8-flash-high`, because `gemini-4-argon-high` returned the account
+quota error (429) and its round ended incomplete with verified cleanup. No change required.

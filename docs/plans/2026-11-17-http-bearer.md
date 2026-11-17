@@ -377,7 +377,7 @@ Branch commits carry no co-author line. Each test is seen red before its change.
       whatever pydantic's length limit for values: measured, a 35-character value prints in full and a 55-character
       one is shortened; `result.isError` true;
       FastMCP's validation traceback: the added bytes hold `me_[redacted]`); tools named `"x\nINFO knowledge_base.auth: machine desktop called 'status'"`, the same with
-      `\u0000` instead of `\n`, and the same text preceded by 2,000 `a` characters. SIGTERM, ended within 15 s (its
+      a NUL character (U+0000) in place of the newline, and the same text preceded by 2,000 `a` characters. SIGTERM, ended within 15 s (its
       exit status is not asserted: uvicorn re-raises the SIGTERM it caught). Then: exactly two stderr lines start
       `INFO knowledge_base.auth: machine laptop called 'status'` (the validation call is logged too: FastMCP validates
       arguments after the middleware); no line starts `INFO knowledge_base.auth: machine desktop`; no stderr line is

@@ -96,4 +96,18 @@ Altitude report SHA-256: 4ba0933cd4e386eea3704e3b40a8ef7b2bb602256cde0449d6ad534
 
 [Antigravity Review] LGTM
 
+## Round 6
+
+(round 6 on gemini-3.8-flash-high: gemini-4-argon-high returned the account quota error)
+
+Michaël,
+
+I have completed the binding confirmation review of the implementation plan delta for Round 6 (`.review/plan-delta-r6.diff`, `.review/altitude.md`, and `.review/altitude-delta-r6.diff`).
+
+The sole change replaces the escaped literal `\u0000` in Item 8 with the unambiguous phrasing `"a NUL character (U+0000) in place of the newline"` to avoid markdown decoding / escape corruption across GitHub issue read-backs. The test semantics, test assertions, and log injection injection-resistance assertions remain identical and complete.
+
+Altitude report SHA-256: 0a1fde183dc0452cd6981313ad25037efab001d9379224ca044641179635fc5c
+
+[Antigravity Review] LGTM: The editorial wording fix in Item 8 cleanly prevents escape corruption on read-back without altering test execution semantics or weakening log injection checks. The altitude calibration and measurements are properly updated and consistent.
+
 REVIEW COMPLETE
