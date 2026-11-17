@@ -166,7 +166,7 @@ When ingesting web pages via `ingest_url`, inline `<img>` tags are extracted fro
 - Images from private/loopback IP ranges or the host's own addresses, checked on every request and redirect hop (SSRF protection)
 - Duplicate URLs on the same page
 
-Up to 10 images per page are processed. Each image download is capped at 10 MB (streamed). Non-PNG images (JPEG, WebP, GIF) are converted to PNG before being sent to the vision model.
+Up to 10 images per page are processed. Each download keeps the fetch limits of [Web Pages](ingesting-documents.md#web-pages) (by default 50 MiB, 5 redirects, 60 s). Non-PNG images (JPEG, WebP, GIF) are converted to PNG before being sent to the vision model.
 
 **Chunk encoding:**
 

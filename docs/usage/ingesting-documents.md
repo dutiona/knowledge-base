@@ -71,6 +71,28 @@ still verifies the host name). A redirect into loopback, a private range, the ta
 own address fails the ingest before anything is sent there. Proxy variables (`HTTP(S)_PROXY`) are not used for these
 fetches, since a proxy would resolve the name itself.
 
+Each fetch of a page or of an image is bounded by three limits, set in the server's environment (no tool can change
+them) and checked at startup:
+
+| Variable | Default | Limit |
+| --- | --- | --- |
+| `KNOWLEDGE_BASE_FETCH_MAX_BYTES` | `52428800` (50 MiB) | the body, counted as it streams; a redirect's body is never read |
+| `KNOWLEDGE_BASE_FETCH_MAX_REDIRECTS` | `5` | redirects followed; `0` follows none |
+| `KNOWLEDGE_BASE_FETCH_DEADLINE` | `60` (seconds) | the whole fetch, every hop included |
+
+A fetch past a limit fails with an error naming it, and nothing is stored. The deadline is held at every socket
+operation (connect, TLS handshake, every read and write of the headers and the body), so a server that sends one byte
+at a time cannot outlast it; each request also keeps its own timeout (30 s for a page, 15 s for an image). The body is
+asked for uncompressed; a server that compresses it anyway is decoded if it used one layer of gzip or deflate, and its
+decoded size counts. Any other encoding is refused. Where the bound stops:
+
+- Name lookups are outside the deadline: a lookup that starts before it can overrun it by the system resolver's own
+  timeout (5 s per try, 2 tries, by default on glibc).
+- A server that compresses despite the request can overshoot the cap by one 64 KiB read's expansion, about 66 MiB,
+  before the fetch is refused.
+- The browser fallback fetches with its own network and timeouts, and with vision on, each of a page's images has
+  its own deadline after the page's.
+
 ```json
 {
   "name": "ingest_url",
@@ -93,7 +115,8 @@ Filtering heuristics skip non-content images:
 - **Non-raster formats** -- SVG and data URI images are excluded
 - **SSRF protection** -- Every image request and each of its redirect hops keeps the SSRF floor and connects to the address it checked
 
-Up to 10 images per page are processed, with a 10 MB cap per image download.
+Up to 10 images per page are processed. Each download keeps the page's fetch limits (see Web Pages); an image past
+one is skipped with a warning.
 
 Only `http` and `https` URLs are accepted.
 

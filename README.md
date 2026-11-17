@@ -130,6 +130,9 @@ missing, unreadable or malformed token-hash file (named by path and line), and `
 | `KNOWLEDGE_BASE_VISION`, `KNOWLEDGE_BASE_BROWSER`, `KNOWLEDGE_BASE_LLM` | optional | `on` or `off` (default `off`): figure extraction, the Playwright fallback, LLM extraction |
 | `KNOWLEDGE_BASE_LLM_API_KEY` | optional | the only `env:` source an LLM key may name |
 | `KNOWLEDGE_BASE_HOST_ADDRESSES` | optional | this host's own IP addresses or CIDR networks, comma-separated (e.g. `203.0.113.7,2001:db8:7::/64`); the SSRF floor refuses them though they are public |
+| `KNOWLEDGE_BASE_FETCH_MAX_BYTES` | optional | the byte cap on a fetched page or image body (default `52428800`, 50 MiB) |
+| `KNOWLEDGE_BASE_FETCH_MAX_REDIRECTS` | optional | redirects a fetch follows (default `5`; `0` follows none) |
+| `KNOWLEDGE_BASE_FETCH_DEADLINE` | optional | seconds a whole fetch may take, every hop included (default `60`) |
 
 `EMBED_PROVIDER` is no longer read and is refused when set. No embedding provider has a
 default endpoint: nothing falls back to `https://api.openai.com` or to an auto-detected

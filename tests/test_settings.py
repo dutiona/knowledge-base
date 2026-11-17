@@ -6,10 +6,15 @@ import pytest
 
 from knowledge_base.exceptions import ValidationError
 from knowledge_base.settings import (
+    FETCH_DEADLINE_VAR,
+    FETCH_MAX_BYTES_VAR,
+    FETCH_MAX_REDIRECTS_VAR,
     HOST_ADDRESSES_VAR,
     EmbedSettings,
+    FetchLimits,
     check_environment,
     declared_embed_host,
+    fetch_limits,
     host_networks,
     load_embed_settings,
     switch_on,
@@ -199,4 +204,44 @@ def test_host_addresses_refuse_malformed(monkeypatch, value):
 def test_check_environment_validates_host_addresses(monkeypatch):
     monkeypatch.setenv(HOST_ADDRESSES_VAR, "198.51.100.7/24")
     with pytest.raises(ValidationError, match=r"^KNOWLEDGE_BASE_HOST_ADDRESSES"):
+        check_environment()
+
+
+_FETCH_VARS = (FETCH_MAX_BYTES_VAR, FETCH_MAX_REDIRECTS_VAR, FETCH_DEADLINE_VAR)
+
+
+@pytest.mark.parametrize("value", [None, "", "  "])
+def test_fetch_limits_default(monkeypatch, value):
+    for name in _FETCH_VARS:
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    assert fetch_limits() == FetchLimits(max_bytes=52428800, max_redirects=5, deadline=60)
+
+
+def test_fetch_limits_parse(monkeypatch):
+    monkeypatch.setenv(FETCH_MAX_BYTES_VAR, "4096")
+    monkeypatch.setenv(FETCH_MAX_REDIRECTS_VAR, "0")
+    monkeypatch.setenv(FETCH_DEADLINE_VAR, " 007 ")  # surrounding blanks are dropped, as for every variable
+    assert fetch_limits() == FetchLimits(max_bytes=4096, max_redirects=0, deadline=7)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        *((name, value) for name in _FETCH_VARS for value in ("-1", "+3", "1.5", "abc", "\u0663", "1e3")),
+        (FETCH_MAX_BYTES_VAR, "0"),
+        (FETCH_DEADLINE_VAR, "0"),
+    ],
+)
+def test_fetch_limits_refuse_malformed(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError, match=rf"^{name}"):
+        fetch_limits()
+
+
+def test_check_environment_validates_fetch_limits(monkeypatch):
+    monkeypatch.setenv(FETCH_DEADLINE_VAR, "soon")
+    with pytest.raises(ValidationError, match=rf"^{FETCH_DEADLINE_VAR}"):
         check_environment()

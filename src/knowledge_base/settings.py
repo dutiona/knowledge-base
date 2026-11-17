@@ -1,4 +1,6 @@
-"""The operator's embedding declaration, egress switches and host addresses, read from the environment (#569, #572).
+"""The operator's embedding declaration, egress switches, host addresses and fetch limits, read from the environment.
+
+#569 declared the embedder and the switches, #572 the host addresses, #588 the fetch limits.
 
 The environment is authoritative for the embedding configuration: KB starts only with an
 explicit declaration, and the database records it (``db.bind_embed_config``). Every reader
@@ -21,14 +23,19 @@ __all__ = [
     "API_KEY_VAR",
     "BROWSER_VAR",
     "EMBED_PROVIDERS",
+    "FETCH_DEADLINE_VAR",
+    "FETCH_MAX_BYTES_VAR",
+    "FETCH_MAX_REDIRECTS_VAR",
     "HOST_ADDRESSES_VAR",
     "LLM_API_KEY_VAR",
     "LLM_VAR",
     "VARIABLES",
     "VISION_VAR",
     "EmbedSettings",
+    "FetchLimits",
     "check_environment",
     "declared_embed_host",
+    "fetch_limits",
     "host_networks",
     "load_embed_settings",
     "normalize_embed_url",
@@ -48,6 +55,9 @@ VISION_VAR = "KNOWLEDGE_BASE_VISION"
 BROWSER_VAR = "KNOWLEDGE_BASE_BROWSER"
 LLM_VAR = "KNOWLEDGE_BASE_LLM"
 HOST_ADDRESSES_VAR = "KNOWLEDGE_BASE_HOST_ADDRESSES"
+FETCH_MAX_BYTES_VAR = "KNOWLEDGE_BASE_FETCH_MAX_BYTES"
+FETCH_MAX_REDIRECTS_VAR = "KNOWLEDGE_BASE_FETCH_MAX_REDIRECTS"
+FETCH_DEADLINE_VAR = "KNOWLEDGE_BASE_FETCH_DEADLINE"
 _ONNX_MODEL_VAR = "ONNX_EMBED_MODEL_PATH"
 _DEPRECATED_VAR = "EMBED_PROVIDER"
 
@@ -168,10 +178,41 @@ def host_networks() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]
     return tuple(networks)
 
 
+@dataclass(frozen=True, slots=True)
+class FetchLimits:
+    """What one fetch of a tool-supplied URL may take: body bytes, redirects followed, and seconds in all."""
+
+    max_bytes: int
+    max_redirects: int
+    deadline: int
+
+
+def _count(var: str, default: int, *, minimum: int) -> int:
+    raw = _get(var)
+    if raw is None:
+        return default
+    if not (raw.isascii() and raw.isdecimal()) or int(raw) < minimum:
+        raise ValidationError(f"{var} must be a whole number of at least {minimum}, got {raw!r}")
+    return int(raw)
+
+
+def fetch_limits() -> FetchLimits:
+    """The URL-fetch limits (#588); unset or empty means the default."""
+    return FetchLimits(
+        max_bytes=_count(FETCH_MAX_BYTES_VAR, 50 * 1024 * 1024, minimum=1),
+        max_redirects=_count(FETCH_MAX_REDIRECTS_VAR, 5, minimum=0),
+        deadline=_count(FETCH_DEADLINE_VAR, 60, minimum=1),
+    )
+
+
 def check_environment() -> EmbedSettings:
-    """The whole startup check: the declaration, the three switches and the host addresses. Touches nothing on disk."""
+    """The whole startup check: the declaration, the switches, the host addresses and the fetch limits.
+
+    Touches nothing on disk.
+    """
     settings = load_embed_settings()
     for var in (VISION_VAR, BROWSER_VAR, LLM_VAR):
         switch_on(var)
     host_networks()
+    fetch_limits()
     return settings
