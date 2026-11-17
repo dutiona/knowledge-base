@@ -127,7 +127,7 @@ def report(conn: sqlite3.Connection) -> dict:
         "chunk_ids": ids,
         "folder_summaries_to_rebuild": summaries,
         "rewrite_incomplete": pending,
-        "backups_with_old_text": _backups(conn),
+        "backups": _backups(conn),
     }
 
 
