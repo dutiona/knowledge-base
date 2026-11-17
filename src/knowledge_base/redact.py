@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 from bisect import bisect_left, bisect_right
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 import regex
@@ -315,26 +315,33 @@ def redact(text: str) -> tuple[str, list[str]]:
     return "".join(out), list(spans.rules)
 
 
-def redact_in_context(text: str, before: str, after: str) -> tuple[str, list[str]]:
-    """One pass over *text* read between *before* and *after*, the document text around it, and the rules matched.
+def redact_in_context(text: str, contexts: Iterable[tuple[str, str]]) -> tuple[str, list[str]]:
+    """One pass over *text* read in each of its *contexts*, the document text before and after it, and the rules.
 
     A chunk cut mid-word (KB's chunker did so before #592) can hold a fragment of a secret that no rule matches
     alone, or a secret whose context word is in the text before it; the part of each match inside *text* is
-    redacted.
+    redacted, and matches that overlap across contexts share one placeholder.
     """
-    wide = before + text + after
-    lo, hi = len(before), len(before) + len(text)
-    spans = _collect(wide)
+    found: list[tuple[int, int, str]] = []
+    for before, after in contexts:
+        wide = before + text + after
+        lo = len(before)
+        spans = _collect(wide)
+        for start, end, rule in zip(spans.starts, spans.ends, spans.rules, strict=True):
+            s, e = max(start - lo, 0), min(end - lo, len(text))
+            if s < e and wide[start:end] != f"[REDACTED:{rule}]":
+                found.append((s, e, rule))
     out: list[str] = []
     rules: list[str] = []
-    cursor = lo
-    for start, end, rule in zip(spans.starts, spans.ends, spans.rules, strict=True):
-        if start < hi and end > lo and wide[start:end] != f"[REDACTED:{rule}]":
-            out.append(wide[cursor : max(start, lo)])
-            out.append(f"[REDACTED:{rule}]")
-            rules.append(rule)
-            cursor = min(end, hi)
-    out.append(wide[cursor:hi])
+    cursor = 0
+    for s, e, rule in sorted(found):
+        if s < cursor:
+            cursor = max(cursor, e)
+            continue
+        out += [text[cursor:s], f"[REDACTED:{rule}]"]
+        rules.append(rule)
+        cursor = e
+    out.append(text[cursor:])
     return "".join(out), rules
 
 

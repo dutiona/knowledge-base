@@ -12,7 +12,7 @@ import posixpath
 import sqlite3
 from collections import Counter
 from collections.abc import Iterator
-from itertools import groupby
+from itertools import groupby, product
 from typing import Any
 
 from . import migrate as _migrate
@@ -67,8 +67,8 @@ def _contents(conn: sqlite3.Connection) -> dict[int, tuple[str, list[str]]]:
     """
     changed: dict[int, tuple[str, list[str]]] = {}
 
-    def settle(row: sqlite3.Row, before: str, after: str) -> None:
-        edged, rules = redact_in_context(row["content"], before, after)
+    def settle(row: sqlite3.Row, contexts: list[tuple[str, str]]) -> None:
+        edged, rules = redact_in_context(row["content"], contexts)
         content = scrub(edged)
         if content != row["content"]:
             changed[row["id"]] = (content, rules + findings(edged))
@@ -78,18 +78,20 @@ def _contents(conn: sqlite3.Connection) -> dict[int, tuple[str, list[str]]]:
 
     rows = conn.execute("SELECT id, content, source_uri, chunk_index FROM chunks ORDER BY source_uri, chunk_index, id")
     for _uri, document in groupby(rows, key=lambda r: r["source_uri"]):
-        # Re-ingesting a source can leave several revisions under it: a row's neighbour is the window at the
-        # next index that overlaps it.
+        # Re-ingesting a source can leave several revisions under it: a row's neighbours are the windows at the
+        # adjacent indexes that overlap it, and a row two revisions share is read in each of their contexts.
         by_index: dict[int, list[sqlite3.Row]] = {}
         for row in document:
             by_index.setdefault(row["chunk_index"], []).append(row)
         for index, here in by_index.items():
             for cur in here:
-                prev = next((r for r in by_index.get(index - 1, ()) if windowed(r, cur)), None)
-                nxt = next((r for r in by_index.get(index + 1, ()) if windowed(cur, r)), None)
-                before = prev["content"][:-CHUNK_OVERLAP][-_CONTEXT:] if prev is not None else ""
-                after = nxt["content"][CHUNK_OVERLAP:][:_CONTEXT] if nxt is not None else ""
-                settle(cur, before, after)
+                befores = [
+                    r["content"][:-CHUNK_OVERLAP][-_CONTEXT:] for r in by_index.get(index - 1, ()) if windowed(r, cur)
+                ]
+                afters = [
+                    r["content"][CHUNK_OVERLAP:][:_CONTEXT] for r in by_index.get(index + 1, ()) if windowed(cur, r)
+                ]
+                settle(cur, list(product(befores or [""], afters or [""])))
     return changed
 
 

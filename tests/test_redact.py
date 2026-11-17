@@ -147,10 +147,14 @@ def test_a_text_is_read_between_its_neighbours():
     from knowledge_base.redact import redact_in_context
 
     token = "ghp_" + "Zq7Xw3Rt9Lp2Vb6Nm4Kc8Hd1Fs5Gj0Ay"
-    assert redact_in_context("see " + token[:12], "", token[12:] + " end") == (
+    assert redact_in_context("see " + token[:12], [("", token[12:] + " end")]) == (
         "see [REDACTED:github-pat]",
         ["github-pat"],
     )
     hexed = "0123456789abcdef" * 2
-    assert redact_in_context(hexed + " ok", "the api_key=", "") == ("[REDACTED:hex-secret] ok", ["hex-secret"])
-    assert redact_in_context("plain words", "before ", " after") == ("plain words", [])
+    assert redact_in_context(hexed + " ok", [("the api_key=", "")]) == ("[REDACTED:hex-secret] ok", ["hex-secret"])
+    assert redact_in_context("plain words", [("before ", " after")]) == ("plain words", [])
+    # A row two revisions share: each context finds its own continuation's secret.
+    assert (
+        redact_in_context("tail " + token[:12], [("", "x plain"), ("", token[12:])])[0] == "tail [REDACTED:github-pat]"
+    )

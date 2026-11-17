@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import random
 import sqlite3
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -553,6 +554,28 @@ def test_report_reads_a_document_stored_by_the_new_chunker_as_clean(kb_conn, tmp
     with pytest.MonkeyPatch.context() as m:
         m.setattr("knowledge_base.ingest._embed_with_config", lambda conn, texts: [None] * len(texts))
         ingest_text(kb_conn, text, source_uri="content://notes/long", source_type="markdown")
-    assert kb_conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] > 3
+    contents = [r[0] for r in kb_conn.execute("SELECT content FROM chunks ORDER BY chunk_index")]
+    assert any(a[-200:] == b[:200] for a, b in pairwise(contents)), "some rows must be read in context"
     kb_conn.close()
     assert _run(db, "redact") == 0
+
+
+def test_rewrite_reads_a_shared_window_against_every_revision_after_it(kb_conn, tmp_path, vectors, capsys):
+    """#592: two revisions can share a window and the start of the next one; each continuation is read."""
+    db = tmp_path / "test.db"
+    head = ("lorem ipsum " * 200)[:988] + SECRET[:12]
+    first = head + SECRET[12:] + " " + "dolor sit amet " * 80
+    second = head + "-- rewritten after here " * 60
+    shared, first_next, second_next = _legacy_windows(first)[0], _legacy_windows(first)[1], _legacy_windows(second)[1]
+    assert shared == _legacy_windows(second)[0] and first_next[:200] == second_next[:200]
+    _with_vector(kb_conn, second_next, uri="content://notes/edited", index=1)  # the lower id, read first
+    shared_id = _with_vector(kb_conn, shared, uri="content://notes/edited", index=0)
+    _with_vector(kb_conn, first_next, uri="content://notes/edited", index=1)
+    kb_conn.commit()
+    kb_conn.close()
+
+    assert _run(db, "redact", "--rewrite") == 0
+    conn = _open(db)
+    stored = conn.execute("SELECT content FROM chunks WHERE id = ?", (shared_id,)).fetchone()[0]
+    conn.close()
+    assert SECRET[:12] not in stored  # read against the second revision alone, its 12 characters are no secret
