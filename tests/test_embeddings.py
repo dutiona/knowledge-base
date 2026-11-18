@@ -289,6 +289,14 @@ class TestProviderConfigCache:
         assert pa._base_url == "http://host-a.example.com"
         assert pb._base_url == "http://host-b.example.com"
 
+    def test_configs_differing_only_in_batch_size_get_their_own_provider(self):
+        from knowledge_base.embeddings import ProviderConfig
+
+        cfg = ProviderConfig(family="openai_compat", base_url="http://host.example.com", api_key="k")
+        wide = ProviderConfig(family="openai_compat", base_url="http://host.example.com", api_key="k", batch_size=8)
+        assert get_provider(cfg=cfg) is not get_provider(cfg=wide)
+        assert get_provider(cfg=wide)._batch_size == 8  # type: ignore[attr-defined]
+
     def test_same_config_reuses_instance(self):
         from knowledge_base.embeddings import ProviderConfig
 
@@ -878,7 +886,7 @@ class TestBoundedProvider:
         long = "w " * 20
         with caplog.at_level(logging.INFO, logger="knowledge_base.embeddings"):
             self._provider(8).embed(["fits here", long], model="m", expected_dim=8)
-        (sent,) = [json.loads(r.content)["input"] for r in server if r.url.path == "/v1/embeddings"]
+        sent = [text for r in server if r.url.path == "/v1/embeddings" for text in json.loads(r.content)["input"]]
         assert sent[0] == "fits here"
         assert long.startswith(sent[1])
         assert _words(sent[1]) <= 8
@@ -887,3 +895,49 @@ class TestBoundedProvider:
     def test_without_a_limit_nothing_is_counted(self, server):
         self._provider(None).embed(["w " * 20], model="m", expected_dim=8)
         assert [r.url.path for r in server] == ["/v1/embeddings"]
+
+
+@pytest.fixture
+def embedder(monkeypatch, fake_dns, http_requests):
+    """An embedder at the transport: one vector per input, the input's position in its request recorded."""
+    import json
+
+    import httpx
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "https://embedder.example.test")
+    fake_dns["embedder.example.test"] = ["100.64.0.10"]
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        texts = json.loads(request.content)["input"]
+        vectors = [[1.0, float(int(text.split()[-1]))] for text in texts]
+        return httpx.Response(200, json={"data": [{"index": i, "embedding": v} for i, v in enumerate(vectors)]})
+
+    http_requests.handlers["embedder.example.test"] = handle
+    return http_requests
+
+
+def _inputs_per_request(recorder) -> list[list[str]]:
+    import json
+
+    return [json.loads(r.content)["input"] for r in recorder if r.url.path == "/v1/embeddings"]
+
+
+class TestBatchSize:
+    """#614: how many inputs one /v1/embeddings request carries."""
+
+    def _embed(self, texts: list[str], **kwargs) -> list[list[float] | None]:
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        return OpenAICompatProvider("https://embedder.example.test", **kwargs).embed(texts, model="m", expected_dim=2)
+
+    def test_one_input_per_request_by_default(self, embedder):
+        texts = [f"text {i}" for i in range(5)]
+        vectors = self._embed(texts)
+        assert _inputs_per_request(embedder) == [[text] for text in texts]
+        assert [v[1] / v[0] for v in vectors if v is not None] == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+    def test_a_declared_batch_size_groups_inputs(self, embedder):
+        texts = [f"text {i}" for i in range(5)]
+        vectors = self._embed(texts, batch_size=3)
+        assert _inputs_per_request(embedder) == [texts[:3], texts[3:]]
+        assert [v[1] / v[0] for v in vectors if v is not None] == [0.0, 1.0, 2.0, 3.0, 4.0]

@@ -131,7 +131,7 @@ class EmbeddingProvider(Protocol):
 class ProviderConfig:
     """A resolved, hashable embedding-provider identity (ADR-0018 §2).
 
-    The frozen tuple ``(family, base_url, api_key, allow_loopback, max_input_tokens)`` is the provider
+    The frozen tuple ``(family, base_url, api_key, allow_loopback, max_input_tokens, batch_size)`` is the provider
     *cache key* — replacing the old name-keyed cache that made two ``openai_compat``
     configs (different ``base_url``) collide. ``api_key`` holds the **raw** config
     spec (inline value or ``env:VARNAME`` indirection, never a resolved secret); it is
@@ -143,12 +143,13 @@ class ProviderConfig:
     api_key: str | None = None
     allow_loopback: bool = False
     max_input_tokens: int | None = None
+    batch_size: int = 1
 
     def __repr__(self) -> str:
         bu = _sanitize_url(self.base_url) if self.base_url else None
         return (
             f"ProviderConfig(family={self.family!r}, base_url={bu!r}, allow_loopback={self.allow_loopback}, "
-            f"max_input_tokens={self.max_input_tokens})"
+            f"max_input_tokens={self.max_input_tokens}, batch_size={self.batch_size})"
         )
 
 
@@ -294,6 +295,7 @@ class OpenAICompatProvider:
         *,
         allow_loopback: bool = False,
         max_input_tokens: int | None = None,
+        batch_size: int = 1,
     ) -> None:
         if not base_url:
             raise ValidationError(
@@ -304,6 +306,7 @@ class OpenAICompatProvider:
         self._api_key = api_key  # raw spec; never logged
         self._allow_loopback = allow_loopback
         self._max_input_tokens = max_input_tokens
+        self._batch_size = batch_size
         self._http = httpx.Client(timeout=120, follow_redirects=False)  # keep-alive for the per-input counts
 
     def __repr__(self) -> str:
@@ -372,9 +375,8 @@ class OpenAICompatProvider:
         texts = self._bounded(texts)
         headers = self._headers()
         results = []
-        batch_size = 512  # OpenAI supports up to 2048, 512 balances throughput/memory
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
+        for i in range(0, len(texts), self._batch_size):
+            batch = texts[i : i + self._batch_size]
             raw_embeddings = self._call_api(headers, batch, model, expected_dim)
             for emb in raw_embeddings:
                 if expected_dim is not None and len(emb) != expected_dim:
@@ -510,7 +512,11 @@ def _build_provider(cfg: ProviderConfig) -> EmbeddingProvider:
         return OllamaProvider(cfg.base_url)
     if family in ("openai_compat", "openai", "llama.cpp"):
         return OpenAICompatProvider(
-            cfg.base_url, cfg.api_key, allow_loopback=cfg.allow_loopback, max_input_tokens=cfg.max_input_tokens
+            cfg.base_url,
+            cfg.api_key,
+            allow_loopback=cfg.allow_loopback,
+            max_input_tokens=cfg.max_input_tokens,
+            batch_size=cfg.batch_size,
         )
     if family == "onnx":
         return ONNXProvider()
