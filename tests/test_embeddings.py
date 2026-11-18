@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from knowledge_base.embeddings import (
+    _TURNS,
     EmbeddingProvider,
     OllamaProvider,
     ProviderConfig,
@@ -21,10 +22,12 @@ from knowledge_base.embeddings import (
 
 @pytest.fixture(autouse=True)
 def _clear_provider_cache():
-    """Ensure provider cache is fresh for each test."""
+    """Ensure provider cache and the endpoints' turn queues are fresh for each test."""
     _provider_cache.clear()
+    _TURNS.clear()
     yield
     _provider_cache.clear()
+    _TURNS.clear()
 
 
 class TestOllamaProvider:
@@ -944,7 +947,7 @@ class TestOneRequestInFlight:
                 state["in_flight"] += 1
                 state["most"] = max(state["most"], state["in_flight"])
             entered.release()
-            release.wait(5)
+            release.wait(30)  # above the test's own deadlines, so a request is never released early
             with lock:
                 state["in_flight"] -= 1
                 status = state["answer"]
@@ -981,7 +984,7 @@ class TestOneRequestInFlight:
             except Exception as error:  # surfaced by the assertion below
                 errors.append(error)
 
-        threads = [threading.Thread(target=call, args=(name,)) for name in "abc"]
+        threads = [threading.Thread(target=call, args=(name,), daemon=True) for name in "abc"]
         for thread in threads:
             thread.start()
         assert held["entered"].acquire(timeout=5)
@@ -997,8 +1000,8 @@ class TestOneRequestInFlight:
         import threading
 
         provider = self._provider()
-        a = threading.Thread(target=provider.embed, args=(["a 0", "a 1", "a 2"],), kwargs={"model": "m"})
-        b = threading.Thread(target=provider.embed, args=(["b 0"],), kwargs={"model": "m"})
+        a = threading.Thread(target=provider.embed, args=(["a 0", "a 1", "a 2"],), kwargs={"model": "m"}, daemon=True)
+        b = threading.Thread(target=provider.embed, args=(["b 0"],), kwargs={"model": "m"}, daemon=True)
         a.start()
         assert held["entered"].acquire(timeout=5)
         b.start()
@@ -1022,11 +1025,13 @@ class TestOneRequestInFlight:
                 failures.append(error.response.status_code)
 
         held["answer"] = 500
-        a = threading.Thread(target=drain)
+        a = threading.Thread(target=drain, daemon=True)
         a.start()
         assert held["entered"].acquire(timeout=5)
         result: list = []
-        b = threading.Thread(target=lambda: result.extend(provider.embed(["b 1"], model="m", expected_dim=2)))
+        b = threading.Thread(
+            target=lambda: result.extend(provider.embed(["b 1"], model="m", expected_dim=2)), daemon=True
+        )
         b.start()
         self._queued(provider, 2)
         held["release"].set()
@@ -1057,13 +1062,60 @@ class TestOneRequestInFlight:
                 except KeyboardInterrupt:
                     raised.append(True)
 
-            thread = threading.Thread(target=waiter)
+            thread = threading.Thread(target=waiter, daemon=True)
             thread.start()
             thread.join(5)
             turns._cv.wait_for = real_wait_for  # type: ignore[method-assign]
             assert raised == [True]
             assert len(turns._queue) == 1  # only the holder
-        later = threading.Thread(target=lambda: turns.turn().__enter__())
-        later.start()
-        later.join(5)
-        assert not later.is_alive()
+        served: list[bool] = []
+
+        def later() -> None:
+            with turns.turn():
+                served.append(True)
+
+        thread = threading.Thread(target=later, daemon=True)
+        thread.start()
+        thread.join(5)
+        assert served == [True]
+        assert len(turns._queue) == 0
+
+    def test_every_provider_of_an_endpoint_shares_its_turns(self):
+        from knowledge_base.embeddings import ProviderConfig
+
+        def cfg(**changes) -> ProviderConfig:
+            return ProviderConfig(family="llama.cpp", base_url="https://embedder.example.test", api_key="k", **changes)
+
+        providers = [
+            get_provider(cfg=cfg()),
+            get_provider(cfg=cfg(allow_loopback=True)),  # a loopback opt-in toggled mid-drain
+            get_provider(cfg=cfg(batch_size=8)),
+        ]
+        assert len({id(p) for p in providers}) == 3
+        assert len({id(p._turns) for p in providers}) == 1  # type: ignore[attr-defined]
+        other = get_provider(cfg=ProviderConfig(family="llama.cpp", base_url="https://other.example.test"))
+        assert other._turns is not providers[0]._turns  # type: ignore[attr-defined]
+
+    def test_concurrent_first_calls_build_one_provider(self, monkeypatch):
+        import threading
+        import time
+
+        from knowledge_base import embeddings
+        from knowledge_base.embeddings import ProviderConfig
+
+        real = embeddings._build_provider
+
+        def slow(cfg):
+            time.sleep(0.05)  # building takes a while (the client loads its CA bundle), so both calls miss the cache
+            return real(cfg)
+
+        monkeypatch.setattr(embeddings, "_build_provider", slow)
+        cfg = ProviderConfig(family="llama.cpp", base_url="https://embedder.example.test")
+        got: list = []
+        threads = [threading.Thread(target=lambda: got.append(get_provider(cfg=cfg)), daemon=True) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5)
+        assert len(got) == 2
+        assert got[0] is got[1]

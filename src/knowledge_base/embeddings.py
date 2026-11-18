@@ -281,8 +281,8 @@ def split_to_limit(text: str, limit: int, count: Callable[[str], int]) -> list[s
 class _Turns:
     """One holder at a time, the others served in arrival order (#614).
 
-    A plain ``threading.Lock`` is not fair: a thread that releases and re-acquires it in a loop, as a drain does,
-    can keep a waiter out until the drain ends.
+    ``threading.Lock`` does not define which waiter proceeds on release; the queue makes it arrival order by
+    construction, so a waiter is never served after a later one, whatever the scheduler does.
     """
 
     def __init__(self) -> None:
@@ -292,20 +292,20 @@ class _Turns:
     @contextmanager
     def turn(self) -> Iterator[None]:
         me = object()
-        with self._cv:
-            self._queue.append(me)
-            try:
-                self._cv.wait_for(lambda: self._queue[0] is me)
-            except BaseException:
-                self._queue.remove(me)
-                self._cv.notify_all()
-                raise
         try:
-            yield
-        finally:
             with self._cv:
-                self._queue.popleft()
+                self._queue.append(me)
+                self._cv.wait_for(lambda: self._queue[0] is me)
+            yield
+        finally:  # whatever raised, and wherever: the token leaves the queue, so it cannot block the next waiter
+            with self._cv:
+                if me in self._queue:
+                    self._queue.remove(me)
                 self._cv.notify_all()
+
+
+#: One turn queue per endpoint: every provider of an embedder shares it, whatever else its configuration says.
+_TURNS: dict[str, _Turns] = {}
 
 
 class OpenAICompatProvider:
@@ -341,7 +341,7 @@ class OpenAICompatProvider:
         self._max_input_tokens = max_input_tokens
         self._batch_size = batch_size
         # FastMCP runs every sync tool in a thread pool, so concurrent tool calls would each put a request in flight.
-        self._turns = _Turns()
+        self._turns = _TURNS.setdefault(self._base_url, _Turns())
         # Kept alive for the per-input counts and the embedding requests: one input per request (#614) would
         # otherwise pay a new connection, and its TLS handshake, per input.
         self._http = httpx.Client(timeout=120, follow_redirects=False)
@@ -530,6 +530,8 @@ _PROVIDERS: dict[str, Callable[[], EmbeddingProvider]] = {
 # is the fix for the old name-collision bug where two ``openai_compat`` base_urls
 # shared the single ``"openai_compat"`` slot (ADR-0018 §2).
 _provider_cache: dict[str | ProviderConfig, EmbeddingProvider] = {}
+#: Concurrent first calls build one provider, not one each.
+_provider_lock = threading.Lock()
 
 
 def _build_provider(cfg: ProviderConfig) -> EmbeddingProvider:
@@ -569,23 +571,22 @@ def get_provider(
     cached by it — two ``openai_compat`` configs with different ``base_url`` never
     collide. When *cfg* is None, the legacy bare-name path applies (no production caller).
     """
-    if cfg is not None:
-        cached = _provider_cache.get(cfg)
-        if cached is not None:
+    with _provider_lock:
+        if cfg is not None:
+            cached = _provider_cache.get(cfg)
+            if cached is None:
+                cached = _provider_cache[cfg] = _build_provider(cfg)
             return cached
-        instance = _build_provider(cfg)
-        _provider_cache[cfg] = instance
-        return instance
 
-    resolved = (name or "ollama").lower()
-    if resolved in _provider_cache:
-        return _provider_cache[resolved]
-    factory = _PROVIDERS.get(resolved)
-    if factory is None:
-        raise ValueError(f"Unknown embedding provider '{resolved}'. Available: {', '.join(sorted(_PROVIDERS))}")
-    instance = factory()
-    _provider_cache[resolved] = instance
-    return instance
+        resolved = (name or "ollama").lower()
+        if resolved in _provider_cache:
+            return _provider_cache[resolved]
+        factory = _PROVIDERS.get(resolved)
+        if factory is None:
+            raise ValueError(f"Unknown embedding provider '{resolved}'. Available: {', '.join(sorted(_PROVIDERS))}")
+        instance = factory()
+        _provider_cache[resolved] = instance
+        return instance
 
 
 # --- Module-level dispatch functions ---
