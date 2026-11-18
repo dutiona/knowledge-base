@@ -334,6 +334,29 @@ Documents are embedded as they are, without an instruction; only queries carry o
 searching guide). llama.cpp ignores the request's model name, so declare the slug of the file it
 serves: it selects the default query instruction.
 
+A blank database is seeded from the declaration; an existing one must agree with it, or the
+server exits naming the field. There is no default endpoint: nothing falls back to
+`https://api.openai.com`, and Ollama embeddings never auto-detect a host.
+
+**Changing any identity field** (model, provider, dimension, Matryoshka base dimension or the
+served artifact) is a maintenance step with the server stopped: set the new
+`KNOWLEDGE_BASE_EMBED_*` values, run `knowledge-base-ingest re-embed`, start the server. A
+**moved embedder** (same identity) is adopted with `knowledge-base-ingest rebind`. In a running
+server, `promote_embed_space_tool` accepts only the declared identity, and every space is
+embedded into or queried only when the declared endpoint can produce its vectors.
+
+**SSRF safety.** Every `openai_compat` `base_url` is validated on each request (scheme,
+private/link-local/metadata/DNS-rebinding rejected; cross-host redirects refused), with one
+exception: the declared embedding host, by exact host match, so a tailnet embedder whose name
+resolves into `100.64.0.0/10` or `fd7a:` works. A URL a tool supplies (`ingest_url`, image
+fetches, `configure_llm_tool`) always keeps the floor, the declared host included.
+The floor also refuses the host's own addresses listed in `KNOWLEDGE_BASE_HOST_ADDRESSES`, and
+every URL a configure tool stores (LLM, vision, OmniParser, CDP) keeps it when written and on
+every request, which connects to the address it checked.
+
+The deprecated `EMBED_PROVIDER` variable is refused, and `OPENAI_API_KEY` is no longer an
+embedding key source (the bare-name `openai` provider still reads it).
+
 ### Inputs longer than the embedder takes
 
 With a served artifact declared, no input KB sends counts more than `KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS`
@@ -361,25 +384,14 @@ few more requests, each a few times the piece at most. The requests share
 one kept-alive connection. On llama.cpp b12048 a `/tokenize` call took 0.2 to 0.9 ms at the median (up to 3.8 ms)
 on loopback, and it takes no embedding slot.
 
-A blank database is seeded from the declaration; an existing one must agree with it, or the
-server exits naming the field. There is no default endpoint: nothing falls back to
-`https://api.openai.com`, and Ollama embeddings never auto-detect a host.
+### How much KB sends at once
 
-**Changing any identity field** (model, provider, dimension, Matryoshka base dimension or the
-served artifact) is a maintenance step with the server stopped: set the new
-`KNOWLEDGE_BASE_EMBED_*` values, run `knowledge-base-ingest re-embed`, start the server. A
-**moved embedder** (same identity) is adopted with `knowledge-base-ingest rebind`. In a running
-server, `promote_embed_space_tool` accepts only the declared identity, and every space is
-embedded into or queried only when the declared endpoint can produce its vectors.
-
-**SSRF safety.** Every `openai_compat` `base_url` is validated on each request (scheme,
-private/link-local/metadata/DNS-rebinding rejected; cross-host redirects refused), with one
-exception: the declared embedding host, by exact host match, so a tailnet embedder whose name
-resolves into `100.64.0.0/10` or `fd7a:` works. A URL a tool supplies (`ingest_url`, image
-fetches, `configure_llm_tool`) always keeps the floor, the declared host included.
-The floor also refuses the host's own addresses listed in `KNOWLEDGE_BASE_HOST_ADDRESSES`, and
-every URL a configure tool stores (LLM, vision, OmniParser, CDP) keeps it when written and on
-every request, which connects to the address it checked.
-
-The deprecated `EMBED_PROVIDER` variable is refused, and `OPENAI_API_KEY` is no longer an
-embedding key source (the bare-name `openai` provider still reads it).
+With `openai_compat`, `openai` or `llama.cpp`, each `/v1/embeddings` request carries
+`KNOWLEDGE_BASE_EMBED_BATCH_SIZE` inputs (default `1`), and each KB process keeps one request in flight per
+embedder: concurrent tool calls take turns, first come first served. Each other KB process using the same embedder
+(a `knowledge-base-ingest` run beside the server, a stdio session beside the HTTP server) adds one more. llama-server queues a request's inputs ahead of a later
+request's, so a query from another client sharing the embedder waits for the whole request in flight. Measured on a
+CPU build of llama.cpp b12048 with about 600-token chunks, a concurrent one-input query waited 219 s at the 95th
+percentile behind a 512-input request and 428 ms behind one input, while KB embedded the same chunks per second at
+every size. Raise it only for an embedder nobody else queries, or one with a request-rate limit. Under `ollama`
+and `onnx` it is refused at startup: they keep their own batches of 32.

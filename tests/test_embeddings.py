@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from knowledge_base.embeddings import (
+    _TURNS,
     EmbeddingProvider,
     OllamaProvider,
     ProviderConfig,
@@ -21,10 +22,12 @@ from knowledge_base.embeddings import (
 
 @pytest.fixture(autouse=True)
 def _clear_provider_cache():
-    """Ensure provider cache is fresh for each test."""
+    """Ensure provider cache and the endpoints' turn queues are fresh for each test."""
     _provider_cache.clear()
+    _TURNS.clear()
     yield
     _provider_cache.clear()
+    _TURNS.clear()
 
 
 class TestOllamaProvider:
@@ -128,104 +131,86 @@ class TestOpenAICompatProvider:
         with patch("knowledge_base.utils.is_private_ip", return_value=False):
             yield
 
-    def test_embeds_against_base_url(self):
+    @pytest.fixture
+    def server(self, http_requests):
+        """Answer every embeddings request with one 2-dim vector per input; ``vector`` sets it."""
+        import json
+
+        import httpx
+
+        def answer(request: httpx.Request) -> httpx.Response:
+            texts = json.loads(request.content)["input"]
+            data = [{"index": i, "embedding": server.vector} for i in range(len(texts))]
+            return httpx.Response(200, json={"data": data})
+
+        def register(host: str) -> None:
+            http_requests.handlers[host] = answer
+
+        server = http_requests
+        server.vector = [1.0, 0.0]
+        server.register = register
+        return server
+
+    def test_embeds_against_base_url(self, server):
+        import json
+
         from knowledge_base.embeddings import OpenAICompatProvider
 
-        captured = {}
-
-        def _mock_post(url, **kwargs):
-            captured["url"] = url
-            captured.update(kwargs)
-
-            class FakeResp:
-                def raise_for_status(self):
-                    pass
-
-                def json(self):
-                    return {"data": [{"index": 0, "embedding": [1.0, 0.0, 0.0]}]}
-
-            return FakeResp()
-
+        server.register("vllm.example.com")
+        server.vector = [1.0, 0.0, 0.0]
         provider = OpenAICompatProvider(base_url="http://vllm.example.com", api_key="k")
-        with patch("knowledge_base.embeddings.httpx.post", _mock_post):
-            result = provider.embed(["hello"], model="bge-m3", expected_dim=3)
+        result = provider.embed(["hello"], model="bge-m3", expected_dim=3)
 
-        assert captured["url"] == "http://vllm.example.com/v1/embeddings"
-        assert captured["headers"]["Authorization"] == "Bearer k"
-        assert captured["follow_redirects"] is False
-        assert captured["json"]["dimensions"] == 3
+        (request,) = server
+        assert str(request.url) == "http://vllm.example.com/v1/embeddings"
+        assert request.headers["Authorization"] == "Bearer k"
+        assert json.loads(request.content)["dimensions"] == 3
         # L2-normalized
         assert result[0] is not None
         assert abs(sum(x * x for x in result[0]) - 1.0) < 1e-6
 
-    def test_strips_v1_suffix(self):
+    def test_a_redirect_is_not_followed(self, server):
+        import httpx
+
         from knowledge_base.embeddings import OpenAICompatProvider
 
-        captured = {}
+        server.handlers["vllm.example.com"] = lambda request: httpx.Response(
+            307, headers={"Location": "http://elsewhere.example.com/v1/embeddings"}
+        )
+        provider = OpenAICompatProvider(base_url="http://vllm.example.com", api_key="k")
+        with pytest.raises(httpx.HTTPStatusError):
+            provider.embed(["hello"], model="m", expected_dim=2)
+        assert [request.url.host for request in server] == ["vllm.example.com"]
 
-        def _mock_post(url, **kwargs):
-            captured["url"] = url
+    def test_strips_v1_suffix(self, server):
+        from knowledge_base.embeddings import OpenAICompatProvider
 
-            class FakeResp:
-                def raise_for_status(self):
-                    pass
-
-                def json(self):
-                    return {"data": [{"index": 0, "embedding": [1.0, 0.0]}]}
-
-            return FakeResp()
-
+        server.register("host")
         provider = OpenAICompatProvider(base_url="http://host/v1", api_key=None)
-        with patch("knowledge_base.embeddings.httpx.post", _mock_post):
-            provider.embed(["x"], model="m", expected_dim=2)
+        provider.embed(["x"], model="m", expected_dim=2)
         # normalize-first means no /v1/v1 doubling
-        assert captured["url"] == "http://host/v1/embeddings"
+        (request,) = server
+        assert str(request.url) == "http://host/v1/embeddings"
 
-    def test_no_auth_header_when_key_none(self):
+    def test_no_auth_header_when_key_none(self, server):
         from knowledge_base.embeddings import OpenAICompatProvider
 
-        captured = {}
-
-        def _mock_post(url, **kwargs):
-            captured.update(kwargs)
-
-            class FakeResp:
-                def raise_for_status(self):
-                    pass
-
-                def json(self):
-                    return {"data": [{"index": 0, "embedding": [1.0, 0.0]}]}
-
-            return FakeResp()
-
+        server.register("local-tei.example.com")
         provider = OpenAICompatProvider(base_url="http://local-tei.example.com", api_key=None)
-        with patch("knowledge_base.embeddings.httpx.post", _mock_post):
-            provider.embed(["x"], model="m", expected_dim=2)
-        assert "Authorization" not in captured.get("headers", {})
+        provider.embed(["x"], model="m", expected_dim=2)
+        (request,) = server
+        assert "Authorization" not in request.headers
 
-    def test_resolves_env_api_key_at_call_time(self, monkeypatch):
+    def test_resolves_env_api_key_at_call_time(self, server, monkeypatch):
         from knowledge_base.embeddings import OpenAICompatProvider
 
         monkeypatch.setenv("KB_VLLM_KEY", "sk-from-env")
-        captured = {}
-
-        def _mock_post(url, **kwargs):
-            captured.update(kwargs)
-
-            class FakeResp:
-                def raise_for_status(self):
-                    pass
-
-                def json(self):
-                    return {"data": [{"index": 0, "embedding": [1.0, 0.0]}]}
-
-            return FakeResp()
-
+        server.register("vllm.example.com")
         # The raw spec 'env:KB_VLLM_KEY' is stored; the secret is resolved only at call time.
         provider = OpenAICompatProvider(base_url="http://vllm.example.com", api_key="env:KB_VLLM_KEY")
-        with patch("knowledge_base.embeddings.httpx.post", _mock_post):
-            provider.embed(["x"], model="m", expected_dim=2)
-        assert captured["headers"]["Authorization"] == "Bearer sk-from-env"
+        provider.embed(["x"], model="m", expected_dim=2)
+        (request,) = server
+        assert request.headers["Authorization"] == "Bearer sk-from-env"
 
     def test_call_time_guard_rejects_private_base_url(self):
         from knowledge_base.exceptions import ValidationError
@@ -240,7 +225,7 @@ class TestOpenAICompatProvider:
         ):
             provider.embed(["x"], model="m", expected_dim=2)
 
-    def test_loopback_requires_optin(self):
+    def test_loopback_requires_optin(self, server):
         from knowledge_base.embeddings import OpenAICompatProvider
         from knowledge_base.exceptions import ValidationError
 
@@ -250,27 +235,30 @@ class TestOpenAICompatProvider:
             with pytest.raises(ValidationError, match="private"):
                 no_optin.embed(["x"], model="m", expected_dim=2)
 
-        captured = {}
-
-        def _mock_post(url, **kwargs):
-            captured["url"] = url
-
-            class FakeResp:
-                def raise_for_status(self):
-                    pass
-
-                def json(self):
-                    return {"data": [{"index": 0, "embedding": [1.0, 0.0]}]}
-
-            return FakeResp()
-
-        with (
-            patch("knowledge_base.utils.is_private_ip", return_value=True),
-            patch("knowledge_base.embeddings.httpx.post", _mock_post),
-        ):
+        server.register("localhost")
+        with patch("knowledge_base.utils.is_private_ip", return_value=True):
             optin = OpenAICompatProvider(base_url="http://localhost:11434/v1", api_key=None, allow_loopback=True)
             optin.embed(["x"], model="m", expected_dim=2)
-        assert captured["url"] == "http://localhost:11434/v1/embeddings"
+        (request,) = server
+        assert str(request.url) == "http://localhost:11434/v1/embeddings"
+
+    def test_every_request_reuses_the_kept_alive_connection(self, server, monkeypatch):
+        import httpx
+
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        transports: list = []  # the objects themselves, so a collected one cannot lend its id to the next
+        answer = httpx.HTTPTransport.handle_request  # the http_requests fixture's stand-in
+
+        def recording(transport, request):
+            transports.append(transport)
+            return answer(transport, request)
+
+        monkeypatch.setattr(httpx.HTTPTransport, "handle_request", recording)
+        server.register("vllm.example.com")
+        OpenAICompatProvider(base_url="http://vllm.example.com").embed(["a 0", "a 1", "a 2"], model="m")
+        assert [request.url.path for request in server] == ["/v1/embeddings"] * 3
+        assert len({id(transport) for transport in transports}) == 1
 
 
 class TestProviderConfigCache:
@@ -288,6 +276,14 @@ class TestProviderConfigCache:
         assert isinstance(pb, OpenAICompatProvider)
         assert pa._base_url == "http://host-a.example.com"
         assert pb._base_url == "http://host-b.example.com"
+
+    def test_configs_differing_only_in_batch_size_get_their_own_provider(self):
+        from knowledge_base.embeddings import ProviderConfig
+
+        cfg = ProviderConfig(family="openai_compat", base_url="http://host.example.com", api_key="k")
+        wide = ProviderConfig(family="openai_compat", base_url="http://host.example.com", api_key="k", batch_size=8)
+        assert get_provider(cfg=cfg) is not get_provider(cfg=wide)
+        assert get_provider(cfg=wide)._batch_size == 8  # type: ignore[attr-defined]
 
     def test_same_config_reuses_instance(self):
         from knowledge_base.embeddings import ProviderConfig
@@ -878,7 +874,7 @@ class TestBoundedProvider:
         long = "w " * 20
         with caplog.at_level(logging.INFO, logger="knowledge_base.embeddings"):
             self._provider(8).embed(["fits here", long], model="m", expected_dim=8)
-        (sent,) = [json.loads(r.content)["input"] for r in server if r.url.path == "/v1/embeddings"]
+        sent = [text for r in server if r.url.path == "/v1/embeddings" for text in json.loads(r.content)["input"]]
         assert sent[0] == "fits here"
         assert long.startswith(sent[1])
         assert _words(sent[1]) <= 8
@@ -887,3 +883,263 @@ class TestBoundedProvider:
     def test_without_a_limit_nothing_is_counted(self, server):
         self._provider(None).embed(["w " * 20], model="m", expected_dim=8)
         assert [r.url.path for r in server] == ["/v1/embeddings"]
+
+
+@pytest.fixture
+def embedder(monkeypatch, fake_dns, http_requests):
+    """An embedder at the transport: one vector per input, the input's position in its request recorded."""
+    import json
+
+    import httpx
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_URL", "https://embedder.example.test")
+    fake_dns["embedder.example.test"] = ["100.64.0.10"]
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        texts = json.loads(request.content)["input"]
+        vectors = [[1.0, float(int(text.split()[-1]))] for text in texts]
+        return httpx.Response(200, json={"data": [{"index": i, "embedding": v} for i, v in enumerate(vectors)]})
+
+    http_requests.handlers["embedder.example.test"] = handle
+    return http_requests
+
+
+def _inputs_per_request(recorder) -> list[list[str]]:
+    import json
+
+    return [json.loads(r.content)["input"] for r in recorder if r.url.path == "/v1/embeddings"]
+
+
+class TestBatchSize:
+    """#614: how many inputs one /v1/embeddings request carries."""
+
+    def _embed(self, texts: list[str], **kwargs) -> list[list[float] | None]:
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        return OpenAICompatProvider("https://embedder.example.test", **kwargs).embed(texts, model="m", expected_dim=2)
+
+    def test_one_input_per_request_by_default(self, embedder):
+        texts = [f"text {i}" for i in range(5)]
+        vectors = self._embed(texts)
+        assert _inputs_per_request(embedder) == [[text] for text in texts]
+        assert [v[1] / v[0] for v in vectors if v is not None] == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+    def test_a_declared_batch_size_groups_inputs(self, embedder):
+        texts = [f"text {i}" for i in range(5)]
+        vectors = self._embed(texts, batch_size=3)
+        assert _inputs_per_request(embedder) == [texts[:3], texts[3:]]
+        assert [v[1] / v[0] for v in vectors if v is not None] == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+
+class TestOneRequestInFlight:
+    """#614: concurrent tool calls share one /v1/embeddings request in flight per embedder, in arrival order."""
+
+    @pytest.fixture
+    def held(self, embedder):
+        """The embedder, holding each request until ``release`` and recording entries and the most in flight."""
+        import threading
+
+        state = {"order": [], "in_flight": 0, "most": 0, "answer": 200}
+        lock, entered, release = threading.Lock(), threading.Semaphore(0), threading.Event()
+        answer = embedder.handlers["embedder.example.test"]
+
+        def handle(request):
+            import json
+
+            import httpx
+
+            with lock:
+                state["order"].extend(json.loads(request.content)["input"])
+                state["in_flight"] += 1
+                state["most"] = max(state["most"], state["in_flight"])
+            entered.release()
+            release.wait(30)  # above the test's own deadlines, so a request is never released early
+            with lock:
+                state["in_flight"] -= 1
+                status = state["answer"]
+                state["answer"] = 200
+            return answer(request) if status == 200 else httpx.Response(status)
+
+        embedder.handlers["embedder.example.test"] = handle
+        state.update(entered=entered, release=release)
+        return state
+
+    @staticmethod
+    def _provider():
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        return OpenAICompatProvider("https://embedder.example.test")
+
+    @staticmethod
+    def _queued(provider, n: int) -> None:
+        import time
+
+        deadline = time.monotonic() + 5
+        while len(provider._turns._queue) < n:
+            assert time.monotonic() < deadline, "the waiter never queued"
+            time.sleep(0.001)
+
+    def test_concurrent_callers_never_have_two_requests_in_flight(self, held):
+        import threading
+
+        provider, errors = self._provider(), []
+
+        def call(name: str) -> None:
+            try:
+                provider.embed([f"{name} 0", f"{name} 1"], model="m", expected_dim=2)
+            except Exception as error:  # surfaced by the assertion below
+                errors.append(error)
+
+        threads = [threading.Thread(target=call, args=(name,), daemon=True) for name in "abc"]
+        for thread in threads:
+            thread.start()
+        assert held["entered"].acquire(timeout=5)
+        self._queued(provider, 3)  # the two others wait their turn instead of reaching the server
+        held["release"].set()
+        for thread in threads:
+            thread.join(5)
+        assert errors == []
+        assert held["most"] == 1
+        assert sorted(held["order"]) == [f"{name} {i}" for name in "abc" for i in (0, 1)]
+
+    def test_a_caller_that_arrives_during_a_drain_is_served_before_its_next_request(self, held):
+        import threading
+
+        provider = self._provider()
+        a = threading.Thread(target=provider.embed, args=(["a 0", "a 1", "a 2"],), kwargs={"model": "m"}, daemon=True)
+        b = threading.Thread(target=provider.embed, args=(["b 0"],), kwargs={"model": "m"}, daemon=True)
+        a.start()
+        assert held["entered"].acquire(timeout=5)
+        b.start()
+        self._queued(provider, 2)
+        held["release"].set()
+        a.join(5)
+        b.join(5)
+        assert held["order"] == ["a 0", "b 0", "a 1", "a 2"]
+
+    def test_a_failed_request_releases_its_turn(self, held):
+        import threading
+
+        import httpx
+
+        provider, failures = self._provider(), []
+
+        def drain() -> None:
+            try:
+                provider.embed(["a 0"], model="m")
+            except httpx.HTTPStatusError as error:
+                failures.append(error.response.status_code)
+
+        held["answer"] = 500
+        a = threading.Thread(target=drain, daemon=True)
+        a.start()
+        assert held["entered"].acquire(timeout=5)
+        result: list = []
+        b = threading.Thread(
+            target=lambda: result.extend(provider.embed(["b 1"], model="m", expected_dim=2)), daemon=True
+        )
+        b.start()
+        self._queued(provider, 2)
+        held["release"].set()
+        a.join(5)
+        b.join(5)
+        assert failures == [500]
+        assert len(result) == 1
+        assert len(provider._turns._queue) == 0
+
+    def test_a_waiter_whose_wait_raises_leaves_the_queue(self):
+        import threading
+
+        from knowledge_base.embeddings import _Turns
+
+        turns, raised = _Turns(), []
+        with turns.turn():
+            real_wait_for = turns._cv.wait_for
+
+            def interrupted(predicate, timeout=None):
+                raise KeyboardInterrupt
+
+            turns._cv.wait_for = interrupted  # type: ignore[method-assign]
+
+            def waiter() -> None:
+                try:
+                    with turns.turn():
+                        pass
+                except KeyboardInterrupt:
+                    raised.append(True)
+
+            thread = threading.Thread(target=waiter, daemon=True)
+            thread.start()
+            thread.join(5)
+            turns._cv.wait_for = real_wait_for  # type: ignore[method-assign]
+            assert raised == [True]
+            assert len(turns._queue) == 1  # only the holder
+        served: list[bool] = []
+
+        def later() -> None:
+            with turns.turn():
+                served.append(True)
+
+        thread = threading.Thread(target=later, daemon=True)
+        thread.start()
+        thread.join(5)
+        assert served == [True]
+        assert len(turns._queue) == 0
+
+    def test_every_provider_of_an_endpoint_shares_its_turns(self):
+        from knowledge_base.embeddings import ProviderConfig
+
+        def cfg(**changes) -> ProviderConfig:
+            return ProviderConfig(family="llama.cpp", base_url="https://embedder.example.test", api_key="k", **changes)
+
+        providers = [
+            get_provider(cfg=cfg()),
+            get_provider(cfg=cfg(allow_loopback=True)),  # a loopback opt-in toggled mid-drain
+            get_provider(cfg=cfg(batch_size=8)),
+        ]
+        assert len({id(p) for p in providers}) == 3
+        assert len({id(p._turns) for p in providers}) == 1  # type: ignore[attr-defined]
+        other = get_provider(cfg=ProviderConfig(family="llama.cpp", base_url="https://other.example.test"))
+        assert other._turns is not providers[0]._turns  # type: ignore[attr-defined]
+
+    def test_concurrent_first_calls_build_one_provider(self, monkeypatch):
+        import threading
+        import time
+
+        from knowledge_base import embeddings
+        from knowledge_base.embeddings import ProviderConfig
+
+        real = embeddings._build_provider
+
+        def slow(cfg):
+            time.sleep(0.05)  # building takes a while (the client loads its CA bundle), so both calls miss the cache
+            return real(cfg)
+
+        monkeypatch.setattr(embeddings, "_build_provider", slow)
+        cfg = ProviderConfig(family="llama.cpp", base_url="https://embedder.example.test")
+        got: list = []
+        threads = [threading.Thread(target=lambda: got.append(get_provider(cfg=cfg)), daemon=True) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5)
+        assert len(got) == 2
+        assert got[0] is got[1]
+
+
+def test_the_embedder_url_is_validated_before_every_request(embedder, monkeypatch):
+    """One input per request must not leave requests 2..N of a call without the SSRF floor's check."""
+    from knowledge_base import embeddings
+    from knowledge_base.embeddings import OpenAICompatProvider
+
+    checked: list[str] = []
+    real = embeddings.validate_base_url
+
+    def counting(url, **kwargs):
+        checked.append(url)
+        return real(url, **kwargs)
+
+    monkeypatch.setattr(embeddings, "validate_base_url", counting)
+    OpenAICompatProvider("https://embedder.example.test").embed(["a 0", "a 1", "a 2"], model="m")
+    assert len(_inputs_per_request(embedder)) == 3
+    assert len(checked) == 3

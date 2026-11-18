@@ -12,7 +12,10 @@ import logging
 import math
 import os
 import subprocess
-from collections.abc import Callable
+import threading
+from collections import deque
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
@@ -131,7 +134,7 @@ class EmbeddingProvider(Protocol):
 class ProviderConfig:
     """A resolved, hashable embedding-provider identity (ADR-0018 §2).
 
-    The frozen tuple ``(family, base_url, api_key, allow_loopback, max_input_tokens)`` is the provider
+    The frozen tuple ``(family, base_url, api_key, allow_loopback, max_input_tokens, batch_size)`` is the provider
     *cache key* — replacing the old name-keyed cache that made two ``openai_compat``
     configs (different ``base_url``) collide. ``api_key`` holds the **raw** config
     spec (inline value or ``env:VARNAME`` indirection, never a resolved secret); it is
@@ -143,12 +146,13 @@ class ProviderConfig:
     api_key: str | None = None
     allow_loopback: bool = False
     max_input_tokens: int | None = None
+    batch_size: int = 1
 
     def __repr__(self) -> str:
         bu = _sanitize_url(self.base_url) if self.base_url else None
         return (
             f"ProviderConfig(family={self.family!r}, base_url={bu!r}, allow_loopback={self.allow_loopback}, "
-            f"max_input_tokens={self.max_input_tokens})"
+            f"max_input_tokens={self.max_input_tokens}, batch_size={self.batch_size})"
         )
 
 
@@ -274,6 +278,36 @@ def split_to_limit(text: str, limit: int, count: Callable[[str], int]) -> list[s
     return pieces
 
 
+class _Turns:
+    """One holder at a time, the others served in arrival order (#614).
+
+    ``threading.Lock`` does not define which waiter proceeds on release; the queue makes it arrival order by
+    construction, so a waiter is never served after a later one, whatever the scheduler does.
+    """
+
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self._queue: deque[object] = deque()
+
+    @contextmanager
+    def turn(self) -> Iterator[None]:
+        me = object()
+        try:
+            with self._cv:
+                self._queue.append(me)
+                self._cv.wait_for(lambda: self._queue[0] is me)
+            yield
+        finally:  # whatever raised, and wherever: the token leaves the queue, so it cannot block the next waiter
+            with self._cv:
+                if me in self._queue:
+                    self._queue.remove(me)
+                self._cv.notify_all()
+
+
+#: One turn queue per endpoint: every provider of an embedder shares it, whatever else its configuration says.
+_TURNS: dict[str, _Turns] = {}
+
+
 class OpenAICompatProvider:
     """Embedding provider for ANY OpenAI-compatible ``/v1/embeddings`` endpoint.
 
@@ -294,6 +328,7 @@ class OpenAICompatProvider:
         *,
         allow_loopback: bool = False,
         max_input_tokens: int | None = None,
+        batch_size: int = 1,
     ) -> None:
         if not base_url:
             raise ValidationError(
@@ -304,7 +339,12 @@ class OpenAICompatProvider:
         self._api_key = api_key  # raw spec; never logged
         self._allow_loopback = allow_loopback
         self._max_input_tokens = max_input_tokens
-        self._http = httpx.Client(timeout=120, follow_redirects=False)  # keep-alive for the per-input counts
+        self._batch_size = batch_size
+        # FastMCP runs every sync tool in a thread pool, so concurrent tool calls would each put a request in flight.
+        self._turns = _TURNS.setdefault(self._base_url, _Turns())
+        # Kept alive for the per-input counts and the embedding requests: one input per request (#614) would
+        # otherwise pay a new connection, and its TLS handshake, per input.
+        self._http = httpx.Client(timeout=120, follow_redirects=False)
 
     def __repr__(self) -> str:
         return f"OpenAICompatProvider(base_url={_sanitize_url(self._base_url)!r})"
@@ -370,12 +410,12 @@ class OpenAICompatProvider:
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
         texts = self._bounded(texts)
-        headers = self._headers()
         results = []
-        batch_size = 512  # OpenAI supports up to 2048, 512 balances throughput/memory
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
-            raw_embeddings = self._call_api(headers, batch, model, expected_dim)
+        for i in range(0, len(texts), self._batch_size):
+            batch = texts[i : i + self._batch_size]
+            headers = self._headers()  # the floor's check before every request, as it was when a call was one request
+            with self._turns.turn():
+                raw_embeddings = self._call_api(headers, batch, model, expected_dim)
             for emb in raw_embeddings:
                 if expected_dim is not None and len(emb) != expected_dim:
                     raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
@@ -392,13 +432,7 @@ class OpenAICompatProvider:
         body: dict = {"model": model, "input": texts}
         if dimensions is not None:
             body["dimensions"] = dimensions
-        resp = httpx.post(
-            f"{self._base_url}/v1/embeddings",
-            headers=headers,
-            json=body,
-            timeout=120,
-            follow_redirects=False,
-        )
+        resp = self._http.post(f"{self._base_url}/v1/embeddings", headers=headers, json=body)
         resp.raise_for_status()
         data = resp.json()["data"]
         data.sort(key=lambda x: x["index"])
@@ -496,6 +530,8 @@ _PROVIDERS: dict[str, Callable[[], EmbeddingProvider]] = {
 # is the fix for the old name-collision bug where two ``openai_compat`` base_urls
 # shared the single ``"openai_compat"`` slot (ADR-0018 §2).
 _provider_cache: dict[str | ProviderConfig, EmbeddingProvider] = {}
+#: Concurrent first calls build one provider, not one each.
+_provider_lock = threading.Lock()
 
 
 def _build_provider(cfg: ProviderConfig) -> EmbeddingProvider:
@@ -510,7 +546,11 @@ def _build_provider(cfg: ProviderConfig) -> EmbeddingProvider:
         return OllamaProvider(cfg.base_url)
     if family in ("openai_compat", "openai", "llama.cpp"):
         return OpenAICompatProvider(
-            cfg.base_url, cfg.api_key, allow_loopback=cfg.allow_loopback, max_input_tokens=cfg.max_input_tokens
+            cfg.base_url,
+            cfg.api_key,
+            allow_loopback=cfg.allow_loopback,
+            max_input_tokens=cfg.max_input_tokens,
+            batch_size=cfg.batch_size,
         )
     if family == "onnx":
         return ONNXProvider()
@@ -531,23 +571,22 @@ def get_provider(
     cached by it — two ``openai_compat`` configs with different ``base_url`` never
     collide. When *cfg* is None, the legacy bare-name path applies (no production caller).
     """
-    if cfg is not None:
-        cached = _provider_cache.get(cfg)
-        if cached is not None:
+    with _provider_lock:
+        if cfg is not None:
+            cached = _provider_cache.get(cfg)
+            if cached is None:
+                cached = _provider_cache[cfg] = _build_provider(cfg)
             return cached
-        instance = _build_provider(cfg)
-        _provider_cache[cfg] = instance
-        return instance
 
-    resolved = (name or "ollama").lower()
-    if resolved in _provider_cache:
-        return _provider_cache[resolved]
-    factory = _PROVIDERS.get(resolved)
-    if factory is None:
-        raise ValueError(f"Unknown embedding provider '{resolved}'. Available: {', '.join(sorted(_PROVIDERS))}")
-    instance = factory()
-    _provider_cache[resolved] = instance
-    return instance
+        resolved = (name or "ollama").lower()
+        if resolved in _provider_cache:
+            return _provider_cache[resolved]
+        factory = _PROVIDERS.get(resolved)
+        if factory is None:
+            raise ValueError(f"Unknown embedding provider '{resolved}'. Available: {', '.join(sorted(_PROVIDERS))}")
+        instance = factory()
+        _provider_cache[resolved] = instance
+        return instance
 
 
 # --- Module-level dispatch functions ---

@@ -61,6 +61,7 @@ VARIABLES = {
     "pooling": "KNOWLEDGE_BASE_EMBED_POOLING",
     "normalization": "KNOWLEDGE_BASE_EMBED_NORMALIZATION",
     "max_input_tokens": "KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS",
+    "batch_size": "KNOWLEDGE_BASE_EMBED_BATCH_SIZE",
 }
 #: ADR-0015 §1's identity tuple, names and order normative; the last four are the served artifact.
 IDENTITY_FIELDS = (
@@ -114,6 +115,8 @@ class EmbedSettings:
     pooling: str | None = None
     normalization: str | None = None
     max_input_tokens: int | None = None
+    #: Inputs per ``/v1/embeddings`` request. One lets another client's query wait for one input, not a batch (#614).
+    batch_size: int = 1
 
 
 def _get(name: str) -> str | None:
@@ -204,6 +207,12 @@ def load_embed_settings() -> EmbedSettings:
             f"{VARIABLES['max_input_tokens']} needs an embedder that counts tokens at /tokenize (llama-server): "
             f"{VARIABLES['provider']} must be llama.cpp or openai_compat with a served artifact, got {provider!r}"
         )
+    batch_size = _positive_int("batch_size")
+    if batch_size is not None and provider not in _OPENAI_FAMILIES:
+        raise ValidationError(
+            f"{VARIABLES['batch_size']} applies to {', '.join(_OPENAI_FAMILIES)}; "
+            f"got {VARIABLES['provider']}={provider}"
+        )
     return EmbedSettings(
         provider=provider,
         model=model,
@@ -211,6 +220,7 @@ def load_embed_settings() -> EmbedSettings:
         base_url=base_url,
         api_key_source=f"env:{API_KEY_VAR}" if _get(API_KEY_VAR) else None,
         matryoshka_base_dim=base_dim,
+        batch_size=batch_size or 1,
         **served,  # pyright: ignore[reportArgumentType]  # typed per field above
     )
 

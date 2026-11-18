@@ -36,6 +36,7 @@ _EMBED_VARS = (
     "KNOWLEDGE_BASE_EMBED_URL",
     "KNOWLEDGE_BASE_EMBED_API_KEY",
     "KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM",
+    "KNOWLEDGE_BASE_EMBED_BATCH_SIZE",
     *(f"KNOWLEDGE_BASE_EMBED_{field.upper()}" for field in _SERVED),
 )
 
@@ -436,3 +437,36 @@ def test_onnx_never_routes_by_model(declare, tmp_path, monkeypatch):
     monkeypatch.setenv("ONNX_EMBED_MODEL_PATH", str(model))
     declare(provider="onnx", model="local", dim="8")
     assert routes_by_model(load_embed_settings()) is False
+
+
+def test_the_batch_size_defaults_to_one_input_per_request(declare):
+    declare(**_OPENAI_COMPAT, url="https://embedder.example.test")
+    assert load_embed_settings().batch_size == 1
+
+
+@pytest.mark.parametrize("provider", ["openai_compat", "openai", "llama.cpp"])
+def test_the_batch_size_is_declared_for_the_openai_wire(declare, provider):
+    declare(provider=provider, model="m", dim="8", url="https://embedder.example.test", batch_size="8")
+    assert load_embed_settings().batch_size == 8
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "x", "1.5", "٣"])
+def test_an_invalid_batch_size_names_its_variable(declare, value):
+    declare(**_OPENAI_COMPAT, url="https://embedder.example.test", batch_size=value)
+    with pytest.raises(ValidationError, match=r"^KNOWLEDGE_BASE_EMBED_BATCH_SIZE"):
+        load_embed_settings()
+
+
+@pytest.mark.parametrize(
+    "values",
+    [_OLLAMA, {"provider": "onnx", "model": "local", "dim": "8"}],
+    ids=["ollama", "onnx"],
+)
+def test_a_batch_size_is_refused_where_it_would_do_nothing(declare, values, tmp_path, monkeypatch):
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"")
+    monkeypatch.setenv("ONNX_EMBED_MODEL_PATH", str(model))
+    declare(**values, batch_size="4")
+    with pytest.raises(ValidationError, match=r"^KNOWLEDGE_BASE_EMBED_BATCH_SIZE") as error:
+        load_embed_settings()
+    assert values["provider"] in str(error.value)

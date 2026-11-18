@@ -295,3 +295,23 @@ def test_the_limit_split_still_ends_when_a_link_cannot_be_kept_whole(text):
     pieces = split_to_limit(text, 100, by_chars)
     assert "".join(pieces) == text
     assert all(by_chars(p) <= 100 for p in pieces)
+
+
+def test_an_ingest_sends_one_input_per_request_by_default(conn, bounded_embedder, tmp_path):
+    from knowledge_base.ingest import ingest_file
+
+    path = tmp_path / "notes.md"
+    path.write_text(SECTION)
+    ingest_file(conn, path)
+    assert len(bounded_embedder.inputs) > 1  # the section is split into several pieces
+    assert {len(sent) for sent in bounded_embedder.inputs} == {1}
+
+
+def test_an_ingest_groups_inputs_by_the_declared_batch_size(conn, bounded_embedder, tmp_path, monkeypatch):
+    from knowledge_base.ingest import ingest_file
+
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_BATCH_SIZE", "2")
+    path = tmp_path / "notes.md"
+    path.write_text(SECTION)
+    ingest_file(conn, path)
+    assert max(len(sent) for sent in bounded_embedder.inputs) == 2

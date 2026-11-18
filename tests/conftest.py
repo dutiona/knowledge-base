@@ -110,6 +110,7 @@ def _declared_environment(monkeypatch):
         "KNOWLEDGE_BASE_EMBED_POOLING",
         "KNOWLEDGE_BASE_EMBED_NORMALIZATION",
         "KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS",
+        "KNOWLEDGE_BASE_EMBED_BATCH_SIZE",
     ):
         monkeypatch.delenv(name, raising=False)
 
