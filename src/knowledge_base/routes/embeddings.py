@@ -90,7 +90,8 @@ def backfill_embed_space_tool(name: str, batch_size: int = 32) -> str:
 
     Args:
         name: Name of the space to backfill (must be in 'populating' status).
-        batch_size: Number of chunks per embedding batch (default 32).
+        batch_size: Chunks read and embedded per step (default 32); each embedding request carries
+            KNOWLEDGE_BASE_EMBED_BATCH_SIZE of them.
     """
     conn = _get_conn()
     try:

@@ -801,7 +801,7 @@ Backfill an embedding space with chunk embeddings. Resumable -- interrupted back
 | Parameter    | Type  | Required | Default | Description                                             |
 | ------------ | ----- | -------- | ------- | ------------------------------------------------------- |
 | `name`       | `str` | yes      | --      | Name of the space to backfill (must be in `populating`) |
-| `batch_size` | `int` | no       | `32`    | Number of chunks per embedding batch                    |
+| `batch_size` | `int` | no       | `32`    | Chunks read and embedded per step; each `/v1/embeddings` request carries `KNOWLEDGE_BASE_EMBED_BATCH_SIZE` of them |
 
 **Returns:**
 
