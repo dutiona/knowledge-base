@@ -243,16 +243,22 @@ class TestOpenAICompatProvider:
         assert str(request.url) == "http://localhost:11434/v1/embeddings"
 
     def test_every_request_reuses_the_kept_alive_connection(self, server, monkeypatch):
-        from knowledge_base import embeddings
+        import httpx
+
         from knowledge_base.embeddings import OpenAICompatProvider
 
-        def a_new_connection(*args, **kwargs):
-            raise AssertionError("a new connection per request")
+        transports: list = []  # the objects themselves, so a collected one cannot lend its id to the next
+        answer = httpx.HTTPTransport.handle_request  # the http_requests fixture's stand-in
 
-        monkeypatch.setattr(embeddings.httpx, "post", a_new_connection)
+        def recording(transport, request):
+            transports.append(transport)
+            return answer(transport, request)
+
+        monkeypatch.setattr(httpx.HTTPTransport, "handle_request", recording)
         server.register("vllm.example.com")
         OpenAICompatProvider(base_url="http://vllm.example.com").embed(["a 0", "a 1", "a 2"], model="m")
         assert [request.url.path for request in server] == ["/v1/embeddings"] * 3
+        assert len({id(transport) for transport in transports}) == 1
 
 
 class TestProviderConfigCache:
