@@ -387,8 +387,9 @@ on loopback, and it takes no embedding slot.
 ### How much KB sends at once
 
 With `openai_compat`, `openai` or `llama.cpp`, each `/v1/embeddings` request carries
-`KNOWLEDGE_BASE_EMBED_BATCH_SIZE` inputs (default `1`), and each embedder has one request in flight at a time:
-concurrent tool calls take turns, first come first served. llama-server queues a request's inputs ahead of a later
+`KNOWLEDGE_BASE_EMBED_BATCH_SIZE` inputs (default `1`), and each KB process keeps one request in flight per
+embedder: concurrent tool calls take turns, first come first served. Each other KB process using the same embedder
+(a `knowledge-base-ingest` run beside the server, a stdio session beside the HTTP server) adds one more. llama-server queues a request's inputs ahead of a later
 request's, so a query from another client sharing the embedder waits for the whole request in flight. Measured on a
 CPU build of llama.cpp b12048 with about 600-token chunks, a concurrent one-input query waited 219 s at the 95th
 percentile behind a 512-input request and 428 ms behind one input, while KB embedded the same chunks per second at
