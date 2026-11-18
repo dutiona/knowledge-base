@@ -1119,3 +1119,21 @@ class TestOneRequestInFlight:
             thread.join(5)
         assert len(got) == 2
         assert got[0] is got[1]
+
+
+def test_the_embedder_url_is_validated_before_every_request(embedder, monkeypatch):
+    """One input per request must not leave requests 2..N of a call without the SSRF floor's check."""
+    from knowledge_base import embeddings
+    from knowledge_base.embeddings import OpenAICompatProvider
+
+    checked: list[str] = []
+    real = embeddings.validate_base_url
+
+    def counting(url, **kwargs):
+        checked.append(url)
+        return real(url, **kwargs)
+
+    monkeypatch.setattr(embeddings, "validate_base_url", counting)
+    OpenAICompatProvider("https://embedder.example.test").embed(["a 0", "a 1", "a 2"], model="m")
+    assert len(_inputs_per_request(embedder)) == 3
+    assert len(checked) == 3

@@ -410,10 +410,10 @@ class OpenAICompatProvider:
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
         texts = self._bounded(texts)
-        headers = self._headers()
         results = []
         for i in range(0, len(texts), self._batch_size):
             batch = texts[i : i + self._batch_size]
+            headers = self._headers()  # the floor's check before every request, as it was when a call was one request
             with self._turns.turn():
                 raw_embeddings = self._call_api(headers, batch, model, expected_dim)
             for emb in raw_embeddings:
