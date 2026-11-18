@@ -342,7 +342,9 @@ class OpenAICompatProvider:
         self._batch_size = batch_size
         # FastMCP runs every sync tool in a thread pool, so concurrent tool calls would each put a request in flight.
         self._turns = _Turns()
-        self._http = httpx.Client(timeout=120, follow_redirects=False)  # keep-alive for the per-input counts
+        # Kept alive for the per-input counts and the embedding requests: one input per request (#614) would
+        # otherwise pay a new connection, and its TLS handshake, per input.
+        self._http = httpx.Client(timeout=120, follow_redirects=False)
 
     def __repr__(self) -> str:
         return f"OpenAICompatProvider(base_url={_sanitize_url(self._base_url)!r})"
@@ -430,13 +432,7 @@ class OpenAICompatProvider:
         body: dict = {"model": model, "input": texts}
         if dimensions is not None:
             body["dimensions"] = dimensions
-        resp = httpx.post(
-            f"{self._base_url}/v1/embeddings",
-            headers=headers,
-            json=body,
-            timeout=120,
-            follow_redirects=False,
-        )
+        resp = self._http.post(f"{self._base_url}/v1/embeddings", headers=headers, json=body)
         resp.raise_for_status()
         data = resp.json()["data"]
         data.sort(key=lambda x: x["index"])
