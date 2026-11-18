@@ -941,3 +941,150 @@ class TestBatchSize:
         vectors = self._embed(texts, batch_size=3)
         assert _inputs_per_request(embedder) == [texts[:3], texts[3:]]
         assert [v[1] / v[0] for v in vectors if v is not None] == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+
+class TestOneRequestInFlight:
+    """#614: concurrent tool calls share one /v1/embeddings request in flight per embedder, in arrival order."""
+
+    @pytest.fixture
+    def held(self, embedder):
+        """The embedder, holding each request until ``release`` and recording entries and the most in flight."""
+        import threading
+
+        state = {"order": [], "in_flight": 0, "most": 0, "answer": 200}
+        lock, entered, release = threading.Lock(), threading.Semaphore(0), threading.Event()
+        answer = embedder.handlers["embedder.example.test"]
+
+        def handle(request):
+            import json
+
+            import httpx
+
+            with lock:
+                state["order"].extend(json.loads(request.content)["input"])
+                state["in_flight"] += 1
+                state["most"] = max(state["most"], state["in_flight"])
+            entered.release()
+            release.wait(5)
+            with lock:
+                state["in_flight"] -= 1
+                status = state["answer"]
+                state["answer"] = 200
+            return answer(request) if status == 200 else httpx.Response(status)
+
+        embedder.handlers["embedder.example.test"] = handle
+        state.update(entered=entered, release=release)
+        return state
+
+    @staticmethod
+    def _provider():
+        from knowledge_base.embeddings import OpenAICompatProvider
+
+        return OpenAICompatProvider("https://embedder.example.test")
+
+    @staticmethod
+    def _queued(provider, n: int) -> None:
+        import time
+
+        deadline = time.monotonic() + 5
+        while len(provider._turns._queue) < n:
+            assert time.monotonic() < deadline, "the waiter never queued"
+            time.sleep(0.001)
+
+    def test_concurrent_callers_never_have_two_requests_in_flight(self, held):
+        import threading
+
+        provider, errors = self._provider(), []
+
+        def call(name: str) -> None:
+            try:
+                provider.embed([f"{name} 0", f"{name} 1"], model="m", expected_dim=2)
+            except Exception as error:  # surfaced by the assertion below
+                errors.append(error)
+
+        threads = [threading.Thread(target=call, args=(name,)) for name in "abc"]
+        for thread in threads:
+            thread.start()
+        assert held["entered"].acquire(timeout=5)
+        self._queued(provider, 3)  # the two others wait their turn instead of reaching the server
+        held["release"].set()
+        for thread in threads:
+            thread.join(5)
+        assert errors == []
+        assert held["most"] == 1
+        assert sorted(held["order"]) == [f"{name} {i}" for name in "abc" for i in (0, 1)]
+
+    def test_a_caller_that_arrives_during_a_drain_is_served_before_its_next_request(self, held):
+        import threading
+
+        provider = self._provider()
+        a = threading.Thread(target=provider.embed, args=(["a 0", "a 1", "a 2"],), kwargs={"model": "m"})
+        b = threading.Thread(target=provider.embed, args=(["b 0"],), kwargs={"model": "m"})
+        a.start()
+        assert held["entered"].acquire(timeout=5)
+        b.start()
+        self._queued(provider, 2)
+        held["release"].set()
+        a.join(5)
+        b.join(5)
+        assert held["order"] == ["a 0", "b 0", "a 1", "a 2"]
+
+    def test_a_failed_request_releases_its_turn(self, held):
+        import threading
+
+        import httpx
+
+        provider, failures = self._provider(), []
+
+        def drain() -> None:
+            try:
+                provider.embed(["a 0"], model="m")
+            except httpx.HTTPStatusError as error:
+                failures.append(error.response.status_code)
+
+        held["answer"] = 500
+        a = threading.Thread(target=drain)
+        a.start()
+        assert held["entered"].acquire(timeout=5)
+        result: list = []
+        b = threading.Thread(target=lambda: result.extend(provider.embed(["b 1"], model="m", expected_dim=2)))
+        b.start()
+        self._queued(provider, 2)
+        held["release"].set()
+        a.join(5)
+        b.join(5)
+        assert failures == [500]
+        assert len(result) == 1
+        assert len(provider._turns._queue) == 0
+
+    def test_a_waiter_whose_wait_raises_leaves_the_queue(self):
+        import threading
+
+        from knowledge_base.embeddings import _Turns
+
+        turns, raised = _Turns(), []
+        with turns.turn():
+            real_wait_for = turns._cv.wait_for
+
+            def interrupted(predicate, timeout=None):
+                raise KeyboardInterrupt
+
+            turns._cv.wait_for = interrupted  # type: ignore[method-assign]
+
+            def waiter() -> None:
+                try:
+                    with turns.turn():
+                        pass
+                except KeyboardInterrupt:
+                    raised.append(True)
+
+            thread = threading.Thread(target=waiter)
+            thread.start()
+            thread.join(5)
+            turns._cv.wait_for = real_wait_for  # type: ignore[method-assign]
+            assert raised == [True]
+            assert len(turns._queue) == 1  # only the holder
+        later = threading.Thread(target=lambda: turns.turn().__enter__())
+        later.start()
+        later.join(5)
+        assert not later.is_alive()

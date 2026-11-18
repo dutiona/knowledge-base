@@ -12,7 +12,10 @@ import logging
 import math
 import os
 import subprocess
-from collections.abc import Callable
+import threading
+from collections import deque
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
@@ -275,6 +278,36 @@ def split_to_limit(text: str, limit: int, count: Callable[[str], int]) -> list[s
     return pieces
 
 
+class _Turns:
+    """One holder at a time, the others served in arrival order (#614).
+
+    A plain ``threading.Lock`` is not fair: a thread that releases and re-acquires it in a loop, as a drain does,
+    can keep a waiter out until the drain ends.
+    """
+
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self._queue: deque[object] = deque()
+
+    @contextmanager
+    def turn(self) -> Iterator[None]:
+        me = object()
+        with self._cv:
+            self._queue.append(me)
+            try:
+                self._cv.wait_for(lambda: self._queue[0] is me)
+            except BaseException:
+                self._queue.remove(me)
+                self._cv.notify_all()
+                raise
+        try:
+            yield
+        finally:
+            with self._cv:
+                self._queue.popleft()
+                self._cv.notify_all()
+
+
 class OpenAICompatProvider:
     """Embedding provider for ANY OpenAI-compatible ``/v1/embeddings`` endpoint.
 
@@ -307,6 +340,8 @@ class OpenAICompatProvider:
         self._allow_loopback = allow_loopback
         self._max_input_tokens = max_input_tokens
         self._batch_size = batch_size
+        # FastMCP runs every sync tool in a thread pool, so concurrent tool calls would each put a request in flight.
+        self._turns = _Turns()
         self._http = httpx.Client(timeout=120, follow_redirects=False)  # keep-alive for the per-input counts
 
     def __repr__(self) -> str:
@@ -377,7 +412,8 @@ class OpenAICompatProvider:
         results = []
         for i in range(0, len(texts), self._batch_size):
             batch = texts[i : i + self._batch_size]
-            raw_embeddings = self._call_api(headers, batch, model, expected_dim)
+            with self._turns.turn():
+                raw_embeddings = self._call_api(headers, batch, model, expected_dim)
             for emb in raw_embeddings:
                 if expected_dim is not None and len(emb) != expected_dim:
                     raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
