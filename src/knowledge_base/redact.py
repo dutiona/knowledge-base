@@ -234,7 +234,10 @@ def _detect_url_credential(text: str, spans: _Spans) -> list[tuple[int, int]]:
                 start, end = auth_start + colon + 1, auth_start + at
                 if start < end and not spans.overlaps(start, end):
                     found.append((start, end))
-        pos = auth_end + 1
+        # Resume inside the authority, not past it: an authority without a path runs to the
+        # ``/`` of the next ``://``, whose password the next search must still reach. Each
+        # search starts past the last ``://``, so the scan stays linear.
+        pos = auth_start
     return found
 
 
