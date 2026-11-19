@@ -168,6 +168,12 @@ def _links(text: str) -> _Spans:
             start -= 1
         while start < sep and not (text[start].isascii() and text[start].isalpha()):
             start += 1
+        # A placeholder right before ``://`` replaced a token glued to the scheme: it keeps the
+        # link, so a later pass leaves the link's content alone.
+        if start == sep and text.endswith("]", 0, sep):
+            lb = text.rfind("[REDACTED:", max(0, sep - 64), sep)
+            if lb >= 0 and "]" not in text[lb : sep - 1]:
+                start = lb
         run = _LINK_RUN.match(text, sep + 3)
         end = run.end() if run else sep + 3
         if start < sep:

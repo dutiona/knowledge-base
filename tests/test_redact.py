@@ -23,7 +23,7 @@ import pytest
 from knowledge_base.redact import TOKEN_SHAPE, redact, redact_json, scrub
 
 FIXTURE = Path(__file__).parent / "fixtures" / "redaction-cases.jsonl"
-FIXTURE_SHA256 = "2cc50a060a426a0099dec7ea6a3cf7e90f33aef7908c5a25a9a31e431ad02a92"
+FIXTURE_SHA256 = "b1902ceba79a1208fd096aac9d01ddc802d8e5f165158b7ccc41bda44d3b1b09"
 _LINES = FIXTURE.read_text(encoding="utf-8").split("\n")
 HEADER = json.loads(_LINES[0])
 CASES = [json.loads(line) for line in _LINES[1:] if line]
@@ -169,3 +169,14 @@ def test_a_text_is_read_between_its_neighbours():
     assert (
         redact_in_context("tail " + token[:12], [("", "x plain"), ("", token[12:])])[0] == "tail [REDACTED:github-pat]"
     )
+
+
+def test_a_glued_token_settles_with_its_link_intact() -> None:
+    """A glued token's placeholder stands where the link's scheme was: it keeps the link, so a
+    second pass leaves the link's content alone and ``scrub`` settles where one pass did."""
+    ghp = "ghp_" + "Ex4mpleTok3nBody0123456789abcdefABCD"
+    for glued, rule in [("AKIA" + "IOSFODNN7EXAMPLE" + "https", "aws-access-key"), (ghp + "/https", "github-pat")]:
+        text = f"key {glued}://example.com/x?k={ghp} end"
+        want = f"key [REDACTED:{rule}]://example.com/x?k={ghp} end"
+        assert redact(text)[0] == want
+        assert scrub(text) == want
