@@ -23,7 +23,7 @@ import pytest
 from knowledge_base.redact import TOKEN_SHAPE, redact, redact_json, scrub
 
 FIXTURE = Path(__file__).parent / "fixtures" / "redaction-cases.jsonl"
-FIXTURE_SHA256 = "57cba3dca562b441786aa366e17692340de18061add57266bef319365ecbc088"
+FIXTURE_SHA256 = "2cc50a060a426a0099dec7ea6a3cf7e90f33aef7908c5a25a9a31e431ad02a92"
 _LINES = FIXTURE.read_text(encoding="utf-8").split("\n")
 HEADER = json.loads(_LINES[0])
 CASES = [json.loads(line) for line in _LINES[1:] if line]

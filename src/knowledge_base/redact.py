@@ -104,6 +104,14 @@ class _Spans:
         self.rules: list[str] = []
         self._pending: list[tuple[int, int, str]] = []
         self.extents: list[tuple[int, int]] = []  # whole links, userinfo included (only _links fills it)
+        # Each link's body, after its ``://`` or its userinfo's last ``@`` (only _links fills it).
+        self.body_starts: list[int] = []
+        self.body_ends: list[int] = []
+
+    def in_body(self, pos: int) -> bool:
+        """Whether ``pos`` lies in a link's body: only a match that starts there is the link's content."""
+        i = bisect_right(self.body_starts, pos) - 1
+        return i >= 0 and self.body_ends[i] > pos
 
     def overlaps(self, start: int, end: int) -> bool:
         i = bisect_left(self.starts, end)
@@ -148,7 +156,9 @@ def _is_ws(c: str) -> bool:
 def _links(text: str) -> _Spans:
     """``scheme://`` plus link characters: no rule but url-credential redacts inside one.
 
-    The userinfo is no reference, so it is left out and stays subject to every rule.
+    The userinfo is no reference, so it is left out and stays subject to every rule. Only a match
+    that starts in a link's body is exempt: one that starts before it, in the scheme or glued to it
+    (``AKIA…https://``, ``ghp_…/https://``), is not the link's content.
     """
     links = _Spans()
     pos = 0
@@ -168,6 +178,8 @@ def _links(text: str) -> _Spans:
                 links.add(at, end, "link")
             else:
                 links.add(start, end, "link")
+            links.body_starts.append(at if at >= 0 else sep + 3)
+            links.body_ends.append(end)
             links.extents.append((start, end))
         pos = max(end, sep + 3)
     links.flush()
@@ -210,7 +222,7 @@ def _detect_provider_prefix(text: str, spans: _Spans, links: _Spans) -> None:
                 # A SendGrid key and a JWT are dotted: the dot must lie past the prefix, whose own dot does not count.
                 if short or (prefix in ("SG.", "eyJ") and bisect_left(dots, end) == bisect_left(dots, body)):
                     continue
-            if not spans.overlaps(start, end) and not links.overlaps(start, end):
+            if not spans.overlaps(start, end) and not links.in_body(start):
                 spans.add(start, end, rule)
         spans.flush()  # each prefix's matches come in order; prefixes interleave
 
@@ -280,7 +292,7 @@ def _detect_hex_in_context(text: str, spans: _Spans, links: _Spans) -> None:
         i = bisect_left(newlines, start) - 1
         line_start = newlines[i] + 1 if i >= 0 else 0
         if _has_hex_context_key(text, start, line_start, words) and not (
-            spans.overlaps(start, end) or links.overlaps(start, end)
+            spans.overlaps(start, end) or links.in_body(start)
         ):
             spans.add(start, end, "hex-secret")
     spans.flush()
@@ -309,7 +321,7 @@ def _detect_high_entropy(text: str, spans: _Spans, links: _Spans) -> None:
             and any(c.isdigit() or c in "+/=_-" for c in token)
             and _shannon_entropy(token) >= HIGH_ENTROPY_BITS
             and not spans.overlaps(m.start(), m.end())
-            and not links.overlaps(m.start(), m.end())
+            and not links.in_body(m.start())
         ):
             spans.add(m.start(), m.end(), "high-entropy")
     spans.flush()
