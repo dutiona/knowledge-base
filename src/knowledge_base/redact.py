@@ -12,6 +12,9 @@ and the prefix minimum counts UTF-8 bytes. Indices are code points, so the URL s
 terminator where memory-engine panics. The only residual is a character whose Unicode properties differ
 between the versions of Rust's standard library and of ``regex``.
 
+memory-engine#1024 added sixteen provider prefixes, some with a body of ASCII alphanumerics only, and made
+``SG.`` and ``eyJ`` need a dot past the prefix; ``SECRET_PREFIXES`` carries both.
+
 Each detector stays linear: overlap checks bisect the sorted spans, and the prefix body, its last ``.``, the
 end of a ``-----BEGIN`` line and the hex-context word are read from precomputed runs, never rescanned.
 """
@@ -33,17 +36,35 @@ __all__ = ["TOKEN_SHAPE", "findings", "link_extents", "redact", "redact_json", "
 #: ``me_`` followed by 32 base62 characters (ADR-0020 §4).
 TOKEN_SHAPE = "me_[0-9A-Za-z]{32}"  # noqa: S105 -- a pattern, not a secret
 
+#: (rule, prefix, body): the body runs from the prefix to the end of a ``token`` run (``_BODY_RUN``) or of a
+#: ``base62`` run (ASCII alphanumerics only); the first ten are the original set, the rest memory-engine#1024's.
 SECRET_PREFIXES = (
-    ("aws-access-key", "AKIA"),
-    ("github-pat", "ghp_"),
-    ("github-fine-pat", "github_pat_"),
-    ("openai-key", "sk-"),
-    ("google-api-key", "AIza"),
-    ("slack-token", "xoxb-"),
-    ("slack-token", "xoxp-"),
-    ("private-key-header", "-----BEGIN"),
-    ("jwt", "eyJ"),
-    ("sendgrid", "SG."),
+    ("aws-access-key", "AKIA", "token"),
+    ("github-pat", "ghp_", "token"),
+    ("github-fine-pat", "github_pat_", "token"),
+    ("openai-key", "sk-", "token"),
+    ("google-api-key", "AIza", "token"),
+    ("slack-token", "xoxb-", "token"),
+    ("slack-token", "xoxp-", "token"),
+    ("private-key-header", "-----BEGIN", "token"),
+    ("jwt", "eyJ", "token"),
+    ("sendgrid", "SG.", "token"),
+    ("huggingface-token", "hf_", "base62"),
+    ("tailscale-key", "tskey-", "token"),
+    ("gitlab-pat", "glpat-", "token"),
+    ("github-token", "gho_", "base62"),
+    ("github-token", "ghu_", "base62"),
+    ("github-token", "ghs_", "base62"),
+    ("github-token", "ghr_", "base62"),
+    ("stripe-key", "sk_live_", "base62"),
+    ("stripe-key", "rk_live_", "base62"),
+    ("npm-token", "npm_", "base62"),
+    ("pypi-token", "pypi-", "token"),
+    ("age-secret-key", "AGE-SECRET-KEY-1", "token"),
+    ("slack-token", "xapp-", "token"),
+    ("supabase-token", "sbp_", "base62"),
+    ("docker-pat", "dckr_pat_", "token"),
+    ("digitalocean-token", "dop_v1_", "base62"),
 )
 PREFIX_BOUNDARY_CHARS = frozenset("\"'`(){}[]:,;=<>?&/@")
 HEX_CONTEXT_KEYS = frozenset(
@@ -59,6 +80,7 @@ _LONGEST_KEY = max(map(len, HEX_CONTEXT_KEYS))
 _ALNUM = r"\p{Alphabetic}\p{Nd}\p{Nl}\p{No}"
 _WS = regex.compile(r"\p{White_Space}")
 _BODY_RUN = regex.compile(rf"[{_ALNUM}._\-+/=]+")
+_BASE62_RUN = regex.compile(r"[0-9A-Za-z]+")
 _WORD_RUN = regex.compile(rf"[{_ALNUM}_]+")
 _HEX_RUN = regex.compile(r"[0-9A-Fa-f]+")
 _AUTHORITY_END = regex.compile(r"[/?#\p{White_Space}]")
@@ -161,10 +183,10 @@ def _detect_machine_token(text: str, spans: _Spans) -> None:
 
 
 def _detect_provider_prefix(text: str, spans: _Spans, links: _Spans) -> None:
-    bodies = _Runs(_BODY_RUN, text)
+    bodies = {"token": _Runs(_BODY_RUN, text), "base62": _Runs(_BASE62_RUN, text)}
     dots = [m.start() for m in regex.finditer(r"\.", text)]
     newlines = [m.start() for m in regex.finditer("\n", text)]
-    for rule, prefix in SECRET_PREFIXES:
+    for rule, prefix, body_class in SECRET_PREFIXES:
         pos = 0
         while (start := text.find(prefix, pos)) >= 0:
             pos = start + 1
@@ -180,12 +202,13 @@ def _detect_provider_prefix(text: str, spans: _Spans, links: _Spans) -> None:
                     end = links.starts[k]
             else:
                 body = start + len(prefix)
-                run = bodies.run_at(body)
+                run = bodies[body_class].run_at(body)
                 end = run[1] if run else body
                 short = (
                     end - start < MIN_PREFIXED_SECRET_LEN and len(text[start:end].encode()) < MIN_PREFIXED_SECRET_LEN
                 )
-                if short or (prefix in ("SG.", "eyJ") and bisect_left(dots, end) == bisect_left(dots, start)):
+                # A SendGrid key and a JWT are dotted: the dot must lie past the prefix, whose own dot does not count.
+                if short or (prefix in ("SG.", "eyJ") and bisect_left(dots, end) == bisect_left(dots, body)):
                     continue
             if not spans.overlaps(start, end) and not links.overlaps(start, end):
                 spans.add(start, end, rule)

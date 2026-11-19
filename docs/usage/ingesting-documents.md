@@ -229,7 +229,8 @@ Before KB embeds or stores an ingested document's text, it replaces token-shaped
 | Rule | Matches |
 | --- | --- |
 | `machine-token` | `me_` and 32 base62 characters, with no `[0-9A-Za-z_]` on either side (memory-engine ADR-0020) |
-| `aws-access-key`, `github-pat`, `github-fine-pat`, `openai-key`, `google-api-key`, `slack-token`, `jwt`, `sendgrid` | a known prefix at a word boundary, 20 bytes or more |
+| `aws-access-key`, `github-pat`, `github-fine-pat`, `openai-key`, `google-api-key`, `slack-token`, `jwt`, `sendgrid` | a known prefix at a word boundary, 20 bytes or more; `sendgrid` (`SG.`) and `jwt` (`eyJ`) also need a `.` after the prefix |
+| `huggingface-token`, `tailscale-key`, `gitlab-pat`, `github-token`, `stripe-key`, `npm-token`, `pypi-token`, `age-secret-key`, `supabase-token`, `docker-pat`, `digitalocean-token`; `slack-token` also for `xapp-` | `hf_`, `tskey-`, `glpat-`, `gho_`/`ghu_`/`ghs_`/`ghr_`, `sk_live_`/`rk_live_`, `npm_`, `pypi-`, `AGE-SECRET-KEY-1`, `xapp-`, `sbp_`, `dckr_pat_`, `dop_v1_`, at a word boundary, 20 bytes or more; the body of `hf_`, `gho_`/`ghu_`/`ghs_`/`ghr_`, `sk_live_`/`rk_live_`, `npm_`, `sbp_` and `dop_v1_` is ASCII letters and digits only |
 | `private-key-header` | a `-----BEGIN` line |
 | `connection-string-password` | the password of a URL's `user:pass@` |
 | `hex-secret` | 32 or more hex digits right after a word such as `api_key`, `secret` or `token` |

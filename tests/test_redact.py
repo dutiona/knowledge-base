@@ -4,12 +4,15 @@
 dutiona/memory-engine (memory-engine#1024). Its outputs were produced by memory-engine's own code at
 97c8e77 (``crates/memory-engine/src/bootstrap/redact.rs``) with Michaël's rulings of 2026-11-17 applied: no
 email detector, the ADR-0020 machine-token detector first, and links exempt from every rule but
-url-credential. Only ``url-authority-ends-at-multibyte-space`` is written by hand: memory-engine panics on it.
+url-credential. memory-engine#1024 then added sixteen provider prefixes (the ``new-prefix-`` cases) and made
+SendGrid's ``SG.`` and ``eyJ`` need a dot past the prefix. Only ``url-authority-ends-at-multibyte-space`` is
+written by hand: memory-engine panics on it.
 Change the file only through a linked pair of PRs, memory-engine first, both quoting the same ``sha256sum``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -20,6 +23,7 @@ import pytest
 from knowledge_base.redact import TOKEN_SHAPE, redact, redact_json, scrub
 
 FIXTURE = Path(__file__).parent / "fixtures" / "redaction-cases.jsonl"
+FIXTURE_SHA256 = "04fcc1b23d17e889551181aaa81b53b22136374f35a26cda77f0b9ae58a1d5e7"
 _LINES = FIXTURE.read_text(encoding="utf-8").split("\n")
 HEADER = json.loads(_LINES[0])
 CASES = [json.loads(line) for line in _LINES[1:] if line]
@@ -59,6 +63,13 @@ def encode_line(case: dict) -> str:
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
 def test_redact_matches_the_shared_case(case):
     assert redact(case["input"]) == (case["output"], case["rules"])
+
+
+def test_fixture_is_the_pinned_one():
+    digest = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
+    assert digest == FIXTURE_SHA256, (
+        "the fixture changed: that is a linked PR pair, memory-engine first, then this repo"
+    )
 
 
 def test_fixture_is_canonical():
