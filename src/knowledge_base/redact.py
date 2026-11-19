@@ -153,6 +153,16 @@ def _is_ws(c: str) -> bool:
     return _WS.match(c) is not None
 
 
+# The placeholders this engine emits: the prefixes' rules and the fixed ones, as memory-engine's.
+_PLACEHOLDERS = tuple(
+    f"[REDACTED:{rule}]"
+    for rule in dict.fromkeys(
+        [r for r, _, _ in SECRET_PREFIXES]
+        + ["denylist", "machine-token", "connection-string-password", "hex-secret", "high-entropy"]
+    )
+)
+
+
 def _links(text: str) -> _Spans:
     """``scheme://`` plus link characters: no rule but url-credential redacts inside one.
 
@@ -169,11 +179,10 @@ def _links(text: str) -> _Spans:
         while start < sep and not (text[start].isascii() and text[start].isalpha()):
             start += 1
         # A placeholder right before ``://`` replaced a token glued to the scheme: it keeps the
-        # link, so a later pass leaves the link's content alone.
-        if start == sep and text.endswith("]", 0, sep):
-            lb = text.rfind("[REDACTED:", max(0, sep - 64), sep)
-            if lb >= 0 and "]" not in text[lb : sep - 1]:
-                start = lb
+        # link, so a later pass leaves the link's content alone. Only a placeholder of a rule this
+        # engine emits does; any other bracketed text opens no link.
+        if start == sep:
+            start = next((sep - len(p) for p in _PLACEHOLDERS if text.endswith(p, 0, sep)), sep)
         run = _LINK_RUN.match(text, sep + 3)
         end = run.end() if run else sep + 3
         if start < sep:
