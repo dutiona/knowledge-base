@@ -76,7 +76,7 @@ The `chunk_strategy` parameter controls which chunks get embedded: only chunks o
 }
 ```
 
-Embeds all matching chunks into the space's vec table. Resumable -- if interrupted, call again and it picks up where it left off (ID-cursor based, skips already-embedded chunk IDs).
+Embeds the space's pending chunks into its vec table: chunks of its strategy with no vector there and no refusal. Resumable -- if interrupted, call again and it picks up where it left off. A chunk the embedder answers with no usable vector (zero norm, whole or after Matryoshka truncation) is logged and recorded as refused for the space (`embed_refusals`): it is never counted and never sent again, until its text changes (a `redact --rewrite`, for example). The result reports `chunks_refused`, and the space's `chunk_count` is the number of vectors it stores.
 
 #### 3. Promote to active
 
@@ -95,6 +95,10 @@ Atomically:
 - Invalidates all `similar` relationships (they depend on the embedding space)
 
 After promotion, all new ingestion and search queries use the promoted space's vec table.
+
+A space is promoted only when nothing is left to embed: every chunk of its strategy has a vector or a refusal, and it
+holds at least one vector. Otherwise the promotion says how many chunks are backfilled (run the backfill again); for a
+deprecated space it names `knowledge-base-ingest re-embed`, since a deprecated space cannot be backfilled.
 
 Only a space of the whole declared identity (every ADR-0015 field the `KNOWLEDGE_BASE_EMBED_*` variables declare) can
 be promoted: the declaration is the active identity. Every other call into a space (backfill, search, comparison)
@@ -120,7 +124,7 @@ Drops the deprecated space's vec table and removes its registry entry. Only work
 { "name": "list_embed_spaces_tool", "arguments": {} }
 ```
 
-Returns all spaces with their status, model, dimension, chunk strategy, and backfill progress (`chunk_count` / `total_chunks`).
+Returns all spaces with their status, model, dimension, chunk strategy, and backfill progress (`chunk_count`, the vectors stored, against `total_chunks`, the chunks targeted when the space was created).
 
 ### Interaction with chunk_strategy (#100)
 

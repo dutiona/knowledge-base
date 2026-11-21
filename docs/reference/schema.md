@@ -169,6 +169,12 @@ erDiagram
     papers ||--o{ jobs : "has jobs"
     papers }o--o| chunks : "abstract_chunk"
     chunks }o--o{ prediction_errors : "top_chunk"
+    chunks ||--o{ embed_refusals : "refused"
+    embed_spaces ||--o{ embed_refusals : "refused for"
+    embed_refusals {
+        INTEGER chunk_id FK
+        TEXT space_name FK
+    }
     embed_spaces {
         TEXT name PK
         TEXT model
@@ -341,7 +347,7 @@ Registry for embedding spaces. Each space owns a `sqlite-vec` virtual table and 
 | `status`              | TEXT    | NOT NULL, CHECK  | --                | One of: `active`, `populating`, `deprecated`                            |
 | `table_name`          | TEXT    | NOT NULL, UNIQUE | --                | Backing vec0 virtual table name                                         |
 | `created_at`          | TEXT    | NOT NULL         | `datetime('now')` | ISO 8601 timestamp                                                      |
-| `chunk_count`         | INTEGER | --               | `0`               | Number of chunks backfilled so far                                      |
+| `chunk_count`         | INTEGER | --               | `0`               | Vectors stored in the space's table                                     |
 | `total_chunks`        | INTEGER | --               | --                | Total chunks targeted for backfill                                      |
 | `matryoshka_base_dim` | INTEGER | --               | `NULL`            | Native model dimension for Matryoshka truncation (NULL = no truncation) |
 | `element_type`        | TEXT    | NOT NULL, CHECK  | `'float32'`       | Vector element storage type; every space KB creates is `float32` (`int8` is reserved by ADR-0015 and may only appear in old rows) |
@@ -359,6 +365,19 @@ Registry for embedding spaces. Each space owns a `sqlite-vec` virtual table and 
 - `matryoshka_base_dim IS NULL OR matryoshka_base_dim > dim`
 
 **Index:** `idx_embed_spaces_one_active` -- UNIQUE on `(status)` WHERE `status = 'active'` (enforces at most one active space)
+
+### embed_refusals
+
+Schema v3 (#579). The chunks a space's embedder answered with no usable vector (zero norm), so a backfill neither counts
+nor resends them and promotion counts them as done.
+
+| Column       | Type    | Constraints                                                     | Description              |
+| ------------ | ------- | --------------------------------------------------------------- | ------------------------ |
+| `chunk_id`   | INTEGER | NOT NULL, REFERENCES `chunks(id)` ON DELETE CASCADE             | The refused chunk        |
+| `space_name` | TEXT    | NOT NULL, REFERENCES `embed_spaces(name)` ON DELETE CASCADE     | The space it was refused for |
+
+**Primary key:** `(chunk_id, space_name)`. **Trigger:** `chunks_au_refusals` deletes a chunk's refusals when its
+`content` changes, so new text is tried again.
 
 ---
 

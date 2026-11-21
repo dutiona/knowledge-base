@@ -193,6 +193,11 @@ The kernel releases the lock when its holder exits, however it exits, so a kille
 Never delete the lock file: deleting a held one lets a second writer in. The lock holds between processes of one host,
 containers sharing the database's volume included, never across hosts or on a network filesystem.
 
+**Upgrading to schema v3** (#579, the chunks each space's embedder refused): stop the unit and run
+`knowledge-base-ingest migrate` once; it backs the database up first, adds `embed_refusals` and sets every space's
+`chunk_count` to the vectors it stores. Until then the server exits 78 naming that command. A space holding a chunk an
+earlier backfill counted but could not embed is backfilled once more before it can be promoted.
+
 **Upgrading to schema v2** (the served artifact and each space's query instruction): stop the
 unit and run `knowledge-base-ingest migrate`, which backs the database up first; until then the
 server exits 78 naming that command. The migrated spaces record no served artifact, so they
@@ -395,6 +400,7 @@ reads `KNOWLEDGE_BASE_DB`. Key tables:
 - `methods` / `datasets` / `metrics` — structured extraction results
 - `entities` / `entity_mentions` — resolved entities and surface forms
 - `embed_spaces` — multiple embedding space configurations
+- `embed_refusals` — the chunks each space's embedder answered with no usable vector (schema v3)
 - `chunk_sessions` — N:M ingestion session tracking
 - `folder_summaries` / `folder_summaries_vec` — folder-level semantic embeddings
 - `prediction_errors` — stale result detection

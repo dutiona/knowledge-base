@@ -806,7 +806,7 @@ Backfill an embedding space with chunk embeddings. Resumable -- interrupted back
 **Returns:**
 
 ```json
-{ "space": "bge_m3_1024", "chunks_processed": 1500, "total_chunks": 1500 }
+{ "space": "bge_m3_1024", "chunks_processed": 1500, "chunks_refused": 0, "total_chunks": 1500 }
 ```
 
 ### promote_embed_space_tool
