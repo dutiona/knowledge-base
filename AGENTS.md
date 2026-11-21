@@ -23,6 +23,7 @@ uv run ruff format --check src/ tests/ # no reformats
 uv run pytest tests/ -q -m "not slow"
 uv sync --all-groups                   # the type-check resolves the optional groups' imports
 uv run basedpyright src/ tests/
+uv run --group docs sphinx-build -W -E -q -b html docs docs/_build  # zero warnings: an orphan page or a broken link fails it
 ```
 
 This list is the merge gate: run every command, in this order, at the PR's final head with a

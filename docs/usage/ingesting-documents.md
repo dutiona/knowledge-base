@@ -312,7 +312,7 @@ Chunks are embedded automatically during ingestion using the configured embeddin
 
 ### Embedding Providers
 
-Pluggable embedding providers decouple the knowledge base from any single inference backend. This design was motivated by competitive analysis (NornicDB supports Ollama, OpenAI, and local ONNX inference) and aligns with the [four-layer cognitive architecture](../insights/four-layer-cognitive-architecture.md) — embeddings sit in the Knowledge (infrastructure) layer where swappable backends enable cost/quality/latency trade-offs without touching higher layers.
+Pluggable embedding providers decouple the knowledge base from any single inference backend. This design was motivated by competitive analysis (NornicDB supports Ollama, OpenAI, and local ONNX inference) and aligns with the [four-layer cognitive architecture](https://github.com/dutiona/knowledge-base/blob/master/docs/insights/four-layer-cognitive-architecture.md) — embeddings sit in the Knowledge (infrastructure) layer where swappable backends enable cost/quality/latency trade-offs without touching higher layers.
 
 The provider is declared in the environment (below). Providers are organized
 by **API family**, not vendor (per [ADR-0018](../design/adr/0018-provider-abstraction.md)):

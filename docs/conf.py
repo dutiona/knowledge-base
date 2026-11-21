@@ -22,6 +22,8 @@ exclude_patterns = [
     "Thumbs.db",
     ".DS_Store",
     "insights",
+    # A branch's implementation plan, archived to an issue before merge.
+    "plans",
 ]
 
 html_theme = "sphinx_rtd_theme"

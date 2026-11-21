@@ -168,7 +168,7 @@ four), so the store records the exact ADR-0015 identity. A database from before 
 
 Maintenance commands run through the same image as the unit, with the same user namespace, both volumes (the named
 `db` volume, never the database file alone) and, for a command that embeds, the same declaration, with the unit
-stopped. The [store lock](../../README.md#the-store-lock) enforces the stop: a writing command run while the unit
+stopped. The [store lock](https://github.com/dutiona/knowledge-base/blob/master/README.md#the-store-lock) enforces the stop: a writing command run while the unit
 serves, through `podman run` or `podman exec`, exits 1 naming the lock file, and a unit started while a command runs
 exits 78 (set `RestartPreventExitStatus=78` so it stays down; start it once the command has finished). Read-only
 commands (`status`, `schema`, `migrate --check`, `redact`) run against the live unit. The lock file,
