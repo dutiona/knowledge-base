@@ -677,3 +677,97 @@ def test_cli_rebind_repairs_drifted_config_identity(tmp_path):
     assert conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()["value"] == "bge-m3"
     conn.close()
     _plain_open(db_path)
+
+
+# --- #596: the store lock ---
+
+#: Every subcommand, classified: a writing one holds the store lock, a read-only one takes none.
+_WRITING = {
+    "ingest": ["ingest", "{doc}"],
+    "reingest": ["reingest", "{doc}"],
+    "ingest-url": ["ingest-url", "https://docs.example.test/"],
+    "re-embed": ["re-embed"],
+    "rebind": ["rebind"],
+    "migrate": ["migrate"],
+    "redact": ["redact", "--rewrite"],
+}
+_READ_ONLY = {
+    "status": ["status"],
+    "schema": ["schema"],
+    "migrate": ["migrate", "--check"],
+    "redact": ["redact"],
+}
+
+
+def _exit_of(argv: list[str]) -> int | str | None:
+    try:
+        main(argv)
+    except SystemExit as exc:
+        return exc.code
+    return 0
+
+
+def _store(tmp_path):
+    """A current store with one ingested document; returns its path and the document."""
+    conn, db = _setup(tmp_path)
+    doc = tmp_path / "doc.md"
+    doc.write_text("# Doc\n\nSome text to keep.\n")
+    from knowledge_base.ingest import ingest_file
+
+    with patch("knowledge_base.ingest.embed", _fake_embed), patch("knowledge_base.folder_summaries.embed", _fake_embed):
+        ingest_file(conn, doc)
+    conn.close()
+    return db, doc
+
+
+def _dump(db) -> list[str]:
+    conn = get_connection(db)
+    try:
+        return list(conn.iterdump())
+    finally:
+        conn.close()
+
+
+def test_every_command_is_classified():
+    choices = next(a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)).choices
+    assert set(choices) == set(_WRITING) | set(_READ_ONLY)
+
+
+@pytest.mark.parametrize("argv", list(_WRITING.values()), ids=list(_WRITING))
+def test_a_writing_command_refuses_while_the_store_is_held(tmp_path, capsys, http_requests, argv):
+    from knowledge_base.store_lock import hold, lock_path
+
+    db, doc = _store(tmp_path)
+    before = _dump(db)
+    with hold(db):
+        assert _exit_of(["--db", str(db), *(a.format(doc=doc) for a in argv)]) == 1
+    error = json.loads(capsys.readouterr().err)["error"]
+    assert str(lock_path(db)) in error
+    assert http_requests == []
+    assert _dump(db) == before
+
+
+@pytest.mark.parametrize("argv", list(_READ_ONLY.values()), ids=list(_READ_ONLY))
+def test_a_read_only_command_runs_while_the_store_is_held(tmp_path, argv):
+    from knowledge_base.store_lock import hold
+
+    db, _ = _store(tmp_path)
+    with hold(db):
+        assert _exit_of(["--db", str(db), "--quiet", *argv]) == 0
+
+
+@pytest.mark.parametrize("argv", [["status"], ["redact"]], ids=["status", "redact"])
+def test_a_read_only_command_never_initializes_a_store(tmp_path, capsys, argv):
+    import sqlite3
+
+    missing = tmp_path / "missing.db"
+    assert _exit_of(["--db", str(missing), *argv]) == 1
+    assert "no database at" in capsys.readouterr().err
+    assert not missing.exists()
+
+    legacy = tmp_path / "legacy.db"
+    sqlite3.connect(legacy).executescript("CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT);").close()
+    before = legacy.read_bytes()
+    assert _exit_of(["--db", str(legacy), *argv]) == 1
+    assert "migrate" in capsys.readouterr().err
+    assert legacy.read_bytes() == before

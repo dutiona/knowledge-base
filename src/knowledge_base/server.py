@@ -7,6 +7,7 @@ import argparse
 import ipaddress
 import sys
 from collections.abc import Sequence
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -14,9 +15,11 @@ import uvicorn
 from fastmcp import FastMCP
 
 from .auth import CallingMachine, RequireMachine, TokenTable, log_to_stderr
-from .db import open_declared_db
+from .db import open_declared_db, resolve_db_path
 from .exceptions import KnowledgeBaseError, ValidationError
-from .settings import BROWSER_VAR, VISION_VAR, switch_on
+from .jobs import shutdown_worker
+from .settings import BROWSER_VAR, VISION_VAR, check_environment, switch_on
+from .store_lock import hold
 
 from .routes.embeddings import mcp as _embeddings
 from .routes.extraction import mcp as _extraction
@@ -211,21 +214,28 @@ def main(argv: Sequence[str] | None = None) -> None:
     # The startup gate (#569), after the token file so a bad file never touches the database: serve only
     # with an explicit embedding declaration the database agrees with. 78 is EX_CONFIG, so a unit can set
     # RestartPreventExitStatus=78 instead of restart-looping on a configuration error.
-    try:
-        app = build_http_app(TokenTable.load(token_file)) if token_file is not None else None
-        open_declared_db().close()
-    except KnowledgeBaseError as exc:
-        print(f"knowledge-base: {exc}", file=sys.stderr)
-        sys.exit(78)
-    if app is None:
-        mcp.run(transport="stdio")
-        return
-    host, port = args.http
-    log_to_stderr()
-    http = uvicorn.Server(uvicorn_config(app, host, port))
-    http.run()
-    if not http.started:  # run() returns normally after a failed startup; uvicorn's own CLI exits 3 here
-        sys.exit(1)
+    with ExitStack() as held:
+        try:
+            app = build_http_app(TokenTable.load(token_file)) if token_file is not None else None
+            check_environment()  # before the lock, so a misconfigured start leaves no lock file
+            db = resolve_db_path()
+            # The store lock (#596) for the process's life, taken before the gate reads the store. Exits run LIFO:
+            # the job worker stops before the lock is released.
+            held.enter_context(hold(db))
+            held.callback(shutdown_worker)
+            open_declared_db(db).close()
+        except KnowledgeBaseError as exc:
+            print(f"knowledge-base: {exc}", file=sys.stderr)
+            sys.exit(78)
+        if app is None:
+            mcp.run(transport="stdio")
+            return
+        host, port = args.http
+        log_to_stderr()
+        http = uvicorn.Server(uvicorn_config(app, host, port))
+        http.run()
+        if not http.started:  # run() returns normally after a failed startup; uvicorn's own CLI exits 3 here
+            sys.exit(1)
 
 
 if __name__ == "__main__":

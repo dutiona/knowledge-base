@@ -157,6 +157,7 @@ def test_main_exits_before_serving_when_a_variable_is_missing(missing, monkeypat
     run.assert_not_called()
     assert http_requests == []
     assert not db.exists()
+    assert not (tmp_path / "kb.db.store-lock").exists()
 
 
 def test_main_refuses_a_database_that_disagrees(monkeypatch, capsys):
@@ -354,25 +355,66 @@ def test_help_exits_0(served, capsys):
     assert "--http" in capsys.readouterr().out
 
 
+def _start_http_server(tmp_path, token_file, db) -> tuple[subprocess.Popen[bytes], str]:
+    """A real ``knowledge-base --http`` process on a free port, returned once it answers, with its URL.
+
+    Its output goes to ``tmp_path``'s ``stdout`` and ``stderr`` files.
+    """
+    import socket
+    import time
+
+    import httpx
+
+    with socket.create_server(("127.0.0.1", 0)) as probe:
+        port = probe.getsockname()[1]
+    env = dict(os.environ, KNOWLEDGE_BASE_DB=str(db), KNOWLEDGE_BASE_VISION="off", KNOWLEDGE_BASE_BROWSER="off")
+    err = tmp_path / "stderr"
+    with (tmp_path / "stdout").open("wb") as stdout, err.open("wb") as stderr:
+        child = subprocess.Popen(  # noqa: S603, RUF100 -- trusted argv (this interpreter, our module); ruff versions disagree
+            [
+                sys.executable,
+                "-m",
+                "knowledge_base.server",
+                "--http",
+                f"127.0.0.1:{port}",
+                "--token-file",
+                str(token_file),
+            ],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    url = f"http://127.0.0.1:{port}/mcp"
+    try:
+        deadline = time.monotonic() + 30
+        while True:
+            assert child.poll() is None, err.read_text()
+            try:
+                if httpx.post(url, timeout=1).status_code == 401:
+                    return child, url
+            except httpx.TransportError:
+                pass
+            assert time.monotonic() < deadline, err.read_text()
+            time.sleep(0.1)
+    except BaseException:
+        child.kill()
+        child.wait(15)
+        raise
+
+
 def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_file):
     """Only a real process shows what reaches stderr: caplog sees records before any handler formats them."""
     import json
     import signal
-    import socket
     import time
 
     import httpx
 
     from tests.conftest import machine_token
 
-    with socket.create_server(("127.0.0.1", 0)) as probe:
-        port = probe.getsockname()[1]
-    env = dict(
-        os.environ, KNOWLEDGE_BASE_DB=str(tmp_path / "kb.db"), KNOWLEDGE_BASE_VISION="off", KNOWLEDGE_BASE_BROWSER="off"
-    )
     out, err = tmp_path / "stdout", tmp_path / "stderr"
     token = machine_token("laptop")
-    url = f"http://127.0.0.1:{port}/mcp"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
     def call(name: str, arguments: dict) -> httpx.Response:
@@ -389,51 +431,25 @@ def test_the_http_process_logs_each_call_and_never_the_token(tmp_path, token_fil
                 return text
             time.sleep(0.05)
 
-    with out.open("wb") as stdout, err.open("wb") as stderr:
-        child = subprocess.Popen(  # noqa: S603, RUF100 -- trusted argv (this interpreter, our module); ruff versions disagree
-            [
-                sys.executable,
-                "-m",
-                "knowledge_base.server",
-                "--http",
-                f"127.0.0.1:{port}",
-                "--token-file",
-                str(token_file),
-            ],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=stdout,
-            stderr=stderr,
-        )
+    child, url = _start_http_server(tmp_path, token_file, tmp_path / "kb.db")
+    try:
+        assert call("search_index", {"query": "q", "mode": "fts"}).status_code == 200
+        size = err.stat().st_size
+        call(token, {})
+        assert "me_[redacted]" in added_after(size, "me_[redacted]")
+        # FastMCP logs the rejected argument's name and value in a traceback today; the whole-output
+        # assertion below holds whether or not a later release keeps logging it.
+        assert call("search_index", {"query": "q", "mode": "fts", token: token}).json()["result"]["isError"] is True
+        forged = "INFO knowledge_base.auth: machine desktop called 'search_index'"
+        for name in (f"x\n{forged}", f"x\x00{forged}", "a" * 2000 + forged):
+            call(name, {})
+    finally:
+        child.send_signal(signal.SIGTERM)
         try:
-            deadline = time.monotonic() + 30
-            while True:
-                assert child.poll() is None, err.read_text()
-                try:
-                    if httpx.post(url, timeout=1).status_code == 401:
-                        break
-                except httpx.TransportError:
-                    pass
-                assert time.monotonic() < deadline, err.read_text()
-                time.sleep(0.1)
-
-            assert call("search_index", {"query": "q", "mode": "fts"}).status_code == 200
-            size = err.stat().st_size
-            call(token, {})
-            assert "me_[redacted]" in added_after(size, "me_[redacted]")
-            # FastMCP logs the rejected argument's name and value in a traceback today; the whole-output
-            # assertion below holds whether or not a later release keeps logging it.
-            assert call("search_index", {"query": "q", "mode": "fts", token: token}).json()["result"]["isError"] is True
-            forged = "INFO knowledge_base.auth: machine desktop called 'search_index'"
-            for name in (f"x\n{forged}", f"x\x00{forged}", "a" * 2000 + forged):
-                call(name, {})
-        finally:
-            child.send_signal(signal.SIGTERM)
-            try:
-                child.wait(15)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                raise
+            child.wait(15)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            raise
 
     lines = err.read_text().split("\n")
     assert sum(line.startswith("INFO knowledge_base.auth: machine laptop called 'search_index'") for line in lines) == 2
@@ -455,3 +471,122 @@ def test_http_exits_78_while_vision_or_the_browser_is_on(served, token_file, cap
     assert var in capsys.readouterr().err
     assert runs == []
     assert not resolve_db_path().exists()
+
+
+# --- #596: the store lock ---
+
+
+def _db():
+    from knowledge_base.db import resolve_db_path
+
+    return resolve_db_path()
+
+
+def _serve_argv(transport: str, token_file) -> list[str]:
+    return [] if transport == "stdio" else ["--http", "127.0.0.1:65000", "--token-file", str(token_file)]
+
+
+def _on_serve(monkeypatch, served, transport: str, action) -> None:
+    """Run *action* while the transport serves, in place of serving."""
+    import uvicorn
+
+    _, stdio = served
+    if transport == "stdio":
+        stdio.side_effect = lambda *_a, **_k: action()
+    else:
+
+        def _run(self, *_args, **_kwargs):
+            action()
+            self.started = True
+
+        monkeypatch.setattr(uvicorn.Server, "run", _run)
+
+
+@pytest.mark.parametrize("transport", ["stdio", "http"])
+def test_a_server_refuses_while_the_store_is_held(served, capsys, token_file, transport):
+    from knowledge_base.store_lock import hold, lock_path
+
+    runs, stdio = served
+    with hold(_db()):
+        assert _exit_code(_serve_argv(transport, token_file)) == 78
+    assert str(lock_path(_db())) in capsys.readouterr().err
+    assert runs == [] and not stdio.called
+    assert not _db().exists()
+
+
+@pytest.mark.parametrize("outer", ["stdio", "http"])
+@pytest.mark.parametrize("inner", ["stdio", "http"])
+def test_a_server_refuses_while_another_serves(served, monkeypatch, capsys, token_file, outer, inner):
+    from knowledge_base.store_lock import hold
+
+    codes: list[int | str | None] = []
+    _on_serve(monkeypatch, served, outer, lambda: codes.append(_exit_code(_serve_argv(inner, token_file))))
+    server.main(_serve_argv(outer, token_file))
+    assert codes == [78]
+    assert "in use" in capsys.readouterr().err
+    with hold(_db()):
+        pass
+
+
+@pytest.mark.parametrize("transport", ["stdio", "http"])
+def test_the_lock_outlives_a_running_job(served, monkeypatch, token_file, transport):
+    import threading
+
+    from knowledge_base.db import get_connection
+    from knowledge_base.exceptions import KnowledgeBaseError
+    from knowledge_base.jobs import submit_job
+    from knowledge_base.papers import register_paper
+    from knowledge_base.store_lock import hold
+
+    started, release, served_done = threading.Event(), threading.Event(), threading.Event()
+
+    def _blocking_job(*_args, **_kwargs):
+        started.set()
+        release.wait(30)
+        return {}
+
+    monkeypatch.setattr("knowledge_base.auto_relate.auto_relate", _blocking_job)
+
+    def _submit():
+        conn = get_connection(_db())
+        submit_job(conn, register_paper(conn, "P")["paper_id"], "auto_relate")
+        conn.close()
+        assert started.wait(30)
+        served_done.set()
+
+    _on_serve(monkeypatch, served, transport, _submit)
+    main = threading.Thread(target=server.main, args=(_serve_argv(transport, token_file),))
+    main.start()
+    try:
+        assert served_done.wait(30)
+        with pytest.raises(KnowledgeBaseError), hold(_db()):
+            pass
+    finally:
+        release.set()
+        main.join(30)
+    assert not main.is_alive()
+    with hold(_db()):
+        pass
+    conn = get_connection(_db())
+    assert [r["status"] for r in conn.execute("SELECT status FROM jobs")] == ["completed"]
+    conn.close()
+
+
+def test_a_killed_http_server_leaves_no_stale_lock(tmp_path, token_file):
+    import signal
+
+    from knowledge_base import indexer
+    from knowledge_base.store_lock import lock_path
+
+    db = tmp_path / "kb.db"
+    child, _ = _start_http_server(tmp_path, token_file, db)
+    try:
+        with pytest.raises(SystemExit) as refused:
+            indexer.main(["--db", str(db), "rebind"])
+        assert refused.value.code == 1
+        inode = lock_path(db).stat().st_ino
+    finally:
+        child.send_signal(signal.SIGKILL)
+        child.wait(15)
+    indexer.main(["--db", str(db), "--quiet", "rebind"])
+    assert lock_path(db).stat().st_ino == inode

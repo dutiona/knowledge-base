@@ -36,6 +36,7 @@ relied on and a CI status is never evidence.
 src/knowledge_base/
   server.py        # entry point: stdio, or stateless HTTP behind the gate with --http
   auth.py          # machine tokens: the token-hash file, the Bearer gate, the per-call log
+  store_lock.py    # the store lock: one writer process per database (#596)
   db.py            # SQLite schema, migrations, connection helpers
   ingest.py        # PDF/code/web/markdown ingestion pipeline
   redact.py        # Secret redaction (memory-engine's rules); redact_store.py: the redact command

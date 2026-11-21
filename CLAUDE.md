@@ -78,6 +78,7 @@ Read these when the task touches the corresponding area:
 | Paper metadata & relationships                                  | `src/knowledge_base/papers.py`            | `docs/usage/relationships-conclusions.md` |
 | BibTeX export & sync                                            | `src/knowledge_base/bibtex.py`            | `docs/usage/bibtex-export.md`             |
 | Background jobs                                                 | `src/knowledge_base/jobs.py`              | `docs/design/architecture-overview.md`    |
+| Store lock (one writer process per database)                    | `src/knowledge_base/store_lock.py`        | `README.md`                               |
 | Folder context boosting                                         | `src/knowledge_base/folder_summaries.py`  | `docs/usage/searching.md`                 |
 | Embedding providers (openai_compat/ollama/onnx; ProviderConfig) | `src/knowledge_base/embeddings.py`        | `docs/usage/ingesting-documents.md`       |
 | Embedding model swap                                            | `src/knowledge_base/embed_swap.py`        | `docs/design/architecture-overview.md`    |

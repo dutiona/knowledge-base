@@ -153,10 +153,10 @@ that user, with `--userns keep-id:uid=10001,gid=10001` (`UserNS=` in a quadlet).
 (`RunInit=true` in a quadlet): as PID 1, Python ignores `SIGTERM`, so without an init process `podman stop` waits out
 its grace period and then kills the server. The state lives on two volumes:
 
-| Variable                  | Volume                         | Holds                               |
-| ------------------------- | ------------------------------ | ----------------------------------- |
-| `KNOWLEDGE_BASE_DB`       | `/var/lib/knowledge-base/db`   | `knowledge.db` and its WAL files    |
-| `KNOWLEDGE_BASE_DATA_DIR` | `/var/lib/knowledge-base/data` | figures and other on-disk artifacts |
+| Variable                  | Volume                         | Holds                                            |
+| ------------------------- | ------------------------------ | ------------------------------------------------ |
+| `KNOWLEDGE_BASE_DB`       | `/var/lib/knowledge-base/db`   | `knowledge.db`, its WAL files and its store lock |
+| `KNOWLEDGE_BASE_DATA_DIR` | `/var/lib/knowledge-base/data` | figures and other on-disk artifacts              |
 
 The image carries no embedding declaration: pass the `KNOWLEDGE_BASE_EMBED_*` variables (and any
 `KNOWLEDGE_BASE_{VISION,BROWSER,LLM}` switch) with `--env` (`Environment=` in a quadlet), and the key
@@ -165,6 +165,15 @@ exits 78 at start (see the README's Configuration section). A llama.cpp embedder
 served artifact too (`KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256`, `_POOLING`, `_NORMALIZATION`, `_MAX_INPUT_TOKENS`, all
 four), so the store records the exact ADR-0015 identity. A database from before schema v2 needs
 `knowledge-base-ingest migrate` with the unit stopped before the new image starts.
+
+Maintenance commands run through the same image as the unit, with the same user namespace, both volumes (the named
+`db` volume, never the database file alone) and, for a command that embeds, the same declaration, with the unit
+stopped. The [store lock](../../README.md#the-store-lock) enforces the stop: a writing command run while the unit
+serves, through `podman run` or `podman exec`, exits 1 naming the lock file, and a unit started while a command runs
+exits 78 (set `RestartPreventExitStatus=78` so it stays down; start it once the command has finished). Read-only
+commands (`status`, `schema`, `migrate --check`, `redact`) run against the live unit. The lock file,
+`knowledge.db.store-lock`, stays on the `db` volume: never delete it; after a crash or `podman kill` there is nothing
+to clean.
 
 Also set `KNOWLEDGE_BASE_HOST_ADDRESSES` to the host's public IPv4 address and its IPv6 prefix (for example
 `203.0.113.7,2001:db8:7::/64`). They are global, so the SSRF floor would otherwise accept them, yet a container

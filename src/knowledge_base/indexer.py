@@ -13,6 +13,7 @@ import logging
 import sqlite3
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 import httpx
@@ -20,6 +21,8 @@ import httpx
 from . import migrate as _mig
 from .db import get_connection, init_schema, open_declared_db, resolve_db_path
 from .exceptions import KnowledgeBaseError
+from .jobs import shutdown_worker
+from .store_lock import hold
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,28 @@ def _drain_jobs(
             return
         time.sleep(1.0)
     logger.warning("Job drain timed out after %.0fs", timeout)
+
+
+def _read_only(args: argparse.Namespace) -> bool:
+    """The commands that never write the store: they take no store lock and run beside a server (#596)."""
+    if args.command == "migrate":
+        return args.check
+    if args.command == "redact":
+        return not args.rewrite
+    return args.command in ("status", "schema")
+
+
+def _require_current_store(db: Path) -> None:
+    """Refuse a store a read-only command would otherwise create, bootstrap or migrate through ``init_schema``."""
+    if not db.is_file():
+        raise KnowledgeBaseError(f"no database at {db}")
+    live, current = _mig.peek_schema_version(db), _mig.CURRENT_SCHEMA_VERSION
+    if live is None or live < current:
+        raise KnowledgeBaseError(
+            f"{db} is at schema {live or 'none'}, this build needs {current}: run knowledge-base-ingest migrate"
+        )
+    if live > current:
+        raise KnowledgeBaseError(f"{db} is at schema {live}, newer than this build's {current}")
 
 
 def _print(data: object, *, quiet: bool = False) -> None:
@@ -161,6 +186,7 @@ def cmd_rebind(args: argparse.Namespace) -> None:
 def cmd_status(args: argparse.Namespace) -> None:
     from .embed_swap import get_embed_config
 
+    _require_current_store(args.db)
     conn = get_connection(args.db)  # read-only report: no declaration needed
     init_schema(conn)
 
@@ -195,6 +221,7 @@ def cmd_redact(args: argparse.Namespace) -> None:
     if args.rewrite:
         conn = open_declared_db(args.db)  # it re-embeds: the declared embedder, as re-embed
     else:
+        _require_current_store(args.db)
         conn = get_connection(args.db)  # the report only reads: no declaration needed
         init_schema(conn)
     try:
@@ -395,7 +422,12 @@ def main(argv: list[str] | None = None) -> None:
     }
 
     try:
-        dispatch[args.command](args)
+        # Every writing command holds the store lock (#596); the job worker stops before it is released.
+        with nullcontext() if _read_only(args) else hold(args.db):
+            try:
+                dispatch[args.command](args)
+            finally:
+                shutdown_worker()
     except (KnowledgeBaseError, ValueError) as exc:
         _print_error({"error": str(exc)})
         sys.exit(1)

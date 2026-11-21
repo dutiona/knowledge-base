@@ -4,8 +4,8 @@ Complete reference for the knowledge-base MCP tools: 47 tools over stdio, 3 over
 
 ## Surfaces
 
-- **stdio** (`knowledge-base`) serves every tool: the local and maintenance surface. Against a database the HTTP
-  server uses, run it only with that server stopped.
+- **stdio** (`knowledge-base`) serves every tool: the local and maintenance surface. It refuses to start (exit 78)
+  while another KB process, the HTTP server included, holds the database's store lock.
 - **HTTP** (`knowledge-base --http`) serves only `search_index`, `ingest_text` and `ingest_url`, the same tools with
   the same names and schemas. No HTTP tool takes or writes a server path, configures the server, or removes
   or replaces a document. The server refuses to start while `KNOWLEDGE_BASE_VISION` or `KNOWLEDGE_BASE_BROWSER` is
