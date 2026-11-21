@@ -114,3 +114,45 @@ def test_a_refusal_names_the_holder(tmp_path):
         pass
     assert f"in use by b (pid {os.getpid()}, since " in str(refused.value)
     assert "knowledge-base --http" not in str(refused.value)
+
+
+def test_a_lock_directory_that_cannot_be_made_is_a_clear_error(tmp_path):
+    (tmp_path / "file").write_text("not a directory")
+    with pytest.raises(KnowledgeBaseError, match="cannot lock the store"), hold(tmp_path / "file" / "kb.db", "test"):
+        pass
+
+
+def test_a_holder_record_that_cannot_be_written_is_a_clear_error_and_frees_the_lock(tmp_path, monkeypatch):
+    db = tmp_path / "kb.db"
+
+    def _full(*_args):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "pwrite", _full)
+    with pytest.raises(KnowledgeBaseError, match="No space left on device"), hold(db, "test"):
+        pass
+    monkeypatch.undo()
+    with hold(db, "test"):
+        pass
+
+
+def test_a_new_holder_never_leaves_the_record_empty(tmp_path, monkeypatch):
+    """Written before it is trimmed, the record is never empty between the lock and the write (#578)."""
+    db = tmp_path / "kb.db"
+    with hold(db, "a-much-longer-first-holder-name"):
+        pass
+    seen: list[bytes] = []
+    real = os.ftruncate
+
+    def _spy(fd, length):
+        seen.append(lock_file_bytes(db))
+        real(fd, length)
+
+    monkeypatch.setattr(os, "ftruncate", _spy)
+    with hold(db, "b"):
+        assert lock_file_bytes(db).startswith(b"b (pid ")
+    assert seen and seen[0].startswith(b"b (pid ")
+
+
+def lock_file_bytes(db) -> bytes:
+    return _lock_file(db).read_bytes()

@@ -20,6 +20,14 @@ from .exceptions import KnowledgeBaseError
 __all__ = ["hold", "lock_path"]
 
 
+def _recorded_holder(fd: int) -> str:
+    """The holder's line, or nothing when it cannot be read: a refusal never fails for want of a name."""
+    try:
+        return os.pread(fd, 512, 0).decode(errors="replace").partition("\n")[0].strip()
+    except OSError:
+        return ""
+
+
 def lock_path(db: Path) -> Path:
     """``db``, symlinks resolved so every name of one store finds one lock, plus ``.store-lock``.
 
@@ -34,11 +42,12 @@ def hold(db: Path, holder: str) -> Iterator[None]:
 
     *holder* names this process in a refusal another process gets (#578): a role such as ``knowledge-base --http``,
     never an argument value, which can carry a secret. The line it writes is only ever quoted: whether the store is
-    held is the kernel's answer alone, so it is no PID file, and the next holder overwrites a dead one's line.
+    held is the kernel's answer alone, so it is no PID file, and the next holder overwrites a dead one's line. In the
+    instant between taking the lock and writing its line, a refusal still names the previous holder.
     """
     lock = lock_path(db)
-    lock.parent.mkdir(parents=True, exist_ok=True)
     try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
         # Never truncated at open and never unlinked: unlinking a held lock file hands the next process a fresh inode
         # and a second "exclusive" lock. The descriptor is not inheritable (PEP 446), so a child process never keeps
         # a dead holder's lock.
@@ -51,16 +60,20 @@ def hold(db: Path, holder: str) -> Iterator[None]:
             # the file.
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            line = os.pread(fd, 512, 0).decode(errors="replace").partition("\n")[0].strip()
             raise KnowledgeBaseError(
-                f"the store is in use by {line or 'another process'}: {lock} is locked; stop it or let it finish, "
-                "then rerun"
+                f"the store is in use by {_recorded_holder(fd) or 'another process'}: {lock} is locked; "
+                "stop it or let it finish, then rerun"
             ) from exc
         except OSError as exc:
             raise KnowledgeBaseError(f"cannot lock the store {lock}: {exc.strerror}") from exc
         since = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        os.ftruncate(fd, 0)
-        os.pwrite(fd, f"{holder} (pid {os.getpid()}, since {since})\n".encode(), 0)
+        record = f"{holder} (pid {os.getpid()}, since {since})\n".encode()
+        try:
+            # Written, then trimmed: a contender reading in between sees this record or the last one, never nothing.
+            os.pwrite(fd, record, 0)
+            os.ftruncate(fd, len(record))
+        except OSError as exc:
+            raise KnowledgeBaseError(f"cannot record the store lock's holder in {lock}: {exc.strerror}") from exc
         yield
     finally:
         os.close(fd)
