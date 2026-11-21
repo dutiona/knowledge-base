@@ -70,10 +70,12 @@ def hold(db: Path, holder: str) -> Iterator[None]:
         record = f"{holder} (pid {os.getpid()}, since {since})\n".encode()
         try:
             # Written, then trimmed: a contender reading in between sees this record or the last one, never nothing.
-            os.pwrite(fd, record, 0)
+            written = os.pwrite(fd, record, 0)
             os.ftruncate(fd, len(record))
         except OSError as exc:
             raise KnowledgeBaseError(f"cannot record the store lock's holder in {lock}: {exc.strerror}") from exc
+        if written != len(record):
+            raise KnowledgeBaseError(f"cannot record the store lock's holder in {lock}: short write")
         yield
     finally:
         os.close(fd)

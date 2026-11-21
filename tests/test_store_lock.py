@@ -156,3 +156,13 @@ def test_a_new_holder_never_leaves_the_record_empty(tmp_path, monkeypatch):
 
 def lock_file_bytes(db) -> bytes:
     return _lock_file(db).read_bytes()
+
+
+def test_a_short_holder_record_write_is_a_clear_error(tmp_path, monkeypatch):
+    real = os.pwrite
+    monkeypatch.setattr(os, "pwrite", lambda fd, data, offset: real(fd, data[:3], offset))
+    with (
+        pytest.raises(KnowledgeBaseError, match="cannot record the store lock's holder"),
+        hold(tmp_path / "kb.db", "t"),
+    ):
+        pass
