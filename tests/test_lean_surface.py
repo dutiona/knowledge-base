@@ -419,4 +419,4 @@ def test_a_domain_error_reads_as_its_message(declared_db, monkeypatch, hub, tool
     with patch(target, side_effect=NotFoundError("marker refusal")):
         result = asyncio.run(_run())
     assert result.is_error
-    assert result.content[0].text == "marker refusal"
+    assert [getattr(c, "text", None) for c in result.content] == ["marker refusal"]
