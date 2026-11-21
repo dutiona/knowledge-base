@@ -95,12 +95,6 @@ def declared_provider_config(conn: sqlite3.Connection, space: Mapping[str, objec
 # ---------------------------------------------------------------------------
 
 
-def _has_chunk_strategy_column(conn: sqlite3.Connection) -> bool:
-    """Check if the chunks table has a chunk_strategy column (#100)."""
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
-    return "chunk_strategy" in columns
-
-
 def create_space(
     conn: sqlite3.Connection,
     name: str,
@@ -139,13 +133,7 @@ def create_space(
     tbl = space_table_name(name)
 
     # Count target chunks for progress tracking
-    if _has_chunk_strategy_column(conn):
-        total = conn.execute(
-            "SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?",
-            (chunk_strategy,),
-        ).fetchone()[0]
-    else:
-        total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    total = conn.execute("SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?", (chunk_strategy,)).fetchone()[0]
 
     conn.execute(
         "INSERT INTO embed_spaces"
@@ -193,24 +181,13 @@ def backfill_space(
 
     embed_provider = get_provider(cfg=declared_provider_config(conn, dict(space)))
 
-    # Build chunk selection query — strategy-aware
-    has_strategy = _has_chunk_strategy_column(conn)
-    if has_strategy:
-        base_query = (
-            "SELECT c.id, c.content FROM chunks c "
-            "LEFT JOIN [{tbl}] v ON c.id = v.chunk_id "
-            "WHERE c.chunk_strategy = ? AND c.id > ? AND v.chunk_id IS NULL "
-            "ORDER BY c.id LIMIT ?"
-        ).replace("{tbl}", tbl)
-        base_params_prefix = [chunk_strategy]
-    else:
-        base_query = (
-            "SELECT c.id, c.content FROM chunks c "
-            "LEFT JOIN [{tbl}] v ON c.id = v.chunk_id "
-            "WHERE c.id > ? AND v.chunk_id IS NULL "
-            "ORDER BY c.id LIMIT ?"
-        ).replace("{tbl}", tbl)
-        base_params_prefix = []
+    base_query = (
+        "SELECT c.id, c.content FROM chunks c "
+        "LEFT JOIN [{tbl}] v ON c.id = v.chunk_id "
+        "WHERE c.chunk_strategy = ? AND c.id > ? AND v.chunk_id IS NULL "
+        "ORDER BY c.id LIMIT ?"
+    ).replace("{tbl}", tbl)
+    base_params_prefix = [chunk_strategy]
 
     processed = 0
     last_id = 0
@@ -355,13 +332,9 @@ def _check_promotable(conn: sqlite3.Connection, space: sqlite3.Row) -> str | Non
     # Block promotion of incompletely backfilled spaces.
     # Recount live corpus to catch chunks ingested after backfill.
     count = space["chunk_count"] or 0
-    if _has_chunk_strategy_column(conn):
-        live_total = conn.execute(
-            "SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?",
-            (space["chunk_strategy"],),
-        ).fetchone()[0]
-    else:
-        live_total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    live_total = conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?", (space["chunk_strategy"],)
+    ).fetchone()[0]
     if live_total > 0 and count < live_total:
         raise ValueError(
             f"Cannot promote space {space_name!r}: only {count} of "
@@ -372,14 +345,7 @@ def _check_promotable(conn: sqlite3.Connection, space: sqlite3.Row) -> str | Non
     # doesn't match the current corpus (chunks ingested after deprecation).
     stale_warning = None
     if space["status"] == "deprecated":
-        has_strategy = _has_chunk_strategy_column(conn)
-        if has_strategy:
-            current_total = conn.execute(
-                "SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?",
-                (space["chunk_strategy"],),
-            ).fetchone()[0]
-        else:
-            current_total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        current_total = live_total
         if current_total != count:
             stale_warning = (
                 f"Space {space_name!r} has {count} embeddings but corpus now "

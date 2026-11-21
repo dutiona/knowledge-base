@@ -65,7 +65,7 @@ populating  -->  active  -->  deprecated  -->  (cleaned up)
 
 This creates the `embed_spaces` registry entry and the backing `chunks_vec_bge_m3_1024` virtual table. The space starts in `populating` status. It records the shape given here (model, dim, `matryoshka_base_dim`, and an optional `query_instruction`: omitted, the model's default; `""`, none) and the declared endpoint's provider and served artifact, since that endpoint fills it. A space of another model than the declared one is accepted only when the endpoint serves the model a request names: `ollama`, or `openai` at exactly `https://api.openai.com`, with no served artifact declared. Under `llama.cpp`, `onnx` or `openai_compat`, or any declared served artifact, it is refused with the differing field. Vectors are stored as `float32`.
 
-The `chunk_strategy` parameter controls which chunks get embedded. When the `chunk_strategy` column exists on the `chunks` table (from #100), only chunks matching the specified strategy are selected. Otherwise all chunks are embedded.
+The `chunk_strategy` parameter controls which chunks get embedded: only chunks of that strategy are selected.
 
 #### 2. Backfill embeddings
 
@@ -124,13 +124,11 @@ Returns all spaces with their status, model, dimension, chunk strategy, and back
 
 ### Interaction with chunk_strategy (#100)
 
-When `chunks.chunk_strategy` exists, each embedding space is scoped to a single strategy (`mechanical` or `semantic`). This means:
+Each embedding space is scoped to a single strategy (`mechanical` or `semantic`). This means:
 
 - A `mechanical` space only embeds chunks produced by fixed-size or AST-aware chunking.
 - A `semantic` space only embeds chunks produced by semantic boundary detection.
 - You can have two active-quality spaces (one per strategy) by promoting one and keeping the other in `populating` for comparison, though only one can be `active` at a time.
-
-If the `chunk_strategy` column does not exist (pre-#100 databases), all chunks are embedded regardless of the strategy parameter.
 
 ### Re-embedding the active identity
 
