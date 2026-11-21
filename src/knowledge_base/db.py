@@ -750,22 +750,22 @@ def delete_chunk_vecs(
         )
 
 
-def delete_chunks_cascade(
-    conn: sqlite3.Connection,
-    chunk_ids: list[int],
-    table_name: str | None = None,
-) -> int:
-    """Delete chunks and their associated vec embeddings.
+def delete_chunks_cascade(conn: sqlite3.Connection, chunk_ids: list[int]) -> int:
+    """Delete chunks and their vectors in every embedding space.
 
-    Handles the two-step cascade: vec rows first (no trigger), then chunk
-    rows (whose DELETE trigger cleans up FTS). Callers are responsible for
-    any FK cleanup (papers, relationships, conclusions) before calling this.
+    Handles the two-step cascade: vec rows first (no trigger), in every space's table so no populating or deprecated
+    space keeps a vector of a chunk that is gone, then chunk rows (whose DELETE trigger cleans up FTS). Callers are
+    responsible for any FK cleanup (papers, relationships, conclusions) before calling this.
 
     Returns the number of chunks deleted.
     """
     if not chunk_ids:
         return 0
-    delete_chunk_vecs(conn, chunk_ids, table_name=table_name)
+    # A space whose table is gone (a cleanup interrupted between its two steps) has no vector to delete.
+    for (table,) in conn.execute(
+        "SELECT e.table_name FROM embed_spaces e JOIN sqlite_master m ON m.name = e.table_name"
+    ).fetchall():
+        delete_chunk_vecs(conn, chunk_ids, table_name=table)
     _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", chunk_ids)
     return len(chunk_ids)
 

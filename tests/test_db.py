@@ -1004,6 +1004,29 @@ def test_char_delete_chunks_cascade_removes_chunk_vec_and_fts(tmp_path):
     assert len(post) == 0
 
 
+def test_a_deleted_chunk_leaves_every_space(tmp_path):
+    conn = get_connection(tmp_path / "test.db")
+    init_schema(conn)
+    cid = _char_add_chunk(conn, "a chunk in two spaces", 0)
+    keep = _char_add_chunk(conn, "a chunk that stays", 1)
+    insert_chunk_vec(conn, cid, [0.1] * TEST_EMBED_DIM)
+    insert_chunk_vec(conn, keep, [0.1] * TEST_EMBED_DIM)
+    table = create_space(conn, "other", TEST_EMBED_MODEL, TEST_EMBED_DIM)["table_name"]
+    for chunk in (cid, keep):
+        insert_chunk_vec(conn, chunk, [0.1] * TEST_EMBED_DIM, table_name=table)
+    conn.execute("UPDATE embed_spaces SET chunk_count = 2 WHERE name = 'other'")
+    conn.commit()
+    active_before = _char_active_count(conn)
+
+    delete_chunks_cascade(conn, [cid])
+    conn.commit()
+
+    for tbl in ("chunks_vec", table):
+        assert [r[0] for r in conn.execute(f"SELECT chunk_id FROM [{tbl}]")] == [keep]  # noqa: S608
+    assert _char_active_count(conn) == active_before - 1
+    assert _char_space_count(conn, "other") == 1
+
+
 def test_char_delete_chunks_cascade_return_counts_input_not_actual(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     init_schema(conn)
