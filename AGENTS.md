@@ -28,8 +28,8 @@ uv run --group docs sphinx-build -W -E -q -b html docs docs/_build  # zero warni
 
 This list is the merge gate: run every command, in this order, at the PR's final head with a
 clean tree (an earlier `uv sync` may already have rewritten a drifted `uv.lock`), and quote the
-results in the PR. It mirrors `.github/workflows/ci.yml`, which no longer runs, so CI is not
-relied on and a CI status is never evidence.
+results in the PR. `.github/workflows/ci.yml` no longer runs, so CI is not relied on and a CI
+status is never evidence.
 
 ## Project Layout
 
