@@ -423,12 +423,42 @@ def scrub(text: str) -> str:
     raise KnowledgeBaseError("redaction did not settle; nothing was stored")
 
 
+_WORD_CHAR = regex.compile(rf"[{_ALNUM}_]")
+
+
+def _key_has_context(key: str) -> bool:
+    """The key's last word (its trailing run of alphanumerics and ``_``), split on ``_``, holds a context key.
+
+    A JSON member's key is the context word of a hex value under it, as the word before a hex run is in text:
+    memory-engine's ``key_has_context`` (dutiona/knowledge-base#626).
+    """
+    start = len(key)
+    while start and _WORD_CHAR.match(key[start - 1]):
+        start -= 1
+    return any(_is_key(part) for part in key[start:].split("_"))
+
+
 def redact_json(value: Any, leaf: Callable[[str], str] = scrub) -> Any:
-    """``leaf`` applied to every string value of a JSON document; keys and non-strings are kept."""
+    """``leaf`` applied to every string value of a JSON document; keys and non-strings are kept.
+
+    A member whose value is entirely a run of 32 or more hex digits, under a key whose last word is a context word,
+    becomes ``[REDACTED:hex-secret]`` before any leaf sees it; an array element reads no key.
+    """
     if isinstance(value, str):
         return leaf(value)
     if isinstance(value, list):
         return [redact_json(v, leaf) for v in value]
     if isinstance(value, dict):
-        return {k: redact_json(v, leaf) for k, v in value.items()}
+        return {k: _redact_member(k, v, leaf) for k, v in value.items()}
     return value
+
+
+def _redact_member(key: str, value: Any, leaf: Callable[[str], str]) -> Any:
+    if (
+        isinstance(value, str)
+        and len(value) >= HEX_SECRET_MIN_LEN
+        and _HEX_RUN.fullmatch(value)
+        and _key_has_context(key)
+    ):
+        return "[REDACTED:hex-secret]"
+    return redact_json(value, leaf)

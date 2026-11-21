@@ -182,6 +182,17 @@ def test_chunk_metadata_is_redacted_keys_kept(kb_conn, stub_document_embedder):
     }
 
 
+def test_metadata_hex_under_a_context_key_is_redacted(kb_conn):
+    """A hex secret whose only context word is its metadata key is redacted; a commit hash stays readable (#626)."""
+    hex32, hex40 = "0123456789abcdef" * 2, "0123456789abcdef" * 2 + "01234567"
+    raw = json.dumps({"api_key": hex32, "commit": hex40})
+    ingest._insert_chunk(
+        kb_conn, content_hash="h", content="c", source_type="markdown", source_uri="/m.md", chunk_index=0, metadata=raw
+    )
+    stored = json.loads(kb_conn.execute("SELECT metadata FROM chunks").fetchone()["metadata"])
+    assert stored == {"api_key": "[REDACTED:hex-secret]", "commit": hex40}
+
+
 def test_clean_metadata_is_stored_byte_for_byte(kb_conn):
     raw = '{"extractor": "pymupdf4llm@1.27.2.1", "pages": [3]}'
     ingest._insert_chunk(

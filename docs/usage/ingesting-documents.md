@@ -258,7 +258,7 @@ Before KB embeds or stores an ingested document's text, it replaces token-shaped
 | `huggingface-token`, `tailscale-key`, `gitlab-pat`, `github-token`, `stripe-key`, `npm-token`, `pypi-token`, `age-secret-key`, `supabase-token`, `docker-pat`, `digitalocean-token`; `slack-token` also for `xapp-` | `hf_`, `tskey-`, `glpat-`, `gho_`/`ghu_`/`ghs_`/`ghr_`, `sk_live_`/`rk_live_`, `npm_`, `pypi-`, `AGE-SECRET-KEY-1`, `xapp-`, `sbp_`, `dckr_pat_`, `dop_v1_`, at a word boundary, 20 bytes or more; the body of `hf_`, `gho_`/`ghu_`/`ghs_`/`ghr_`, `sk_live_`/`rk_live_`, `npm_`, `sbp_` and `dop_v1_` is ASCII letters and digits only |
 | `private-key-header` | a `-----BEGIN` line |
 | `connection-string-password` | the password of a URL's `user:pass@` |
-| `hex-secret` | 32 or more hex digits right after a word such as `api_key`, `secret` or `token` |
+| `hex-secret` | 32 or more hex digits right after a word such as `api_key`, `secret` or `token`; in a chunk's metadata, also a whole value of 32 or more hex digits under a key whose last word is such a word (`api_key`, `X-Api-Key`) |
 | `high-entropy` | a token of 20 or more characters, letters, digits and `+/=_-` only, with a digit or one of `+/=_-`, at 4.3 bits per character or more |
 
 - **Where it runs**: on a whole document before it is chunked (a PDF page by page), on figure descriptions, captions and OCR text, on folder summaries, and on every string in a chunk's metadata.
