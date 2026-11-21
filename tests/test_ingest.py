@@ -4189,10 +4189,9 @@ def test_ingest_intra_batch_duplicate_of_existing_chunk(tmp_path, monkeypatch):
 def test_reingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
     """Reingest of a doc with intra-document duplicate chunks must not crash (#553 review).
 
-    reingest_file() calls _produce_and_insert_chunks(deduplicate=False), which bypassed
-    the batch-hash guard entirely — so the second in-document duplicate hit the
-    chunks.content_hash UNIQUE constraint and aborted the whole reingest. The intra-batch
-    collapse must run regardless of DB-level deduplication.
+    Reingest once bypassed the batch-hash guard, so the second in-document duplicate hit
+    the chunks.content_hash UNIQUE constraint and aborted the whole reingest. The
+    intra-batch collapse runs on every path.
     """
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -4243,7 +4242,7 @@ def test_reingest_rolls_back_on_midway_failure(tmp_path, monkeypatch):
     def _boom(*_args, **_kwargs):
         raise RuntimeError("simulated mid-reingest failure")
 
-    monkeypatch.setattr("knowledge_base.ingest._produce_and_insert_chunks", _boom)
+    monkeypatch.setattr("knowledge_base.ingest._insert_chunks", _boom)
 
     with pytest.raises(RuntimeError, match="simulated mid-reingest failure"):
         reingest_file(conn, f)
@@ -4447,3 +4446,71 @@ def test_reingest_links_a_chunk_another_document_holds(kb_conn, tmp_path, sessio
     assert (session is None) or session in sessions
     assert kb_conn.execute("SELECT abstract_chunk_id FROM papers WHERE id = ?", (pid,)).fetchone()[0] == shared_id
     assert kb_conn.execute("SELECT chunk_id FROM methods WHERE paper_id = ?", (pid,)).fetchone()[0] == shared_id
+
+
+# ---------------------------------------------------------------------------
+# One function stores every new document; a failed file ingest stores nothing (#597)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("name", "body"), [("notes.md", "# Notes\n\n"), ("lib.rs", "// a Rust module\n")])
+def test_a_text_file_is_stored_as_its_text_would_be(kb_conn, stub_document_embedder, tmp_path, name, body):
+    """Converged onto ingest_text's chunker and store: a file's text through ingest_text stores nothing new."""
+    from knowledge_base.ingest import ingest_text
+
+    with patch("knowledge_base.folder_summaries.embed", _fake_embed):
+        f = tmp_path / name
+        f.write_text(body + "".join(f"distinct passage number {i}. " for i in range(120)))
+        stored = ingest_file(kb_conn, f)
+        again = ingest_text(kb_conn, f.read_text(), source_uri="content:///copy", source_type="markdown")
+    assert stored["chunks_added"] > 1
+    assert (again["chunks_added"], again["chunks_skipped"]) == (0, stored["chunks_added"])
+
+
+def _failing_second_insert():
+    import knowledge_base.ingest as ingest_mod
+
+    real_insert = ingest_mod._insert_chunk
+    calls = []
+
+    def _fail_second(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real_insert(*args, **kwargs)
+
+    return patch.object(ingest_mod, "_insert_chunk", _fail_second)
+
+
+@pytest.mark.parametrize("kind", ["markdown", "python", "pdf"])
+def test_a_failed_file_ingest_leaves_no_rows(kb_conn, stub_document_embedder, tmp_path, kind):
+    import sys
+
+    from knowledge_base.db import get_vec_table_name
+    from tests.test_redact_paths import _pdf_module
+
+    pages = [
+        {"metadata": {"page": 1}, "text": "## Methods\n" + "We erode the image with a disk. " * 60 + "\n"},
+        {"metadata": {"page": 2}, "text": "## Results\n" + "The opening keeps the large grains. " * 60 + "\n"},
+    ]
+    if kind == "markdown":
+        f = tmp_path / "notes.md"
+        f.write_text("".join(f"distinct passage number {i}. " for i in range(120)))
+    elif kind == "python":
+        f = tmp_path / "ops.py"
+        f.write_text("def erode(image):\n    return image - 1\n\n\ndef dilate(image):\n    return image + 1\n")
+    else:
+        f = tmp_path / "paper.pdf"
+        f.write_bytes(b"%PDF-1.4 fake")
+    with (
+        _failing_second_insert(),
+        patch.dict(sys.modules, {"pymupdf4llm": _pdf_module(pages)}),
+        pytest.raises(sqlite3.OperationalError),
+    ):
+        ingest_file(kb_conn, f, source_type="pdf" if kind == "pdf" else None, session_id="s")
+
+    assert not kb_conn.in_transaction
+    kb_conn.commit()
+    assert _rows(kb_conn, f.resolve().as_posix()) == []
+    assert kb_conn.execute("SELECT COUNT(*) FROM chunk_sessions").fetchone()[0] == 0
+    assert kb_conn.execute(f"SELECT COUNT(*) FROM [{get_vec_table_name(kb_conn)}]").fetchone()[0] == 0  # noqa: S608

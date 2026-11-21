@@ -332,30 +332,31 @@ def _extract_markdown_text(path: Path) -> str:
     return scrub(path.read_text(encoding="utf-8", errors="replace"))
 
 
-def _produce_and_insert_chunks(
-    conn: sqlite3.Connection,
-    *,
-    path: Path,
-    source_type: str,
-    source_uri: str,
-    session_id: str | None = None,
-    session_ids: set[str] | None = None,
-    deduplicate: bool = True,
-) -> tuple[int, int, list[tuple[int, int]]]:
-    """Extract text, produce chunks, embed, and insert into the database.
+#: A chunk to store: its index in the document, its text, the text's hash and its metadata JSON.
+_Item = tuple[int, str, str, str]
 
-    Does NOT commit the transaction — callers handle commit timing.
 
-    When *deduplicate* is True, existing chunks (by content hash) are
-    skipped and returned, so the caller can link them to its sessions.
+def _text_chunks(conn: sqlite3.Connection, clean: str) -> list[str]:
+    """Already-redacted *clean* text as it is stored: windows, each split to the input limit, each piece a fixpoint.
 
-    Returns ``(chunks_added, chunks_skipped, deduplicated)``: ``deduplicated`` holds the ``(chunk_index, id)`` of
-    each chunk already stored under another document, in document order, whatever *session_id* is.
+    A window can start mid-word, which a rule reads as a boundary, and the input-limit split cuts anywhere, so each
+    window and each piece is scrubbed again (#592).
+    """
+    windows = [scrub(c) for c in _chunk_text(clean)]
+    if not windows:
+        return []
+    return [scrub(piece) for pieces in _bounded_chunks(conn, windows) for piece in pieces]
+
+
+def _file_chunks(conn: sqlite3.Connection, path: Path, source_type: str) -> tuple[list[_Item], str]:
+    """The chunks of the file at *path*, in document order, and the chunk strategy they were cut with.
+
+    A PDF is cut by its pages and sections and a Python file by its AST, each chunk keeping its own metadata; every
+    other file is cut as ``ingest_text`` cuts text.
     """
     strategy = _get_chunk_strategy(conn)
     effective_strategy = "semantic" if source_type == "pdf" and strategy == "semantic" else "mechanical"
 
-    # --- Text extraction ---
     if source_type == "pdf":
         image_dir = pdf_image_dir(path, conn)
         if image_dir.exists():
@@ -366,7 +367,6 @@ def _produce_and_insert_chunks(
         page_map: dict[int, int] = {}
         image_dir = None
 
-    # --- Chunk production ---
     ast_chunks = None
     if source_type == "code" and path.suffix.lower() == ".py":
         ast_chunks = _chunk_python_ast(text)
@@ -380,7 +380,7 @@ def _produce_and_insert_chunks(
             )
             for k, piece in enumerate(pieces)
         ]
-        items: list[tuple[int, str, str, str]] = []
+        items: list[_Item] = []
         for i, ac in enumerate(ast_chunks):
             meta = json.dumps(
                 {
@@ -393,19 +393,11 @@ def _produce_and_insert_chunks(
             items.append((i, ac["text"], _content_hash(ac["text"]), meta))
     elif source_type == "pdf":
         if effective_strategy == "semantic":
-            md_chunks = _chunk_by_section(
-                text,
-                page_map=page_map,
-                image_dir=image_dir if page_map else None,
-            )
+            md_chunks = _chunk_by_section(text, page_map=page_map, image_dir=image_dir if page_map else None)
         else:
-            md_chunks = _chunk_markdown(
-                text,
-                page_map=page_map,
-                image_dir=image_dir if page_map else None,
-            )
+            md_chunks = _chunk_markdown(text, page_map=page_map, image_dir=image_dir if page_map else None)
         if not md_chunks:
-            return (0, 0, [])
+            return [], effective_strategy
         # The split counts, and looks up, the text that is stored (#592).
         md_chunks = [(scrub(chunk_text), pages) for chunk_text, pages in md_chunks]
         # A piece keeps its parent's pages and lists the images whose reference starts in it. They are read from
@@ -432,57 +424,58 @@ def _produce_and_insert_chunks(
                 chunk_meta["images"] = images
             items.append((i, chunk_text, _content_hash(chunk_text), json.dumps(chunk_meta)))
     else:
-        fixed_chunks = [
-            piece for pieces in _bounded_chunks(conn, [scrub(c) for c in _chunk_text(text)]) for piece in pieces
-        ]
-        if not fixed_chunks:
-            return (0, 0, [])
-        items = [(i, c, _content_hash(c), "{}") for i, c in enumerate(fixed_chunks)]
+        items = [(i, c, _content_hash(c), "{}") for i, c in enumerate(_text_chunks(conn, text))]
 
     # A cut can start a chunk mid-word, which a rule reads as a boundary: every stored chunk is a fixpoint (#592).
-    items = [(i, (clean := scrub(t)), h if clean == t else _content_hash(clean), m) for i, t, h, m in items]
+    return [
+        (i, (clean := scrub(t)), h if clean == t else _content_hash(clean), m) for i, t, h, m in items
+    ], effective_strategy
 
-    # --- Deduplication ---
-    # The intra-document (in-batch) hash collapse ALWAYS runs: two identical chunks
-    # in one document share a content_hash and the second would hit the
-    # chunks.content_hash UNIQUE constraint (#553). This is independent of
-    # *deduplicate*, which only governs the cross-document DB probe below (#553 review).
-    deduplicated: list[tuple[int, int]] = []
-    new_items: list[tuple[int, str, str, str]] = []
+
+def _insert_chunks(
+    conn: sqlite3.Connection,
+    items: list[_Item],
+    *,
+    source_uri: str,
+    source_type: str,
+    chunk_strategy: str,
+    session_id: str | None = None,
+    session_ids: set[str] | None = None,
+) -> tuple[int, int, list[tuple[int, int]]]:
+    """Insert the *items* no document holds yet, every one embedded before the first write; commits nothing.
+
+    A chunk repeated within the items is stored once (chunks.content_hash is UNIQUE, #553); one already stored under
+    any document is skipped and returned, so the caller can link it to its sessions.
+
+    Returns ``(chunks_added, chunks_skipped, stored)``: ``stored`` holds the ``(chunk_index, id)`` of each chunk
+    already stored, in document order.
+    """
+    stored: list[tuple[int, int]] = []
+    new_items: list[_Item] = []
     skipped = 0
-    batch_hashes: set[str] = set()
+    seen: set[str] = set()
     for item in items:
-        if item[2] in batch_hashes:
+        if item[2] in seen:
             skipped += 1
             continue
-        # Record the hash before the DB probe so later in-batch duplicates
-        # of an ALREADY-PERSISTED chunk skip here too — one session link
-        # and one DB query per distinct hash, not per occurrence.
-        batch_hashes.add(item[2])
-        if deduplicate:
-            existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (item[2],)).fetchone()
-            if existing:
-                deduplicated.append((item[0], existing["id"]))
-                skipped += 1
-                continue
+        # Recorded before the probe, so later repeats of an already-stored chunk skip here: one link and one query
+        # per distinct hash.
+        seen.add(item[2])
+        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (item[2],)).fetchone()
+        if existing:
+            stored.append((item[0], existing["id"]))
+            skipped += 1
+            continue
         new_items.append(item)
-    items = new_items
+    if not new_items:
+        return (0, skipped, stored)
 
-    if not items:
-        return (0, skipped, deduplicated)
+    embeddings = _embed_with_config(conn, [item[1] for item in new_items])
 
-    # --- Embed + insert ---
-    texts_to_embed = [item[1] for item in items]
-    embeddings = _embed_with_config(conn, texts_to_embed)
-
-    # Resolve the active vec table once so every per-chunk insert targets the same
-    # table AND the single batched chunk_count bump below matches it (#392). The
-    # per-row UPDATE is suppressed (bump_count=False); we tally the embeddings
-    # actually inserted and bump once after the loop — N+1 UPDATEs collapse to 1,
-    # with a chunk_count identical to the per-row path.
+    # One vec table for every insert and the single batched chunk_count bump, which counts the vectors inserted (#392).
     vec_table = get_vec_table_name(conn)
     n_inserted = 0
-    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(items, embeddings, strict=True):
+    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(new_items, embeddings, strict=True):
         _insert_chunk(
             conn,
             content_hash=chunk_hash,
@@ -493,18 +486,47 @@ def _produce_and_insert_chunks(
             embedding=emb_vec,
             session_id=session_id,
             session_ids=session_ids,
-            chunk_strategy=effective_strategy,
+            chunk_strategy=chunk_strategy,
             metadata=meta_json,
             vec_table=vec_table,
             bump_count=False,
         )
         if emb_vec is not None:
             n_inserted += 1
-
     if n_inserted:
         bump_chunk_count(conn, vec_table, n_inserted)
+    return (len(new_items), skipped, stored)
 
-    return (len(items), skipped, deduplicated)
+
+def _store_document(
+    conn: sqlite3.Connection,
+    items: list[_Item],
+    *,
+    source_uri: str,
+    source_type: str,
+    chunk_strategy: str,
+    session_id: str | None = None,
+) -> tuple[int, int]:
+    """Store a new document's *items* in one transaction: the one owner of every insert-only document (#597).
+
+    Already-stored chunks are linked to *session_id*. Commits once; any failure rolls back, so the thread's reused
+    connection never carries half a document (#554).
+    """
+    try:
+        added, skipped, stored = _insert_chunks(
+            conn,
+            items,
+            source_uri=source_uri,
+            source_type=source_type,
+            chunk_strategy=chunk_strategy,
+            session_id=session_id,
+        )
+        _flush_deferred_session_links(conn, [cid for _, cid in stored], session_id)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return added, skipped
 
 
 def ingest_file(
@@ -518,18 +540,10 @@ def ingest_file(
     if source_type is None:
         source_type = _detect_source_type(path)
 
-    added, skipped, deferred = _produce_and_insert_chunks(
-        conn,
-        path=path,
-        source_type=source_type,
-        source_uri=path.as_posix(),
-        session_id=session_id,
-        deduplicate=True,
+    items, strategy = _file_chunks(conn, path, source_type)
+    added, skipped = _store_document(
+        conn, items, source_uri=path.as_posix(), source_type=source_type, chunk_strategy=strategy, session_id=session_id
     )
-
-    # Flush deferred session links for deduped chunks (#180).
-    _flush_deferred_session_links(conn, [cid for _, cid in deferred], session_id)
-    conn.commit()
 
     result: dict = {
         "file": path.as_posix(),
@@ -572,82 +586,22 @@ def ingest_text(
     Insert-only: a chunk repeated within *text*, or whose hash is already stored under any source, is
     skipped (a stored one is linked to *session_id*); nothing stored is deleted or updated. Every new
     chunk is embedded before the first write, so an embedder failure stores nothing. Commits once; any
-    failure rolls back, so the thread's reused connection never carries half a document (#554).
+    failure rolls back (``_store_document``, which stores files the same way).
     """
-    # Redact the whole text before chunking (a 1000-character window can cut a token in two), then each chunk:
-    # a window can start mid-word, which a rule reads as a boundary, so every stored chunk is a fixpoint.
-    chunks = [scrub(c) for c in _chunk_text(scrub(text))]
+    # Redact the whole text before chunking: a 1000-character window can cut a token in two.
+    chunks = _text_chunks(conn, scrub(text))
     if not chunks:
         return {"chunks_added": 0, "chunks_skipped": 0}
-    # The input-limit split cuts anywhere too, so each piece is scrubbed again.
-    chunks = [scrub(piece) for pieces in _bounded_chunks(conn, chunks) for piece in pieces]
-    try:
-        return _store_text_chunks(conn, chunks, source_uri, source_type, session_id, metadata)
-    except BaseException:
-        conn.rollback()
-        raise
-
-
-def _store_text_chunks(
-    conn: sqlite3.Connection,
-    chunks: list[str],
-    source_uri: str,
-    source_type: str,
-    session_id: str | None,
-    metadata: dict | None,
-) -> dict[str, int]:
-    # Defer chunk_sessions writes until after embeddings succeed (#180).
-    new_chunks: list[tuple[int, str, str]] = []
-    skipped = 0
-    deferred_session_links: list[int] = []
-    seen: set[str] = set()
-    for i, chunk in enumerate(chunks):
-        h = _content_hash(chunk)
-        if h in seen:  # chunks.content_hash is UNIQUE: a repeat within the text is stored once (#553)
-            skipped += 1
-            continue
-        seen.add(h)
-        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (h,)).fetchone()
-        if existing:
-            if session_id is not None:
-                deferred_session_links.append(existing["id"])
-            skipped += 1
-            continue
-        new_chunks.append((i, chunk, h))
-
-    if not new_chunks:
-        _flush_deferred_session_links(conn, deferred_session_links, session_id)
-        conn.commit()
-        return {"chunks_added": 0, "chunks_skipped": skipped}
-
-    embeddings = _embed_with_config(conn, [c[1] for c in new_chunks])
-
-    # One vec table for every insert and the single batched chunk_count bump (#392).
-    vec_table = get_vec_table_name(conn)
     meta_json = json.dumps(metadata or {})
-    n_inserted = 0
-    for (idx, chunk_text, chunk_hash), emb_vec in zip(new_chunks, embeddings, strict=True):
-        _insert_chunk(
-            conn,
-            content_hash=chunk_hash,
-            content=chunk_text,
-            source_type=source_type,
-            source_uri=source_uri,
-            chunk_index=idx,
-            embedding=emb_vec,
-            session_id=session_id,
-            metadata=meta_json,
-            vec_table=vec_table,
-            bump_count=False,
-        )
-        if emb_vec is not None:
-            n_inserted += 1
-    if n_inserted:
-        bump_chunk_count(conn, vec_table, n_inserted)
-
-    _flush_deferred_session_links(conn, deferred_session_links, session_id)
-    conn.commit()
-    return {"chunks_added": len(new_chunks), "chunks_skipped": skipped}
+    added, skipped = _store_document(
+        conn,
+        [(i, c, _content_hash(c), meta_json) for i, c in enumerate(chunks)],
+        source_uri=source_uri,
+        source_type=source_type,
+        chunk_strategy="mechanical",
+        session_id=session_id,
+    )
+    return {"chunks_added": added, "chunks_skipped": skipped}
 
 
 def reingest_file(
@@ -715,14 +669,15 @@ def reingest_file(
 
         # Its own rows are gone, so the probe finds only chunks another document holds (#592: redaction and
         # the redact --rewrite merge make that sharing common); link them instead of inserting them again.
-        added, _, shared = _produce_and_insert_chunks(
+        items, strategy = _file_chunks(conn, path, source_type)
+        added, _, shared = _insert_chunks(
             conn,
-            path=path,
-            source_type=source_type,
+            items,
             source_uri=source_uri,
+            source_type=source_type,
+            chunk_strategy=strategy,
             session_id=session_id,
             session_ids=all_sessions,
-            deduplicate=True,
         )
         conn.executemany(
             "INSERT OR IGNORE INTO chunk_sessions (chunk_id, session_id) VALUES (?, ?)",

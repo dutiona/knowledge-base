@@ -61,7 +61,8 @@ Ingest a file or directory into the research index.
 }
 ```
 
-Uses content-hash deduplication -- unchanged chunks are skipped.
+Uses content-hash deduplication -- unchanged chunks are skipped. A file is stored in one transaction: one that fails
+stores nothing of itself, and a directory ingest stops at the first such file, keeping the files stored before it.
 
 ### reingest
 
