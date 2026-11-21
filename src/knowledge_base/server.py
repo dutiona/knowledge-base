@@ -221,7 +221,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             db = resolve_db_path()
             # The store lock (#596) for the process's life, taken before the gate reads the store. Exits run LIFO:
             # the job worker stops before the lock is released.
-            held.enter_context(hold(db))
+            held.enter_context(hold(db, "knowledge-base (stdio)" if app is None else "knowledge-base --http"))
             held.callback(shutdown_worker)
             open_declared_db(db).close()
         except KnowledgeBaseError as exc:

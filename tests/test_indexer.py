@@ -739,7 +739,7 @@ def test_a_writing_command_refuses_while_the_store_is_held(tmp_path, capsys, htt
 
     db, doc = _store(tmp_path)
     before = _dump(db)
-    with hold(db):
+    with hold(db, "test"):
         assert _exit_of(["--db", str(db), *(a.format(doc=doc) for a in argv)]) == 1
     error = json.loads(capsys.readouterr().err)["error"]
     assert str(lock_path(db)) in error
@@ -752,7 +752,7 @@ def test_a_read_only_command_runs_while_the_store_is_held(tmp_path, argv):
     from knowledge_base.store_lock import hold
 
     db, _ = _store(tmp_path)
-    with hold(db):
+    with hold(db, "test"):
         assert _exit_of(["--db", str(db), "--quiet", *argv]) == 0
 
 
@@ -771,3 +771,43 @@ def test_a_read_only_command_never_initializes_a_store(tmp_path, capsys, argv):
     assert _exit_of(["--db", str(legacy), *argv]) == 1
     assert "migrate" in capsys.readouterr().err
     assert legacy.read_bytes() == before
+
+
+# --- #578: a server started during a transition exits 78 naming it ---
+
+
+@pytest.mark.parametrize(
+    ("command", "env"),
+    [("re-embed", _MOVED), ("rebind", {"KNOWLEDGE_BASE_EMBED_URL": "http://embedder-b.example.test:11434"})],
+    ids=["re-embed", "rebind"],
+)
+def test_a_server_started_during_a_transition_exits_78_naming_it(tmp_path, monkeypatch, http_requests, command, env):
+    import io
+    import os
+    from contextlib import redirect_stderr
+
+    from knowledge_base import indexer, server
+    from knowledge_base.db import open_declared_db
+
+    db_path = _seed_corpus(tmp_path)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("KNOWLEDGE_BASE_DB", str(db_path))
+    http_requests.handlers["embedder-b.example.test"] = _ollama_embedder()
+    started: list[tuple[int | str | None, str]] = []
+
+    def _open_then_start_a_server(*args, **kwargs):
+        conn = open_declared_db(*args, **kwargs)
+        err = io.StringIO()
+        with patch.object(server.mcp, "run") as run, redirect_stderr(err), pytest.raises(SystemExit) as refused:
+            server.main([])
+        run.assert_not_called()
+        started.append((refused.value.code, err.getvalue()))
+        return conn
+
+    monkeypatch.setattr(indexer, "open_declared_db", _open_then_start_a_server)
+    main(["--db", str(db_path), "--quiet", command])
+    ((code, err),) = started
+    assert code == 78
+    assert f"knowledge-base-ingest {command} (pid {os.getpid()}, since " in err
+    _plain_open(db_path)  # the transition completed

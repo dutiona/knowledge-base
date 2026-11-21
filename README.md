@@ -178,8 +178,9 @@ connects to the address it checked. Endpoints the operator's environment declare
 Every KB process that writes a database holds one exclusive advisory lock on `<database>.store-lock`, beside the
 database (memory-engine's ADR-0020 §8): `knowledge-base`, stdio or `--http`, for its whole life, and every writing
 `knowledge-base-ingest` command (`ingest`, `reingest`, `ingest-url`, `re-embed`, `rebind`, `migrate`,
-`redact --rewrite`) for its run. A second taker refuses before it reads the database, naming the lock file: a server
-exits 78, a command exits 1 with its JSON error. A process releases the lock only after its background job worker has
+`redact --rewrite`) for its run. A second taker refuses before it reads the database, naming the holder (its role,
+PID and start time, which the holder writes into the lock file) and the lock file: a server exits 78, a command exits
+1 with its JSON error. A process releases the lock only after its background job worker has
 stopped. The read-only commands (`status`, `schema`, `migrate --check`, `redact` without `--rewrite`) take no lock and
 run beside a server; they refuse a missing database, or one that is not at this build's schema, rather than create or
 migrate it.

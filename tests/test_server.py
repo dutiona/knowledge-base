@@ -507,7 +507,7 @@ def test_a_server_refuses_while_the_store_is_held(served, capsys, token_file, tr
     from knowledge_base.store_lock import hold, lock_path
 
     runs, stdio = served
-    with hold(_db()):
+    with hold(_db(), "test"):
         assert _exit_code(_serve_argv(transport, token_file)) == 78
     assert str(lock_path(_db())) in capsys.readouterr().err
     assert runs == [] and not stdio.called
@@ -524,7 +524,7 @@ def test_a_server_refuses_while_another_serves(served, monkeypatch, capsys, toke
     server.main(_serve_argv(outer, token_file))
     assert codes == [78]
     assert "in use" in capsys.readouterr().err
-    with hold(_db()):
+    with hold(_db(), "test"):
         pass
 
 
@@ -559,13 +559,13 @@ def test_the_lock_outlives_a_running_job(served, monkeypatch, token_file, transp
     main.start()
     try:
         assert served_done.wait(30)
-        with pytest.raises(KnowledgeBaseError), hold(_db()):
+        with pytest.raises(KnowledgeBaseError), hold(_db(), "test"):
             pass
     finally:
         release.set()
         main.join(30)
     assert not main.is_alive()
-    with hold(_db()):
+    with hold(_db(), "test"):
         pass
     conn = get_connection(_db())
     assert [r["status"] for r in conn.execute("SELECT status FROM jobs")] == ["completed"]
@@ -590,3 +590,29 @@ def test_a_killed_http_server_leaves_no_stale_lock(tmp_path, token_file):
         child.wait(15)
     indexer.main(["--db", str(db), "--quiet", "rebind"])
     assert lock_path(db).stat().st_ino == inode
+
+
+# --- #578: a refusal names the holder ---
+
+_SERVER_LINE = {"stdio": "knowledge-base (stdio) (pid ", "http": "knowledge-base --http (pid "}
+
+
+@pytest.mark.parametrize("command", ["re-embed", "rebind"])
+@pytest.mark.parametrize("transport", ["stdio", "http"])
+def test_a_transition_against_a_running_server_names_it(served, monkeypatch, capsys, token_file, transport, command):
+    import json
+
+    from knowledge_base import indexer
+
+    codes: list[int | str | None] = []
+
+    def _transition():
+        with pytest.raises(SystemExit) as refused:
+            indexer.main(["--db", str(_db()), command])
+        codes.append(refused.value.code)
+
+    _on_serve(monkeypatch, served, transport, _transition)
+    server.main(_serve_argv(transport, token_file))
+    assert codes == [1]
+    error = json.loads(capsys.readouterr().err)["error"]
+    assert f"{_SERVER_LINE[transport]}{os.getpid()}, since " in error

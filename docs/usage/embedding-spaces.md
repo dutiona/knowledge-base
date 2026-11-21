@@ -136,7 +136,9 @@ If the `chunk_strategy` column does not exist (pre-#100 databases), all chunks a
 
 Changing the active identity is a maintenance step with the server stopped: set the new `KNOWLEDGE_BASE_EMBED_*`
 values (including `KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM` for a truncated active space), run
-`knowledge-base-ingest re-embed`, then start the server. Under the hood it:
+`knowledge-base-ingest re-embed`, then start the server. The store lock enforces the order: `re-embed` (and `rebind`)
+run beside a server exits 1 naming it, for example `the store is in use by knowledge-base --http (pid 2, since
+2026-11-21T19:00:00Z)`, and a server started during a re-embed exits 78 naming the re-embed. Under the hood it:
 
 1. Creates a new space named `<model>_<dim>` with the whole declared identity
 2. Backfills it

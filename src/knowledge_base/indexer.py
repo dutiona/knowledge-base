@@ -423,7 +423,7 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         # Every writing command holds the store lock (#596); the job worker stops before it is released.
-        with nullcontext() if _read_only(args) else hold(args.db):
+        with nullcontext() if _read_only(args) else hold(args.db, f"knowledge-base-ingest {args.command}"):
             try:
                 dispatch[args.command](args)
             finally:
