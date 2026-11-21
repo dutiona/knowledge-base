@@ -372,7 +372,7 @@ every URL a configure tool stores (LLM, vision, OmniParser, CDP) keeps it when w
 every request, which connects to the address it checked.
 
 The deprecated `EMBED_PROVIDER` variable is refused, and `OPENAI_API_KEY` is no longer an
-embedding key source (the bare-name `openai` provider still reads it).
+embedding key source.
 
 ### Inputs longer than the embedder takes
 
