@@ -1,7 +1,7 @@
 """Domain exceptions for knowledge-base.
 
-Raised by library functions instead of returning ``{"error": ...}`` dicts.
-Caught by the MCP tool wrappers in ``routes/`` and serialized to JSON for the client.
+Raised by library functions instead of returning ``{"error": ...}`` dicts. A tool lets them through:
+``routes.tool``'s call boundary reports each as an MCP tool error carrying its message (#598).
 """
 
 from __future__ import annotations
@@ -16,15 +16,7 @@ __all__ = [
 
 
 class KnowledgeBaseError(Exception):
-    """Base exception for all knowledge-base domain errors.
-
-    Optional ``details`` dict carries structured data that the ``routes/``
-    wrappers merge into the JSON error response for backward compatibility.
-    """
-
-    def __init__(self, message: str, *, details: dict | None = None) -> None:
-        super().__init__(message)
-        self.details: dict = details or {}
+    """Base exception for all knowledge-base domain errors."""
 
 
 class NotFoundError(KnowledgeBaseError):

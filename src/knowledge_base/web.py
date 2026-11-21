@@ -439,62 +439,17 @@ def _extract_html_images(
     texts = [desc for desc, _ in collected]
     embeddings = _embed_with_config(conn, texts)
 
-    # --- Delete stale inline image chunks (only after embeddings succeed) ---
-    # Scoped to [_WEB_IMAGE_CHUNK_INDEX_START, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START)
-    # to avoid deleting element captures from Phase 3.
-    old_ids = [
-        r["id"]
-        for r in conn.execute(
-            "SELECT id FROM chunks WHERE source_uri = ? "
-            "AND source_type = 'figure' AND chunk_index >= ? AND chunk_index < ?",
-            (
-                source_url,
-                _WEB_IMAGE_CHUNK_INDEX_START,
-                _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START,
-            ),
-        ).fetchall()
-    ]
-    if old_ids:
-        delete_chunks_cascade(conn, old_ids)
-
-    # --- Insert new figure chunks ---
-    # Resolve the active vec table once so the per-chunk inserts and the single
-    # batched chunk_count bump below both target it; suppress the per-row UPDATE
-    # (bump_count=False) and bump once with the count of embeddings actually
-    # inserted (#392). Not every figure embeds, so tally non-None separately.
-    vec_table = get_vec_table_name(conn)
-    figures_added = 0
-    n_inserted = 0
-    for idx, ((desc, meta), emb_vec) in enumerate(zip(collected, embeddings, strict=True)):
-        chunk_hash = _content_hash(desc)
-        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)).fetchone()
-        if existing:
-            continue
-
-        meta_json = json.dumps(meta)
-        chunk_index = _WEB_IMAGE_CHUNK_INDEX_START + idx
-        _insert_chunk(
-            conn,
-            content_hash=chunk_hash,
-            content=desc,
-            source_type="figure",
-            source_uri=source_url,
-            chunk_index=chunk_index,
-            embedding=emb_vec,
-            metadata=meta_json,
-            vec_table=vec_table,
-            bump_count=False,
-        )
-        figures_added += 1
-        if emb_vec is not None:
-            n_inserted += 1
-
-    if n_inserted:
-        bump_chunk_count(conn, vec_table, n_inserted)
-
-    if figures_added or old_ids:
-        conn.commit()
-    return figures_added
+    # --- Replace the page's inline image figures (only after embeddings succeed) ---
+    added, _ = _replace_figures(
+        conn,
+        source_url,
+        (_WEB_IMAGE_CHUNK_INDEX_START, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START),
+        [
+            (_WEB_IMAGE_CHUNK_INDEX_START + idx, desc, json.dumps(meta), emb_vec)
+            for idx, ((desc, meta), emb_vec) in enumerate(zip(collected, embeddings, strict=True))
+        ],
+    )
+    return added
 
 
 # ---------------------------------------------------------------------------
@@ -813,63 +768,29 @@ def _extract_web_figures(
 
     embeddings = _embed_with_config(conn, texts)
 
-    # Remove stale screenshot figure chunks only (scope to < _WEB_IMAGE_CHUNK_INDEX_START
-    # to avoid deleting inline image figures managed by _extract_html_images)
-    old_fig_ids = [
-        r["id"]
-        for r in conn.execute(
-            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index < ?",
-            (source_url, _WEB_IMAGE_CHUNK_INDEX_START),
-        ).fetchall()
-    ]
-    if old_fig_ids:
-        delete_chunks_cascade(conn, old_fig_ids)
-
-    # Resolve the active vec table once for the per-chunk inserts and the single
-    # batched chunk_count bump (#392); suppress the per-row UPDATE and bump once
-    # with the count of embeddings actually inserted (some figures may not embed).
-    vec_table = get_vec_table_name(conn)
-    figures_added = 0
-    n_inserted = 0
-
-    for idx, (fig, desc, emb_vec) in enumerate(zip(valid_figures, texts, embeddings, strict=True)):
-        chunk_hash = _content_hash(desc)
-        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)).fetchone()
-        if existing:
-            continue
-
-        meta_json = json.dumps(
-            {
-                "figure_type": fig.get("figure_type", "web_screenshot"),
-                "title": fig.get("title", ""),
-                "original_source_type": "web",
-                "source_url": source_url,
-                "vision_model": model,
-            }
-        )
-
-        chunk_index = _WEB_FIGURE_CHUNK_INDEX_START + idx
-        _insert_chunk(
-            conn,
-            content_hash=chunk_hash,
-            content=desc,
-            source_type="figure",
-            source_uri=source_url,
-            chunk_index=chunk_index,
-            embedding=emb_vec,
-            metadata=meta_json,
-            vec_table=vec_table,
-            bump_count=False,
-        )
-        figures_added += 1
-        if emb_vec is not None:
-            n_inserted += 1
-
-    if n_inserted:
-        bump_chunk_count(conn, vec_table, n_inserted)
-
-    if figures_added:
-        conn.commit()
+    # Replace the screenshot figures only: inline images and element captures keep their own index ranges.
+    figures_added, _ = _replace_figures(
+        conn,
+        source_url,
+        (0, _WEB_IMAGE_CHUNK_INDEX_START),
+        [
+            (
+                _WEB_FIGURE_CHUNK_INDEX_START + idx,
+                desc,
+                json.dumps(
+                    {
+                        "figure_type": fig.get("figure_type", "web_screenshot"),
+                        "title": fig.get("title", ""),
+                        "original_source_type": "web",
+                        "source_url": source_url,
+                        "vision_model": model,
+                    }
+                ),
+                emb_vec,
+            )
+            for idx, (fig, desc, emb_vec) in enumerate(zip(valid_figures, texts, embeddings, strict=True))
+        ],
+    )
     return figures_added
 
 
@@ -961,53 +882,74 @@ def _extract_element_captures(
     texts = [desc for desc, _, _ in collected]
     embeddings = _embed_with_config(conn, texts)
 
-    # --- Phase 3: Atomic swap — delete stale, insert new (infallible) ---
-    old_ids = [
-        r["id"]
-        for r in conn.execute(
-            "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' AND chunk_index >= ?",
-            (source_url, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START),
-        ).fetchall()
-    ]
-    if old_ids:
-        delete_chunks_cascade(conn, old_ids)
-
-    # Resolve the active vec table once for the per-chunk inserts and the single
-    # batched chunk_count bump (#392); suppress the per-row UPDATE and bump once
-    # with the count of embeddings actually inserted (some captures may not embed).
-    vec_table = get_vec_table_name(conn)
-    figures_added = 0
-    n_inserted = 0
-    for (desc, meta, cap_idx), emb_vec in zip(collected, embeddings, strict=True):
-        chunk_hash = _content_hash(desc)
-        existing = conn.execute("SELECT id FROM chunks WHERE content_hash = ?", (chunk_hash,)).fetchone()
-        if existing:
-            continue
-
-        meta_json = json.dumps(meta)
-        chunk_index = _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START + cap_idx
-        _insert_chunk(
-            conn,
-            content_hash=chunk_hash,
-            content=desc,
-            source_type="figure",
-            source_uri=source_url,
-            chunk_index=chunk_index,
-            embedding=emb_vec,
-            metadata=meta_json,
-            vec_table=vec_table,
-            bump_count=False,
-        )
-        figures_added += 1
-        if emb_vec is not None:
-            n_inserted += 1
-
-    if n_inserted:
-        bump_chunk_count(conn, vec_table, n_inserted)
-
-    if figures_added:
-        conn.commit()
+    # --- Phase 3: replace the element captures in one transaction ---
+    figures_added, _ = _replace_figures(
+        conn,
+        source_url,
+        (_WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START, None),
+        [
+            (_WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START + cap_idx, desc, json.dumps(meta), emb_vec)
+            for (desc, meta, cap_idx), emb_vec in zip(collected, embeddings, strict=True)
+        ],
+    )
     return figures_added
+
+
+def _replace_figures(
+    conn: sqlite3.Connection,
+    source_url: str,
+    index_range: tuple[int, int | None],
+    figures: list[tuple[int, str, str, list[float] | None]],
+) -> tuple[int, int]:
+    """Replace *source_url*'s figure chunks whose index is in *index_range* by *figures*, in one transaction (#597).
+
+    Each figure is ``(chunk_index, text, metadata_json, vector)``; one whose text another chunk already holds is
+    skipped. Each writer owns its own index range, so the screenshot, inline-image and element-capture figures of a
+    page are replaced independently. Commits; any failure rolls back, so the old figures stay and the thread's
+    connection carries nothing to the next commit.
+
+    Returns ``(figures_added, figures_removed)``.
+    """
+    lo, hi = index_range
+    try:
+        old_ids = [
+            r["id"]
+            for r in conn.execute(
+                "SELECT id FROM chunks WHERE source_uri = ? AND source_type = 'figure' "
+                "AND chunk_index >= ? AND (? IS NULL OR chunk_index < ?)",
+                (source_url, lo, hi, hi),
+            ).fetchall()
+        ]
+        if old_ids:
+            delete_chunks_cascade(conn, old_ids)
+        # One vec table for every insert and one chunk_count bump of the vectors inserted (#392).
+        vec_table = get_vec_table_name(conn)
+        added = n_inserted = 0
+        for chunk_index, text, meta_json, vector in figures:
+            chunk_hash = _content_hash(text)
+            if conn.execute("SELECT 1 FROM chunks WHERE content_hash = ?", (chunk_hash,)).fetchone():
+                continue
+            _insert_chunk(
+                conn,
+                content_hash=chunk_hash,
+                content=text,
+                source_type="figure",
+                source_uri=source_url,
+                chunk_index=chunk_index,
+                embedding=vector,
+                metadata=meta_json,
+                vec_table=vec_table,
+                bump_count=False,
+            )
+            added += 1
+            n_inserted += vector is not None
+        if n_inserted:
+            bump_chunk_count(conn, vec_table, n_inserted)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return added, len(old_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -1024,26 +966,13 @@ def _cleanup_stale_inline_images(conn: sqlite3.Connection, source_uri: str) -> i
 
     Returns the number of chunks deleted.
     """
-    # Scoped to [_WEB_IMAGE_CHUNK_INDEX_START, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START)
-    # to avoid deleting element captures from Phase 3.
-    old_ids = [
-        r["id"]
-        for r in conn.execute(
-            "SELECT id FROM chunks WHERE source_uri = ? "
-            "AND source_type = 'figure' AND chunk_index >= ? AND chunk_index < ?",
-            (
-                source_uri,
-                _WEB_IMAGE_CHUNK_INDEX_START,
-                _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START,
-            ),
-        ).fetchall()
-    ]
-    if not old_ids:
-        return 0
-    delete_chunks_cascade(conn, old_ids)
-    conn.commit()
-    logger.info("Cleaned %d stale inline image chunks for %s", len(old_ids), source_uri)
-    return len(old_ids)
+    # Scoped to the inline image range, so element captures from Phase 3 stay.
+    _, removed = _replace_figures(
+        conn, source_uri, (_WEB_IMAGE_CHUNK_INDEX_START, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START), []
+    )
+    if removed:
+        logger.info("Cleaned %d stale inline image chunks for %s", removed, source_uri)
+    return removed
 
 
 # ---------------------------------------------------------------------------

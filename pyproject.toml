@@ -85,6 +85,7 @@ dev = [
     "ruff>=0.15.5",
     "basedpyright>=1.21",
     "trustme>=1.1",
+    "jsonschema>=4.0",
 ]
 docs = [
     "sphinx>=8.0",

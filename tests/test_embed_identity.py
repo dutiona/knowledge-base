@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from fastmcp.exceptions import ToolError
 
 from knowledge_base import migrate, server
 from knowledge_base.db import get_connection, init_schema, resolve_db_path
@@ -730,15 +731,14 @@ def test_the_comparison_tools_report_a_space_the_endpoint_cannot_serve(tool, kb_
     kb_conn.commit()
     with patch.object(emb, "_get_conn", return_value=kb_conn):
         if tool == "compare":
-            result = json.loads(emb.compare_spaces_tool(query="q", space_a="default", space_b="alt", mode="vec"))
+            with pytest.raises(ToolError, match="provider 'onnx'"):
+                emb.compare_spaces_tool(query="q", space_a="default", space_b="alt", mode="vec")
         elif tool == "batch":
-            result = json.loads(
+            with pytest.raises(ToolError, match="provider 'onnx'"):
                 emb.batch_compare_spaces_tool(queries=["q"], space_a="default", space_b="alt", mode="vec")
-            )
         else:
             result = json.loads(emb.benchmark_spaces_tool(sample_queries=1))
-    error = result["comparisons"][0]["error"] if tool == "benchmark" else result["error"]
-    assert "provider 'onnx'" in error
+            assert "provider 'onnx'" in result["comparisons"][0]["error"]
 
 
 # --- super-review round 1 (PR #612) -----------------------------------------------

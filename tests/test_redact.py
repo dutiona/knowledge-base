@@ -7,6 +7,8 @@ email detector, the ADR-0020 machine-token detector first, and links exempt from
 url-credential. memory-engine#1024 then added sixteen provider prefixes (the ``new-prefix-`` cases) and made
 SendGrid's ``SG.`` and ``eyJ`` need a dot past the prefix. Only ``url-authority-ends-at-multibyte-space`` is
 written by hand: memory-engine panics on it.
+The ``json-`` cases (memory-engine's ``test(redact): share JSON-key hex cases with knowledge-base``, for #626) hold
+JSON documents: each is also its own one-pass text output, and the JSON walk must turn its input into its output too.
 Change the file only through a linked pair of PRs, memory-engine first, both quoting the same ``sha256sum``.
 """
 
@@ -23,7 +25,7 @@ import pytest
 from knowledge_base.redact import TOKEN_SHAPE, redact, redact_json, scrub
 
 FIXTURE = Path(__file__).parent / "fixtures" / "redaction-cases.jsonl"
-FIXTURE_SHA256 = "87d16a42195fdc108b32f07916fd343f7cec185d5304fa266e56442d6eb0f9b7"
+FIXTURE_SHA256 = "0c142e4c7c5823e775e031af3815c754f57a0ed6c6e8576b028e38564ec4f4db"
 _LINES = FIXTURE.read_text(encoding="utf-8").split("\n")
 HEADER = json.loads(_LINES[0])
 CASES = [json.loads(line) for line in _LINES[1:] if line]
@@ -99,6 +101,65 @@ def test_url_authority_ending_at_a_multibyte_space_does_not_crash():
         out, rules = redact(f"see https://u:pw@example.com{space}more https://v:pw2@example.org")
         assert rules == ["connection-string-password", "connection-string-password"]
         assert "pw" not in out.replace("[REDACTED:connection-string-password]", "")
+
+
+JSON_CASES = [c for c in CASES if c["name"].startswith("json-")]
+
+
+@pytest.mark.parametrize("case", JSON_CASES, ids=[c["name"] for c in JSON_CASES])
+def test_the_json_walk_matches_the_shared_json_cases(case):
+    assert redact_json(json.loads(case["input"])) == json.loads(case["output"])
+
+
+HEX = "0123456789abcdef" * 2
+HEX_PLACEHOLDER = "[REDACTED:hex-secret]"
+
+
+@pytest.mark.parametrize(
+    ("key", "redacted"),
+    [
+        ("api_key", True),
+        ("access-token", True),
+        ("X-Api-Key", True),
+        ("secret", True),
+        ("client_secret_v2", True),
+        ("clé_token", True),
+        ("sha", False),
+        ("commit", False),
+        ("monkey", False),
+        ("keyboard", False),
+        ("tokené", False),
+        ("api_key:", False),
+    ],
+)
+def test_a_hex_value_is_redacted_when_its_key_is_a_context_word(key, redacted):
+    """memory-engine's rule (decision 11 of its plan #1103): the key's last word, split on `_`, holds a context key."""
+    assert redact_json({key: HEX}) == {key: HEX_PLACEHOLDER if redacted else HEX}
+
+
+def test_the_key_rule_reads_no_array_element_and_only_its_own_member():
+    assert redact_json({"api_key": [HEX]}) == {"api_key": [HEX]}
+    assert redact_json({"api_key": {"v": HEX}}) == {"api_key": {"v": HEX}}
+    assert redact_json({"auth": {"token": HEX}}) == {"auth": {"token": HEX_PLACEHOLDER}}
+
+
+def test_the_key_rule_needs_a_whole_hex_value():
+    assert redact_json({"api_key": HEX[:31]}) == {"api_key": HEX[:31]}
+    assert redact_json({"api_key": HEX + " rotated"}) == {"api_key": HEX + " rotated"}
+
+
+def test_the_key_rule_runs_before_a_custom_leaf():
+    seen: list[str] = []
+
+    def leaf(value: str) -> str:
+        seen.append(value)
+        return value
+
+    assert redact_json({"api_key": HEX, "url": "https://example.test/a"}, leaf) == {
+        "api_key": HEX_PLACEHOLDER,
+        "url": "https://example.test/a",
+    }
+    assert seen == ["https://example.test/a"]
 
 
 def test_redact_json_keeps_keys_and_non_strings():

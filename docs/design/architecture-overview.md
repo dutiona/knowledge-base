@@ -49,7 +49,7 @@ graph LR
 
 **`db.py`** -- Database schema creation, migrations, and shared SQL helpers. Defines the complete schema (chunks, papers, relationships, conclusions, methods, datasets, metrics, entities, jobs, config tables) along with FTS5 virtual tables and sqlite-vec vector tables. Provides `get_connection()` which loads the sqlite-vec extension and enables WAL mode. Includes `_batched_execute` and `_batched_select` helpers that batch IN-clause queries to stay under SQLite's 999 variable limit.
 
-**`ingest.py`** -- Ingestion pipeline for PDF, markdown, code, and web content. PDFs go through pymupdf4llm for header-aware markdown extraction with page tracking; Python files use AST-aware chunking (functions/classes as units); all other text uses fixed-size chunking (1000 chars, 200 overlap). Web ingestion uses trafilatura with browser fallback for JS-heavy pages. Computes SHA-256 content hashes for deduplication and calls the embedding API for each new chunk.
+**`ingest.py`** -- Ingestion pipeline for PDF, markdown, code, and web content. PDFs go through pymupdf4llm for header-aware markdown extraction with page tracking; Python files use AST-aware chunking (functions/classes as units); all other text uses fixed-size chunking (1000 chars, 200 overlap). Web ingestion uses trafilatura with browser fallback for JS-heavy pages. Computes SHA-256 content hashes for deduplication and calls the embedding API for each new chunk. One function, `_store_document`, stores every new document (a file of any type, text by content, a page's text): it embeds every new chunk before the first write and commits once, and any failure rolls the whole document back. Each web figure writer replaces its own figures the same way, in one transaction.
 
 **`search.py`** -- Hybrid search combining FTS5 BM25 keyword search with sqlite-vec cosine similarity, merged via Reciprocal Rank Fusion (k=60). Supports three modes: `hybrid` (default), `fts` (keyword only), and `vec` (semantic only). Over-fetches 3x the requested results before RRF merging, then fetches chunk details for the top-k.
 
@@ -143,7 +143,7 @@ flowchart TD
 
 The server uses three mechanisms for thread safety:
 
-**Thread-local connections.** Each thread gets its own `sqlite3.Connection` via `threading.local()`. SQLite connections are not thread-safe, so sharing is avoided entirely.
+**Thread-local connections.** Each thread gets its own `sqlite3.Connection` via `threading.local()`. SQLite connections are not thread-safe, so sharing is avoided entirely. Every tool is registered through `routes.tool(mcp)`, a call boundary that runs on the tool's own thread: a call that fails rolls back its connection's open transaction, and one that returns with a transaction open is logged and rolled back, so no call leaves a partial write for the thread's next commit or holds the write lock against other threads.
 
 **Double-checked locking for schema init.** A module-level `threading.Lock` with a `_schema_ready` boolean flag ensures `init_schema()` runs exactly once, even when multiple threads call `_get_conn()` concurrently. The outer check avoids lock acquisition on the hot path.
 

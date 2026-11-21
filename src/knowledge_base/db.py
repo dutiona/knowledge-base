@@ -802,6 +802,11 @@ def delete_chunks_cascade(conn: sqlite3.Connection, chunk_ids: list[int]) -> int
     """
     if not chunk_ids:
         return 0
+    # Read the schema before any write: SQLite < 3.54.1 fails a DELETE on chunks or papers (an FTS5 delete trigger
+    # and foreign-key children) with "no such table" when it is the first statement a connection runs after another
+    # connection's DDL, such as a new embedding space's table (#633). Once the first write holds the lock, no other
+    # connection's DDL can come between.
+    conn.execute("SELECT 1 FROM sqlite_master").fetchone()
     _batched_execute(conn, "UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({ph})", chunk_ids)
     _batched_execute(
         conn, "UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({ph})", chunk_ids
@@ -814,7 +819,8 @@ def delete_chunks_cascade(conn: sqlite3.Connection, chunk_ids: list[int]) -> int
             chunk_ids,
         )
     _batched_execute(conn, "DELETE FROM entity_mentions WHERE chunk_id IN ({ph})", chunk_ids)
-    # A space whose table is gone (a cleanup interrupted between its two steps) has no vector to delete.
+    # Listed under the write lock, so a space created just before this cascade loses the chunks' vectors too. A space
+    # whose table is gone (a cleanup interrupted between its two steps) has no vector to delete.
     for (table,) in conn.execute(
         "SELECT e.table_name FROM embed_spaces e JOIN sqlite_master m ON m.name = e.table_name"
     ).fetchall():

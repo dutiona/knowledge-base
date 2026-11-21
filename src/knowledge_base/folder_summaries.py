@@ -75,6 +75,12 @@ def _build_folder_summary(conn: sqlite3.Connection, folder_path: str) -> str:
     return scrub("\n".join(parts))
 
 
+def drop_summary(conn: sqlite3.Connection, folder_path: str) -> None:
+    """Delete *folder_path*'s summary and its vector; commits nothing."""
+    conn.execute("DELETE FROM folder_summaries WHERE folder_path = ?", (folder_path,))
+    conn.execute("DELETE FROM folder_summaries_vec WHERE folder_path = ?", (folder_path,))
+
+
 def update_folder_summary(
     conn: sqlite3.Connection,
     folder_path: str,
@@ -89,11 +95,7 @@ def update_folder_summary(
 
     if not current_hash:
         # No chunks in this folder — clean up stale entry if present
-        conn.execute("DELETE FROM folder_summaries WHERE folder_path = ?", (folder_path,))
-        conn.execute(
-            "DELETE FROM folder_summaries_vec WHERE folder_path = ?",
-            (folder_path,),
-        )
+        drop_summary(conn, folder_path)
         conn.commit()
         return False
 

@@ -1,7 +1,7 @@
 """Wrapper-level tests for the papers route MCP tools.
 
 These exercise the *server-only* logic in ``knowledge_base.routes.papers``:
-error mapping (``KnowledgeBaseError`` -> ``{"error": str(e), **e.details}``),
+error mapping (a ``KnowledgeBaseError`` becomes a ``ToolError`` carrying its message),
 orchestration (auto_relate job submission), and JSON shaping. Domain
 internals live in ``papers.py`` / ``conclusions.py`` / ``bibtex.py`` and are
 tested via real ``kb_conn`` round-trips rather than re-asserted here.
@@ -17,6 +17,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
+from fastmcp.exceptions import ToolError
 
 from knowledge_base.routes import papers as papers_routes
 
@@ -143,12 +146,8 @@ def test_add_relationship_tool_invalid_type_maps_to_error(kb_conn):
     src = _register(kb_conn, "S")
     tgt = _register(kb_conn, "T")
 
-    with _patch_conn(kb_conn):
-        result = json.loads(papers_routes.add_relationship_tool(src, tgt, "bogus_relation"))
-
-    # ValidationError carries no details -> error dict is just {"error": ...}.
-    assert set(result.keys()) == {"error"}
-    assert "Invalid relation_type" in result["error"]
+    with _patch_conn(kb_conn), pytest.raises(ToolError, match="Invalid relation_type"):
+        papers_routes.add_relationship_tool(src, tgt, "bogus_relation")
 
 
 # ---------------------------------------------------------------------------
@@ -185,11 +184,8 @@ def test_record_conclusion_tool_success(kb_conn):
 
 
 def test_record_conclusion_tool_invalid_confidence_maps_to_error(kb_conn):
-    with _patch_conn(kb_conn):
-        result = json.loads(papers_routes.record_conclusion_tool("Bad confidence", confidence=1.5))
-
-    assert set(result.keys()) == {"error"}
-    assert "confidence must be between" in result["error"]
+    with _patch_conn(kb_conn), pytest.raises(ToolError, match="confidence must be between"):
+        papers_routes.record_conclusion_tool("Bad confidence", confidence=1.5)
 
 
 # ---------------------------------------------------------------------------
@@ -232,11 +228,8 @@ def test_supersede_conclusion_tool_success(kb_conn):
 
 
 def test_supersede_conclusion_tool_missing_id_maps_to_error(kb_conn):
-    with _patch_conn(kb_conn):
-        result = json.loads(papers_routes.supersede_conclusion_tool(9999, "Replacement claim"))
-
-    assert set(result.keys()) == {"error"}
-    assert "9999 not found" in result["error"]
+    with _patch_conn(kb_conn), pytest.raises(ToolError, match="9999 not found"):
+        papers_routes.supersede_conclusion_tool(9999, "Replacement claim")
 
 
 # ---------------------------------------------------------------------------
@@ -277,16 +270,13 @@ def test_export_bibtex_tool_returns_content_when_no_path(kb_conn):
 
 
 def test_export_bibtex_tool_write_error_maps_to_error(kb_conn, tmp_path, monkeypatch):
-    """A ValueError/OSError from the write branch maps to {"error": ...}."""
+    """A ValueError/OSError from the write branch maps to a ToolError."""
     _register(kb_conn, "Paper One", authors=["Smith"], year=2020)
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
 
-    with _patch_conn(kb_conn):
-        # Bad extension -> _validate_bib_path raises ValueError, caught -> error.
-        result = json.loads(papers_routes.export_bibtex_tool(output_path=str(tmp_path / "bad.txt")))
-
-    assert set(result.keys()) == {"error"}
-    assert "extension" in result["error"]
+    # Bad extension -> _validate_bib_path raises ValueError, caught -> ToolError.
+    with _patch_conn(kb_conn), pytest.raises(ToolError, match="extension"):
+        papers_routes.export_bibtex_tool(output_path=str(tmp_path / "bad.txt"))
 
 
 # ---------------------------------------------------------------------------
@@ -297,15 +287,12 @@ def test_export_bibtex_tool_write_error_maps_to_error(kb_conn, tmp_path, monkeyp
 def test_sync_bibtex_tool_bad_extension_maps_to_error(kb_conn, tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
 
-    with _patch_conn(kb_conn):
-        result = json.loads(papers_routes.sync_bibtex_tool(output_path=str(tmp_path / "refs.txt")))
-
-    assert set(result.keys()) == {"error"}
-    assert "extension" in result["error"]
+    with _patch_conn(kb_conn), pytest.raises(ToolError, match="extension"):
+        papers_routes.sync_bibtex_tool(output_path=str(tmp_path / "refs.txt"))
 
 
 def test_sync_bibtex_tool_oserror_maps_to_error(kb_conn, tmp_path, monkeypatch):
-    """An OSError from sync_bibtex maps to a {"error": ...} dict (path passes
+    """An OSError from sync_bibtex maps to a ToolError (path passes
     validation first)."""
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     out = str(tmp_path / "refs.bib")
@@ -313,12 +300,12 @@ def test_sync_bibtex_tool_oserror_maps_to_error(kb_conn, tmp_path, monkeypatch):
     with (
         _patch_conn(kb_conn),
         patch.object(papers_routes, "sync_bibtex", side_effect=OSError("disk full")),
+        pytest.raises(ToolError) as exc_info,
     ):
-        result = json.loads(papers_routes.sync_bibtex_tool(output_path=out))
+        papers_routes.sync_bibtex_tool(output_path=out)
 
-    assert set(result.keys()) == {"error"}
-    assert "Failed to sync" in result["error"]
-    assert "disk full" in result["error"]
+    assert "Failed to sync" in str(exc_info.value)
+    assert "disk full" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -360,11 +347,24 @@ def test_relocate_paper_tool_missing_paper_maps_to_error(kb_conn, tmp_path):
     target = tmp_path / "somewhere.pdf"
     target.write_text("x", encoding="utf-8")
 
-    with _patch_conn(kb_conn):
-        result = json.loads(papers_routes.relocate_paper_tool(4242, str(target)))
+    with _patch_conn(kb_conn), pytest.raises(ToolError, match="4242"):
+        papers_routes.relocate_paper_tool(4242, str(target))
 
-    assert set(result.keys()) == {"error"}
-    assert "4242" in result["error"]
+
+def test_relocate_paper_tool_hash_mismatch_names_both_hashes(kb_conn, tmp_path):
+    """The mismatch's two hashes, once separate keys of the error dict, are in the tool error's text (#598)."""
+    from knowledge_base.papers import compute_file_hash
+
+    old_file = tmp_path / "old.pdf"
+    old_file.write_text("content", encoding="utf-8")
+    new_file = tmp_path / "new.pdf"
+    new_file.write_text("other content", encoding="utf-8")
+    paper_id = _register(kb_conn, "Movable Paper", source_uri=str(old_file))
+
+    with _patch_conn(kb_conn), pytest.raises(ToolError, match="Content hash mismatch") as exc_info:
+        papers_routes.relocate_paper_tool(paper_id, str(new_file))
+    assert compute_file_hash(old_file) in str(exc_info.value)
+    assert compute_file_hash(new_file) in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

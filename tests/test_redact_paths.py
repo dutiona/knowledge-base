@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import sqlite3
 import sys
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 import fitz
@@ -181,6 +182,17 @@ def test_chunk_metadata_is_redacted_keys_kept(kb_conn, stub_document_embedder):
     }
 
 
+def test_metadata_hex_under_a_context_key_is_redacted(kb_conn):
+    """A hex secret whose only context word is its metadata key is redacted; a commit hash stays readable (#626)."""
+    hex32, hex40 = "0123456789abcdef" * 2, "0123456789abcdef" * 2 + "01234567"
+    raw = json.dumps({"api_key": hex32, "commit": hex40})
+    ingest._insert_chunk(
+        kb_conn, content_hash="h", content="c", source_type="markdown", source_uri="/m.md", chunk_index=0, metadata=raw
+    )
+    stored = json.loads(kb_conn.execute("SELECT metadata FROM chunks").fetchone()["metadata"])
+    assert stored == {"api_key": "[REDACTED:hex-secret]", "commit": hex40}
+
+
 def test_clean_metadata_is_stored_byte_for_byte(kb_conn):
     raw = '{"extractor": "pymupdf4llm@1.27.2.1", "pages": [3]}'
     ingest._insert_chunk(
@@ -350,6 +362,131 @@ def test_figure_text_is_neither_stored_nor_embedded(
     assert not _leaks(GITHUB_TOKEN, meta) and not _leaks(AWS_KEY, meta)
 
 
+def _figure_ids(conn: sqlite3.Connection) -> list[int]:
+    return [r[0] for r in conn.execute("SELECT id FROM chunks WHERE source_type = 'figure' ORDER BY id")]
+
+
+def _another_figure() -> list[dict]:
+    return [{"description": "A bar chart of grain sizes after the opening", "figure_type": "chart", "title": "Grains"}]
+
+
+@pytest.mark.parametrize(
+    "site",
+    [_run_html_images, _run_web_figures, _run_element_captures, "stale-cleanup"],
+    ids=["html-images", "web-figures", "element-captures", "stale-cleanup"],
+)
+def test_a_failed_figure_write_changes_nothing(
+    kb_conn, stub_document_embedder, http_requests, fake_dns, public_net, tmp_path, site
+):
+    """A figure writer replaces its figures in one transaction: a failure keeps the old ones, none left open (#597)."""
+    from knowledge_base.web import _cleanup_stale_inline_images
+
+    fake_dns.update({"img.example.test": ["203.0.113.11"]})
+    seed = _run_html_images if site == "stale-cleanup" else site
+    with (
+        patch("knowledge_base.vision._get_vision_config", return_value=_VISION),
+        patch("knowledge_base.vision._vision_call", return_value=_figure_said()),
+    ):
+        assert seed(kb_conn, tmp_path, http_requests) == 1
+    (old,) = _figure_ids(kb_conn)
+    kb_conn.execute("INSERT INTO papers (title, abstract_chunk_id) VALUES ('p', ?)", (old,))
+    kb_conn.commit()
+
+    failure = sqlite3.OperationalError("disk I/O error")
+    with (
+        patch("knowledge_base.vision._get_vision_config", return_value=_VISION),
+        patch("knowledge_base.vision._vision_call", return_value=_another_figure()),
+        patch("knowledge_base.web._insert_chunk", side_effect=failure),
+        patch("knowledge_base.db.delete_chunk_vecs", side_effect=failure) if site == "stale-cleanup" else nullcontext(),
+        pytest.raises(sqlite3.OperationalError),
+    ):
+        if site == "stale-cleanup":
+            _cleanup_stale_inline_images(kb_conn, "https://docs.example.test/page")
+        else:
+            site(kb_conn, tmp_path, http_requests)
+
+    assert not kb_conn.in_transaction
+    kb_conn.commit()
+    assert _figure_ids(kb_conn) == [old]
+    assert kb_conn.execute("SELECT abstract_chunk_id FROM papers").fetchone()[0] == old
+
+
+@pytest.mark.parametrize("site", [_run_web_figures, _run_element_captures], ids=["web-figures", "element-captures"])
+def test_a_figure_set_replaced_by_known_figures_is_committed(
+    kb_conn, stub_document_embedder, http_requests, tmp_path, site
+):
+    """A writer whose new figures are all already stored still commits the removal of its old ones."""
+    with (
+        patch("knowledge_base.vision._get_vision_config", return_value=_VISION),
+        patch("knowledge_base.vision._vision_call", return_value=_figure_said()),
+    ):
+        assert site(kb_conn, tmp_path, http_requests) == 1
+    (old,) = _figure_ids(kb_conn)
+    known = scrub(_another_figure()[0]["description"])
+    ingest._insert_chunk(
+        kb_conn,
+        content_hash=content_hash(known),
+        content=known,
+        source_type="markdown",
+        source_uri="/n.md",
+        chunk_index=0,
+    )
+    kb_conn.commit()
+    with (
+        patch("knowledge_base.vision._get_vision_config", return_value=_VISION),
+        patch("knowledge_base.vision._vision_call", return_value=_another_figure()),
+    ):
+        assert site(kb_conn, tmp_path, http_requests) == 0
+    assert not kb_conn.in_transaction
+    fresh = get_connection(tmp_path / "test.db")
+    try:
+        assert fresh.execute("SELECT COUNT(*) FROM chunks WHERE id = ?", (old,)).fetchone()[0] == 0
+    finally:
+        fresh.close()
+
+
+def test_ingest_url_keeps_its_figures_when_their_write_fails(
+    kb_conn, stub_document_embedder, http_requests, fake_dns, public_net, monkeypatch
+):
+    """A page's figure phase that fails is logged and skipped; the page's text commit must not store its half-done
+    replacement (#597)."""
+    from knowledge_base.web import ingest_url
+    from tests.test_ingest import _make_test_png
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_BROWSER")
+    fake_dns.update({"docs.example.test": ["203.0.113.12"], "img.example.test": ["203.0.113.11"]})
+    http_requests.handlers["img.example.test"] = lambda request: httpx.Response(200, content=_make_test_png())
+
+    def _serve(words: str) -> None:
+        body = (
+            "<html><head><title>Docs</title></head><body><article><h1>Docs</h1><p>"
+            + words * 12
+            + '</p><img src="https://img.example.test/d.png" alt="diagram"></article></body></html>'
+        ).encode()
+        http_requests.handlers["docs.example.test"] = lambda request: httpx.Response(
+            200, content=body, headers={"content-type": "text/html"}
+        )
+
+    url = "https://docs.example.test/page"
+    _serve("The service reads its settings from the environment. ")
+    with (
+        patch("knowledge_base.vision._get_vision_config", return_value=_VISION),
+        patch("knowledge_base.vision._vision_call", return_value=_figure_said()),
+    ):
+        assert ingest_url(kb_conn, url)["figures_extracted"] == 1
+    (old,) = _figure_ids(kb_conn)
+    _serve("The service now logs to the journal instead. ")
+    with (
+        patch("knowledge_base.vision._get_vision_config", return_value=_VISION),
+        patch("knowledge_base.vision._vision_call", return_value=_another_figure()),
+        patch("knowledge_base.web._insert_chunk", side_effect=sqlite3.OperationalError("disk I/O error")),
+    ):
+        result = ingest_url(kb_conn, url)
+    assert result["figures_extracted"] == 0 and result["chunks_added"] > 0
+    assert not kb_conn.in_transaction
+    assert _figure_ids(kb_conn) == [old]
+
+
 def test_folder_summary_is_a_fixpoint(kb_conn, stub_document_embedder, folder_embedder, tmp_path):
     """A summary joins file names (kept as identity), 200-character cuts and joined lines: each can make a match."""
     from tests.conftest import machine_token
@@ -370,11 +507,8 @@ def test_folder_summary_is_a_fixpoint(kb_conn, stub_document_embedder, folder_em
 
 #: Every function that inserts a chunk, and the test proving it redacts before it hashes or embeds.
 INSERT_SITES = {
-    "ingest._store_text_chunks": "test_ingest_text_neither_stores_nor_embeds_a_secret",
-    "ingest._produce_and_insert_chunks": "test_file_ingest_redacts_markdown_code_and_pdf",
-    "web._extract_html_images": "test_figure_text_is_neither_stored_nor_embedded[html-images]",
-    "web._extract_web_figures": "test_figure_text_is_neither_stored_nor_embedded[web-figures]",
-    "web._extract_element_captures": "test_figure_text_is_neither_stored_nor_embedded[element-captures]",
+    "ingest._insert_chunks": "test_file_ingest_redacts_markdown_code_and_pdf",
+    "web._replace_figures": "test_figure_text_is_neither_stored_nor_embedded",
     "vision._persist_figures": "test_figure_text_is_neither_stored_nor_embedded[pdf-figures]",
 }
 

@@ -968,6 +968,7 @@ build = [
 ]
 dev = [
     { name = "basedpyright" },
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -1010,6 +1011,7 @@ browser = [{ name = "playwright", specifier = ">=1.40" }]
 build = [{ name = "hatchling", specifier = ">=1.27" }]
 dev = [
     { name = "basedpyright", specifier = ">=1.21" },
+    { name = "jsonschema", specifier = ">=4.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "ruff", specifier = ">=0.15.5" },

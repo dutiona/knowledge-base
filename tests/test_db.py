@@ -1888,3 +1888,132 @@ def test_bind_refuses_a_drifted_config_row_while_the_active_space_matches(tmp_pa
     conn.commit()
     with pytest.raises(KnowledgeBaseError, match=r"config embed_model is 'drifted-model'.*rebind"):
         bind_embed_config(conn, load_embed_settings())
+
+
+class _Provider:
+    def embed(self, texts, model="x", expected_dim=None):
+        return [[0.1] * (expected_dim or TEST_EMBED_DIM) for _ in texts]
+
+
+def _vector_rows(conn: sqlite3.Connection, ids: list[int]) -> int:
+    tables = [
+        r[0]
+        for r in conn.execute("SELECT e.table_name FROM embed_spaces e JOIN sqlite_master m ON m.name = e.table_name")
+    ]
+    marks = ",".join("?" * len(ids))
+    return sum(
+        conn.execute(f"SELECT COUNT(*) FROM [{t}] WHERE chunk_id IN ({marks})", ids).fetchone()[0]  # noqa: S608
+        for t in tables
+    )
+
+
+@pytest.mark.parametrize("path", ["cascade", "remove", "reingest", "re-embed"])
+def test_a_connection_older_than_a_new_space_still_deletes(kb_conn, tmp_path, stub_document_embedder, path):
+    """SQLite before 3.54.1 fails a DELETE on chunks that is a connection's first statement after another
+    connection's DDL (#633); every path through an older connection must still delete."""
+    from unittest.mock import patch
+
+    from knowledge_base.embed_swap import re_embed
+    from knowledge_base.ingest import ingest_file, ingest_text, reingest_file, remove_document
+
+    url = "https://example.test/page"
+    ingest_text(kb_conn, "a page about sparse mathematical morphology " * 20, source_uri=url, source_type="web")
+    doc = tmp_path / "notes.md"
+    doc.write_text("# Notes\n\n" + "the first version of these notes " * 40)
+    ingest_file(kb_conn, doc)
+    url_ids = [r[0] for r in kb_conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (url,))]
+    old_doc_ids = [r[0] for r in kb_conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (doc.as_posix(),))]
+    assert url_ids and old_doc_ids
+    kb_conn.execute("SELECT COUNT(*) FROM chunks").fetchone()  # A has read the old schema
+
+    other = get_connection(tmp_path / "test.db")
+    create_space(other, "s", TEST_EMBED_MODEL, TEST_EMBED_DIM)
+    other.close()
+
+    result = None
+    if path == "cascade":
+        delete_chunks_cascade(kb_conn, url_ids)
+        kb_conn.commit()
+    elif path == "remove":
+        remove_document(kb_conn, url)
+    elif path == "reingest":
+        doc.write_text("# Notes\n\n" + "the second version of these notes " * 40)
+        reingest_file(kb_conn, doc)
+    else:
+        with patch("knowledge_base.embed_swap.get_provider", return_value=_Provider()):
+            result = re_embed(kb_conn)
+
+    fresh = get_connection(tmp_path / "test.db")
+    try:
+        if path in ("cascade", "remove"):
+            assert fresh.execute("SELECT COUNT(*) FROM chunks WHERE source_uri = ?", (url,)).fetchone()[0] == 0
+            assert _vector_rows(fresh, url_ids) == 0
+        elif path == "reingest":
+            contents = [
+                r[0] for r in fresh.execute("SELECT content FROM chunks WHERE source_uri = ?", (doc.as_posix(),))
+            ]
+            assert contents and all("second version" in c for c in contents)
+            assert _vector_rows(fresh, old_doc_ids) == 0
+        else:
+            assert result is not None
+            space = fresh.execute(
+                "SELECT status, table_name FROM embed_spaces WHERE name = ?", (result["space"],)
+            ).fetchone()
+            assert space["status"] == "active"
+            chunks = fresh.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            assert fresh.execute(f"SELECT COUNT(*) FROM [{space['table_name']}]").fetchone()[0] == chunks  # noqa: S608
+    finally:
+        fresh.close()
+
+
+def test_chunk_and_paper_rows_are_deleted_only_by_their_owner():
+    """A bare DELETE on chunks or papers skips the reference and every-space vector cleanup, and SQLite before 3.54.1
+    fails it when it is a connection's first statement after another connection's DDL (#633)."""
+    import ast
+    import re
+    from pathlib import Path
+
+    import knowledge_base
+
+    pattern = re.compile(r"DELETE\s+FROM\s+(chunks|papers)\b", re.IGNORECASE)
+    root = Path(knowledge_base.__file__).parent
+    found: set[str] = set()
+    for source in root.rglob("*.py"):
+        module = ".".join(source.relative_to(root).with_suffix("").parts)
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                for inner in ast.walk(node):
+                    if isinstance(inner, ast.Constant) and isinstance(inner.value, str) and pattern.search(inner.value):
+                        found.add(f"{module}.{node.name}")
+    assert found == {"db.delete_chunks_cascade", "redact_store._merge_into"}, (
+        f"delete chunks and papers through db.delete_chunks_cascade (#633): {sorted(found)}"
+    )
+
+
+def test_a_space_created_before_the_cascade_writes_loses_the_chunks_vectors_too(kb_conn, tmp_path, monkeypatch):
+    """Spaces are listed once the cascade holds the write lock: one created and filled just before its first write
+    must not keep a vector of a deleted chunk (review of #633)."""
+    import knowledge_base.db as db_mod
+    from knowledge_base.db import insert_chunk_vec
+
+    chunk = kb_conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h', 'x', 'markdown', '/d.md', 0)"
+    ).lastrowid
+    kb_conn.commit()
+    real = db_mod._batched_execute
+    created: list[str] = []
+
+    def _space_appears_first(conn, *args, **kwargs):
+        if not created:  # the cascade's first write: another connection creates and fills a space just before it
+            other = get_connection(tmp_path / "test.db")
+            created.append(create_space(other, "late", TEST_EMBED_MODEL, TEST_EMBED_DIM)["table_name"])
+            insert_chunk_vec(other, chunk, [0.1] * TEST_EMBED_DIM, table_name=created[0])
+            other.commit()
+            other.close()
+        return real(conn, *args, **kwargs)
+
+    monkeypatch.setattr(db_mod, "_batched_execute", _space_appears_first)
+    delete_chunks_cascade(kb_conn, [chunk])
+    kb_conn.commit()
+    assert kb_conn.execute(f"SELECT COUNT(*) FROM [{created[0]}]").fetchone()[0] == 0  # noqa: S608

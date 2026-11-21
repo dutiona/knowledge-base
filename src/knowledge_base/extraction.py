@@ -1009,7 +1009,7 @@ def estimate_extraction_time(conn: sqlite3.Connection, paper_id: int) -> dict:
     """Estimate extraction time for a paper without running it.
 
     Returns dict with total_chars, chunk_count, estimated_seconds, is_long.
-    Returns {"error": ...} if paper or chunks not found.
+    Raises NotFoundError when the paper or its chunks are not found.
     """
     paper = conn.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone()
     if not paper:

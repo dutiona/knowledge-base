@@ -600,7 +600,8 @@ def test_backfill_writes_nothing_for_a_chunk_changed_while_it_embeds(tmp_path):
     gone = _add_chunk(conn, "zero", 1)
     rewritten = _add_chunk(conn, "two", 2)
     create_space(conn, "s", "m", 4)
-    # Opened after create_space: a connection older than a new vec0 table fails its DELETE on chunks.
+    # Opened after create_space: the writer's first statement is a bare DELETE on chunks, which SQLite < 3.54.1 fails
+    # on a connection older than any other connection's DDL (#633).
     other = get_connection(tmp_path / "test.db")
 
     def _concurrent_writer():

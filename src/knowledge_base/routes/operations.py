@@ -7,7 +7,8 @@ import json
 from fastmcp import FastMCP
 
 from .._conn import _get_conn
-from ..exceptions import KnowledgeBaseError
+from . import tool
+from ..exceptions import NotFoundError
 from ..jobs import get_job, list_jobs as _list_jobs
 from ..prediction_errors import (
     list_prediction_errors as _list_prediction_errors,
@@ -17,7 +18,7 @@ from ..prediction_errors import (
 mcp = FastMCP("operations-routes")
 
 
-@mcp.tool()
+@tool(mcp)
 def get_job_status_tool(job_id: int) -> str:
     """Get the status and progress of a background extraction job.
 
@@ -27,11 +28,11 @@ def get_job_status_tool(job_id: int) -> str:
     conn = _get_conn()
     job = get_job(conn, job_id)
     if job is None:
-        return json.dumps({"error": f"Job {job_id} not found"})
+        raise NotFoundError(f"Job {job_id} not found")
     return json.dumps(job)
 
 
-@mcp.tool()
+@tool(mcp)
 def list_jobs_tool(status: str | None = None, paper_id: int | None = None) -> str:
     """List background extraction jobs.
 
@@ -43,7 +44,7 @@ def list_jobs_tool(status: str | None = None, paper_id: int | None = None) -> st
     return json.dumps(_list_jobs(conn, status=status, paper_id=paper_id))
 
 
-@mcp.tool()
+@tool(mcp)
 def list_prediction_errors_tool(
     since: str | None = None,
     unresolved_only: bool = True,
@@ -61,7 +62,7 @@ def list_prediction_errors_tool(
     return json.dumps(_list_prediction_errors(conn, since=since, unresolved_only=unresolved_only))
 
 
-@mcp.tool()
+@tool(mcp)
 def resolve_prediction_error_tool(error_id: int) -> str:
     """Mark a prediction error as resolved (e.g. after ingesting content that fills the gap).
 
@@ -69,8 +70,4 @@ def resolve_prediction_error_tool(error_id: int) -> str:
         error_id: ID of the prediction error to resolve.
     """
     conn = _get_conn()
-    try:
-        return json.dumps(resolve_prediction_error(conn, error_id))
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    return json.dumps(resolve_prediction_error(conn, error_id))

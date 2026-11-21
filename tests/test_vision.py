@@ -6,6 +6,7 @@ import subprocess
 import fitz as _fitz
 import httpx
 import pytest
+from fastmcp.exceptions import ToolError
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1469,18 +1470,16 @@ def test_mcp_tool_page_conversion(mock_get_conn, mock_eft, mock_submit):
 
 @patch("knowledge_base.routes.extraction._get_conn")
 def test_mcp_tool_rejects_zero_and_negative_pages(mock_get_conn):
-    """extract_figures_tool rejects pages <= 0."""
+    """extract_figures_tool raises a tool error for pages <= 0."""
     from knowledge_base.routes.extraction import extract_figures_tool
 
     mock_get_conn.return_value = MagicMock()
 
-    result = json.loads(extract_figures_tool(paper_id=1, pages=[0, 3]))
-    assert "error" in result
-    assert "Pages must be >= 1" in result["error"]
+    with pytest.raises(ToolError, match="Pages must be >= 1"):
+        extract_figures_tool(paper_id=1, pages=[0, 3])
 
-    result_neg = json.loads(extract_figures_tool(paper_id=1, pages=[-1]))
-    assert "error" in result_neg
-    assert "Pages must be >= 1" in result_neg["error"]
+    with pytest.raises(ToolError, match="Pages must be >= 1"):
+        extract_figures_tool(paper_id=1, pages=[-1])
 
 
 # ---------------------------------------------------------------------------

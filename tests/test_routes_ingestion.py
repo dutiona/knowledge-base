@@ -2,7 +2,7 @@
 
 These exercise the *server-only* logic of each tool wrapper in
 ``knowledge_base.routes.ingestion`` — path existence checks, dir-vs-file
-branching, result aggregation, exception→JSON error mapping, and the reingest
+branching, result aggregation, exception→ToolError mapping, and the reingest
 orchestration side-effect (stale 'similar' relationship invalidation + auto_relate
 job submission). The domain ingestion functions (``ingest_file``,
 ``ingest_directory``, ``reingest_file``, ``ingest_url``) compute embeddings via
@@ -16,6 +16,7 @@ disable/error paths) run against the real ``kb_conn`` temp DB with no mocks.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from unittest.mock import patch
 
@@ -37,11 +38,13 @@ from knowledge_base.routes.ingestion import (
 
 
 def test_ingest_nonexistent_path_returns_error(kb_conn, tmp_path):
-    """A path that does not exist short-circuits to an error dict (no domain call)."""
+    """A path that does not exist short-circuits to a ToolError (no domain call)."""
     missing = tmp_path / "does_not_exist.pdf"
-    with patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn):
-        result = json.loads(ingest(str(missing)))
-    assert result == {"error": f"Path does not exist: {missing.resolve()}"}
+    with (
+        patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
+        pytest.raises(ToolError, match=re.escape(f"Path does not exist: {missing.resolve()}")),
+    ):
+        ingest(str(missing))
 
 
 def test_ingest_file_passes_through_result_and_forwards_args(kb_conn, tmp_path):
@@ -109,9 +112,11 @@ def test_ingest_directory_aggregates_per_file_results(kb_conn, tmp_path):
 
 def test_reingest_nonexistent_path_returns_error(kb_conn, tmp_path):
     missing = tmp_path / "gone.pdf"
-    with patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn):
-        result = json.loads(reingest(str(missing)))
-    assert result == {"error": f"Path does not exist: {missing.resolve()}"}
+    with (
+        patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
+        pytest.raises(ToolError, match=re.escape(f"Path does not exist: {missing.resolve()}")),
+    ):
+        reingest(str(missing))
 
 
 def test_reingest_happy_path_passthrough_no_affected_papers(kb_conn, tmp_path):
@@ -135,20 +140,20 @@ def test_reingest_happy_path_passthrough_no_affected_papers(kb_conn, tmp_path):
     mock_submit.assert_not_called()
 
 
-def test_reingest_maps_knowledgebase_error_to_json(kb_conn, tmp_path):
-    """reingest_file raising a KnowledgeBaseError → {"error": str(e), **e.details}."""
+def test_reingest_maps_knowledgebase_error_to_a_tool_error(kb_conn, tmp_path):
+    """reingest_file raising a KnowledgeBaseError → a ToolError carrying its message."""
     f = tmp_path / "doc.md"
     f.write_text("")
-    exc = NotFoundError("No chunks found for source_uri: x", details={"source_uri": "x"})
+    exc = NotFoundError("No chunks found for source_uri: x")
 
     with (
         patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
         patch("knowledge_base.routes.ingestion.reingest_file", side_effect=exc),
         patch("knowledge_base.jobs.submit_job") as mock_submit,
+        pytest.raises(ToolError, match=re.escape(str(exc))),
     ):
-        result = json.loads(reingest(str(f)))
+        reingest(str(f))
 
-    assert result == {"error": str(exc), "source_uri": "x"}
     mock_submit.assert_not_called()
 
 
@@ -261,7 +266,7 @@ def test_ingest_url_passthrough_success(kb_conn):
 
 def test_ingest_url_maps_knowledgebase_error_to_a_tool_error(kb_conn):
     """A KnowledgeBaseError from _ingest_url is an MCP tool error carrying its reason."""
-    exc = ValidationError("URL must include a hostname", details={"url": "ftp://x"})
+    exc = ValidationError("URL must include a hostname")
     with (
         patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
         patch("knowledge_base.routes.ingestion._ingest_url", side_effect=exc),
@@ -321,13 +326,13 @@ def test_configure_chunking_set_semantic_persists(kb_conn):
 
 
 def test_configure_chunking_invalid_strategy_rejected_no_write(kb_conn):
-    """An invalid strategy returns an error mentioning valid options and does not
+    """An invalid strategy raises a ToolError mentioning valid options and does not
     mutate the stored config."""
     with patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn):
-        result = json.loads(configure_chunking("bogus"))
-        assert "error" in result
-        assert "mechanical" in result["error"]
-        assert "semantic" in result["error"]
+        with pytest.raises(ToolError) as exc_info:
+            configure_chunking("bogus")
+        assert "mechanical" in str(exc_info.value)
+        assert "semantic" in str(exc_info.value)
         # Config unchanged — still the default.
         after = json.loads(configure_chunking())
     assert after == {"chunk_strategy": "mechanical"}
@@ -347,25 +352,26 @@ def test_configure_browser_tool_disable_success(kb_conn):
 
 
 def test_configure_browser_tool_maps_validation_error(kb_conn):
-    """An invalid (non-absolute / missing) venv path surfaces as an error dict via
+    """An invalid (non-absolute / missing) venv path surfaces as a ToolError via
     the KnowledgeBaseError mapping — exercised against the real configure_browser."""
-    with patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn):
-        result = json.loads(configure_browser_tool(venv_path="/nonexistent/venv/does/not/exist"))
-    assert "error" in result
-    # configure_browser raises "Python executable not found in venv at ..."
-    assert "Python executable not found" in result["error"]
+    with (
+        patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
+        # configure_browser raises "Python executable not found in venv at ..."
+        pytest.raises(ToolError, match="Python executable not found"),
+    ):
+        configure_browser_tool(venv_path="/nonexistent/venv/does/not/exist")
 
 
-def test_configure_browser_tool_error_mapping_includes_details(kb_conn):
-    """When configure_browser raises a KnowledgeBaseError with details, the wrapper
-    merges them into the JSON error response."""
-    exc = ValidationError("boom", details={"field": "venv_path"})
+def test_configure_browser_tool_maps_a_domain_error(kb_conn):
+    """When configure_browser raises a KnowledgeBaseError, the wrapper surfaces its
+    message as a ToolError."""
+    exc = ValidationError("boom")
     with (
         patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn),
         patch("knowledge_base.routes.ingestion.configure_browser", side_effect=exc),
+        pytest.raises(ToolError, match=re.escape("boom")),
     ):
-        result = json.loads(configure_browser_tool(venv_path="/some/path"))
-    assert result == {"error": "boom", "field": "venv_path"}
+        configure_browser_tool(venv_path="/some/path")
 
 
 # ---------------------------------------------------------------------------

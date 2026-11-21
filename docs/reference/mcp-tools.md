@@ -15,8 +15,11 @@ Complete reference for the knowledge-base MCP tools: 47 tools over stdio, 3 over
 Every failure of `search_index`, `ingest_text` and `ingest_url` is an MCP tool error (`isError: true`) whose text KB
 wrote: a refusal gives its reason, an embedder failure gives its kind (`HTTP 503`, `ConnectError`) and never the
 endpoint, with "retry later" only when a retry can help. A failed ingest stored no text. Over HTTP, any other
-exception reads `Error calling tool '<name>'`; its detail goes only to the server log. The other tools return
-failures as `{"error": ...}` results.
+exception reads `Error calling tool '<name>'`; its detail goes only to the server log. Every other tool reports a
+failure the same way, as a tool error whose text says why; a successful result is never an `{"error": ...}` object
+(a benchmark's per-space `error` entry belongs to a successful result). A failed call leaves no transaction open:
+what it had not yet committed is rolled back; a step it had already committed (a paper registered before its
+similarity job failed to queue) stays.
 
 A document's `source_uri` names it in every result. It is an opaque identifier, never parsed as a URL:
 
@@ -61,7 +64,8 @@ Ingest a file or directory into the research index.
 }
 ```
 
-Uses content-hash deduplication -- unchanged chunks are skipped.
+Uses content-hash deduplication -- unchanged chunks are skipped. A file is stored in one transaction: one that fails
+stores nothing of itself, and a directory ingest stops at the first such file, keeping the files stored before it.
 
 ### reingest
 

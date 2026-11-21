@@ -132,15 +132,10 @@ def cmd_reingest(args: argparse.Namespace) -> None:
 
     conn = _get_conn(args.db)
     p = Path(args.path).expanduser().resolve()
-
-    if not p.exists():
-        _print_error({"error": f"Path does not exist: {p}"})
-        sys.exit(1)
-
-    result = reingest_file(conn, p, args.source_type, session_id=args.session_id)
+    result = reingest_file(conn, p, args.source_type, session_id=args.session_id)  # refuses a missing file
 
     # Post-reingest: invalidate stale "similar" relationships and submit
-    # auto_relate jobs for affected papers (mirrors routes/ingestion.py:83-99).
+    # auto_relate jobs for affected papers (as the reingest tool does).
     source_uri = p.as_posix()
     affected = conn.execute("SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)).fetchall()
     submitted_job_ids: list[int] = []
@@ -184,7 +179,7 @@ def cmd_rebind(args: argparse.Namespace) -> None:
 
 
 def cmd_remove(args: argparse.Namespace) -> None:
-    """Remove one URL or content document (#595); the store lock keeps the server stopped."""
+    """Remove one URL, content or gone file's document (#595, #631); the store lock keeps the server stopped."""
     from .ingest import remove_document
 
     if not args.db.is_file():  # a mistyped path would otherwise be created
@@ -353,10 +348,17 @@ def build_parser() -> argparse.ArgumentParser:
     # -- remove ---------------------------------------------------------------
     p_remove = sub.add_parser(
         "remove",
-        help="Remove one URL or content:// document and its chunks (server stopped).",
+        help=(
+            "Remove one document and its chunks: a URL, a content:// document, or a file that no longer exists "
+            "(server stopped)."
+        ),
         description=(
             "Remove the document stored under SOURCE_URI: every chunk under it, a web page's figures included, their "
-            "vectors in every embedding space and every reference to them, in one transaction. A passage is stored "
+            "vectors in every embedding space and every reference to them, in one transaction. A file document is "
+            "removed only once its file is gone (deleted or moved); reingest replaces one that exists. Its folder's "
+            "summary is dropped until the folder's next ingest or redact --rewrite; a registered paper keeps its "
+            "record and path (move a registered paper's file with relocate_paper_tool instead: it keeps its chunks), "
+            "and images extracted from the file stay on disk. A passage is stored "
             "once, under the first document that contained it, so a removed document may hold the only copy of a "
             "passage a later document also contained: that passage then leaves search for both, until the later "
             "document is ingested again. The removed text stays in the database file until "
@@ -366,8 +368,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_remove.add_argument(
         "source_uri",
         help=(
-            "the document's source_uri as search results show it: an http(s) URL (matched without its userinfo) or "
-            "content://<machine>/<name>"
+            "the document's source_uri as search results show it: an http(s) URL (matched without its userinfo), "
+            "content://<machine>/<name>, or the absolute path of a file that no longer exists"
         ),
     )
 

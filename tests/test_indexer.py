@@ -899,11 +899,92 @@ def test_remove_an_unknown_source_uri_changes_nothing(tmp_path, capsys):
     assert _dump(db) == before
 
 
-def test_remove_refuses_a_file_document(tmp_path, capsys):
+def test_remove_refuses_a_file_that_exists(tmp_path, capsys):
     db, doc = _store(tmp_path)
     before = _dump(db)
     assert _exit_of(["--db", str(db), "remove", doc.as_posix()]) == 1
     assert "reingest" in json.loads(capsys.readouterr().err)["error"]
+    assert _dump(db) == before
+    with patch("knowledge_base.ingest.embed", _fake_embed), patch("knowledge_base.folder_summaries.embed", _fake_embed):
+        assert _exit_of(["--db", str(db), "--quiet", "reingest", str(doc)]) == 0
+
+
+def test_remove_a_deleted_files_document(tmp_path, capsys, stub_document_embedder):
+    """A file document whose file is gone is removed by its stored path, like a URL document (#631)."""
+    from knowledge_base.conclusions import record_conclusion
+    from knowledge_base.db import insert_chunk_vec
+    from knowledge_base.embed_swap import create_space
+    from knowledge_base.ingest import ingest_file, ingest_text
+    from knowledge_base.papers import register_paper
+    from tests.declared_env import TEST_EMBED_MODEL
+
+    conn, db = _setup(tmp_path)
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    doc = notes / "gone.md"
+    doc.write_text("# Gone\n\nA passage about granulometries that will be deleted.\n")
+    with patch("knowledge_base.folder_summaries.embed", _fake_embed):
+        ingest_file(conn, doc)
+    uri = doc.resolve().as_posix()
+    ingest_text(conn, "Another document entirely.", source_uri="content:///other", source_type="markdown")
+    (gone,), (other,) = _chunk_ids(conn, uri), _chunk_ids(conn, "content:///other")
+    space = create_space(conn, "spare", TEST_EMBED_MODEL, TEST_EMBED_DIM)["table_name"]
+    for chunk in (gone, other):
+        insert_chunk_vec(conn, chunk, [0.1] * TEST_EMBED_DIM, table_name=space)
+    conn.execute("UPDATE embed_spaces SET chunk_count = 2 WHERE name = 'spare'")
+    paper = register_paper(conn, "P")["paper_id"]
+    conn.execute("UPDATE papers SET abstract_chunk_id = ? WHERE id = ?", (gone, paper))
+    conn.execute("INSERT INTO paper_paths (paper_id, path) VALUES (?, ?)", (paper, uri))
+    conclusion = record_conclusion(conn, "claim", source_chunk_ids=[gone, other])["conclusion_id"]
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM folder_summaries").fetchone()[0] == 1
+    conn.close()
+    doc.unlink()
+
+    main(["--db", str(db), "remove", uri])
+
+    assert json.loads(capsys.readouterr().out) == {"source_uri": uri, "chunks_deleted": 1}
+    conn = get_connection(db)
+    assert _chunk_ids(conn, uri) == []
+    assert conn.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'granulometries'").fetchone()[0] == 0
+    for table in ("chunks_vec", space):
+        assert _vector_ids(conn, table) == {other}
+    for row in conn.execute("SELECT table_name, chunk_count FROM embed_spaces"):
+        assert row["chunk_count"] == len(_vector_ids(conn, row["table_name"]))
+    assert conn.execute("SELECT abstract_chunk_id FROM papers WHERE id = ?", (paper,)).fetchone()[0] is None
+    cited = conn.execute("SELECT source_chunk_ids FROM conclusions WHERE id = ?", (conclusion,)).fetchone()[0]
+    assert json.loads(cited) == [other]
+    assert conn.execute("SELECT COUNT(*) FROM folder_summaries").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM folder_summaries_vec").fetchone()[0] == 0
+    assert conn.execute("SELECT path FROM paper_paths WHERE paper_id = ?", (paper,)).fetchone()[0] == uri
+
+
+def test_remove_a_moved_files_document(tmp_path, stub_document_embedder):
+    from knowledge_base.ingest import ingest_file
+
+    conn, db = _setup(tmp_path)
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    old = tmp_path / "a" / "doc.md"
+    old.write_text("# Doc\n\n" + "".join(f"distinct passage number {i}. " for i in range(60)))
+    with patch("knowledge_base.folder_summaries.embed", _fake_embed):
+        stored = ingest_file(conn, old)
+    conn.close()
+    new = old.rename(tmp_path / "b" / "doc.md")
+
+    assert _exit_of(["--db", str(db), "--quiet", "remove", old.resolve().as_posix()]) == 0
+    conn = get_connection(db)
+    with patch("knowledge_base.folder_summaries.embed", _fake_embed):
+        again = ingest_file(conn, new)
+    assert (again["chunks_added"], again["chunks_skipped"]) == (stored["chunks_added"], 0)
+
+
+def test_reingest_of_a_gone_file_names_remove(tmp_path, capsys):
+    db, doc = _store(tmp_path)
+    before = _dump(db)
+    doc.unlink()
+    assert _exit_of(["--db", str(db), "reingest", str(doc)]) == 1
+    assert "knowledge-base-ingest remove" in json.loads(capsys.readouterr().err)["error"]
     assert _dump(db) == before
 
 

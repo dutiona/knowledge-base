@@ -16,8 +16,10 @@ test database (which would trigger real LLM extraction).
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from knowledge_base.jobs import submit_job
 from knowledge_base.papers import register_paper
@@ -63,9 +65,8 @@ def test_get_job_status_tool_returns_job(kb_conn, monkeypatch):
 def test_get_job_status_tool_missing_returns_error(kb_conn, monkeypatch):
     monkeypatch.setattr(ops, "_get_conn", lambda: kb_conn)
 
-    result = json.loads(ops.get_job_status_tool(99999))
-
-    assert result == {"error": "Job 99999 not found"}
+    with pytest.raises(ToolError, match=re.escape("Job 99999 not found")):
+        ops.get_job_status_tool(99999)
 
 
 # --------------------------------------------------------------------------- #
@@ -214,10 +215,7 @@ def test_resolve_prediction_error_tool_success(kb_conn, monkeypatch):
 def test_resolve_prediction_error_tool_missing_maps_error(kb_conn, monkeypatch):
     monkeypatch.setattr(ops, "_get_conn", lambda: kb_conn)
 
-    result = json.loads(ops.resolve_prediction_error_tool(12345))
-
     # resolve_prediction_error raises NotFoundError (a KnowledgeBaseError);
-    # the wrapper maps it to {"error": <message>, **details}. details is empty.
-    assert "error" in result
-    assert "12345" in result["error"]
-    assert result == {"error": "prediction error 12345 not found"}
+    # the wrapper maps it to a ToolError carrying the message.
+    with pytest.raises(ToolError, match=re.escape("prediction error 12345 not found")):
+        ops.resolve_prediction_error_tool(12345)

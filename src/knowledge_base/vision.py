@@ -2113,7 +2113,8 @@ def estimate_figures_time(
     Uses the dual-path pipeline: counts extracted images (primary) and
     vector/heuristic pages (fallback) to compute the ETA.
 
-    Returns {"error": ...} on validation failure.
+    Raises ValidationError when vision is off, the source is not a PDF or a page is out of range, and
+    NotFoundError when the paper or its source is not found.
     """
     _require_vision()
     ctx = _resolve_paper_context(conn, paper_id)
