@@ -17,7 +17,9 @@ wrote: a refusal gives its reason, an embedder failure gives its kind (`HTTP 503
 endpoint, with "retry later" only when a retry can help. A failed ingest stored no text. Over HTTP, any other
 exception reads `Error calling tool '<name>'`; its detail goes only to the server log. Every other tool reports a
 failure the same way, as a tool error whose text says why; a successful result is never an `{"error": ...}` object
-(a benchmark's per-space `error` entry belongs to a successful result). A failed call leaves nothing half-written.
+(a benchmark's per-space `error` entry belongs to a successful result). A failed call leaves no transaction open:
+what it had not yet committed is rolled back; a step it had already committed (a paper registered before its
+similarity job failed to queue) stays.
 
 A document's `source_uri` names it in every result. It is an opaque identifier, never parsed as a URL:
 
