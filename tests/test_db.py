@@ -1988,3 +1988,32 @@ def test_chunk_and_paper_rows_are_deleted_only_by_their_owner():
     assert found == {"db.delete_chunks_cascade", "redact_store._merge_into"}, (
         f"delete chunks and papers through db.delete_chunks_cascade (#633): {sorted(found)}"
     )
+
+
+def test_a_space_created_before_the_cascade_writes_loses_the_chunks_vectors_too(kb_conn, tmp_path, monkeypatch):
+    """Spaces are listed once the cascade holds the write lock: one created and filled just before its first write
+    must not keep a vector of a deleted chunk (review of #633)."""
+    import knowledge_base.db as db_mod
+    from knowledge_base.db import insert_chunk_vec
+
+    chunk = kb_conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h', 'x', 'markdown', '/d.md', 0)"
+    ).lastrowid
+    kb_conn.commit()
+    real = db_mod._batched_execute
+    created: list[str] = []
+
+    def _space_appears_first(conn, *args, **kwargs):
+        if not created:  # the cascade's first write: another connection creates and fills a space just before it
+            other = get_connection(tmp_path / "test.db")
+            created.append(create_space(other, "late", TEST_EMBED_MODEL, TEST_EMBED_DIM)["table_name"])
+            insert_chunk_vec(other, chunk, [0.1] * TEST_EMBED_DIM, table_name=created[0])
+            other.commit()
+            other.close()
+        return real(conn, *args, **kwargs)
+
+    monkeypatch.setattr(db_mod, "_batched_execute", _space_appears_first)
+    delete_chunks_cascade(kb_conn, [chunk])
+    kb_conn.commit()
+    assert kb_conn.execute(f"SELECT COUNT(*) FROM [{created[0]}]").fetchone()[0] == 0  # noqa: S608
