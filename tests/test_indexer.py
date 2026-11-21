@@ -683,6 +683,7 @@ def test_cli_rebind_repairs_drifted_config_identity(tmp_path):
 
 #: Every subcommand, classified: a writing one holds the store lock, a read-only one takes none.
 _WRITING = {
+    "remove": ["remove", "content:///x"],
     "ingest": ["ingest", "{doc}"],
     "reingest": ["reingest", "{doc}"],
     "ingest-url": ["ingest-url", "https://docs.example.test/"],
@@ -811,3 +812,119 @@ def test_a_server_started_during_a_transition_exits_78_naming_it(tmp_path, monke
     assert code == 78
     assert f"knowledge-base-ingest {command} (pid {os.getpid()}, since " in err
     _plain_open(db_path)  # the transition completed
+
+
+# --- #595: knowledge-base-ingest remove ---
+
+_PAGE = "https://docs.example.test/page"
+
+
+def _chunk_ids(conn, source_uri: str) -> list[int]:
+    return [r["id"] for r in conn.execute("SELECT id FROM chunks WHERE source_uri = ? ORDER BY id", (source_uri,))]
+
+
+def _vector_ids(conn, table: str) -> set[int]:
+    return {r[0] for r in conn.execute(f"SELECT chunk_id FROM [{table}]")}  # noqa: S608
+
+
+def test_remove_a_url_document(tmp_path, capsys, stub_document_embedder):
+    from knowledge_base.conclusions import record_conclusion
+    from knowledge_base.db import insert_chunk_vec
+    from knowledge_base.embed_swap import create_space
+    from knowledge_base.ingest import ingest_text
+    from knowledge_base.papers import add_relationship, register_paper
+    from tests.declared_env import TEST_EMBED_MODEL
+
+    conn, db = _setup(tmp_path)
+    ingest_text(conn, "A page about attention mechanisms.", source_uri=_PAGE, source_type="web")
+    figure = conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('fig-hash', 'A figure of the page.', 'figure', ?, 9000)",
+        (_PAGE,),
+    ).lastrowid
+    assert figure is not None
+    insert_chunk_vec(conn, figure, [0.1] * TEST_EMBED_DIM)
+    ingest_text(conn, "Another document entirely.", source_uri="content:///other", source_type="markdown")
+    page_chunk, other_chunk = _chunk_ids(conn, _PAGE)[0], _chunk_ids(conn, "content:///other")[0]
+    space = create_space(conn, "spare", TEST_EMBED_MODEL, TEST_EMBED_DIM)["table_name"]
+    for chunk in (page_chunk, figure, other_chunk):
+        insert_chunk_vec(conn, chunk, [0.1] * TEST_EMBED_DIM, table_name=space)
+    conn.execute("UPDATE embed_spaces SET chunk_count = 3 WHERE name = 'spare'")
+    paper = register_paper(conn, "P")["paper_id"]
+    other_paper = register_paper(conn, "Q")["paper_id"]
+    conn.execute("UPDATE papers SET abstract_chunk_id = ? WHERE id = ?", (page_chunk, paper))
+    add_relationship(conn, paper, other_paper, "cites", evidence_chunk_id=page_chunk)
+    conclusion = record_conclusion(conn, "claim", source_chunk_ids=[page_chunk, other_chunk])["conclusion_id"]
+    conn.commit()
+    conn.close()
+
+    main(["--db", str(db), "remove", "https://reader:example-pass@docs.example.test/page"])
+
+    assert json.loads(capsys.readouterr().out) == {"source_uri": _PAGE, "chunks_deleted": 2}
+    conn = get_connection(db)
+    assert _chunk_ids(conn, _PAGE) == []
+    assert conn.execute("SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'attention'").fetchone()[0] == 0
+    for table in ("chunks_vec", space):
+        assert _vector_ids(conn, table) == {other_chunk}
+    for row in conn.execute("SELECT table_name, chunk_count FROM embed_spaces"):
+        assert row["chunk_count"] == len(_vector_ids(conn, row["table_name"]))
+    assert conn.execute("SELECT abstract_chunk_id FROM papers WHERE id = ?", (paper,)).fetchone()[0] is None
+    assert conn.execute("SELECT evidence_chunk_id FROM relationships").fetchone()[0] is None
+    cited = conn.execute("SELECT source_chunk_ids FROM conclusions WHERE id = ?", (conclusion,)).fetchone()[0]
+    assert json.loads(cited) == [other_chunk]
+    assert _chunk_ids(conn, "content:///other") == [other_chunk]
+
+
+def test_remove_a_content_document_takes_its_shared_passage_from_later_ones(tmp_path, stub_document_embedder):
+    from knowledge_base.ingest import ingest_text
+
+    conn, db = _setup(tmp_path)
+    passage = "A passage two documents contain."
+    ingest_text(conn, passage, source_uri="content://laptop/early.md", source_type="markdown")
+    later = ingest_text(conn, passage, source_uri="content://laptop/later.md", source_type="markdown")
+    assert later == {"chunks_added": 0, "chunks_skipped": 1}  # stored once, under the first document
+    conn.close()
+
+    main(["--db", str(db), "--quiet", "remove", "content://laptop/early.md"])
+
+    conn = get_connection(db)
+    assert conn.execute("SELECT COUNT(*) FROM chunks WHERE content = ?", (passage,)).fetchone()[0] == 0
+
+
+def test_remove_an_unknown_source_uri_changes_nothing(tmp_path, capsys):
+    db, _ = _store(tmp_path)
+    before = _dump(db)
+    assert _exit_of(["--db", str(db), "remove", "content:///nowhere"]) == 1
+    assert "content:///nowhere" in json.loads(capsys.readouterr().err)["error"]
+    assert _dump(db) == before
+
+
+def test_remove_refuses_a_file_document(tmp_path, capsys):
+    db, doc = _store(tmp_path)
+    before = _dump(db)
+    assert _exit_of(["--db", str(db), "remove", doc.as_posix()]) == 1
+    assert "reingest" in json.loads(capsys.readouterr().err)["error"]
+    assert _dump(db) == before
+
+
+def test_a_failed_remove_changes_nothing(tmp_path, stub_document_embedder, monkeypatch):
+    from knowledge_base.ingest import ingest_text
+
+    conn, db = _setup(tmp_path)
+    ingest_text(conn, "Text that must survive.", source_uri="content:///keep", source_type="markdown")
+    conn.close()
+    before = _dump(db)
+
+    def _broken(*_args, **_kwargs):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr("knowledge_base.db.delete_chunk_vecs", _broken)
+    with pytest.raises(RuntimeError):
+        main(["--db", str(db), "remove", "content:///keep"])
+    assert _dump(db) == before
+
+
+def test_remove_help_states_what_dedup_implies(capsys):
+    with pytest.raises(SystemExit):
+        main(["remove", "--help"])
+    assert "only copy of a passage" in " ".join(capsys.readouterr().out.split())

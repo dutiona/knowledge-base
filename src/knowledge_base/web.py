@@ -20,6 +20,7 @@ import httpx
 import trafilatura
 
 from .db import (
+    _cleanup_conclusion_refs,
     _batched_execute,
     bump_chunk_count,
     delete_chunk_vecs,
@@ -47,7 +48,6 @@ from .utils import (
     validate_base_url,
 )
 from .ingest import (
-    _cleanup_conclusion_refs,
     _embed_with_config,
     _insert_chunk,
     ingest_text,

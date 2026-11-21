@@ -36,7 +36,7 @@ from .migrate import _main_db_path
 from .redact import redact_json, scrub
 from .embed_swap import declared_provider_config
 from .embeddings import embed, split_inputs, truncate_embedding
-from .exceptions import NotFoundError
+from .exceptions import NotFoundError, ValidationError
 from .folder_summaries import update_folder_summary
 from .utils import content_hash as _content_hash
 from .utils import without_userinfo
@@ -61,6 +61,7 @@ __all__ = [
     "kb_data_dir",
     "pdf_image_dir",
     "reingest_file",
+    "remove_document",
 ]
 
 
@@ -649,45 +650,6 @@ def _store_text_chunks(
     return {"chunks_added": len(new_chunks), "chunks_skipped": skipped}
 
 
-def _cleanup_conclusion_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> None:
-    """Remove *chunk_ids* from ``conclusions.source_chunk_ids`` JSON arrays.
-
-    Uses ``json_each()`` to target only conclusions that reference any of the
-    given IDs instead of scanning the full table (#277).  Conclusions left
-    with an empty array are deleted (zombie cleanup, #160); their
-    ``superseded_by`` back-references are cleared first.
-    """
-    if not chunk_ids:
-        return
-    id_set = set(chunk_ids)
-    rows = _batched_select(
-        conn,
-        "SELECT DISTINCT c.id, c.source_chunk_ids "
-        "FROM conclusions c, json_each(c.source_chunk_ids) j "
-        "WHERE j.value IN ({ph})",
-        chunk_ids,
-    )
-    # Deduplicate across batches: a conclusion referencing chunks in
-    # different batches would otherwise appear once per batch.
-    seen: set[int] = set()
-    for row in rows:
-        if row["id"] in seen:
-            continue
-        seen.add(row["id"])
-        filtered = [cid for cid in json.loads(row["source_chunk_ids"]) if cid not in id_set]
-        if filtered:
-            conn.execute(
-                "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
-                (json.dumps(filtered), row["id"]),
-            )
-        else:
-            conn.execute(
-                "UPDATE conclusions SET superseded_by = NULL WHERE superseded_by = ?",
-                (row["id"],),
-            )
-            conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
-
-
 def reingest_file(
     conn: sqlite3.Connection,
     path: Path,
@@ -713,31 +675,13 @@ def reingest_file(
     # leaves a dirty transaction on the reused thread-local connection that a
     # later write would commit as a truncated document (#554 review).
     try:
-        # --- FK cleanup (batched to stay under SQLITE_MAX_VARIABLE_NUMBER) ---
-        # 1. papers.abstract_chunk_id → SET NULL (track affected papers for re-linking)
+        # The papers and named entities pointing at the old chunks, re-linked to the new ones below;
+        # delete_chunks_cascade releases every reference to the old chunks.
         affected_paper_ids = [
             r["id"] for r in _batched_select(conn, "SELECT id FROM papers WHERE abstract_chunk_id IN ({ph})", old_ids)
         ]
-        _batched_execute(
-            conn,
-            "UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({ph})",
-            old_ids,
-        )
-
-        # 2. relationships.evidence_chunk_id → SET NULL
-        _batched_execute(
-            conn,
-            "UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({ph})",
-            old_ids,
-        )
-
-        # 3. conclusions.source_chunk_ids — targeted json_each() cleanup (#277)
-        _cleanup_conclusion_refs(conn, old_ids)
-
-        # 4. methods/datasets/metrics.chunk_id → SET NULL (track for re-linking)
-        affected_entities: dict[str, list[dict]] = {}
-        for table in ("methods", "datasets", "metrics"):
-            affected_entities[table] = [
+        affected_entities: dict[str, list[dict]] = {
+            table: [
                 {"id": r["id"], "name": r["name"], "old_chunk_id": r["chunk_id"]}
                 for r in _batched_select(
                     conn,
@@ -745,18 +689,8 @@ def reingest_file(
                     old_ids,
                 )
             ]
-            _batched_execute(
-                conn,
-                f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",  # noqa: S608  # table is a hardcoded literal identifier, not user input
-                old_ids,
-            )
-
-        # 5. entity_mentions.chunk_id — NOT NULL FK, must delete (re-created by extraction)
-        _batched_execute(
-            conn,
-            "DELETE FROM entity_mentions WHERE chunk_id IN ({ph})",
-            old_ids,
-        )
+            for table in ("methods", "datasets", "metrics")
+        }
 
         # --- Preserve historical session associations ---
         historical_sessions = {
@@ -768,7 +702,7 @@ def reingest_file(
             ).fetchall()
         }
 
-        # --- Delete old chunks (vec + chunk rows) ---
+        # --- Delete old chunks (references, vectors in every space, rows) ---
         delete_chunks_cascade(conn, old_ids)
 
         # --- Re-ingest ---
@@ -850,6 +784,29 @@ def reingest_file(
         "chunks_deleted": len(old_ids),
         "chunks_added": added,
     }
+
+
+def remove_document(conn: sqlite3.Connection, source_uri: str) -> dict:
+    """Remove the URL or content document stored under *source_uri* (#595), in one transaction.
+
+    Every chunk under it goes, a web page's figures included, with its vectors in every space and every reference to
+    it. A file document is refused: ``reingest`` replaces it from its file.
+    """
+    uri = without_userinfo(source_uri)  # ingest stores a URL without its userinfo
+    if not uri.lower().startswith(("http://", "https://", "content://")):
+        raise ValidationError(
+            f"{uri} is a file document: reingest replaces it from its file; remove takes URL and content:// documents"
+        )
+    ids = [r["id"] for r in conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (uri,))]
+    if not ids:
+        raise NotFoundError(f"no document is stored under {uri}")
+    try:
+        delete_chunks_cascade(conn, ids)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return {"source_uri": uri, "chunks_deleted": len(ids)}
 
 
 def ingest_directory(

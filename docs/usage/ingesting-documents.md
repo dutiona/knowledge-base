@@ -173,7 +173,8 @@ The response includes per-file results:
 
 ## Re-Ingestion
 
-`reingest` is for files, over stdio. A document ingested by URL or by content has no replace or removal yet (#595).
+`reingest` is for files, over stdio. A document ingested by URL or by content is removed with
+`knowledge-base-ingest remove` (see [Removing a Document](#removing-a-document)), then ingested again.
 
 Use the `reingest` tool to force a full re-ingest. This deletes all existing chunks for the file and inserts the new ones. A chunk another document already holds (the same text; after redaction, a passage that differs only by a secret) is linked to the file's sessions instead of inserted again. Use this after a file has been updated.
 
@@ -185,6 +186,19 @@ Use the `reingest` tool to force a full re-ingest. This deletes all existing chu
 ```
 
 `reingest` also cleans up foreign key references: it nullifies `papers.abstract_chunk_id`, `relationships.evidence_chunk_id`, and `methods/datasets/metrics.chunk_id` for affected chunks, removes stale `entity_mentions`, and re-links papers and entities to the new chunks after insertion.
+
+## Removing a Document
+
+`knowledge-base-ingest remove <source_uri>` removes one document stored by URL (`https://…`, matched without its
+userinfo) or by content (`content://<machine>/<name>`), with the server stopped (the store lock refuses otherwise). In
+one transaction it deletes every chunk under that `source_uri`, a web page's figures included, their vectors in every
+embedding space, and every reference to them, as `reingest` does; it embeds nothing, so it needs no embedding
+declaration, and prints `{"source_uri": …, "chunks_deleted": N}`. An unknown `source_uri` exits 1 and changes
+nothing. A file document is refused: `reingest` replaces it from its file.
+
+What stays: papers keep their metadata (an abstract link to a removed chunk becomes empty), and the removed text's
+bytes stay in the database file's free pages, FTS segments and WAL until `knowledge-base-ingest redact --rewrite`,
+which always purges them.
 
 ## Chunking Strategy
 
@@ -221,6 +235,8 @@ On normal `ingest`, each chunk is SHA-256 hashed (truncated to 16 hex chars). If
 Hashes are of the redacted text (see [Redaction](#redaction)), so two documents that differ only by a secret share their chunks.
 
 On `reingest`, all existing chunks for the source URI are deleted unconditionally, then the new chunks are inserted; a chunk another document holds is linked rather than inserted again.
+
+A passage is stored once, under the first document that contained it. Removing that document (`remove`, or a `reingest` whose new text drops the passage) removes the passage for every later document that also contained it, until that later document is ingested again.
 
 ## Redaction
 

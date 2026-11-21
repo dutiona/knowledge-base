@@ -166,6 +166,10 @@ connects to the address it checked. Endpoints the operator's environment declare
   previous declaration instead of rerunning, restore it and run `knowledge-base-ingest rebind`.
 - **Moving the embedder** (server stopped): set the new `KNOWLEDGE_BASE_EMBED_URL`, run
   `knowledge-base-ingest rebind`, start the server.
+- **Removing a URL or content document** (server stopped): `knowledge-base-ingest remove <source_uri>` deletes it, its
+  chunks and every reference to them. A passage is stored once, under the first document that held it, so a later
+  document that repeated it loses it too. See
+  [Removing a Document](docs/usage/ingesting-documents.md#removing-a-document).
 - **Redacting rows stored before redaction existed** (server stopped): `knowledge-base-ingest redact` reports them
   (exit 1 if any, never printing the text), `knowledge-base-ingest redact --rewrite` redacts them, re-embeds and
   purges the old bytes from the file. Backups taken earlier still hold that text. See
@@ -177,7 +181,7 @@ connects to the address it checked. Endpoints the operator's environment declare
 
 Every KB process that writes a database holds one exclusive advisory lock on `<database>.store-lock`, beside the
 database (memory-engine's ADR-0020 §8): `knowledge-base`, stdio or `--http`, for its whole life, and every writing
-`knowledge-base-ingest` command (`ingest`, `reingest`, `ingest-url`, `re-embed`, `rebind`, `migrate`,
+`knowledge-base-ingest` command (`ingest`, `reingest`, `ingest-url`, `remove`, `re-embed`, `rebind`, `migrate`,
 `redact --rewrite`) for its run. A second taker refuses before it reads the database, naming the holder (its role,
 PID and start time, which the holder writes into the lock file) and the lock file: a server exits 78, a command exits
 1 with its JSON error. A process releases the lock only after its background job worker has
@@ -441,7 +445,7 @@ database and checked at every start (see [Configuration](#configuration)).
 
 - One process (SQLite WAL mode, no concurrent writers), shared over HTTP by every machine holding a token; each
   reaches only the three network tools
-- No tool removes a document ingested by URL or by content yet (#595); re-ingesting changed text keeps the earlier
-  version searchable
+- Only the maintenance command `knowledge-base-ingest remove` removes a document ingested by URL or by content;
+  re-ingesting changed text keeps the earlier version searchable
 - AST-aware chunking only for Python files; other code uses fixed-size chunks
 - Embedding model swap re-embeds all chunks sequentially (can be slow for large indexes)

@@ -183,6 +183,21 @@ def cmd_rebind(args: argparse.Namespace) -> None:
     _print({"rebound": str(args.db)}, quiet=args.quiet)
 
 
+def cmd_remove(args: argparse.Namespace) -> None:
+    """Remove one URL or content document (#595); the store lock keeps the server stopped."""
+    from .ingest import remove_document
+
+    if not args.db.is_file():  # a mistyped path would otherwise be created
+        raise KnowledgeBaseError(f"no database at {args.db}")
+    conn = get_connection(args.db)  # it embeds nothing: no declaration needed
+    try:
+        init_schema(conn)
+        result = remove_document(conn, args.source_uri)
+    finally:
+        conn.close()
+    _print(result, quiet=args.quiet)
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     from .embed_swap import get_embed_config
 
@@ -335,6 +350,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_url.add_argument("url", help="URL to fetch and ingest.")
     p_url.add_argument("--session-id", dest="session_id", default=None)
 
+    # -- remove ---------------------------------------------------------------
+    p_remove = sub.add_parser(
+        "remove",
+        help="Remove one URL or content:// document and its chunks (server stopped).",
+        description=(
+            "Remove the document stored under SOURCE_URI: every chunk under it, a web page's figures included, their "
+            "vectors in every embedding space and every reference to them, in one transaction. A passage is stored "
+            "once, under the first document that contained it, so a removed document may hold the only copy of a "
+            "passage a later document also contained: that passage then leaves search for both, until the later "
+            "document is ingested again. The removed text stays in the database file until "
+            "knowledge-base-ingest redact --rewrite purges it."
+        ),
+    )
+    p_remove.add_argument(
+        "source_uri",
+        help=(
+            "the document's source_uri as search results show it: an http(s) URL (matched without its userinfo) or "
+            "content://<machine>/<name>"
+        ),
+    )
+
     # -- re-embed -------------------------------------------------------------
     p_embed = sub.add_parser(
         "re-embed",
@@ -413,6 +449,7 @@ def main(argv: list[str] | None = None) -> None:
         "ingest": cmd_ingest,
         "reingest": cmd_reingest,
         "ingest-url": cmd_ingest_url,
+        "remove": cmd_remove,
         "re-embed": cmd_re_embed,
         "rebind": cmd_rebind,
         "status": cmd_status,
