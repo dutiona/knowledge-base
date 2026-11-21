@@ -1,9 +1,8 @@
 """Embedding provider abstraction.
 
 Pluggable backends by API family (ADR-0018): any OpenAI-compatible server, Ollama, ONNX
-Runtime. Configured embedding always goes to the declared ``KNOWLEDGE_BASE_EMBED_URL``
-(#569); the Ollama URL auto-detection below serves only the bare-name provider and the
-LLM/vision defaults.
+Runtime. Embedding always goes to the declared ``KNOWLEDGE_BASE_EMBED_URL`` (#569); the
+Ollama URL auto-detection below serves only the LLM and vision defaults.
 """
 
 from __future__ import annotations
@@ -134,8 +133,8 @@ class ProviderConfig:
     """A resolved, hashable embedding-provider identity (ADR-0018 §2).
 
     The frozen tuple ``(family, base_url, api_key, allow_loopback, max_input_tokens, batch_size)`` is the provider
-    *cache key* — replacing the old name-keyed cache that made two ``openai_compat``
-    configs (different ``base_url``) collide. ``api_key`` holds the **raw** config
+    *cache key*, so two ``openai_compat`` configs with different ``base_url`` never
+    collide. ``api_key`` holds the **raw** config
     spec (inline value or ``env:VARNAME`` indirection, never a resolved secret); it is
     omitted from ``__repr__`` so no key reaches a log line.
     """
@@ -158,13 +157,12 @@ class ProviderConfig:
 class OllamaProvider:
     """Embedding provider using Ollama's /api/embed endpoint.
 
-    The config path always passes the declared ``base_url`` (#569); only the bare-name
-    ``OllamaProvider()`` auto-detects (``OLLAMA_HOST`` env > WSL2 Windows host >
-    localhost). Ollama is localhost-trusted by family, so it is not SSRF-validated.
+    Built only from the declared ``base_url`` (#569), never auto-detected. Ollama is
+    localhost-trusted by family, so it is not SSRF-validated.
     """
 
-    def __init__(self, base_url: str | None = None) -> None:
-        self._base_url = base_url.rstrip("/") if base_url else None
+    def __init__(self, base_url: str) -> None:
+        self._base_url = base_url.rstrip("/")
 
     def embed(
         self,
@@ -172,12 +170,11 @@ class OllamaProvider:
         model: str = "bge-m3",
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
-        url = self._base_url or _get_ollama_url()
         results = []
         for i in range(0, len(texts), 32):
             batch = texts[i : i + 32]
             resp = httpx.post(
-                f"{url}/api/embed",
+                f"{self._base_url}/api/embed",
                 json={"model": model, "input": batch},
                 timeout=120,
             )
@@ -192,6 +189,9 @@ class OllamaProvider:
 
 
 _LIMIT_VAR = VARIABLES["max_input_tokens"]
+
+#: An embedding call's inputs cut to fit ``max_input_tokens``, by position: (tokens counted, tokens kept).
+Cuts = dict[int, tuple[int, int]]
 
 
 def _nothing_fits(limit: int) -> ValidationError:
@@ -379,28 +379,29 @@ class OpenAICompatProvider:
 
         return count
 
-    def _bounded(self, texts: list[str]) -> list[str]:
+    def _bounded(self, texts: list[str]) -> tuple[list[str], Cuts]:
         limit = self._max_input_tokens
         if limit is None:
-            return texts
+            return texts, {}
         count = self.token_counter()
-        bounded = []
-        for text in texts:
+        bounded, cuts = [], {}
+        for i, text in enumerate(texts):
             tokens = count(text)
             if tokens > limit:
                 cut = _fit(text, limit, count)
                 if not cut:
                     raise _nothing_fits(limit)
                 text = text[:cut]
+                cuts[i] = (tokens, count(text))
                 logger.info(
                     "an embedding input of %d tokens is truncated to %d tokens to fit %s=%d",
                     tokens,
-                    count(text),
+                    cuts[i][1],
                     _LIMIT_VAR,
                     limit,
                 )
             bounded.append(text)
-        return bounded
+        return bounded, cuts
 
     def embed(
         self,
@@ -408,7 +409,12 @@ class OpenAICompatProvider:
         model: str = "text-embedding-3-large",
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
-        texts = self._bounded(texts)
+        return self._embed_with_cuts(texts, model, expected_dim)[0]
+
+    def _embed_with_cuts(
+        self, texts: list[str], model: str, expected_dim: int | None
+    ) -> tuple[list[list[float] | None], Cuts]:
+        texts, cuts = self._bounded(texts)
         results = []
         for i in range(0, len(texts), self._batch_size):
             batch = texts[i : i + self._batch_size]
@@ -419,7 +425,7 @@ class OpenAICompatProvider:
                 if expected_dim is not None and len(emb) != expected_dim:
                     raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
                 results.append(_normalize_or_none(emb, "OpenAI-compat"))
-        return results
+        return results, cuts
 
     def _call_api(
         self,
@@ -436,29 +442,6 @@ class OpenAICompatProvider:
         data = resp.json()["data"]
         data.sort(key=lambda x: x["index"])
         return [item["embedding"] for item in data]
-
-
-class OpenAIProvider(OpenAICompatProvider):
-    """OpenAI literal-endpoint alias (back-compat).
-
-    Degenerate case of :class:`OpenAICompatProvider` with ``base_url`` fixed to
-    ``https://api.openai.com``. Unlike a generic ``openai_compat`` server (where a
-    missing key means "no auth", valid for local backends), the OpenAI literal
-    *requires* ``OPENAI_API_KEY`` — that contract is preserved here.
-    """
-
-    def __init__(self) -> None:
-        super().__init__("https://api.openai.com", os.environ.get("OPENAI_API_KEY"))
-
-    def embed(
-        self,
-        texts: list[str],
-        model: str = "text-embedding-3-large",
-        expected_dim: int | None = None,
-    ) -> list[list[float] | None]:
-        if not self._api_key:
-            raise RuntimeError("OPENAI_API_KEY environment variable required for OpenAI embeddings")
-        return super().embed(texts, model=model, expected_dim=expected_dim)
 
 
 class ONNXProvider:
@@ -515,20 +498,8 @@ class ONNXProvider:
         return self._sessions[cache_key]
 
 
-# Bare-name factories (legacy / no-config path). ``openai_compat`` is intentionally
-# absent here: it has no working default — it requires a configured ``base_url`` and
-# must be constructed via the config path (``get_provider(cfg=ProviderConfig(...))``).
-_PROVIDERS: dict[str, Callable[[], EmbeddingProvider]] = {
-    "ollama": OllamaProvider,
-    "openai": OpenAIProvider,
-    "onnx": ONNXProvider,
-}
-
-# Cache keyed by EITHER a resolved family name (str, legacy path) OR a frozen
-# ``ProviderConfig`` (config path). Keying the config path on the full identity tuple
-# is the fix for the old name-collision bug where two ``openai_compat`` base_urls
-# shared the single ``"openai_compat"`` slot (ADR-0018 §2).
-_provider_cache: dict[str | ProviderConfig, EmbeddingProvider] = {}
+#: One provider per frozen ``ProviderConfig``: two ``openai_compat`` base URLs never share one (ADR-0018 §2).
+_provider_cache: dict[ProviderConfig, EmbeddingProvider] = {}
 #: Concurrent first calls build one provider, not one each.
 _provider_lock = threading.Lock()
 
@@ -536,60 +507,40 @@ _provider_lock = threading.Lock()
 def _build_provider(cfg: ProviderConfig) -> EmbeddingProvider:
     """Construct a provider from a resolved :class:`ProviderConfig`."""
     family = cfg.family.lower()
-    if family in ("ollama", "openai_compat", "openai", "llama.cpp") and not cfg.base_url:
+    if family == "onnx":
+        return ONNXProvider()
+    if family not in ("ollama", "openai_compat", "openai", "llama.cpp"):
+        raise ValueError(
+            f"'{cfg.family}' is not an embedding provider "
+            "(anthropic_compat is chat-only; valid: openai_compat, llama.cpp, ollama, onnx)."
+        )
+    if not cfg.base_url:
         raise ValidationError(
             f"the {family} embedding provider needs a base URL (KNOWLEDGE_BASE_EMBED_URL); "
             "KB has no default embedding endpoint"
         )
     if family == "ollama":
         return OllamaProvider(cfg.base_url)
-    if family in ("openai_compat", "openai", "llama.cpp"):
-        return OpenAICompatProvider(
-            cfg.base_url,
-            cfg.api_key,
-            allow_loopback=cfg.allow_loopback,
-            max_input_tokens=cfg.max_input_tokens,
-            batch_size=cfg.batch_size,
-        )
-    if family == "onnx":
-        return ONNXProvider()
-    raise ValueError(
-        f"'{cfg.family}' is not an embedding provider "
-        "(anthropic_compat is chat-only; valid: openai_compat, llama.cpp, ollama, onnx)."
+    return OpenAICompatProvider(
+        cfg.base_url,
+        cfg.api_key,
+        allow_loopback=cfg.allow_loopback,
+        max_input_tokens=cfg.max_input_tokens,
+        batch_size=cfg.batch_size,
     )
 
 
-def get_provider(
-    name: str | None = None,
-    *,
-    cfg: ProviderConfig | None = None,
-) -> EmbeddingProvider:
-    """Get an embedding provider, by config (preferred) or by bare name (legacy).
-
-    When *cfg* is given, the provider is built from the resolved identity tuple and
-    cached by it — two ``openai_compat`` configs with different ``base_url`` never
-    collide. When *cfg* is None, the legacy bare-name path applies (no production caller).
-    """
+def get_provider(*, cfg: ProviderConfig) -> EmbeddingProvider:
+    """The provider for *cfg*'s resolved identity, built once and cached by it."""
     with _provider_lock:
-        if cfg is not None:
-            cached = _provider_cache.get(cfg)
-            if cached is None:
-                cached = _provider_cache[cfg] = _build_provider(cfg)
-            return cached
-
-        resolved = (name or "ollama").lower()
-        if resolved in _provider_cache:
-            return _provider_cache[resolved]
-        factory = _PROVIDERS.get(resolved)
-        if factory is None:
-            raise ValueError(f"Unknown embedding provider '{resolved}'. Available: {', '.join(sorted(_PROVIDERS))}")
-        instance = factory()
-        _provider_cache[resolved] = instance
-        return instance
+        cached = _provider_cache.get(cfg)
+        if cached is None:
+            cached = _provider_cache[cfg] = _build_provider(cfg)
+        return cached
 
 
 # --- Module-level dispatch functions ---
-# These are the primary API. All callers (ingest, search, embed_swap)
+# These are the primary API. Callers (ingest, folder_summaries, search)
 # import and call these. Provider dispatch happens here.
 # Tests that @patch("knowledge_base.ingest.embed", _fake) replace
 # the name in the caller's namespace, so mocks work unchanged.
@@ -597,21 +548,22 @@ def get_provider(
 
 def embed(
     texts: list[str],
-    model: str = "bge-m3",
+    model: str,
     expected_dim: int | None = None,
     *,
-    _provider_name: str = "ollama",
-    _provider_cfg: ProviderConfig | None = None,
+    _provider_cfg: ProviderConfig,
 ) -> list[list[float] | None]:
-    """Embed a batch of texts using the configured provider.
+    """Embed a batch of texts with the provider *_provider_cfg* selects."""
+    return get_provider(cfg=_provider_cfg).embed(texts, model=model, expected_dim=expected_dim)
 
-    Signature is intentionally stable (ADR-0018 §2): the new ``_provider_cfg`` is a
-    purely-additive private kwarg, so existing callers and ``@patch(...embed)`` mocks
-    keep working. When *_provider_cfg* is given it selects the provider (config path);
-    otherwise the legacy *_provider_name* bare-name path applies.
-    """
-    provider = get_provider(cfg=_provider_cfg) if _provider_cfg is not None else get_provider(_provider_name)
-    return provider.embed(texts, model=model, expected_dim=expected_dim)
+
+def embed_with_cuts(
+    provider: EmbeddingProvider, texts: list[str], model: str, expected_dim: int | None = None
+) -> tuple[list[list[float] | None], Cuts]:
+    """*provider*'s vectors for *texts*, and the inputs it cut to fit (#620); only a counting provider cuts any."""
+    if isinstance(provider, OpenAICompatProvider):
+        return provider._embed_with_cuts(texts, model, expected_dim)
+    return provider.embed(texts, model=model, expected_dim=expected_dim), {}
 
 
 def split_inputs(texts: list[str], cfg: ProviderConfig) -> list[list[str]]:

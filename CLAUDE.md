@@ -36,12 +36,26 @@ uv run ruff format --check src/ tests/ # no reformats
 uv run pytest tests/ -q -m "not slow"
 uv sync --all-groups                   # the type-check resolves the optional groups' imports
 uv run basedpyright src/ tests/
+uv run --group docs sphinx-build -W -E -q -b html docs docs/_build  # zero warnings: an orphan page or a broken link fails it
+# Heavy (up to 32 GiB, 16 CPUs), only when an image input changed: builds HEAD's archive, so commit first
+git diff --quiet origin/master...HEAD -- Containerfile .containerignore pyproject.toml uv.lock .python-version || (
+    git archive --format=tar HEAD | podman build --pull=newer --layers=false --memory=32g \
+        --cpu-period=100000 --cpu-quota=1600000 -t knowledge-base:verify - || exit
+    podman run --rm --network=none knowledge-base:verify python -c "import knowledge_base.server"; rc=$?
+    podman rmi knowledge-base:verify && exit $rc
+)
 ```
 
 This list is the merge gate: run every command, in this order, at the PR's final head with a
 clean tree (an earlier `uv sync` may already have rewritten a drifted `uv.lock`), and quote the
-results in the PR. It mirrors `.github/workflows/ci.yml`, which no longer runs, so CI is not
-relied on and a CI status is never evidence.
+results in the PR. `.github/workflows/ci.yml` no longer runs, so CI is not relied on and a CI
+status is never evidence.
+
+The image step (#617) builds `HEAD`'s `git archive`, as the deployment builds a tag. A lock that pulls in a package
+without a Linux wheel, or a Containerfile edit, passes every other step and fails only there. It is heavy: a CPU quota
+bounds it to 16 CPUs (rootless podman is delegated only the cpu, memory and pids controllers, so `--cpuset-cpus` fails)
+and `--memory` to 32 GiB. It keeps no intermediate layers, and it removes its image whether or not the smoke passes. Its
+paths are the build inputs no other step exercises: add one when the Containerfile copies a new file.
 
 ## Architecture
 

@@ -312,7 +312,7 @@ Chunks are embedded automatically during ingestion using the configured embeddin
 
 ### Embedding Providers
 
-Pluggable embedding providers decouple the knowledge base from any single inference backend. This design was motivated by competitive analysis (NornicDB supports Ollama, OpenAI, and local ONNX inference) and aligns with the [four-layer cognitive architecture](../insights/four-layer-cognitive-architecture.md) — embeddings sit in the Knowledge (infrastructure) layer where swappable backends enable cost/quality/latency trade-offs without touching higher layers.
+Pluggable embedding providers decouple the knowledge base from any single inference backend. This design was motivated by competitive analysis (NornicDB supports Ollama, OpenAI, and local ONNX inference) and aligns with the [four-layer cognitive architecture](https://github.com/dutiona/knowledge-base/blob/master/docs/insights/four-layer-cognitive-architecture.md) — embeddings sit in the Knowledge (infrastructure) layer where swappable backends enable cost/quality/latency trade-offs without touching higher layers.
 
 The provider is declared in the environment (below). Providers are organized
 by **API family**, not vendor (per [ADR-0018](../design/adr/0018-provider-abstraction.md)):
@@ -372,7 +372,7 @@ every URL a configure tool stores (LLM, vision, OmniParser, CDP) keeps it when w
 every request, which connects to the address it checked.
 
 The deprecated `EMBED_PROVIDER` variable is refused, and `OPENAI_API_KEY` is no longer an
-embedding key source (the bare-name `openai` provider still reads it).
+embedding key source.
 
 ### Inputs longer than the embedder takes
 
@@ -388,7 +388,7 @@ makes, which is why a served artifact is accepted only for `llama.cpp` or `opena
 | Folder summaries | truncated: one vector per folder; the stored summary text stays whole |
 | Figure, image and element-capture descriptions | truncated: one chunk per figure keeps the figure's metadata |
 | Queries | truncated |
-| Stored chunks during `re-embed` | truncated: a stored chunk is one row; reingesting its document splits it |
+| Stored chunks during `re-embed` | truncated: a stored chunk is one row; the result's `truncated_chunks` names it and its document, and reingesting the document splits it |
 
 A split PDF piece keeps its parent's pages and lists the images whose reference starts in it; a reference on its
 own line is never cut, unless that line is longer than half a piece. A split Python piece keeps its function's line

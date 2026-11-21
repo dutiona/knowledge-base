@@ -19,6 +19,8 @@ from knowledge_base.embeddings import (
     get_provider,
 )
 
+_OLLAMA = "http://ollama.example.test:11434"
+
 
 @pytest.fixture(autouse=True)
 def _clear_provider_cache():
@@ -34,7 +36,7 @@ class TestOllamaProvider:
     """Test OllamaProvider implements the Protocol correctly."""
 
     def test_implements_protocol(self):
-        provider = OllamaProvider()
+        provider = OllamaProvider(_OLLAMA)
         assert isinstance(provider, EmbeddingProvider)
 
     @patch("knowledge_base.embeddings.httpx.post")
@@ -44,7 +46,7 @@ class TestOllamaProvider:
             json=lambda: {"embeddings": [raw]},
             raise_for_status=lambda: None,
         )
-        provider = OllamaProvider()
+        provider = OllamaProvider(_OLLAMA)
         result = provider.embed(["hello"], model="bge-m3", expected_dim=3)
         assert len(result) == 1
         assert result[0] is not None
@@ -58,7 +60,7 @@ class TestOllamaProvider:
             json=lambda: {"embeddings": [raw]},
             raise_for_status=lambda: None,
         )
-        provider = OllamaProvider()
+        provider = OllamaProvider(_OLLAMA)
         result = provider.embed(["hello"], model="bge-m3", expected_dim=3)
         assert result[0] is not None
         norm = math.sqrt(sum(x * x for x in result[0]))
@@ -70,7 +72,7 @@ class TestOllamaProvider:
             json=lambda: {"embeddings": [[0.1, 0.2]]},
             raise_for_status=lambda: None,
         )
-        provider = OllamaProvider()
+        provider = OllamaProvider(_OLLAMA)
         with pytest.raises(ValueError, match="Expected 3 dims"):
             provider.embed(["hello"], model="bge-m3", expected_dim=3)
 
@@ -86,7 +88,7 @@ class TestOllamaProvider:
             )
 
         mock_post.side_effect = _mock_response
-        provider = OllamaProvider()
+        provider = OllamaProvider(_OLLAMA)
         texts = [f"text {i}" for i in range(50)]
         result = provider.embed(texts, model="bge-m3", expected_dim=3)
         assert len(result) == 50
@@ -95,31 +97,14 @@ class TestOllamaProvider:
 
 
 class TestGetProvider:
-    def test_returns_ollama_by_default(self):
-        provider = get_provider("ollama")
+    def test_an_ollama_config_builds_an_ollama_provider_on_its_url(self):
+        provider = get_provider(cfg=ProviderConfig(family="ollama", base_url=_OLLAMA))
         assert isinstance(provider, OllamaProvider)
+        assert provider._base_url == _OLLAMA
 
-    def test_unknown_provider_raises(self):
-        with pytest.raises(ValueError, match="Unknown embedding provider"):
-            get_provider("nonexistent")
-
-    def test_embed_provider_env_no_longer_selects(self, monkeypatch):
-        """#569: the deprecated EMBED_PROVIDER is refused at startup and never read here."""
-        monkeypatch.setenv("EMBED_PROVIDER", "ollama")
-        with pytest.raises(ValueError, match="Unknown embedding provider 'nonexistent'"):
-            get_provider("nonexistent")
-
-    def test_provider_caching(self):
-        """get_provider returns the same instance for the same name."""
-        p1 = get_provider("ollama")
-        p2 = get_provider("ollama")
-        assert p1 is p2
-
-    def test_provider_caching_different_names(self):
-        """Different provider names get different instances."""
-        p_ollama = get_provider("ollama")
-        p_openai = get_provider("openai")
-        assert p_ollama is not p_openai
+    def test_an_unknown_family_raises(self):
+        with pytest.raises(ValueError, match="is not an embedding provider"):
+            get_provider(cfg=ProviderConfig(family="nonexistent", base_url=_OLLAMA))
 
 
 class TestOpenAICompatProvider:
@@ -304,27 +289,6 @@ class TestEmbedDispatch:
     """Test that module-level embed()/embed_query() dispatch through providers."""
 
     @patch("knowledge_base.embeddings.get_provider")
-    def test_embed_dispatches_to_named_provider(self, mock_get):
-        mock_provider = MagicMock()
-        mock_provider.embed.return_value = [[0.1, 0.2, 0.3]]
-        mock_get.return_value = mock_provider
-
-        result = embed(["hello"], model="bge-m3", expected_dim=3, _provider_name="openai")
-
-        mock_get.assert_called_once_with("openai")
-        mock_provider.embed.assert_called_once()
-        assert result == [[0.1, 0.2, 0.3]]
-
-    @patch("knowledge_base.embeddings.get_provider")
-    def test_embed_defaults_to_ollama(self, mock_get):
-        mock_provider = MagicMock()
-        mock_provider.embed.return_value = [[0.1] * 3]
-        mock_get.return_value = mock_provider
-
-        embed(["hello"])
-        mock_get.assert_called_once_with("ollama")
-
-    @patch("knowledge_base.embeddings.get_provider")
     def test_embed_query_sends_the_instruction_then_the_text(self, mock_get):
         mock_provider = MagicMock()
         mock_provider.embed.return_value = [[0.1, 0.2, 0.3]]
@@ -343,70 +307,11 @@ class TestEmbedDispatch:
         mock_provider.embed.return_value = [[0.1, 0.2, 0.3]]
         mock_get.return_value = mock_provider
 
-        embed(["hello"], model="bge-m3")
+        cfg = ProviderConfig(family="ollama", base_url=_OLLAMA)
+        embed(["hello"], model="bge-m3", _provider_cfg=cfg)
+        mock_get.assert_called_once_with(cfg=cfg)
         args, _ = mock_provider.embed.call_args
         assert args == (["hello"],)
-
-
-class TestOpenAIProvider:
-    @pytest.fixture(autouse=True)
-    def _set_api_key(self, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-        # OpenAICompatProvider.embed now runs a call-time validate_base_url; the OpenAI
-        # literal host is public but resolving it would hit the network — keep offline.
-        with patch("knowledge_base.utils.is_private_ip", return_value=False):
-            yield
-
-    def test_implements_protocol(self):
-        from knowledge_base.embeddings import OpenAIProvider
-
-        provider = OpenAIProvider()
-        assert isinstance(provider, EmbeddingProvider)
-
-    @patch("knowledge_base.embeddings.OpenAIProvider._call_api")
-    def test_embed_batch(self, mock_api):
-        from knowledge_base.embeddings import OpenAIProvider
-
-        mock_api.return_value = [[1.0, 0.0, 0.0]]
-        provider = OpenAIProvider()
-        result = provider.embed(["hello"], model="text-embedding-3-large", expected_dim=3)
-        assert len(result) == 1
-        assert result[0] is not None
-        assert len(result[0]) == 3
-
-    @patch("knowledge_base.embeddings.OpenAIProvider._call_api")
-    def test_embed_normalizes(self, mock_api):
-        from knowledge_base.embeddings import OpenAIProvider
-
-        mock_api.return_value = [[3.0, 4.0, 0.0]]
-        provider = OpenAIProvider()
-        result = provider.embed(["hello"], model="text-embedding-3-large", expected_dim=3)
-        assert result[0] is not None
-        norm = math.sqrt(sum(x * x for x in result[0]))
-        assert abs(norm - 1.0) < 1e-6
-
-    @patch("knowledge_base.embeddings.OpenAIProvider._call_api")
-    def test_embed_rejects_wrong_dim(self, mock_api):
-        from knowledge_base.embeddings import OpenAIProvider
-
-        mock_api.return_value = [[0.1, 0.2]]
-        provider = OpenAIProvider()
-        with pytest.raises(ValueError, match="Expected 3 dims"):
-            provider.embed(["hello"], model="text-embedding-3-large", expected_dim=3)
-
-    def test_missing_api_key_raises(self, monkeypatch):
-        from knowledge_base.embeddings import OpenAIProvider
-
-        monkeypatch.delenv("OPENAI_API_KEY")
-        provider = OpenAIProvider()
-        with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
-            provider.embed(["hello"], model="text-embedding-3-large")
-
-    def test_get_provider_returns_openai(self):
-        from knowledge_base.embeddings import OpenAIProvider
-
-        provider = get_provider("openai")
-        assert isinstance(provider, OpenAIProvider)
 
 
 class TestONNXProvider:
@@ -452,10 +357,10 @@ class TestONNXProvider:
         with pytest.raises(RuntimeError, match="ONNX_EMBED_MODEL_PATH"):
             provider._get_session("bge-m3")
 
-    def test_get_provider_returns_onnx(self):
+    def test_an_onnx_config_without_a_url_builds_an_onnx_provider(self):
         from knowledge_base.embeddings import ONNXProvider
 
-        provider = get_provider("onnx")
+        provider = get_provider(cfg=ProviderConfig(family="onnx"))
         assert isinstance(provider, ONNXProvider)
 
 
@@ -499,7 +404,7 @@ class TestProviderZeroNormHandling:
             json=lambda: {"embeddings": [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]]},
             raise_for_status=lambda: None,
         )
-        provider = OllamaProvider()
+        provider = OllamaProvider(_OLLAMA)
         result = provider.embed(["good", "bad", "good2"], model="bge-m3", expected_dim=3)
         assert len(result) == 3
         assert result[0] is not None
@@ -513,7 +418,7 @@ class TestProviderZeroNormHandling:
             json=lambda: {"embeddings": [[0.0, 0.0, 0.0]]},
             raise_for_status=lambda: None,
         )
-        provider = OllamaProvider()
+        provider = OllamaProvider(_OLLAMA)
         with caplog.at_level(logging.WARNING):
             result = provider.embed(["empty"], model="bge-m3", expected_dim=3)
         assert result[0] is None
@@ -546,30 +451,6 @@ class TestOllamaBaseUrl:
             provider.embed(["x"], model="bge-m3", expected_dim=3)
         assert captured["url"] == "http://remote-ollama:11434/api/embed"
 
-    def test_falls_back_to_autodetect_without_base_url(self):
-        from knowledge_base.embeddings import OllamaProvider
-
-        captured = {}
-
-        def _mock_post(url, **kwargs):
-            captured["url"] = url
-
-            class FakeResp:
-                def raise_for_status(self):
-                    pass
-
-                def json(self):
-                    return {"embeddings": [[1.0, 0.0, 0.0]]}
-
-            return FakeResp()
-
-        with (
-            patch("knowledge_base.embeddings._get_ollama_url", return_value="http://auto:11434"),
-            patch("knowledge_base.embeddings.httpx.post", _mock_post),
-        ):
-            OllamaProvider().embed(["x"], model="bge-m3", expected_dim=3)
-        assert captured["url"] == "http://auto:11434/api/embed"
-
 
 class TestNoImplicitEndpoint:
     """#569: no embedding provider is built without an explicit base URL."""
@@ -589,20 +470,10 @@ class TestNoImplicitEndpoint:
 
         with (
             patch("knowledge_base.utils.is_private_ip", return_value=False),
-            patch("knowledge_base.embeddings._get_ollama_url") as ollama_url,
             pytest.raises(ValidationError, match="base URL"),
         ):
             embed(["x"], model="m", expected_dim=3, _provider_cfg=ProviderConfig(family=family))
         assert http_requests == []
-        ollama_url.assert_not_called()
-
-    def test_explicit_openai_provider_is_unchanged(self):
-        from knowledge_base.embeddings import OpenAIProvider
-
-        assert OpenAIProvider()._base_url == "https://api.openai.com"
-        bare = get_provider("openai")
-        assert isinstance(bare, OpenAIProvider)
-        assert bare._base_url == "https://api.openai.com"
 
 
 class TestDeclaredEndpointExemption:

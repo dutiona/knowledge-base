@@ -400,6 +400,13 @@ floor rules). The family names stay valid. The same change renamed the one-text 
 call `embed_single` to `embed_query`: it is now only the query path, prefixing the space's
 query instruction (ADR-0015 §6).
 
+## Amendment (2026-11-21, #605): a provider is built only from a `ProviderConfig`
+
+The bare-name path is removed: the `_PROVIDERS` registry, `OpenAIProvider`, `get_provider(name)` and
+`embed(_provider_name=…)`. Every embedding goes through `get_provider(cfg=…)`, whose config carries the declared
+endpoint, so the #569 amendment's "The bare-name `OpenAIProvider` keeps its literal endpoint" no longer holds: the
+`openai` family builds an `OpenAICompatProvider` on the declared URL, and `OllamaProvider` takes a required URL.
+
 ## References
 
 - Current code: `src/knowledge_base/embeddings.py` (`EmbeddingProvider` Protocol,

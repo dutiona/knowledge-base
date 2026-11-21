@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -315,3 +316,88 @@ def test_an_ingest_groups_inputs_by_the_declared_batch_size(conn, bounded_embedd
     path.write_text(SECTION)
     ingest_file(conn, path)
     assert max(len(sent) for sent in bounded_embedder.inputs) == 2
+
+
+#: Long stored texts, each word holding a sentinel no report may carry.
+LONG = " ".join(f"zqxsentinel{i}" for i in range(2 * LIMIT))
+LONGER = " ".join(f"zqxsentinel{i}" for i in range(3 * LIMIT))
+SHORT = "a short stored note"
+
+
+def _store(conn: sqlite3.Connection, *chunks: tuple[str, str]) -> list[int]:
+    """Insert chunks raw, as stored before #604 split long ones; their ids in order."""
+    ids = [
+        conn.execute(
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) VALUES (?, ?, ?, ?, 0)",
+            (f"h{n}", text, "markdown", uri),
+        ).lastrowid
+        for n, (uri, text) in enumerate(chunks)
+    ]
+    conn.commit()
+    return [i for i in ids if i is not None]
+
+
+def test_a_backfill_reports_each_stored_chunk_it_truncates(conn, bounded_embedder, http_requests):
+    from knowledge_base.embed_swap import backfill_space, create_space
+    from knowledge_base.routes import embeddings as routes
+
+    old, _, older = _store(conn, ("/docs/old.md", LONG), ("/docs/new.md", SHORT), ("/docs/older.md", LONGER))
+    create_space(conn, "alt", "Qwen/Qwen3-Embedding-0.6B", DIM)
+
+    result = backfill_space(conn, "alt")
+
+    assert bounded_embedder.refused == 0
+    sent = [t for batch in bounded_embedder.inputs for t in batch if t.startswith("zqxsentinel")]
+    assert [count(t) <= LIMIT for t in sent] == [True, True]
+    assert result["truncated_chunks"] == [
+        {"chunk_id": old, "source_uri": "/docs/old.md", "tokens_before": count(LONG), "tokens_after": count(sent[0])},
+        {
+            "chunk_id": older,
+            "source_uri": "/docs/older.md",
+            "tokens_before": count(LONGER),
+            "tokens_after": count(sent[1]),
+        },
+    ]
+    with patch.object(routes, "_get_conn", return_value=conn):
+        tool = routes.backfill_embed_space_tool("alt")
+    assert json.loads(tool)["truncated_chunks"] == result["truncated_chunks"]
+    assert "zqxsentinel" not in json.dumps(result)
+    assert "zqxsentinel" not in tool
+    counted = [json.loads(r.content)["content"] for r in http_requests if r.url.path == "/tokenize"]
+    assert counted.count(SHORT) == 1
+
+
+def test_a_resumed_backfill_still_reports_the_truncations_of_its_interrupted_run(conn, bounded_embedder, http_requests):
+    from knowledge_base.embed_swap import backfill_space, create_space
+
+    old, _, older = _store(conn, ("/docs/old.md", LONG), ("/docs/new.md", SHORT), ("/docs/older.md", LONGER))
+    create_space(conn, "alt", "Qwen/Qwen3-Embedding-0.6B", DIM)
+    requests = 0
+
+    def fail_the_second_request(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        if request.url.path == "/v1/embeddings":
+            requests += 1
+            if requests == 2:
+                return httpx.Response(500, json={"error": "down"})
+        return bounded_embedder(request)
+
+    http_requests.handlers["embedder.example.test"] = fail_the_second_request
+    with pytest.raises(httpx.HTTPStatusError):
+        backfill_space(conn, "alt", batch_size=1)
+
+    result = backfill_space(conn, "alt", batch_size=1)
+
+    assert [entry["chunk_id"] for entry in result["truncated_chunks"]] == [old, older]
+    assert "zqxsentinel" not in json.dumps(result)
+
+
+def test_re_embed_reports_the_chunks_its_backfill_truncates(conn, bounded_embedder):
+    from knowledge_base.embed_swap import re_embed
+
+    (chunk,) = _store(conn, ("/docs/old.md", LONG))
+
+    result = re_embed(conn)
+
+    assert [(e["chunk_id"], e["source_uri"]) for e in result["truncated_chunks"]] == [(chunk, "/docs/old.md")]
+    assert "zqxsentinel" not in json.dumps(result)

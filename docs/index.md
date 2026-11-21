@@ -21,9 +21,12 @@ getting-started/core-concepts
 
 usage/ingesting-documents
 usage/searching
+usage/embedding-spaces
 usage/structured-extraction
 usage/figure-extraction
 usage/relationships-conclusions
+usage/auto-relationships
+usage/prediction-errors
 usage/bibtex-export
 ```
 
@@ -32,6 +35,17 @@ usage/bibtex-export
 :caption: Design
 
 design/architecture-overview
+design/kb-geometric-retrieval
+design/kb-me-roadmap-parity
+design/project-management
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Architecture decisions
+:glob:
+
+design/adr/*
 ```
 
 ```{toctree}

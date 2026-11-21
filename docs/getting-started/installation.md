@@ -163,12 +163,12 @@ The image carries no embedding declaration: pass the `KNOWLEDGE_BASE_EMBED_*` va
 `KNOWLEDGE_BASE_EMBED_API_KEY` through `--env-file` or a secret, never in the unit file. Without them the server
 exits 78 at start (see the README's Configuration section). A llama.cpp embedder with a known model file declares its
 served artifact too (`KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256`, `_POOLING`, `_NORMALIZATION`, `_MAX_INPUT_TOKENS`, all
-four), so the store records the exact ADR-0015 identity. A database from before schema v3 needs
+four), so the store records the exact ADR-0015 identity. A database from before schema v4 needs
 `knowledge-base-ingest migrate` with the unit stopped before the new image starts.
 
 Maintenance commands run through the same image as the unit, with the same user namespace, both volumes (the named
 `db` volume, never the database file alone) and, for a command that embeds, the same declaration, with the unit
-stopped. The [store lock](../../README.md#the-store-lock) enforces the stop: a writing command run while the unit
+stopped. The [store lock](https://github.com/dutiona/knowledge-base/blob/master/README.md#the-store-lock) enforces the stop: a writing command run while the unit
 serves, through `podman run` or `podman exec`, exits 1 naming the lock file, and a unit started while a command runs
 exits 78 (set `RestartPreventExitStatus=78` so it stays down; start it once the command has finished). Read-only
 commands (`status`, `schema`, `migrate --check`, `redact`) run against the live unit. The lock file,

@@ -332,6 +332,49 @@ def test_rewrite_merges_rows_identical_after_redaction(kb_conn, tmp_path, vector
     conn.close()
 
 
+def test_a_merge_drops_the_duplicate_s_truncation_record_with_its_vector(kb_conn, tmp_path, vectors):
+    """#620: a cut describes the duplicate's own vector, which the merge deletes; the survivor's whole vector stays
+    unrecorded."""
+    db = tmp_path / "test.db"
+    keep = _with_vector(kb_conn, "token [REDACTED:github-pat] x", uri="/d/k.md")
+    dup = _with_vector(kb_conn, f"token {SECRET} x", uri="/d/dup.md")
+    space = kb_conn.execute("SELECT name FROM embed_spaces WHERE status = 'active'").fetchone()[0]
+    kb_conn.execute(
+        "INSERT INTO embed_truncations (chunk_id, space_name, tokens_before, tokens_after) VALUES (?, ?, 9, 4)",
+        (dup, space),
+    )
+    kb_conn.commit()
+    kb_conn.close()
+
+    assert _run(db, "redact", "--rewrite") == 0
+
+    conn = _open(db)
+    assert [r[0] for r in conn.execute("SELECT id FROM chunks")] == [keep]
+    assert conn.execute("SELECT COUNT(*) FROM embed_truncations").fetchone()[0] == 0
+    conn.close()
+
+
+def test_a_merge_does_not_hand_the_duplicate_s_refusal_to_the_survivor(kb_conn, tmp_path, vectors):
+    """A refusal is about the duplicate's old text; moved to the survivor it would keep the survivor out of that
+    space's backfill for good, and promotion would count it done."""
+    from knowledge_base.embed_swap import create_space
+
+    db = tmp_path / "test.db"
+    keep = _with_vector(kb_conn, "token [REDACTED:github-pat] x", uri="/d/k.md")
+    dup = _with_vector(kb_conn, f"token {SECRET} x", uri="/d/dup.md")
+    create_space(kb_conn, "alt", "other-model", TEST_EMBED_DIM)
+    kb_conn.execute("INSERT INTO embed_refusals (chunk_id, space_name) VALUES (?, 'alt')", (dup,))
+    kb_conn.commit()
+    kb_conn.close()
+
+    assert _run(db, "redact", "--rewrite") == 0
+
+    conn = _open(db)
+    assert [r[0] for r in conn.execute("SELECT id FROM chunks")] == [keep]
+    assert conn.execute("SELECT COUNT(*) FROM embed_refusals").fetchone()[0] == 0
+    conn.close()
+
+
 def test_rewrite_reembeds_from_redacted_text(kb_conn, tmp_path, vectors):
     from knowledge_base.embed_swap import _check_promotable, backfill_space
 
