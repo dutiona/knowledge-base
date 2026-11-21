@@ -701,3 +701,73 @@ def test_every_tool_is_registered_through_the_boundary():
                     if isinstance(call, ast.Attribute) and call.attr == "tool":
                         direct.append(f"{source.stem}.{node.name}")
     assert direct == [], f"register these through routes.tool(mcp): {sorted(direct)}"
+
+
+# --- #598: every stdio tool reports a failure as a tool error ---
+
+
+def _argument(schema: dict, missing: str):
+    """A value valid for *schema* that names nothing stored."""
+    if "enum" in schema:
+        return schema["enum"][0]
+    if "anyOf" in schema:
+        return _argument(next(s for s in schema["anyOf"] if s.get("type") != "null"), missing)
+    kind = schema.get("type")
+    if kind == "string":
+        return missing
+    if kind == "integer":
+        return schema.get("minimum", 0)
+    if kind == "number":
+        return float(schema.get("minimum", 0))
+    if kind == "boolean":
+        return False
+    if kind == "array":
+        return []
+    return {}
+
+
+def test_no_stdio_tool_reports_a_failure_as_a_result(
+    declared_db,
+    fresh_thread_connections,
+    stub_embedder,
+    stub_document_embedder,
+    http_requests,
+    fake_dns,
+    tmp_path,
+):
+    """Walk every registered tool: a failure must be a tool error, never an ``{"error": ...}`` result (#598)."""
+    import json
+
+    import jsonschema
+    from fastmcp import Client
+
+    missing = str(tmp_path / "missing-7f3a")
+
+    async def _walk():
+        returned = {}
+        async with Client(server.mcp) as client:
+            for t in await client.list_tools():
+                schema = t.inputSchema
+                arguments = {
+                    name: _argument(schema["properties"][name], missing) for name in schema.get("required", [])
+                }
+                jsonschema.validate(arguments, schema)  # FastMCP accepts the call, so the tool's body runs
+                result = await client.call_tool(t.name, arguments, raise_on_error=False)
+                returned[t.name] = None if result.is_error else "".join(getattr(c, "text", "") for c in result.content)
+        return returned
+
+    with (
+        patch("knowledge_base.vision._vision_call", side_effect=RuntimeError("no vision in tests")),
+        patch("knowledge_base.llm._llm_call", side_effect=RuntimeError("no LLM in tests")),
+    ):
+        returned = asyncio.run(_walk())
+
+    def _is_error_object(text):
+        try:
+            value = json.loads(text)
+        except (TypeError, ValueError):
+            return False
+        return isinstance(value, dict) and "error" in value
+
+    assert len(returned) == 47
+    assert sorted(name for name, text in returned.items() if text is not None and _is_error_object(text)) == []

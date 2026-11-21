@@ -13,7 +13,7 @@ from fastmcp.exceptions import ToolError
 
 from .._conn import _get_conn
 from ..auth import calling_machine
-from ..exceptions import KnowledgeBaseError
+from ..exceptions import NotFoundError, ValidationError
 from ..ingest import ingest_directory, ingest_file, ingest_text as _ingest_text, reingest_file
 from ..web import configure_browser, ingest_url as _ingest_url
 from . import RACE, embedder_failure, tool
@@ -40,7 +40,7 @@ def ingest(
     p = Path(path).expanduser().resolve()
 
     if not p.exists():
-        return json.dumps({"error": f"Path does not exist: {p}"})
+        raise NotFoundError(f"Path does not exist: {p}")
 
     if p.is_dir():
         results = ingest_directory(conn, p)
@@ -76,11 +76,7 @@ def reingest(
     """
     conn = _get_conn()
     p = Path(path).expanduser().resolve()
-    try:
-        result = reingest_file(conn, p, source_type, session_id=session_id)
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    result = reingest_file(conn, p, source_type, session_id=session_id)
 
     # Invalidate stale "similar" relationships for all papers linked to this file
     source_uri = p.as_posix()
@@ -137,8 +133,6 @@ def ingest_text(name: str, content: str) -> str:
     conn = _get_conn()
     try:
         stored = _ingest_text(conn, content, source_uri=source_uri, source_type="markdown")
-    except KnowledgeBaseError as e:
-        raise ToolError(str(e)) from e
     except sqlite3.IntegrityError as e:
         raise ToolError(f"{RACE}; nothing was stored, retry") from e
     except httpx.HTTPError as e:
@@ -163,8 +157,6 @@ def ingest_url(url: str, session_id: str | None = None) -> str:
     conn = _get_conn()
     try:
         return json.dumps(_ingest_url(conn, url, session_id=session_id))
-    except KnowledgeBaseError as e:
-        raise ToolError(str(e)) from e
     except sqlite3.IntegrityError as e:
         raise ToolError(f"{RACE}; the page's text was not stored, retry") from e
     except httpx.HTTPError as e:  # ingest_url reports every page-fetch failure as ValidationError: this is the embedder
@@ -191,7 +183,7 @@ def configure_chunking(strategy: str | None = None) -> str:
         row = conn.execute("SELECT value FROM config WHERE key = 'chunk_strategy'").fetchone()
         return json.dumps({"chunk_strategy": row["value"] if row else "mechanical"})
     if strategy not in ("mechanical", "semantic"):
-        return json.dumps({"error": f"Invalid strategy: {strategy!r}. Must be 'mechanical' or 'semantic'."})
+        raise ValidationError(f"Invalid strategy: {strategy!r}. Must be 'mechanical' or 'semantic'.")
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('chunk_strategy', ?)",
         (strategy,),
@@ -240,8 +232,4 @@ def configure_browser_tool(
             Pass both as empty string to disable browser rendering.
     """
     conn = _get_conn()
-    try:
-        return json.dumps(configure_browser(conn, cdp_endpoint=cdp_endpoint, venv_path=venv_path))
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    return json.dumps(configure_browser(conn, cdp_endpoint=cdp_endpoint, venv_path=venv_path))

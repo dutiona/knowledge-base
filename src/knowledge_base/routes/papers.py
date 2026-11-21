@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from .._conn import _get_conn
 from . import tool
@@ -16,7 +17,6 @@ from ..conclusions import (
     record_conclusion,
     supersede_conclusion,
 )
-from ..exceptions import KnowledgeBaseError
 from ..papers import (
     add_relationship,
     get_paper,
@@ -116,20 +116,16 @@ def add_relationship_tool(
         evidence_chunk_id: Optional chunk ID containing evidence for this relationship.
     """
     conn = _get_conn()
-    try:
-        return json.dumps(
-            add_relationship(
-                conn,
-                source_paper_id,
-                target_paper_id,
-                relation_type,
-                confidence,
-                evidence_chunk_id,
-            )
+    return json.dumps(
+        add_relationship(
+            conn,
+            source_paper_id,
+            target_paper_id,
+            relation_type,
+            confidence,
+            evidence_chunk_id,
         )
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    )
 
 
 @tool(mcp)
@@ -165,11 +161,7 @@ def record_conclusion_tool(
         session_context: Context about why this conclusion was drawn.
     """
     conn = _get_conn()
-    try:
-        return json.dumps(record_conclusion(conn, claim, confidence, source_chunk_ids, session_context))
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    return json.dumps(record_conclusion(conn, claim, confidence, source_chunk_ids, session_context))
 
 
 @tool(mcp)
@@ -207,20 +199,16 @@ def supersede_conclusion_tool(
         session_context: Context for why the conclusion changed.
     """
     conn = _get_conn()
-    try:
-        return json.dumps(
-            supersede_conclusion(
-                conn,
-                old_conclusion_id,
-                new_claim,
-                confidence,
-                source_chunk_ids,
-                session_context,
-            )
+    return json.dumps(
+        supersede_conclusion(
+            conn,
+            old_conclusion_id,
+            new_claim,
+            confidence,
+            source_chunk_ids,
+            session_context,
         )
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    )
 
 
 @tool(mcp)
@@ -256,7 +244,7 @@ def export_bibtex_tool(
             p.write_text(bibtex_str, encoding="utf-8")
             return json.dumps({"written_to": str(p), "entries": bibtex_str.count("@")})
         except (OSError, ValueError) as e:
-            return json.dumps({"error": str(e)})
+            raise ToolError(str(e)) from e
     return json.dumps({"bibtex": bibtex_str, "entries": bibtex_str.count("@")})
 
 
@@ -276,13 +264,13 @@ def sync_bibtex_tool(
     try:
         p = _validate_bib_path(output_path)
     except ValueError as e:
-        return json.dumps({"error": str(e)})
+        raise ToolError(str(e)) from e
     conn = _get_conn()
     try:
         result = sync_bibtex(conn, str(p), paper_ids, title_pattern)
         return json.dumps(result)
     except OSError as e:
-        return json.dumps({"error": f"Failed to sync {p}: {e}"})
+        raise ToolError(f"Failed to sync {p}: {e}") from e
 
 
 @tool(mcp)
@@ -342,11 +330,7 @@ def relocate_paper_tool(paper_id: int, new_path: str) -> str:
         new_path: The new absolute path to the file.
     """
     conn = _get_conn()
-    try:
-        return json.dumps(relocate_paper(conn, paper_id, new_path))
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    return json.dumps(relocate_paper(conn, paper_id, new_path))
 
 
 @tool(mcp)

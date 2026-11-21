@@ -8,7 +8,7 @@ from fastmcp import FastMCP
 
 from .._conn import _get_conn
 from . import tool
-from ..exceptions import KnowledgeBaseError
+from ..exceptions import NotFoundError
 from ..jobs import get_job, list_jobs as _list_jobs
 from ..prediction_errors import (
     list_prediction_errors as _list_prediction_errors,
@@ -28,7 +28,7 @@ def get_job_status_tool(job_id: int) -> str:
     conn = _get_conn()
     job = get_job(conn, job_id)
     if job is None:
-        return json.dumps({"error": f"Job {job_id} not found"})
+        raise NotFoundError(f"Job {job_id} not found")
     return json.dumps(job)
 
 
@@ -70,8 +70,4 @@ def resolve_prediction_error_tool(error_id: int) -> str:
         error_id: ID of the prediction error to resolve.
     """
     conn = _get_conn()
-    try:
-        return json.dumps(resolve_prediction_error(conn, error_id))
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    return json.dumps(resolve_prediction_error(conn, error_id))

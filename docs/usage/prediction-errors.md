@@ -68,7 +68,7 @@ After ingesting content that fills a gap, mark the error as resolved:
 }
 ```
 
-Returns `{"error": "prediction error 42 not found"}` if the ID does not exist.
+An unknown ID fails with a tool error reading `prediction error 42 not found`.
 
 ### Monitoring
 

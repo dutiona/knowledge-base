@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from .._conn import _get_conn
 from . import tool
-from ..exceptions import ExtractionError, KnowledgeBaseError
+from ..exceptions import ExtractionError, ValidationError
 from ..extraction import (
     _MAX_WORKERS_LIMIT,
     compare_papers,
@@ -115,12 +116,8 @@ def extract_structure_tool(
             Increase to match your LLM server's parallel capacity.
     """
     conn = _get_conn()
-    try:
-        _require_llm()  # first: no inline call and no queued job while LLM extraction is off
-        est = estimate_extraction_time(conn, paper_id)
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    _require_llm()  # first: no inline call and no queued job while LLM extraction is off
+    est = estimate_extraction_time(conn, paper_id)
 
     # Short doc: run inline (fast path) — reuse chunks from estimate
     if not est["is_long"]:
@@ -134,13 +131,13 @@ def extract_structure_tool(
                     _prefetched_chunks=est["chunks"],
                 )
             )
-        except ExtractionError as e:
+        except ExtractionError as e:  # the text a failed extraction job records as its result
             result: dict[str, object] = {"error": str(e)}
             if e.errors:
                 result["errors"] = e.errors
             if e.raw:
                 result["raw"] = e.raw
-            return json.dumps(result)
+            raise ToolError(json.dumps(result)) from e
 
     # Long doc, not confirmed: ETA warning (adjust for parallelism)
     effective_workers = min(max(max_workers, 1), est["chunk_count"], _MAX_WORKERS_LIMIT)
@@ -196,11 +193,7 @@ def configure_llm_tool(
             server). Shared by every stored service URL; omit to preserve.
     """
     conn = _get_conn()
-    try:
-        return json.dumps(configure_llm(conn, provider, base_url, model, api_key, allow_loopback_base_url))
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    return json.dumps(configure_llm(conn, provider, base_url, model, api_key, allow_loopback_base_url))
 
 
 @tool(mcp)
@@ -236,14 +229,10 @@ def extract_figures_tool(paper_id: int, pages: list[int] | None = None, confirme
     if pages is not None:
         invalid = [p for p in pages if p <= 0]
         if invalid:
-            return json.dumps({"error": f"Pages must be >= 1 (got {invalid})"})
+            raise ValidationError(f"Pages must be >= 1 (got {invalid})")
         pages_0 = [p - 1 for p in pages]
 
-    try:
-        est = estimate_figures_time(conn, paper_id, pages=pages_0)
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    est = estimate_figures_time(conn, paper_id, pages=pages_0)
 
     # ETA gate
     if est["estimated_seconds"] > 120 and not confirmed:
@@ -282,10 +271,7 @@ def configure_vision_tool(
             a localhost URL needs allow_loopback_base_url (set through configure_llm_tool).
     """
     conn = _get_conn()
-    try:
-        return json.dumps(configure_vision(conn, model=model, base_url=base_url))
-    except KnowledgeBaseError as e:
-        return json.dumps({"error": str(e), **e.details})
+    return json.dumps(configure_vision(conn, model=model, base_url=base_url))
 
 
 @tool(mcp)
@@ -303,8 +289,4 @@ def configure_omniparser_tool(path: str | None = None, server_url: str | None = 
             allow_loopback_base_url).
     """
     conn = _get_conn()
-    try:
-        return json.dumps(configure_omniparser(conn, path, server_url=server_url))
-    except KnowledgeBaseError as e:
-        err = {"error": str(e), **e.details}
-        return json.dumps(err)
+    return json.dumps(configure_omniparser(conn, path, server_url=server_url))

@@ -2,7 +2,7 @@
 
 These exercise the *server-only* logic of each MCP tool wrapper in
 ``knowledge_base.routes.embeddings`` — error mapping (``ValueError`` →
-``{"error": str(e)}``), orchestration side-effects (similarity-relationship
+a ``ToolError`` carrying ``str(e)``), orchestration side-effects (similarity-relationship
 invalidation, ``note`` augmentation), JSON shaping, and the rich branching of
 ``benchmark_spaces_tool``. The embedding/search internals are NOT tested here:
 anything that would reach Ollama or the search index (``re_embed``,
@@ -16,8 +16,12 @@ against an isolated temp DB via the ``kb_conn`` fixture.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from unittest.mock import patch
+
+import pytest
+from fastmcp.exceptions import ToolError
 
 import knowledge_base.routes.embeddings as emb
 
@@ -213,20 +217,17 @@ def test_create_embed_space_success(kb_conn):
 
 
 def test_create_embed_space_duplicate_name_error(kb_conn):
-    """Duplicate name → create_space raises ValueError → error mapping."""
+    """Duplicate name → create_space raises ValueError → ToolError."""
     with patch.object(emb, "_get_conn", return_value=kb_conn):
         emb.create_embed_space_tool(name="dup", model="m", dim=128)
-        result = json.loads(emb.create_embed_space_tool(name="dup", model="m", dim=128))
-    assert "error" in result
-    assert "already exists" in result["error"]
+        with pytest.raises(ToolError, match="already exists"):
+            emb.create_embed_space_tool(name="dup", model="m", dim=128)
 
 
 def test_create_embed_space_invalid_name_error(kb_conn):
-    """Non-alphanumeric name → ValueError → error mapping."""
-    with patch.object(emb, "_get_conn", return_value=kb_conn):
-        result = json.loads(emb.create_embed_space_tool(name="bad name!", model="m", dim=128))
-    assert "error" in result
-    assert "alphanumeric" in result["error"]
+    """Non-alphanumeric name → ValueError → ToolError."""
+    with patch.object(emb, "_get_conn", return_value=kb_conn), pytest.raises(ToolError, match="alphanumeric"):
+        emb.create_embed_space_tool(name="bad name!", model="m", dim=128)
 
 
 # --------------------------------------------------------------------------- #
@@ -235,11 +236,9 @@ def test_create_embed_space_invalid_name_error(kb_conn):
 
 
 def test_backfill_embed_space_unknown_name_error(kb_conn):
-    """Unknown space → real backfill_space raises ValueError → error mapping."""
-    with patch.object(emb, "_get_conn", return_value=kb_conn):
-        result = json.loads(emb.backfill_embed_space_tool("nope"))
-    assert "error" in result
-    assert "not found" in result["error"]
+    """Unknown space → real backfill_space raises ValueError → ToolError."""
+    with patch.object(emb, "_get_conn", return_value=kb_conn), pytest.raises(ToolError, match="not found"):
+        emb.backfill_embed_space_tool("nope")
 
 
 def test_backfill_embed_space_happy_passthrough(kb_conn):
@@ -260,11 +259,9 @@ def test_backfill_embed_space_happy_passthrough(kb_conn):
 
 
 def test_promote_embed_space_unknown_name_error(kb_conn):
-    """Unknown space → real promote_space raises ValueError → error mapping."""
-    with patch.object(emb, "_get_conn", return_value=kb_conn):
-        result = json.loads(emb.promote_embed_space_tool("ghost"))
-    assert "error" in result
-    assert "not found" in result["error"]
+    """Unknown space → real promote_space raises ValueError → ToolError."""
+    with patch.object(emb, "_get_conn", return_value=kb_conn), pytest.raises(ToolError, match="not found"):
+        emb.promote_embed_space_tool("ghost")
 
 
 def test_promote_embed_space_happy_adds_note(kb_conn):
@@ -292,11 +289,9 @@ def test_promote_embed_space_happy_adds_note(kb_conn):
 
 
 def test_deprecate_embed_space_active_error(kb_conn):
-    """Deprecating the active space (seeded 'default') → ValueError → error mapping."""
-    with patch.object(emb, "_get_conn", return_value=kb_conn):
-        result = json.loads(emb.deprecate_embed_space_tool("default"))
-    assert "error" in result
-    assert "active" in result["error"]
+    """Deprecating the active space (seeded 'default') → ValueError → ToolError."""
+    with patch.object(emb, "_get_conn", return_value=kb_conn), pytest.raises(ToolError, match="active"):
+        emb.deprecate_embed_space_tool("default")
 
 
 def test_deprecate_embed_space_success(kb_conn):
@@ -315,12 +310,10 @@ def test_deprecate_embed_space_success(kb_conn):
 
 
 def test_cleanup_embed_space_not_deprecated_error(kb_conn):
-    """Cleaning a non-deprecated (populating) space → ValueError → error mapping."""
+    """Cleaning a non-deprecated (populating) space → ValueError → ToolError."""
     _insert_space(kb_conn, name="pop2", status="populating")
-    with patch.object(emb, "_get_conn", return_value=kb_conn):
-        result = json.loads(emb.cleanup_embed_space_tool("pop2"))
-    assert "error" in result
-    assert "deprecated" in result["error"]
+    with patch.object(emb, "_get_conn", return_value=kb_conn), pytest.raises(ToolError, match="deprecated"):
+        emb.cleanup_embed_space_tool("pop2")
 
 
 def test_cleanup_embed_space_success(kb_conn):
@@ -351,13 +344,13 @@ def test_compare_spaces_happy_passthrough(kb_conn):
 
 
 def test_compare_spaces_value_error_mapping(kb_conn):
-    """compare_spaces raising ValueError → error mapping."""
+    """compare_spaces raising ValueError → ToolError."""
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(emb, "compare_spaces", side_effect=ValueError("space x not found")),
+        pytest.raises(ToolError, match=re.escape("space x not found")),
     ):
-        result = json.loads(emb.compare_spaces_tool("q", "a", "b"))
-    assert result == {"error": "space x not found"}
+        emb.compare_spaces_tool("q", "a", "b")
 
 
 # --------------------------------------------------------------------------- #
@@ -378,13 +371,13 @@ def test_batch_compare_spaces_happy_passthrough(kb_conn):
 
 
 def test_batch_compare_spaces_value_error_mapping(kb_conn):
-    """batch_compare_spaces raising ValueError → error mapping."""
+    """batch_compare_spaces raising ValueError → ToolError."""
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(emb, "batch_compare_spaces", side_effect=ValueError("bad space")),
+        pytest.raises(ToolError, match=re.escape("bad space")),
     ):
-        result = json.loads(emb.batch_compare_spaces_tool("a", "b", ["q"]))
-    assert result == {"error": "bad space"}
+        emb.batch_compare_spaces_tool("a", "b", ["q"])
 
 
 # --------------------------------------------------------------------------- #
@@ -397,21 +390,21 @@ def test_benchmark_no_spaces(kb_conn):
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(emb, "list_spaces", return_value=[]),
+        pytest.raises(ToolError, match=re.escape("No embedding spaces found")),
     ):
-        result = json.loads(emb.benchmark_spaces_tool())
-    assert result == {"error": "No embedding spaces found"}
+        emb.benchmark_spaces_tool()
 
 
 def test_benchmark_no_active_no_baseline(kb_conn):
-    """baseline_space=None and no active space → error."""
+    """baseline_space=None and no active space → ToolError."""
     spaces = [{"name": "sp", "dim": 256, "status": "populating", "element_type": "float32"}]
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(emb, "list_spaces", return_value=spaces),
         patch.object(emb, "get_active_space", return_value=None),
+        pytest.raises(ToolError, match=re.escape("No active space and no baseline specified")),
     ):
-        result = json.loads(emb.benchmark_spaces_tool(baseline_space=None))
-    assert result == {"error": "No active space and no baseline specified"}
+        emb.benchmark_spaces_tool(baseline_space=None)
 
 
 def test_benchmark_explicit_baseline_not_found(kb_conn):
@@ -420,23 +413,22 @@ def test_benchmark_explicit_baseline_not_found(kb_conn):
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(emb, "list_spaces", return_value=spaces),
+        pytest.raises(ToolError) as exc_info,
     ):
-        result = json.loads(emb.benchmark_spaces_tool(baseline_space="missing"))
-    assert "error" in result
-    assert "missing" in result["error"]
-    assert "not found" in result["error"]
+        emb.benchmark_spaces_tool(baseline_space="missing")
+    assert "missing" in str(exc_info.value)
+    assert "not found" in str(exc_info.value)
 
 
 def test_benchmark_no_chunks(kb_conn):
-    """Baseline resolves but DB has no chunks → 'No chunks ...' error."""
+    """Baseline resolves but DB has no chunks → 'No chunks ...' ToolError."""
     spaces = [{"name": "base", "dim": 256, "status": "active", "element_type": "float32"}]
     with (
         patch.object(emb, "_get_conn", return_value=kb_conn),
         patch.object(emb, "list_spaces", return_value=spaces),
+        pytest.raises(ToolError, match="No chunks"),
     ):
-        result = json.loads(emb.benchmark_spaces_tool(baseline_space="base"))
-    assert "error" in result
-    assert "No chunks" in result["error"]
+        emb.benchmark_spaces_tool(baseline_space="base")
 
 
 def test_benchmark_happy_storage_ratio_is_the_dim_ratio(kb_conn):

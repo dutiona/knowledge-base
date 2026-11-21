@@ -11,7 +11,6 @@ from fastmcp.exceptions import ToolError
 from .._conn import _get_conn
 from ..db import co_occurrence_pairs, get_index_stats
 from ..embed_swap import get_embed_config, get_space
-from ..exceptions import KnowledgeBaseError
 from ..prediction_errors import detect_and_log, get_prediction_error_count
 from ..search import search
 from . import embedder_failure, tool
@@ -66,8 +65,6 @@ def search_index(
             space_name=space_name,
             rerank=rerank,
         )
-    except KnowledgeBaseError as e:
-        raise ToolError(str(e)) from e
     except httpx.HTTPError as e:
         kind, retryable = embedder_failure(e)
         raise ToolError(

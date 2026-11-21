@@ -22,6 +22,7 @@ import json
 from unittest.mock import patch
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from knowledge_base.exceptions import ExtractionError, NotFoundError
 from knowledge_base.extraction import _MAX_WORKERS_LIMIT
@@ -190,22 +191,15 @@ def test_configure_llm_tool_valid_ollama(kb_conn):
 
 
 def test_configure_llm_tool_invalid_provider_maps_error(kb_conn):
-    """Unknown provider → KnowledgeBaseError → {"error": ..., **details}."""
-    with _patch_conn(kb_conn):
-        result = json.loads(configure_llm_tool(provider="bogus"))
-
-    assert "error" in result
-    assert "bogus" in result["error"]
-    # ValidationError carries an empty details dict — merge is a no-op but valid.
+    """Unknown provider → KnowledgeBaseError → ToolError."""
+    with _patch_conn(kb_conn), pytest.raises(ToolError, match="bogus"):
+        configure_llm_tool(provider="bogus")
 
 
 def test_configure_llm_tool_openai_compat_missing_base_url(kb_conn):
-    """openai_compat without base_url → ValidationError → error mapping."""
-    with _patch_conn(kb_conn):
-        result = json.loads(configure_llm_tool(provider="openai_compat"))
-
-    assert "error" in result
-    assert "base_url" in result["error"]
+    """openai_compat without base_url → ValidationError → ToolError."""
+    with _patch_conn(kb_conn), pytest.raises(ToolError, match="base_url"):
+        configure_llm_tool(provider="openai_compat")
 
 
 # ---------------------------------------------------------------------------
@@ -256,12 +250,9 @@ def test_configure_omniparser_tool_valid_path(kb_conn, tmp_path):
 
 
 def test_configure_omniparser_tool_invalid_path_maps_error(kb_conn):
-    """Invalid path → ValidationError → error mapping."""
-    with _patch_conn(kb_conn):
-        result = json.loads(configure_omniparser_tool(path="/nonexistent/omniparser"))
-
-    assert "error" in result
-    assert "not found" in result["error"]
+    """Invalid path → ValidationError → ToolError."""
+    with _patch_conn(kb_conn), pytest.raises(ToolError, match="not found"):
+        configure_omniparser_tool(path="/nonexistent/omniparser")
 
 
 # ---------------------------------------------------------------------------
@@ -270,18 +261,16 @@ def test_configure_omniparser_tool_invalid_path_maps_error(kb_conn):
 
 
 def test_extract_structure_tool_estimate_raises_maps_error(kb_conn):
-    """estimate_extraction_time raises KnowledgeBaseError → error mapping."""
+    """estimate_extraction_time raises KnowledgeBaseError → ToolError."""
     with (
         _patch_conn(kb_conn),
         patch(
             f"{ROUTE}.estimate_extraction_time",
             side_effect=NotFoundError("Paper 99 not found"),
         ),
+        pytest.raises(ToolError, match="Paper 99 not found"),
     ):
-        result = json.loads(extract_structure_tool(paper_id=99))
-
-    assert "error" in result
-    assert "Paper 99 not found" in result["error"]
+        extract_structure_tool(paper_id=99)
 
 
 def test_extract_structure_tool_short_doc_passthrough(kb_conn):
@@ -318,7 +307,7 @@ def test_extract_structure_tool_short_doc_passthrough(kb_conn):
 
 
 def test_extract_structure_tool_short_doc_extraction_error(kb_conn):
-    """Short doc + ExtractionError → result carries error, errors, raw."""
+    """Short doc + ExtractionError → the ToolError text carries error, errors, raw as JSON."""
     est = {
         "total_chars": 100,
         "chunk_count": 1,
@@ -335,9 +324,11 @@ def test_extract_structure_tool_short_doc_extraction_error(kb_conn):
         _patch_conn(kb_conn),
         patch(f"{ROUTE}.estimate_extraction_time", return_value=est),
         patch(f"{ROUTE}.extract_structure", side_effect=exc),
+        pytest.raises(ToolError) as exc_info,
     ):
-        result = json.loads(extract_structure_tool(paper_id=7))
+        extract_structure_tool(paper_id=7)
 
+    result = json.loads(str(exc_info.value))
     assert result["error"] == "bad json"
     assert result["errors"] == [{"chunk_id": 1, "error": "boom"}]
     assert result["raw"] == "{not json"
@@ -448,36 +439,36 @@ def test_extract_structure_tool_long_doc_confirmed_single_worker_params_none(kb_
 
 def test_extract_figures_tool_with_vision_off_submits_no_job(kb_conn, monkeypatch):
     """#569: with vision off the tool refuses and queues nothing."""
-    import json
-
     import knowledge_base.routes.extraction as ext
 
     monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
-    with patch("knowledge_base.routes.extraction._get_conn", return_value=kb_conn):
-        response = json.loads(ext.extract_figures_tool(1, confirmed=True))
-    assert "KNOWLEDGE_BASE_VISION" in response["error"]
+    with (
+        patch("knowledge_base.routes.extraction._get_conn", return_value=kb_conn),
+        pytest.raises(ToolError, match="KNOWLEDGE_BASE_VISION"),
+    ):
+        ext.extract_figures_tool(1, confirmed=True)
     assert kb_conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
 
 
 def test_extract_structure_tool_with_llm_off_refuses_and_queues_nothing(kb_conn, monkeypatch):
     """#569: with the LLM off the tool refuses up front, for short and long papers alike."""
-    import json
-
     import knowledge_base.routes.extraction as ext
 
     monkeypatch.delenv("KNOWLEDGE_BASE_LLM")
-    with patch("knowledge_base.routes.extraction._get_conn", return_value=kb_conn):
-        response = json.loads(ext.extract_structure_tool(1, confirmed=True))
-    assert "KNOWLEDGE_BASE_LLM" in response["error"]
+    with (
+        patch("knowledge_base.routes.extraction._get_conn", return_value=kb_conn),
+        pytest.raises(ToolError, match="KNOWLEDGE_BASE_LLM"),
+    ):
+        ext.extract_structure_tool(1, confirmed=True)
     assert kb_conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
 
 
-def test_configure_vision_tool_with_vision_off_returns_an_error(kb_conn, monkeypatch):
-    import json
-
+def test_configure_vision_tool_with_vision_off_raises_a_tool_error(kb_conn, monkeypatch):
     import knowledge_base.routes.extraction as ext
 
     monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
-    with patch("knowledge_base.routes.extraction._get_conn", return_value=kb_conn):
-        response = json.loads(ext.configure_vision_tool(model="m"))
-    assert "KNOWLEDGE_BASE_VISION" in response["error"]
+    with (
+        patch("knowledge_base.routes.extraction._get_conn", return_value=kb_conn),
+        pytest.raises(ToolError, match="KNOWLEDGE_BASE_VISION"),
+    ):
+        ext.configure_vision_tool(model="m")

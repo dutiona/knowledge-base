@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 
 import httpx
+from unittest.mock import patch
+
 import pytest
 
 from knowledge_base import server
@@ -390,3 +392,31 @@ def test_docs_state_the_counts_per_surface():
     counts = f"{len(_names(server.mcp))} tools over stdio, {len(_names(server.network))} over HTTP"
     for doc in ("README.md", "AGENTS.md", "GEMINI.md", "docs/reference/mcp-tools.md"):
         assert counts in (_ROOT / doc).read_text(), doc
+
+
+@pytest.mark.parametrize(
+    ("hub", "tool", "target", "arguments"),
+    [
+        ("mcp", "get_paper_tool", "knowledge_base.routes.papers.get_paper", {"paper_id": 1}),
+        ("network", "search_index", "knowledge_base.routes.search.search", {"query": "q"}),
+    ],
+    ids=["stdio", "network"],
+)
+def test_a_domain_error_reads_as_its_message(declared_db, monkeypatch, hub, tool, target, arguments):
+    """A KnowledgeBaseError a tool lets through reads as its own text on both hubs (#598, #543 D6)."""
+    import threading
+
+    from fastmcp import Client
+
+    from knowledge_base.exceptions import NotFoundError
+
+    monkeypatch.setattr("knowledge_base._conn._local", threading.local())
+
+    async def _run():
+        async with Client(getattr(server, hub)) as client:
+            return await client.call_tool(tool, arguments, raise_on_error=False)
+
+    with patch(target, side_effect=NotFoundError("marker refusal")):
+        result = asyncio.run(_run())
+    assert result.is_error
+    assert result.content[0].text == "marker refusal"

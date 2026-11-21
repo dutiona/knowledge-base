@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from knowledge_base.db import get_connection, init_schema
 from knowledge_base.embed_swap import backfill_space, create_space, get_embed_config, re_embed
@@ -218,15 +219,15 @@ def _config_rows(conn) -> dict:
 
 
 def test_promote_refuses_an_undeclared_identity(kb_conn, http_requests):
-    import json
-
     import knowledge_base.routes.embeddings as emb
 
     create_space(kb_conn, "other", "other-model", TEST_EMBED_DIM)
     before = (_config_rows(kb_conn), _space_rows(kb_conn))
-    with patch("knowledge_base.routes.embeddings._get_conn", return_value=kb_conn):
-        promoted = json.loads(emb.promote_embed_space_tool("other"))
-    assert "KNOWLEDGE_BASE_EMBED_MODEL" in promoted["error"]
+    with (
+        patch("knowledge_base.routes.embeddings._get_conn", return_value=kb_conn),
+        pytest.raises(ToolError, match="KNOWLEDGE_BASE_EMBED_MODEL"),
+    ):
+        emb.promote_embed_space_tool("other")
     assert (_config_rows(kb_conn), _space_rows(kb_conn)) == before
     assert http_requests == []
 

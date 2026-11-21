@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from .._conn import _get_conn
 from . import tool
 from ..comparison import batch_compare_spaces, compare_spaces
 from ..db import get_active_space
-from ..exceptions import KnowledgeBaseError
+from ..exceptions import KnowledgeBaseError, NotFoundError
 from ..embed_swap import (
     backfill_space,
     cleanup_space,
@@ -81,8 +82,8 @@ def create_embed_space_tool(
     try:
         result = create_space(conn, name, model, dim, chunk_strategy, matryoshka_base_dim, query_instruction)
         return json.dumps(result)
-    except (KnowledgeBaseError, ValueError) as e:
-        return json.dumps({"error": str(e)})
+    except ValueError as e:
+        raise ToolError(str(e)) from e
 
 
 @tool(mcp)
@@ -98,8 +99,8 @@ def backfill_embed_space_tool(name: str, batch_size: int = 32) -> str:
     try:
         result = backfill_space(conn, name, batch_size)
         return json.dumps(result)
-    except (KnowledgeBaseError, ValueError) as e:
-        return json.dumps({"error": str(e)})
+    except ValueError as e:
+        raise ToolError(str(e)) from e
 
 
 @tool(mcp)
@@ -120,8 +121,8 @@ def promote_embed_space_tool(name: str) -> str:
             "All 'similar' relationships removed (embedding space changed). Run scan_relationships() to recompute."
         )
         return json.dumps(result)
-    except (KnowledgeBaseError, ValueError) as e:
-        return json.dumps({"error": str(e)})
+    except ValueError as e:
+        raise ToolError(str(e)) from e
 
 
 @tool(mcp)
@@ -136,7 +137,7 @@ def deprecate_embed_space_tool(name: str) -> str:
         result = deprecate_space(conn, name)
         return json.dumps(result)
     except ValueError as e:
-        return json.dumps({"error": str(e)})
+        raise ToolError(str(e)) from e
 
 
 @tool(mcp)
@@ -151,7 +152,7 @@ def cleanup_embed_space_tool(name: str) -> str:
         result = cleanup_space(conn, name)
         return json.dumps(result)
     except ValueError as e:
-        return json.dumps({"error": str(e)})
+        raise ToolError(str(e)) from e
 
 
 @tool(mcp)
@@ -177,8 +178,8 @@ def compare_spaces_tool(
     try:
         result = compare_spaces(conn, query, space_a, space_b, top_k, mode)
         return json.dumps(result)
-    except (KnowledgeBaseError, ValueError) as e:
-        return json.dumps({"error": str(e)})
+    except ValueError as e:
+        raise ToolError(str(e)) from e
 
 
 @tool(mcp)
@@ -204,8 +205,8 @@ def batch_compare_spaces_tool(
     try:
         result = batch_compare_spaces(conn, space_a, space_b, queries, top_k, mode)
         return json.dumps(result)
-    except (KnowledgeBaseError, ValueError) as e:
-        return json.dumps({"error": str(e)})
+    except ValueError as e:
+        raise ToolError(str(e)) from e
 
 
 @tool(mcp)
@@ -229,7 +230,7 @@ def benchmark_spaces_tool(
 
     spaces = list_spaces(conn)
     if not spaces:
-        return json.dumps({"error": "No embedding spaces found"})
+        raise NotFoundError("No embedding spaces found")
 
     # Resolve baseline
     baseline_name: str
@@ -238,12 +239,12 @@ def benchmark_spaces_tool(
     else:
         active = get_active_space(conn)
         if active is None:
-            return json.dumps({"error": "No active space and no baseline specified"})
+            raise NotFoundError("No active space and no baseline specified")
         baseline_name = active["name"]
 
     baseline = next((s for s in spaces if s["name"] == baseline_name), None)
     if baseline is None:
-        return json.dumps({"error": f"Baseline space {baseline_name!r} not found"})
+        raise NotFoundError(f"Baseline space {baseline_name!r} not found")
 
     # Sample queries from chunks
     rows = conn.execute(
@@ -252,7 +253,7 @@ def benchmark_spaces_tool(
     ).fetchall()
     queries = [r["content"] for r in rows]
     if not queries:
-        return json.dumps({"error": "No chunks in database to sample queries from"})
+        raise NotFoundError("No chunks in database to sample queries from")
 
     # Compare each non-deprecated, non-baseline space
     results = []

@@ -9,8 +9,10 @@ from typing import TypeVar
 
 import httpx
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from .. import _conn
+from ..exceptions import KnowledgeBaseError
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,9 @@ def _end_open_transaction() -> bool:
 def tool(mcp: FastMCP) -> Callable[[F], F]:
     """Register a tool on *mcp* through the call boundary: every call ends with no transaction open (#597).
 
+    A ``KnowledgeBaseError`` the tool lets through becomes a tool error carrying its message (#598), so no tool
+    returns a failure as a result.
+
     The boundary runs on the tool's own thread, where its connection lives. A call that raises leaves no partial
     write for that thread's next commit and no write lock against other threads; a call that returns with a
     transaction open forgot to commit, which is logged and rolled back rather than stored by accident later.
@@ -55,6 +60,9 @@ def tool(mcp: FastMCP) -> Callable[[F], F]:
         def call(*args: object, **kwargs: object) -> object:
             try:
                 result = fn(*args, **kwargs)
+            except KnowledgeBaseError as e:  # a domain refusal reads as its own text on both hubs (#543 D6, #598)
+                _end_open_transaction()
+                raise ToolError(str(e)) from e
             except BaseException:
                 _end_open_transaction()
                 raise
