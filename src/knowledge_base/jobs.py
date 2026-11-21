@@ -112,12 +112,12 @@ class _JobWorker:
             self._thread = threading.Thread(target=self._run, daemon=True, name="job-worker")
             self._thread.start()
 
-    def stop(self) -> None:
-        """Signal the worker to stop and wait for it."""
+    def stop(self, timeout: float | None = 10) -> None:
+        """Signal the worker to stop and wait for it, at most *timeout* seconds (``None``: until it exits)."""
         self._stop_flag = True
         self._event.set()
         if self._thread is not None:
-            self._thread.join(timeout=10)
+            self._thread.join(timeout=timeout)
             self._thread = None
 
     def reset(self) -> None:
@@ -266,6 +266,15 @@ def _get_db_path(conn: sqlite3.Connection) -> Path | None:
 
 def _ensure_worker_running(db_path: Path | None = None) -> None:
     _worker.start(db_path=db_path)
+
+
+def shutdown_worker() -> None:
+    """Stop this process's worker and wait until it exits: its running job ends normally, pending ones stay pending.
+
+    The entry points call it before they release the store lock, so the lock is never free while this process can
+    still write (#596).
+    """
+    _worker.stop(timeout=None)
 
 
 def get_worker() -> _JobWorker:

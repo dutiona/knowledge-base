@@ -20,9 +20,7 @@ import httpx
 import trafilatura
 
 from .db import (
-    _batched_execute,
     bump_chunk_count,
-    delete_chunk_vecs,
     delete_chunks_cascade,
     get_vec_table_name,
 )
@@ -47,7 +45,6 @@ from .utils import (
     validate_base_url,
 )
 from .ingest import (
-    _cleanup_conclusion_refs,
     _embed_with_config,
     _insert_chunk,
     ingest_text,
@@ -234,46 +231,6 @@ def _validate_image_url(url: str) -> bool:
 
 # ---------------------------------------------------------------------------
 # Figure FK cleanup
-# ---------------------------------------------------------------------------
-
-
-def _cleanup_figure_fk_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> None:
-    """Clean FK references to figure chunks before deletion.
-
-    Mirrors the FK cleanup in ``reingest_file`` (papers, relationships,
-    conclusions, methods, datasets, metrics, entity_mentions).
-    """
-    if not chunk_ids:
-        return
-
-    _batched_execute(
-        conn,
-        "UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({ph})",
-        chunk_ids,
-    )
-    _batched_execute(
-        conn,
-        "UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({ph})",
-        chunk_ids,
-    )
-
-    _cleanup_conclusion_refs(conn, chunk_ids)
-
-    for table in ("methods", "datasets", "metrics"):
-        _batched_execute(
-            conn,
-            f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",  # noqa: S608  # trusted internal identifier, not user input
-            chunk_ids,
-        )
-    _batched_execute(
-        conn,
-        "DELETE FROM entity_mentions WHERE chunk_id IN ({ph})",
-        chunk_ids,
-    )
-
-
-# ---------------------------------------------------------------------------
-# HTML image extraction
 # ---------------------------------------------------------------------------
 
 
@@ -498,7 +455,6 @@ def _extract_html_images(
         ).fetchall()
     ]
     if old_ids:
-        _cleanup_figure_fk_refs(conn, old_ids)
         delete_chunks_cascade(conn, old_ids)
 
     # --- Insert new figure chunks ---
@@ -867,9 +823,7 @@ def _extract_web_figures(
         ).fetchall()
     ]
     if old_fig_ids:
-        _cleanup_figure_fk_refs(conn, old_fig_ids)
-        delete_chunk_vecs(conn, old_fig_ids)
-        _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_fig_ids)
+        delete_chunks_cascade(conn, old_fig_ids)
 
     # Resolve the active vec table once for the per-chunk inserts and the single
     # batched chunk_count bump (#392); suppress the per-row UPDATE and bump once
@@ -1016,9 +970,7 @@ def _extract_element_captures(
         ).fetchall()
     ]
     if old_ids:
-        _cleanup_figure_fk_refs(conn, old_ids)
-        delete_chunk_vecs(conn, old_ids)
-        _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
+        delete_chunks_cascade(conn, old_ids)
 
     # Resolve the active vec table once for the per-chunk inserts and the single
     # batched chunk_count bump (#392); suppress the per-row UPDATE and bump once
@@ -1088,9 +1040,7 @@ def _cleanup_stale_inline_images(conn: sqlite3.Connection, source_uri: str) -> i
     ]
     if not old_ids:
         return 0
-    _cleanup_figure_fk_refs(conn, old_ids)
-    delete_chunk_vecs(conn, old_ids)
-    _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", old_ids)
+    delete_chunks_cascade(conn, old_ids)
     conn.commit()
     logger.info("Cleaned %d stale inline image chunks for %s", len(old_ids), source_uri)
     return len(old_ids)

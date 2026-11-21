@@ -33,6 +33,7 @@ __all__ = [
     "CURRENT_SCHEMA_VERSION",
     "SCHEMA_VERSION_KEY",
     "add_v2_space_columns",
+    "add_v3_embed_refusals",
     "backup_database",
     "get_schema_version",
     "migrate",
@@ -45,7 +46,7 @@ __all__ = [
 
 #: The schema version this build targets. A fresh DB is stamped with this; the
 #: read path validates against it.
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 #: `config` key under which the applied schema version is stored.
 SCHEMA_VERSION_KEY = "schema_version"
@@ -74,7 +75,30 @@ def add_v2_space_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE embed_spaces ADD COLUMN {name} {sql_type}")
 
 
-_MIGRATIONS: dict[int, Migration] = {2: (add_v2_space_columns, False)}
+def add_v3_embed_refusals(conn: sqlite3.Connection) -> None:
+    """v3 (#579): the chunks each space's embedder refused, and every space's count recounted; commits nothing.
+
+    A refusal leaves with its chunk or its space (foreign keys) and with its text (a rewrite is tried again). The
+    recount sets each ``chunk_count`` to the vectors its table holds, repairing what backfills counted before.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS embed_refusals ("
+        " chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,"
+        " space_name TEXT NOT NULL REFERENCES embed_spaces(name) ON DELETE CASCADE,"
+        " PRIMARY KEY (chunk_id, space_name))"
+    )
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS chunks_au_refusals AFTER UPDATE OF content ON chunks"
+        " BEGIN DELETE FROM embed_refusals WHERE chunk_id = new.id; END"
+    )
+    for name, table in conn.execute(
+        "SELECT e.name, e.table_name FROM embed_spaces e JOIN sqlite_master m ON m.name = e.table_name"
+    ).fetchall():
+        count = conn.execute(f"SELECT COUNT(*) FROM [{table}]").fetchone()[0]  # noqa: S608  # table from sqlite_master
+        conn.execute("UPDATE embed_spaces SET chunk_count = ? WHERE name = ?", (count, name))
+
+
+_MIGRATIONS: dict[int, Migration] = {2: (add_v2_space_columns, False), 3: (add_v3_embed_refusals, False)}
 
 
 # --- version read/write on the config table ------------------------------------

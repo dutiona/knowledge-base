@@ -106,9 +106,11 @@ Or serve stateless MCP over HTTP, with the same declaration exported, behind per
 uv run knowledge-base --http 127.0.0.1:<port> --token-file /path/to/token-hashes
 ```
 
-Plain `knowledge-base` serves stdio: the local and maintenance surface, with every tool. Against a database the HTTP
-server uses, run it only with that server stopped; nothing enforces it yet (#596). `--http` serves only the three
-network tools, `search_index`, `ingest_text` and `ingest_url`.
+Plain `knowledge-base` serves stdio: the local and maintenance surface, with every tool. `--http` serves only the
+three network tools, `search_index`, `ingest_text` and `ingest_url`. Either way one `knowledge-base` process serves a
+database at a time: it holds the [store lock](#the-store-lock) for its whole life, so a second one, a second Claude
+Code session's stdio server included, exits 78 at start. Several clients share one database through one `--http`
+server.
 
 ### Configuration
 
@@ -117,7 +119,8 @@ variable, or a database that disagrees with the declaration, stops the server be
 serves: it prints the reason (naming the variable or the `config` field) and exits 78
 (`EX_CONFIG`). Empty values count as unset. So do a bad command line, `--http` without `--token-file`, and a
 missing, unreadable or malformed token-hash file (named by path and line), and `--http` while
-`KNOWLEDGE_BASE_VISION` or `KNOWLEDGE_BASE_BROWSER` is on, all checked before the database is opened.
+`KNOWLEDGE_BASE_VISION` or `KNOWLEDGE_BASE_BROWSER` is on, all checked before the database is opened, and a
+database whose store lock another process holds.
 
 | Variable | Required | Value |
 | --- | --- | --- |
@@ -163,12 +166,37 @@ connects to the address it checked. Endpoints the operator's environment declare
   previous declaration instead of rerunning, restore it and run `knowledge-base-ingest rebind`.
 - **Moving the embedder** (server stopped): set the new `KNOWLEDGE_BASE_EMBED_URL`, run
   `knowledge-base-ingest rebind`, start the server.
+- **Removing a URL or content document** (server stopped): `knowledge-base-ingest remove <source_uri>` deletes it, its
+  chunks and every reference to them. A passage is stored once, under the first document that held it, so a later
+  document that repeated it loses it too. See
+  [Removing a Document](docs/usage/ingesting-documents.md#removing-a-document).
 - **Redacting rows stored before redaction existed** (server stopped): `knowledge-base-ingest redact` reports them
   (exit 1 if any, never printing the text), `knowledge-base-ingest redact --rewrite` redacts them, re-embeds and
   purges the old bytes from the file. Backups taken earlier still hold that text. See
   [Redaction](docs/usage/ingesting-documents.md#redaction).
-- `re-embed` and `rebind` assume the server is stopped; nothing enforces it. `redact --rewrite` refuses to start while
-  any other connection holds the database.
+- "Server stopped" is enforced by the store lock below. `redact --rewrite` also refuses to start while any other
+  connection holds the database.
+
+### The store lock
+
+Every KB process that writes a database holds one exclusive advisory lock on `<database>.store-lock`, beside the
+database (memory-engine's ADR-0020 §8): `knowledge-base`, stdio or `--http`, for its whole life, and every writing
+`knowledge-base-ingest` command (`ingest`, `reingest`, `ingest-url`, `remove`, `re-embed`, `rebind`, `migrate`,
+`redact --rewrite`) for its run. A second taker refuses before it reads the database, naming the holder (its role,
+PID and start time, which the holder writes into the lock file) and the lock file: a server exits 78, a command exits
+1 with its JSON error. A process releases the lock only after its background job worker has
+stopped. The read-only commands (`status`, `schema`, `migrate --check`, `redact` without `--rewrite`) take no lock and
+run beside a server; they refuse a missing database, or one that is not at this build's schema, rather than create or
+migrate it.
+
+The kernel releases the lock when its holder exits, however it exits, so a killed server leaves nothing to clean up.
+Never delete the lock file: deleting a held one lets a second writer in. The lock holds between processes of one host,
+containers sharing the database's volume included, never across hosts or on a network filesystem.
+
+**Upgrading to schema v3** (#579, the chunks each space's embedder refused): stop the unit and run
+`knowledge-base-ingest migrate` once; it backs the database up first, adds `embed_refusals` and sets every space's
+`chunk_count` to the vectors it stores. Until then the server exits 78 naming that command. A space holding a chunk an
+earlier backfill counted but could not embed is backfilled once more before it can be promoted.
 
 **Upgrading to schema v2** (the served artifact and each space's query instruction): stop the
 unit and run `knowledge-base-ingest migrate`, which backs the database up first; until then the
@@ -372,6 +400,7 @@ reads `KNOWLEDGE_BASE_DB`. Key tables:
 - `methods` / `datasets` / `metrics` — structured extraction results
 - `entities` / `entity_mentions` — resolved entities and surface forms
 - `embed_spaces` — multiple embedding space configurations
+- `embed_refusals` — the chunks each space's embedder answered with no usable vector (schema v3)
 - `chunk_sessions` — N:M ingestion session tracking
 - `folder_summaries` / `folder_summaries_vec` — folder-level semantic embeddings
 - `prediction_errors` — stale result detection
@@ -397,10 +426,9 @@ knowledge-base-ingest --db <path> migrate --check
 knowledge-base-ingest --db <path> migrate
 ```
 
-- **Stop the MCP server before `migrate`.** The server caches its connection and
-  would keep serving the old schema (and may contend for the write lock) until
-  restarted. `schema` / `migrate --check` are read-only and safe against a
-  running server.
+- **Stop the MCP server before `migrate`.** `migrate` refuses while a server holds
+  the [store lock](#the-store-lock). `schema` / `migrate --check` are read-only and
+  safe against a running server.
 - **Backups.** `migrate` writes a timestamped copy to `<db dir>/backups/` (or
   `--backup-dir`) via `VACUUM INTO` before mutating. If a migration fails, the
   backup is **restored automatically** and the command aborts non-zero. Backups
@@ -423,7 +451,7 @@ database and checked at every start (see [Configuration](#configuration)).
 
 - One process (SQLite WAL mode, no concurrent writers), shared over HTTP by every machine holding a token; each
   reaches only the three network tools
-- No tool removes a document ingested by URL or by content yet (#595); re-ingesting changed text keeps the earlier
-  version searchable
+- Only the maintenance command `knowledge-base-ingest remove` removes a document ingested by URL or by content;
+  re-ingesting changed text keeps the earlier version searchable
 - AST-aware chunking only for Python files; other code uses fixed-size chunks
 - Embedding model swap re-embeds all chunks sequentially (can be slow for large indexes)

@@ -65,7 +65,7 @@ populating  -->  active  -->  deprecated  -->  (cleaned up)
 
 This creates the `embed_spaces` registry entry and the backing `chunks_vec_bge_m3_1024` virtual table. The space starts in `populating` status. It records the shape given here (model, dim, `matryoshka_base_dim`, and an optional `query_instruction`: omitted, the model's default; `""`, none) and the declared endpoint's provider and served artifact, since that endpoint fills it. A space of another model than the declared one is accepted only when the endpoint serves the model a request names: `ollama`, or `openai` at exactly `https://api.openai.com`, with no served artifact declared. Under `llama.cpp`, `onnx` or `openai_compat`, or any declared served artifact, it is refused with the differing field. Vectors are stored as `float32`.
 
-The `chunk_strategy` parameter controls which chunks get embedded. When the `chunk_strategy` column exists on the `chunks` table (from #100), only chunks matching the specified strategy are selected. Otherwise all chunks are embedded.
+The `chunk_strategy` parameter controls which chunks get embedded: only chunks of that strategy are selected.
 
 #### 2. Backfill embeddings
 
@@ -76,7 +76,7 @@ The `chunk_strategy` parameter controls which chunks get embedded. When the `chu
 }
 ```
 
-Embeds all matching chunks into the space's vec table. Resumable -- if interrupted, call again and it picks up where it left off (ID-cursor based, skips already-embedded chunk IDs).
+Embeds the space's pending chunks into its vec table: chunks of its strategy with no vector there and no refusal. Resumable -- if interrupted, call again and it picks up where it left off. A chunk the embedder answers with no usable vector (zero norm, whole or after Matryoshka truncation) is logged and recorded as refused for the space (`embed_refusals`): it is never counted and never sent again, until its text changes (a `redact --rewrite`, for example). The result reports `chunks_refused`, and the space's `chunk_count` is the number of vectors it stores.
 
 #### 3. Promote to active
 
@@ -95,6 +95,10 @@ Atomically:
 - Invalidates all `similar` relationships (they depend on the embedding space)
 
 After promotion, all new ingestion and search queries use the promoted space's vec table.
+
+A space is promoted only when nothing is left to embed: every chunk of its strategy has a vector or a refusal, and it
+holds at least one vector. Otherwise the promotion says how many chunks are backfilled (run the backfill again); for a
+deprecated space it names `knowledge-base-ingest re-embed`, since a deprecated space cannot be backfilled.
 
 Only a space of the whole declared identity (every ADR-0015 field the `KNOWLEDGE_BASE_EMBED_*` variables declare) can
 be promoted: the declaration is the active identity. Every other call into a space (backfill, search, comparison)
@@ -120,23 +124,23 @@ Drops the deprecated space's vec table and removes its registry entry. Only work
 { "name": "list_embed_spaces_tool", "arguments": {} }
 ```
 
-Returns all spaces with their status, model, dimension, chunk strategy, and backfill progress (`chunk_count` / `total_chunks`).
+Returns all spaces with their status, model, dimension, chunk strategy, and backfill progress (`chunk_count`, the vectors stored, against `total_chunks`, the chunks targeted when the space was created).
 
 ### Interaction with chunk_strategy (#100)
 
-When `chunks.chunk_strategy` exists, each embedding space is scoped to a single strategy (`mechanical` or `semantic`). This means:
+Each embedding space is scoped to a single strategy (`mechanical` or `semantic`). This means:
 
 - A `mechanical` space only embeds chunks produced by fixed-size or AST-aware chunking.
 - A `semantic` space only embeds chunks produced by semantic boundary detection.
 - You can have two active-quality spaces (one per strategy) by promoting one and keeping the other in `populating` for comparison, though only one can be `active` at a time.
 
-If the `chunk_strategy` column does not exist (pre-#100 databases), all chunks are embedded regardless of the strategy parameter.
-
 ### Re-embedding the active identity
 
 Changing the active identity is a maintenance step with the server stopped: set the new `KNOWLEDGE_BASE_EMBED_*`
 values (including `KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM` for a truncated active space), run
-`knowledge-base-ingest re-embed`, then start the server. Under the hood it:
+`knowledge-base-ingest re-embed`, then start the server. The store lock enforces the order: `re-embed` (and `rebind`)
+run beside a server exits 1 naming it, for example `the store is in use by knowledge-base --http (pid 2, since
+2026-11-21T19:00:00Z)`, and a server started during a re-embed exits 78 naming the re-embed. Under the hood it:
 
 1. Creates a new space named `<model>_<dim>` with the whole declared identity
 2. Backfills it

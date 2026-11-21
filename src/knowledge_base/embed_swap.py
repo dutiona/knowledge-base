@@ -15,6 +15,7 @@ from collections.abc import Mapping
 
 from .db import (
     SPACE_NAME_RE,
+    _batched_select,
     _serialize_f32,
     get_active_space,
     space_table_name,
@@ -95,12 +96,6 @@ def declared_provider_config(conn: sqlite3.Connection, space: Mapping[str, objec
 # ---------------------------------------------------------------------------
 
 
-def _has_chunk_strategy_column(conn: sqlite3.Connection) -> bool:
-    """Check if the chunks table has a chunk_strategy column (#100)."""
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
-    return "chunk_strategy" in columns
-
-
 def create_space(
     conn: sqlite3.Connection,
     name: str,
@@ -139,13 +134,7 @@ def create_space(
     tbl = space_table_name(name)
 
     # Count target chunks for progress tracking
-    if _has_chunk_strategy_column(conn):
-        total = conn.execute(
-            "SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?",
-            (chunk_strategy,),
-        ).fetchone()[0]
-    else:
-        total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    total = conn.execute("SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?", (chunk_strategy,)).fetchone()[0]
 
     conn.execute(
         "INSERT INTO embed_spaces"
@@ -172,12 +161,31 @@ def create_space(
     }
 
 
+def _pending_chunks(table: str) -> str:
+    """The FROM/WHERE of a space's pending chunks: its strategy's chunks with no vector in its table and no refusal.
+
+    Binds the space's ``chunk_strategy`` then its name. The one completeness rule: backfill embeds these, promotion
+    refuses while any is left.
+    """
+    return (
+        f"FROM chunks c LEFT JOIN [{table}] v ON c.id = v.chunk_id "  # noqa: S608  # table: a trusted internal identifier
+        "WHERE c.chunk_strategy = ? AND v.chunk_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM embed_refusals r WHERE r.chunk_id = c.id AND r.space_name = ?)"
+    )
+
+
 def backfill_space(
     conn: sqlite3.Connection,
     space_name: str,
     batch_size: int = 32,
 ) -> dict:
-    """Embed chunks into a populating space. Resumable via ID-cursor."""
+    """Embed a populating space's pending chunks; a rerun resumes where the last one stopped.
+
+    A chunk the embedder answers with no usable vector (zero norm, whole or after Matryoshka truncation) is recorded
+    as refused for the space (#579): it is neither counted nor sent again, so ``chunk_count`` equals the vectors
+    stored. Each batch writes in one transaction that skips a chunk deleted or rewritten while it embedded, which
+    stays pending.
+    """
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = ?", (space_name,)).fetchone()
     if space is None:
         raise ValueError(f"Embedding space {space_name!r} not found")
@@ -193,62 +201,65 @@ def backfill_space(
 
     embed_provider = get_provider(cfg=declared_provider_config(conn, dict(space)))
 
-    # Build chunk selection query — strategy-aware
-    has_strategy = _has_chunk_strategy_column(conn)
-    if has_strategy:
-        base_query = (
-            "SELECT c.id, c.content FROM chunks c "
-            "LEFT JOIN [{tbl}] v ON c.id = v.chunk_id "
-            "WHERE c.chunk_strategy = ? AND c.id > ? AND v.chunk_id IS NULL "
-            "ORDER BY c.id LIMIT ?"
-        ).replace("{tbl}", tbl)
-        base_params_prefix = [chunk_strategy]
-    else:
-        base_query = (
-            "SELECT c.id, c.content FROM chunks c "
-            "LEFT JOIN [{tbl}] v ON c.id = v.chunk_id "
-            "WHERE c.id > ? AND v.chunk_id IS NULL "
-            "ORDER BY c.id LIMIT ?"
-        ).replace("{tbl}", tbl)
-        base_params_prefix = []
-
-    processed = 0
+    processed = stored = refused = 0
     last_id = 0
-
     while True:
-        params = [*base_params_prefix, last_id, batch_size]
-        batch = conn.execute(base_query, params).fetchall()
+        batch = conn.execute(
+            f"SELECT c.id, c.content, c.content_hash {_pending_chunks(tbl)} AND c.id > ? ORDER BY c.id LIMIT ?",
+            (chunk_strategy, space_name, last_id, batch_size),
+        ).fetchall()
         if not batch:
             break
-
-        texts = [row["content"] for row in batch]
-        ids = [row["id"] for row in batch]
-        last_id = ids[-1]
-
-        embeddings = embed_provider.embed(texts, model=model, expected_dim=embed_dim)
-
+        last_id = batch[-1]["id"]
+        embeddings = embed_provider.embed([row["content"] for row in batch], model=model, expected_dim=embed_dim)
         if matryoshka_base_dim:
             embeddings = [truncate_embedding(e, dim) if e is not None else None for e in embeddings]
-
-        for chunk_id, emb_vec in zip(ids, embeddings, strict=True):
-            if emb_vec is None:
-                continue
-            conn.execute(
-                f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",  # noqa: S608  # trusted internal identifier, not user input
-                (chunk_id, _serialize_f32(emb_vec), chunk_id),
-            )
         processed += len(batch)
 
-        # Update progress counter
-        conn.execute(
-            "UPDATE embed_spaces SET chunk_count = chunk_count + ? WHERE name = ?",
-            (len(batch), space_name),
-        )
-        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            current = {
+                r["id"]: r["content_hash"]
+                for r in _batched_select(
+                    conn, "SELECT id, content_hash FROM chunks WHERE id IN ({ph})", [row["id"] for row in batch]
+                )
+            }
+            batch_stored = 0
+            for row, vec in zip(batch, embeddings, strict=True):
+                if current.get(row["id"]) != row["content_hash"]:
+                    continue  # deleted or rewritten while it embedded: pending again
+                if vec is None:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO embed_refusals (chunk_id, space_name) VALUES (?, ?)",
+                        (row["id"], space_name),
+                    )
+                    logger.warning(
+                        "chunk %d: %s returned no usable vector (zero norm); space %r records it and will not send it "
+                        "again",
+                        row["id"],
+                        model,
+                        space_name,
+                    )
+                    refused += 1
+                    continue
+                conn.execute(
+                    f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",  # noqa: S608  # trusted internal identifier, not user input
+                    (row["id"], _serialize_f32(vec), row["id"]),
+                )
+                batch_stored += 1
+            conn.execute(
+                "UPDATE embed_spaces SET chunk_count = chunk_count + ? WHERE name = ?", (batch_stored, space_name)
+            )
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        stored += batch_stored
 
     return {
         "space": space_name,
         "chunks_processed": processed,
+        "chunks_refused": refused,
         "total_chunks": space["total_chunks"],
     }
 
@@ -329,7 +340,7 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
             current_space = conn.execute("SELECT * FROM embed_spaces WHERE name = ?", (space_name,)).fetchone()
             if current_space is None or dict(current_space) != dict(space):
                 raise ValueError(f"Embedding space {space_name!r} changed during promotion; rerun it")
-            stale_warning = _check_promotable(conn, space)
+            _check_promotable(conn, space)
             current = _folder_rows(conn)
             changed = [row for row in current if row not in snapshot]
             vectors = {row: snapshot[row] for row in current if row in snapshot}
@@ -343,49 +354,31 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
     finally:
         conn.isolation_level = level
 
-    result: dict = {"promoted": space_name, "deprecated": old_name}
-    if stale_warning:
-        result["warning"] = stale_warning
-    return result
+    return {"promoted": space_name, "deprecated": old_name}
 
 
-def _check_promotable(conn: sqlite3.Connection, space: sqlite3.Row) -> str | None:
-    """Refuse an incompletely backfilled space; return a staleness warning for a deprecated one."""
-    space_name = space["name"]
-    # Block promotion of incompletely backfilled spaces.
-    # Recount live corpus to catch chunks ingested after backfill.
-    count = space["chunk_count"] or 0
-    if _has_chunk_strategy_column(conn):
-        live_total = conn.execute(
-            "SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?",
-            (space["chunk_strategy"],),
-        ).fetchone()[0]
-    else:
-        live_total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-    if live_total > 0 and count < live_total:
+def _check_promotable(conn: sqlite3.Connection, space: sqlite3.Row) -> None:
+    """Refuse a space with a pending chunk (#579), or whose embedder gave none of its chunks a vector."""
+    name, table, strategy = space["name"], space["table_name"], space["chunk_strategy"]
+    live = conn.execute("SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?", (strategy,)).fetchone()[0]
+    if live == 0:
+        return
+    pending = conn.execute(f"SELECT COUNT(*) {_pending_chunks(table)}", (strategy, name)).fetchone()[0]
+    if pending and space["status"] == "deprecated":
+        # backfill_space takes only populating spaces; the documented rollback is a re-embed.
         raise ValueError(
-            f"Cannot promote space {space_name!r}: only {count} of "
-            f"{live_total} chunks backfilled (run backfill_space to sync)"
+            f"Cannot promote space {name!r}: {pending} chunks were added or rewritten since it was deprecated; "
+            "roll back with knowledge-base-ingest re-embed"
         )
-
-    # Staleness check: warn if promoting a deprecated space whose chunk_count
-    # doesn't match the current corpus (chunks ingested after deprecation).
-    stale_warning = None
-    if space["status"] == "deprecated":
-        has_strategy = _has_chunk_strategy_column(conn)
-        if has_strategy:
-            current_total = conn.execute(
-                "SELECT COUNT(*) FROM chunks WHERE chunk_strategy = ?",
-                (space["chunk_strategy"],),
-            ).fetchone()[0]
-        else:
-            current_total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        if current_total != count:
-            stale_warning = (
-                f"Space {space_name!r} has {count} embeddings but corpus now "
-                f"has {current_total} chunks. Run backfill_space() to sync."
-            )
-    return stale_warning
+    if pending:
+        raise ValueError(
+            f"Cannot promote space {name!r}: only {live - pending} of {live} chunks backfilled "
+            "(run backfill_space to sync)"
+        )
+    if conn.execute(f"SELECT 1 FROM [{table}] LIMIT 1").fetchone() is None:  # noqa: S608  # trusted internal identifier
+        raise ValueError(
+            f"Cannot promote space {name!r}: the embedder returned no usable vector for any of its {live} chunks"
+        )
 
 
 def _swap_active(conn: sqlite3.Connection, space: sqlite3.Row) -> str | None:
@@ -530,6 +523,7 @@ def re_embed(conn: sqlite3.Connection, batch_size: int = 32) -> dict:
 
     return {
         "chunks_processed": result["chunks_processed"],
+        "chunks_refused": result["chunks_refused"],
         "folders_processed": folders_count,
         "model": new_model,
         "dim": new_dim,

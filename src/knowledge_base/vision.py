@@ -38,7 +38,6 @@ from .ingest import (
     kb_data_dir,
     pdf_image_dir,
 )
-from .web import _cleanup_figure_fk_refs
 
 logger = logging.getLogger(__name__)
 
@@ -1995,8 +1994,7 @@ def _persist_figures(
         # restricted to the given pages when provided.
         sql, params = _figure_chunks_query(source_uri, pages)
         fig_chunk_ids = [r["id"] for r in conn.execute(sql, params).fetchall()]
-        _cleanup_figure_fk_refs(conn, fig_chunk_ids)
-        delete_chunks_cascade(conn, fig_chunk_ids, table_name=vec_table)
+        delete_chunks_cascade(conn, fig_chunk_ids)
 
         if all_figures:
             for i, (page_num, fig_idx, figure) in enumerate(all_figures):

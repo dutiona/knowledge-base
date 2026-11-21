@@ -34,6 +34,7 @@ def _v1_database(path) -> sqlite3.Connection:
 
 
 def _downgrade_to_v1(conn: sqlite3.Connection) -> sqlite3.Connection:
+    _drop_v3(conn)
     for column in V2_COLUMNS:
         conn.execute(f"ALTER TABLE embed_spaces DROP COLUMN {column}")
     migrate.set_schema_version(conn, 1)
@@ -41,6 +42,52 @@ def _downgrade_to_v1(conn: sqlite3.Connection) -> sqlite3.Connection:
     assert not set(V2_COLUMNS) & set(_columns(conn))
     assert migrate.get_schema_version(conn) == 1
     return conn
+
+
+def _drop_v3(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TRIGGER IF EXISTS chunks_au_refusals")
+    conn.execute("DROP TABLE IF EXISTS embed_refusals")
+
+
+def _v3_shape(conn: sqlite3.Connection) -> list[tuple]:
+    return conn.execute(
+        "SELECT type, name, sql FROM sqlite_master WHERE name IN ('embed_refusals', 'chunks_au_refusals') ORDER BY name"
+    ).fetchall()
+
+
+# --- schema v3 (#579) -----------------------------------------------------------
+
+
+def test_a_v2_database_migrates_to_v3(tmp_path):
+    conn = get_connection(tmp_path / "v2.db")
+    init_schema(conn)
+    fresh = [tuple(r) for r in _v3_shape(conn)]
+    assert [r[1] for r in fresh] == ["chunks_au_refusals", "embed_refusals"]
+    _drop_v3(conn)
+    conn.execute("UPDATE embed_spaces SET chunk_count = 7")  # a stored over-count: the table holds no vector
+    migrate.set_schema_version(conn, 2)
+    conn.commit()
+
+    migrate.migrate(conn, backup_dir=tmp_path / "backups")
+
+    conn = get_connection(tmp_path / "v2.db")
+    assert migrate.get_schema_version(conn) == 3
+    assert [tuple(r) for r in _v3_shape(conn)] == fresh
+    assert conn.execute("SELECT chunk_count FROM embed_spaces").fetchone()[0] == 0
+
+
+def test_every_origin_converges_to_one_v3_shape(tmp_path):
+    fresh = get_connection(tmp_path / "fresh.db")
+    init_schema(fresh)
+    stamped_v1 = _v1_database(tmp_path / "v1.db")
+    migrate.migrate(stamped_v1, backup_dir=tmp_path / "backups")
+    stamped_v1 = get_connection(tmp_path / "v1.db")
+    legacy = _v1_database(tmp_path / "legacy.db")
+    legacy.execute("DELETE FROM config WHERE key = 'schema_version'")
+    legacy.commit()
+    init_schema(legacy)
+    shapes = [[tuple(r) for r in _v3_shape(conn)] for conn in (fresh, stamped_v1, legacy)]
+    assert shapes[0] == shapes[1] == shapes[2] and len(shapes[0]) == 2
 
 
 # --- schema v2 ------------------------------------------------------------------

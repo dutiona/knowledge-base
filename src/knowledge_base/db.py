@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -750,22 +751,74 @@ def delete_chunk_vecs(
         )
 
 
-def delete_chunks_cascade(
-    conn: sqlite3.Connection,
-    chunk_ids: list[int],
-    table_name: str | None = None,
-) -> int:
-    """Delete chunks and their associated vec embeddings.
+def _cleanup_conclusion_refs(conn: sqlite3.Connection, chunk_ids: list[int]) -> None:
+    """Remove *chunk_ids* from ``conclusions.source_chunk_ids`` JSON arrays.
 
-    Handles the two-step cascade: vec rows first (no trigger), then chunk
-    rows (whose DELETE trigger cleans up FTS). Callers are responsible for
-    any FK cleanup (papers, relationships, conclusions) before calling this.
+    Uses ``json_each()`` to target only conclusions that reference any of the
+    given IDs instead of scanning the full table (#277).  Conclusions left
+    with an empty array are deleted (zombie cleanup, #160); their
+    ``superseded_by`` back-references are cleared first.
+    """
+    if not chunk_ids:
+        return
+    id_set = set(chunk_ids)
+    rows = _batched_select(
+        conn,
+        "SELECT DISTINCT c.id, c.source_chunk_ids "
+        "FROM conclusions c, json_each(c.source_chunk_ids) j "
+        "WHERE j.value IN ({ph})",
+        chunk_ids,
+    )
+    # Deduplicate across batches: a conclusion referencing chunks in
+    # different batches would otherwise appear once per batch.
+    seen: set[int] = set()
+    for row in rows:
+        if row["id"] in seen:
+            continue
+        seen.add(row["id"])
+        filtered = [cid for cid in json.loads(row["source_chunk_ids"]) if cid not in id_set]
+        if filtered:
+            conn.execute(
+                "UPDATE conclusions SET source_chunk_ids = ? WHERE id = ?",
+                (json.dumps(filtered), row["id"]),
+            )
+        else:
+            conn.execute(
+                "UPDATE conclusions SET superseded_by = NULL WHERE superseded_by = ?",
+                (row["id"],),
+            )
+            conn.execute("DELETE FROM conclusions WHERE id = ?", (row["id"],))
+
+
+def delete_chunks_cascade(conn: sqlite3.Connection, chunk_ids: list[int]) -> int:
+    """Delete chunks with every reference to them and their vectors in every embedding space; commits nothing.
+
+    The one deletion path and the one place that knows what refers to a chunk: papers' abstracts, relationship
+    evidence and named entities let go of it, conclusions stop citing it (one left citing nothing is deleted), its
+    entity mentions go; then its vectors, in every space's table so no populating or deprecated space keeps a vector
+    of a chunk that is gone; then the rows (FTS by trigger, session links and prediction errors by foreign key).
 
     Returns the number of chunks deleted.
     """
     if not chunk_ids:
         return 0
-    delete_chunk_vecs(conn, chunk_ids, table_name=table_name)
+    _batched_execute(conn, "UPDATE papers SET abstract_chunk_id = NULL WHERE abstract_chunk_id IN ({ph})", chunk_ids)
+    _batched_execute(
+        conn, "UPDATE relationships SET evidence_chunk_id = NULL WHERE evidence_chunk_id IN ({ph})", chunk_ids
+    )
+    _cleanup_conclusion_refs(conn, chunk_ids)
+    for table in ("methods", "datasets", "metrics"):
+        _batched_execute(
+            conn,
+            f"UPDATE {table} SET chunk_id = NULL WHERE chunk_id IN ({{ph}})",  # noqa: S608  # hardcoded table name
+            chunk_ids,
+        )
+    _batched_execute(conn, "DELETE FROM entity_mentions WHERE chunk_id IN ({ph})", chunk_ids)
+    # A space whose table is gone (a cleanup interrupted between its two steps) has no vector to delete.
+    for (table,) in conn.execute(
+        "SELECT e.table_name FROM embed_spaces e JOIN sqlite_master m ON m.name = e.table_name"
+    ).fetchall():
+        delete_chunk_vecs(conn, chunk_ids, table_name=table)
     _batched_execute(conn, "DELETE FROM chunks WHERE id IN ({ph})", chunk_ids)
     return len(chunk_ids)
 
@@ -1277,6 +1330,7 @@ def _run_migrations(conn: sqlite3.Connection, embed_dim: int, declared: EmbedSet
         _migrate_embed_spaces_element_type,
         lambda c: _migrate.add_v2_space_columns(c),
         lambda c: _bootstrap_embed_spaces(c, embed_dim, declared),
+        lambda c: _migrate.add_v3_embed_refusals(c),
         _migrate_normalize_source_uri,
         _migrate_extraction_source,
     )

@@ -105,15 +105,14 @@ def _normalize_or_none(emb: list[float], provider_name: str) -> list[float] | No
         return None
 
 
-def truncate_embedding(vec: list[float], target_dim: int) -> list[float]:
-    """Truncate a Matryoshka embedding and L2 re-normalize.
+def truncate_embedding(vec: list[float], target_dim: int) -> list[float] | None:
+    """Truncate a Matryoshka embedding and L2 re-normalize; None for a zero-norm prefix, as for a zero-norm vector.
 
     Matryoshka models produce embeddings where prefix subsets retain
     semantic meaning. After truncation, re-normalization is required
     because the truncated prefix is not unit-length.
     """
-    truncated = vec[:target_dim]
-    return _l2_normalize(truncated)
+    return _normalize_or_none(vec[:target_dim], "Matryoshka truncation")
 
 
 @runtime_checkable

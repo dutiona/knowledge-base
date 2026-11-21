@@ -13,6 +13,7 @@ import logging
 import sqlite3
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 import httpx
@@ -20,6 +21,8 @@ import httpx
 from . import migrate as _mig
 from .db import get_connection, init_schema, open_declared_db, resolve_db_path
 from .exceptions import KnowledgeBaseError
+from .jobs import shutdown_worker
+from .store_lock import hold
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,28 @@ def _drain_jobs(
             return
         time.sleep(1.0)
     logger.warning("Job drain timed out after %.0fs", timeout)
+
+
+def _read_only(args: argparse.Namespace) -> bool:
+    """The commands that never write the store: they take no store lock and run beside a server (#596)."""
+    if args.command == "migrate":
+        return args.check
+    if args.command == "redact":
+        return not args.rewrite
+    return args.command in ("status", "schema")
+
+
+def _require_current_store(db: Path) -> None:
+    """Refuse a store a read-only command would otherwise create, bootstrap or migrate through ``init_schema``."""
+    if not db.is_file():
+        raise KnowledgeBaseError(f"no database at {db}")
+    live, current = _mig.peek_schema_version(db), _mig.CURRENT_SCHEMA_VERSION
+    if live is None or live < current:
+        raise KnowledgeBaseError(
+            f"{db} is at schema {live or 'none'}, this build needs {current}: run knowledge-base-ingest migrate"
+        )
+    if live > current:
+        raise KnowledgeBaseError(f"{db} is at schema {live}, newer than this build's {current}")
 
 
 def _print(data: object, *, quiet: bool = False) -> None:
@@ -158,9 +183,25 @@ def cmd_rebind(args: argparse.Namespace) -> None:
     _print({"rebound": str(args.db)}, quiet=args.quiet)
 
 
+def cmd_remove(args: argparse.Namespace) -> None:
+    """Remove one URL or content document (#595); the store lock keeps the server stopped."""
+    from .ingest import remove_document
+
+    if not args.db.is_file():  # a mistyped path would otherwise be created
+        raise KnowledgeBaseError(f"no database at {args.db}")
+    conn = get_connection(args.db)  # it embeds nothing: no declaration needed
+    try:
+        init_schema(conn)
+        result = remove_document(conn, args.source_uri)
+    finally:
+        conn.close()
+    _print(result, quiet=args.quiet)
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     from .embed_swap import get_embed_config
 
+    _require_current_store(args.db)
     conn = get_connection(args.db)  # read-only report: no declaration needed
     init_schema(conn)
 
@@ -195,6 +236,7 @@ def cmd_redact(args: argparse.Namespace) -> None:
     if args.rewrite:
         conn = open_declared_db(args.db)  # it re-embeds: the declared embedder, as re-embed
     else:
+        _require_current_store(args.db)
         conn = get_connection(args.db)  # the report only reads: no declaration needed
         init_schema(conn)
     try:
@@ -308,6 +350,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_url.add_argument("url", help="URL to fetch and ingest.")
     p_url.add_argument("--session-id", dest="session_id", default=None)
 
+    # -- remove ---------------------------------------------------------------
+    p_remove = sub.add_parser(
+        "remove",
+        help="Remove one URL or content:// document and its chunks (server stopped).",
+        description=(
+            "Remove the document stored under SOURCE_URI: every chunk under it, a web page's figures included, their "
+            "vectors in every embedding space and every reference to them, in one transaction. A passage is stored "
+            "once, under the first document that contained it, so a removed document may hold the only copy of a "
+            "passage a later document also contained: that passage then leaves search for both, until the later "
+            "document is ingested again. The removed text stays in the database file until "
+            "knowledge-base-ingest redact --rewrite purges it."
+        ),
+    )
+    p_remove.add_argument(
+        "source_uri",
+        help=(
+            "the document's source_uri as search results show it: an http(s) URL (matched without its userinfo) or "
+            "content://<machine>/<name>"
+        ),
+    )
+
     # -- re-embed -------------------------------------------------------------
     p_embed = sub.add_parser(
         "re-embed",
@@ -386,6 +449,7 @@ def main(argv: list[str] | None = None) -> None:
         "ingest": cmd_ingest,
         "reingest": cmd_reingest,
         "ingest-url": cmd_ingest_url,
+        "remove": cmd_remove,
         "re-embed": cmd_re_embed,
         "rebind": cmd_rebind,
         "status": cmd_status,
@@ -395,7 +459,12 @@ def main(argv: list[str] | None = None) -> None:
     }
 
     try:
-        dispatch[args.command](args)
+        # Every writing command holds the store lock (#596); the job worker stops before it is released.
+        with nullcontext() if _read_only(args) else hold(args.db, f"knowledge-base-ingest {args.command}"):
+            try:
+                dispatch[args.command](args)
+            finally:
+                shutdown_worker()
     except (KnowledgeBaseError, ValueError) as exc:
         _print_error({"error": str(exc)})
         sys.exit(1)

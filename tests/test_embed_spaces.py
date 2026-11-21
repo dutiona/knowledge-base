@@ -467,3 +467,188 @@ def test_migration_adds_element_type(tmp_path):
     conn = _setup(tmp_path)
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(embed_spaces)").fetchall()}
     assert "element_type" in columns
+
+
+# ---------------------------------------------------------------------------
+# #579: refused chunks
+# ---------------------------------------------------------------------------
+
+
+class _RefusingProvider:
+    """Answers ``None`` (a zero-norm vector) for the text ``zero``; records every text it is sent."""
+
+    def __init__(self, on_embed=None):
+        self.sent: list[str] = []
+        self.on_embed = on_embed
+
+    def embed(self, texts, model="x", expected_dim=None):
+        self.sent.extend(texts)
+        if self.on_embed is not None:
+            self.on_embed()
+        return [None if t == "zero" else [0.1] * (expected_dim or 4) for t in texts]
+
+
+def _rows(conn, table: str) -> int:
+    return conn.execute(f"SELECT COUNT(*) FROM [{table}]").fetchone()[0]  # noqa: S608
+
+
+def _count(conn, name: str) -> int:
+    return conn.execute("SELECT chunk_count FROM embed_spaces WHERE name = ?", (name,)).fetchone()[0]
+
+
+def test_backfill_counts_only_stored_vectors(tmp_path):
+    conn = _setup(tmp_path)
+    for i, text in enumerate(["one", "zero", "two"]):
+        _add_chunk(conn, text, i)
+    create_space(conn, "s", "m", 4)
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_RefusingProvider()):
+        result = backfill_space(conn, "s")
+    assert _count(conn, "s") == 2 == _rows(conn, "chunks_vec_s")
+    assert result["chunks_refused"] == 1
+
+
+def test_backfill_never_resends_a_refused_chunk(tmp_path, caplog):
+    conn = _setup(tmp_path)
+    for i, text in enumerate(["one", "zero", "two"]):
+        _add_chunk(conn, text, i)
+    create_space(conn, "s", "m", 4)
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_RefusingProvider()):
+        backfill_space(conn, "s")
+    assert "space 's' records it and will not send it again" in caplog.text
+    again = _RefusingProvider()
+    with patch("knowledge_base.embed_swap.get_provider", return_value=again):
+        backfill_space(conn, "s")
+    assert again.sent == []
+    assert _count(conn, "s") == 2
+
+
+def test_a_space_whose_only_gaps_are_refusals_is_promoted(tmp_path, monkeypatch):
+    """The trap: today's over-count is what lets such a space be promoted, so the count alone cannot be fixed."""
+    conn = _setup(tmp_path)
+    _add_chunk(conn, "one", 0)
+    _add_chunk(conn, "zero", 1)
+    create_space(conn, "s", "m", 4)
+    _declare(monkeypatch, "m", 4)
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_RefusingProvider()):
+        backfill_space(conn, "s")
+        assert promote_space(conn, "s")["promoted"] == "s"
+    assert _count(conn, "s") == 1
+
+
+def test_a_zero_matryoshka_prefix_is_a_refusal(tmp_path):
+    conn = _setup(tmp_path, dim=4)
+    _add_chunk(conn, "fine", 0)
+    _add_chunk(conn, "zero prefix", 1)
+
+    class _Provider:
+        def embed(self, texts, model="x", expected_dim=None):
+            return [[0, 0, 0, 0, 1, 1, 1, 1] if t == "zero prefix" else [0.1] * 8 for t in texts]
+
+    create_space(conn, "mat", "qwen3", 4, matryoshka_base_dim=8)
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_Provider()):
+        result = backfill_space(conn, "mat")
+    assert result["chunks_refused"] == 1
+    assert _count(conn, "mat") == 1
+
+
+def test_a_space_with_no_vector_is_never_promoted(tmp_path, monkeypatch):
+    conn = _setup(tmp_path)
+    _add_chunk(conn, "zero", 0)
+    create_space(conn, "s", "m", 4)
+    _declare(monkeypatch, "m", 4)
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_RefusingProvider()):
+        backfill_space(conn, "s")
+        with pytest.raises(ValueError, match="no usable vector for any of its 1 chunks"):
+            promote_space(conn, "s")
+
+
+def test_a_chunk_added_after_the_backfill_blocks_promotion_until_backfilled(tmp_path, monkeypatch):
+    conn = _setup(tmp_path)
+    _add_chunk(conn, "one", 0)
+    _add_chunk(conn, "zero", 1)
+    create_space(conn, "s", "m", 4)
+    _declare(monkeypatch, "m", 4)
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_RefusingProvider()):
+        backfill_space(conn, "s")
+        _add_chunk(conn, "three", 2)
+        with pytest.raises(ValueError, match="only 2 of 3 chunks backfilled"):
+            promote_space(conn, "s")
+        backfill_space(conn, "s")
+        assert promote_space(conn, "s")["promoted"] == "s"
+
+
+def test_a_deprecated_space_with_pending_chunks_names_re_embed(tmp_path, monkeypatch):
+    conn = _setup(tmp_path)
+    insert_chunk_vec(conn, _add_chunk(conn, "one", 0), [0.1] * 4)  # the default space is complete
+    conn.commit()
+    create_space(conn, "s", "m", 4)
+    _declare(monkeypatch, "m", 4)
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_RefusingProvider()):
+        backfill_space(conn, "s")
+        promote_space(conn, "s")
+        _declare(monkeypatch, "bge-m3", 4)
+        promote_space(conn, "default")  # "s" is now deprecated
+        _add_chunk(conn, "two", 1)
+        _declare(monkeypatch, "m", 4)
+        with pytest.raises(ValueError, match="knowledge-base-ingest re-embed"):
+            promote_space(conn, "s")
+
+
+def test_backfill_writes_nothing_for_a_chunk_changed_while_it_embeds(tmp_path):
+    conn = _setup(tmp_path)
+    kept = _add_chunk(conn, "one", 0)
+    gone = _add_chunk(conn, "zero", 1)
+    rewritten = _add_chunk(conn, "two", 2)
+    create_space(conn, "s", "m", 4)
+    # Opened after create_space: a connection older than a new vec0 table fails its DELETE on chunks.
+    other = get_connection(tmp_path / "test.db")
+
+    def _concurrent_writer():
+        other.execute("DELETE FROM chunks WHERE id = ?", (gone,))
+        other.execute("UPDATE chunks SET content = 'two, rewritten', content_hash = 'new' WHERE id = ?", (rewritten,))
+        other.commit()
+
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_RefusingProvider(_concurrent_writer)):
+        backfill_space(conn, "s")  # no foreign-key error for the deleted, refused chunk
+    vectors = {r[0] for r in conn.execute("SELECT chunk_id FROM chunks_vec_s")}
+    assert vectors == {kept}
+    assert conn.execute("SELECT COUNT(*) FROM embed_refusals").fetchone()[0] == 0
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_RefusingProvider()) as again:
+        backfill_space(conn, "s")
+    assert {r[0] for r in conn.execute("SELECT chunk_id FROM chunks_vec_s")} == {kept, rewritten}
+    assert again.return_value.sent == ["two, rewritten"]
+    other.close()
+
+
+def test_a_refusal_ends_with_its_chunk_its_content_or_its_space(tmp_path, monkeypatch):
+    conn = _setup(tmp_path)
+    deleted = _add_chunk(conn, "zero", 0)
+    create_space(conn, "s", "m", 4)
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_RefusingProvider()):
+        backfill_space(conn, "s")
+    refusals = lambda: conn.execute("SELECT COUNT(*) FROM embed_refusals").fetchone()[0]  # noqa: E731
+    assert refusals() == 1
+    conn.execute("DELETE FROM chunks WHERE id = ?", (deleted,))
+    conn.commit()
+    assert refusals() == 0
+
+    rewritten = conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) "
+        "VALUES ('h2', 'zero', 'pdf', '/test/paper.pdf', 1)"
+    ).lastrowid
+    conn.commit()
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_RefusingProvider()):
+        backfill_space(conn, "s")
+    assert refusals() == 1
+    conn.execute("UPDATE chunks SET content = 'new text' WHERE id = ?", (rewritten,))
+    conn.commit()
+    assert refusals() == 0
+
+    with patch("knowledge_base.embed_swap.get_provider", return_value=_RefusingProvider()):
+        conn.execute("UPDATE chunks SET content = 'zero' WHERE id = ?", (rewritten,))
+        conn.commit()
+        backfill_space(conn, "s")
+    assert refusals() == 1
+    deprecate_space(conn, "s")
+    cleanup_space(conn, "s")
+    assert refusals() == 0

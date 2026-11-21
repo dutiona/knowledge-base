@@ -465,6 +465,7 @@ class TestTruncateEmbedding:
 
         vec = [0.5, 0.5, 0.5, 0.5]  # unit-ish vector
         result = truncate_embedding(vec, 2)
+        assert result is not None
         assert len(result) == 2
         # Should be L2-normalized
         norm = math.sqrt(sum(x * x for x in result))
@@ -1143,3 +1144,10 @@ def test_the_embedder_url_is_validated_before_every_request(embedder, monkeypatc
     OpenAICompatProvider("https://embedder.example.test").embed(["a 0", "a 1", "a 2"], model="m")
     assert len(_inputs_per_request(embedder)) == 3
     assert len(checked) == 3
+
+
+def test_truncate_embedding_returns_none_for_a_zero_prefix():
+    from knowledge_base.embeddings import truncate_embedding
+
+    assert truncate_embedding([0.0, 0.0, 3.0, 4.0], 2) is None
+    assert truncate_embedding([3.0, 4.0, 0.0], 2) == [0.6, 0.8]
