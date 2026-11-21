@@ -20,7 +20,7 @@ from .db import (
     get_active_space,
     space_table_name,
 )
-from .embeddings import EmbeddingProvider, ProviderConfig, get_provider, truncate_embedding
+from .embeddings import EmbeddingProvider, ProviderConfig, embed_with_cuts, get_provider, truncate_embedding
 from .exceptions import KnowledgeBaseError
 from .settings import IDENTITY_FIELDS, declared_identity, load_embed_settings, require_identity, serving_identity
 from .utils import loopback_opt_in
@@ -184,7 +184,8 @@ def backfill_space(
     A chunk the embedder answers with no usable vector (zero norm, whole or after Matryoshka truncation) is recorded
     as refused for the space (#579): it is neither counted nor sent again, so ``chunk_count`` equals the vectors
     stored. Each batch writes in one transaction that skips a chunk deleted or rewritten while it embedded, which
-    stays pending.
+    stays pending. A chunk stored cut to fit ``max_input_tokens`` is recorded with its vector (#620), and
+    ``truncated_chunks`` lists every such chunk of the space, by id, document and token counts, never its text.
     """
     space = conn.execute("SELECT * FROM embed_spaces WHERE name = ?", (space_name,)).fetchone()
     if space is None:
@@ -211,7 +212,9 @@ def backfill_space(
         if not batch:
             break
         last_id = batch[-1]["id"]
-        embeddings = embed_provider.embed([row["content"] for row in batch], model=model, expected_dim=embed_dim)
+        embeddings, cuts = embed_with_cuts(
+            embed_provider, [row["content"] for row in batch], model=model, expected_dim=embed_dim
+        )
         if matryoshka_base_dim:
             embeddings = [truncate_embedding(e, dim) if e is not None else None for e in embeddings]
         processed += len(batch)
@@ -225,7 +228,7 @@ def backfill_space(
                 )
             }
             batch_stored = 0
-            for row, vec in zip(batch, embeddings, strict=True):
+            for i, (row, vec) in enumerate(zip(batch, embeddings, strict=True)):
                 if current.get(row["id"]) != row["content_hash"]:
                     continue  # deleted or rewritten while it embedded: pending again
                 if vec is None:
@@ -246,6 +249,12 @@ def backfill_space(
                     f"INSERT INTO [{tbl}] (rowid, embedding, chunk_id) VALUES (?, ?, ?)",  # noqa: S608  # trusted internal identifier, not user input
                     (row["id"], _serialize_f32(vec), row["id"]),
                 )
+                if i in cuts:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO embed_truncations (chunk_id, space_name, tokens_before, tokens_after)"
+                        " VALUES (?, ?, ?, ?)",
+                        (row["id"], space_name, *cuts[i]),
+                    )
                 batch_stored += 1
             conn.execute(
                 "UPDATE embed_spaces SET chunk_count = chunk_count + ? WHERE name = ?", (batch_stored, space_name)
@@ -256,10 +265,16 @@ def backfill_space(
             raise
         stored += batch_stored
 
+    truncated = conn.execute(
+        "SELECT t.chunk_id, c.source_uri, t.tokens_before, t.tokens_after FROM embed_truncations t"
+        " JOIN chunks c ON c.id = t.chunk_id WHERE t.space_name = ? ORDER BY t.chunk_id",
+        (space_name,),
+    ).fetchall()
     return {
         "space": space_name,
         "chunks_processed": processed,
         "chunks_refused": refused,
+        "truncated_chunks": [dict(row) for row in truncated],
         "total_chunks": space["total_chunks"],
     }
 
@@ -524,6 +539,7 @@ def re_embed(conn: sqlite3.Connection, batch_size: int = 32) -> dict:
     return {
         "chunks_processed": result["chunks_processed"],
         "chunks_refused": result["chunks_refused"],
+        "truncated_chunks": result["truncated_chunks"],
         "folders_processed": folders_count,
         "model": new_model,
         "dim": new_dim,

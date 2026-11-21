@@ -34,6 +34,7 @@ __all__ = [
     "SCHEMA_VERSION_KEY",
     "add_v2_space_columns",
     "add_v3_embed_refusals",
+    "add_v4_embed_truncations",
     "backup_database",
     "get_schema_version",
     "migrate",
@@ -46,7 +47,7 @@ __all__ = [
 
 #: The schema version this build targets. A fresh DB is stamped with this; the
 #: read path validates against it.
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 #: `config` key under which the applied schema version is stored.
 SCHEMA_VERSION_KEY = "schema_version"
@@ -98,7 +99,33 @@ def add_v3_embed_refusals(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE embed_spaces SET chunk_count = ? WHERE name = ?", (count, name))
 
 
-_MIGRATIONS: dict[int, Migration] = {2: (add_v2_space_columns, False), 3: (add_v3_embed_refusals, False)}
+def add_v4_embed_truncations(conn: sqlite3.Connection) -> None:
+    """v4 (#620): the chunks each space stored cut to fit ``max_input_tokens``, with their counts; commits nothing.
+
+    A record is written with its vector, so a resumed backfill still reports what an interrupted one stored. It leaves
+    with its chunk or its space (foreign keys), and with its text, but only when the text really changes:
+    ``redact --rewrite`` sets ``content`` to itself for a metadata-only change and keeps the vector.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS embed_truncations ("
+        " chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,"
+        " space_name TEXT NOT NULL REFERENCES embed_spaces(name) ON DELETE CASCADE,"
+        " tokens_before INTEGER NOT NULL,"
+        " tokens_after INTEGER NOT NULL,"
+        " PRIMARY KEY (chunk_id, space_name))"
+    )
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS chunks_au_truncations AFTER UPDATE OF content ON chunks"
+        " WHEN old.content IS NOT new.content"
+        " BEGIN DELETE FROM embed_truncations WHERE chunk_id = new.id; END"
+    )
+
+
+_MIGRATIONS: dict[int, Migration] = {
+    2: (add_v2_space_columns, False),
+    3: (add_v3_embed_refusals, False),
+    4: (add_v4_embed_truncations, False),
+}
 
 
 # --- version read/write on the config table ------------------------------------

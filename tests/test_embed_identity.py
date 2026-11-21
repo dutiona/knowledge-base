@@ -45,14 +45,68 @@ def _downgrade_to_v1(conn: sqlite3.Connection) -> sqlite3.Connection:
 
 
 def _drop_v3(conn: sqlite3.Connection) -> None:
+    _drop_v4(conn)
     conn.execute("DROP TRIGGER IF EXISTS chunks_au_refusals")
     conn.execute("DROP TABLE IF EXISTS embed_refusals")
+
+
+def _drop_v4(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TRIGGER IF EXISTS chunks_au_truncations")
+    conn.execute("DROP TABLE IF EXISTS embed_truncations")
+
+
+def _v4_shape(conn: sqlite3.Connection) -> list[tuple]:
+    return [
+        tuple(r)
+        for r in conn.execute(
+            "SELECT type, name, sql FROM sqlite_master WHERE name IN ('embed_truncations', 'chunks_au_truncations')"
+            " ORDER BY name"
+        )
+    ]
 
 
 def _v3_shape(conn: sqlite3.Connection) -> list[tuple]:
     return conn.execute(
         "SELECT type, name, sql FROM sqlite_master WHERE name IN ('embed_refusals', 'chunks_au_refusals') ORDER BY name"
     ).fetchall()
+
+
+# --- schema v4 (#620) -----------------------------------------------------------
+
+
+def test_a_v3_database_migrates_to_v4(tmp_path):
+    conn = get_connection(tmp_path / "v3.db")
+    init_schema(conn)
+    fresh = _v4_shape(conn)
+    assert [r[1] for r in fresh] == ["chunks_au_truncations", "embed_truncations"]
+    _drop_v4(conn)
+    migrate.set_schema_version(conn, 3)
+    conn.commit()
+
+    migrate.migrate(conn, backup_dir=tmp_path / "backups")
+
+    conn = get_connection(tmp_path / "v3.db")
+    assert migrate.get_schema_version(conn) == 4
+    assert _v4_shape(conn) == fresh
+
+
+def test_a_text_change_drops_a_truncation_record_and_a_metadata_rewrite_keeps_it(kb_conn):
+    chunk = kb_conn.execute(
+        "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index)"
+        " VALUES ('h', 'long', 'markdown', '/docs/a.md', 0)"
+    ).lastrowid
+    space = kb_conn.execute("SELECT name FROM embed_spaces").fetchone()[0]
+    kb_conn.execute(
+        "INSERT INTO embed_truncations (chunk_id, space_name, tokens_before, tokens_after) VALUES (?, ?, 9, 4)",
+        (chunk, space),
+    )
+    records = "SELECT COUNT(*) FROM embed_truncations WHERE chunk_id = ?"
+
+    kb_conn.execute("UPDATE chunks SET content = coalesce(NULL, content), metadata = '{}' WHERE id = ?", (chunk,))
+    assert kb_conn.execute(records, (chunk,)).fetchone()[0] == 1
+
+    kb_conn.execute("UPDATE chunks SET content = 'other' WHERE id = ?", (chunk,))
+    assert kb_conn.execute(records, (chunk,)).fetchone()[0] == 0
 
 
 # --- schema v3 (#579) -----------------------------------------------------------
@@ -71,7 +125,7 @@ def test_a_v2_database_migrates_to_v3(tmp_path):
     migrate.migrate(conn, backup_dir=tmp_path / "backups")
 
     conn = get_connection(tmp_path / "v2.db")
-    assert migrate.get_schema_version(conn) == 3
+    assert migrate.get_schema_version(conn) == migrate.CURRENT_SCHEMA_VERSION
     assert [tuple(r) for r in _v3_shape(conn)] == fresh
     assert conn.execute("SELECT chunk_count FROM embed_spaces").fetchone()[0] == 0
 

@@ -190,6 +190,9 @@ class OllamaProvider:
 
 _LIMIT_VAR = VARIABLES["max_input_tokens"]
 
+#: An embedding call's inputs cut to fit ``max_input_tokens``, by position: (tokens counted, tokens kept).
+Cuts = dict[int, tuple[int, int]]
+
 
 def _nothing_fits(limit: int) -> ValidationError:
     return ValidationError(f"{_LIMIT_VAR}: not even one character of an embedding input fits in {limit} tokens")
@@ -376,28 +379,29 @@ class OpenAICompatProvider:
 
         return count
 
-    def _bounded(self, texts: list[str]) -> list[str]:
+    def _bounded(self, texts: list[str]) -> tuple[list[str], Cuts]:
         limit = self._max_input_tokens
         if limit is None:
-            return texts
+            return texts, {}
         count = self.token_counter()
-        bounded = []
-        for text in texts:
+        bounded, cuts = [], {}
+        for i, text in enumerate(texts):
             tokens = count(text)
             if tokens > limit:
                 cut = _fit(text, limit, count)
                 if not cut:
                     raise _nothing_fits(limit)
                 text = text[:cut]
+                cuts[i] = (tokens, count(text))
                 logger.info(
                     "an embedding input of %d tokens is truncated to %d tokens to fit %s=%d",
                     tokens,
-                    count(text),
+                    cuts[i][1],
                     _LIMIT_VAR,
                     limit,
                 )
             bounded.append(text)
-        return bounded
+        return bounded, cuts
 
     def embed(
         self,
@@ -405,7 +409,12 @@ class OpenAICompatProvider:
         model: str = "text-embedding-3-large",
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
-        texts = self._bounded(texts)
+        return self._embed_with_cuts(texts, model, expected_dim)[0]
+
+    def _embed_with_cuts(
+        self, texts: list[str], model: str, expected_dim: int | None
+    ) -> tuple[list[list[float] | None], Cuts]:
+        texts, cuts = self._bounded(texts)
         results = []
         for i in range(0, len(texts), self._batch_size):
             batch = texts[i : i + self._batch_size]
@@ -416,7 +425,7 @@ class OpenAICompatProvider:
                 if expected_dim is not None and len(emb) != expected_dim:
                     raise ValueError(f"Expected {expected_dim} dims, got {len(emb)}")
                 results.append(_normalize_or_none(emb, "OpenAI-compat"))
-        return results
+        return results, cuts
 
     def _call_api(
         self,
@@ -546,6 +555,15 @@ def embed(
 ) -> list[list[float] | None]:
     """Embed a batch of texts with the provider *_provider_cfg* selects."""
     return get_provider(cfg=_provider_cfg).embed(texts, model=model, expected_dim=expected_dim)
+
+
+def embed_with_cuts(
+    provider: EmbeddingProvider, texts: list[str], model: str, expected_dim: int | None = None
+) -> tuple[list[list[float] | None], Cuts]:
+    """*provider*'s vectors for *texts*, and the inputs it cut to fit (#620); only a counting provider cuts any."""
+    if isinstance(provider, OpenAICompatProvider):
+        return provider._embed_with_cuts(texts, model, expected_dim)
+    return provider.embed(texts, model=model, expected_dim=expected_dim), {}
 
 
 def split_inputs(texts: list[str], cfg: ProviderConfig) -> list[list[str]]:

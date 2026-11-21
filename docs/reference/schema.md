@@ -175,6 +175,14 @@ erDiagram
         INTEGER chunk_id FK
         TEXT space_name FK
     }
+    chunks ||--o{ embed_truncations : "stored cut"
+    embed_spaces ||--o{ embed_truncations : "stored cut in"
+    embed_truncations {
+        INTEGER chunk_id FK
+        TEXT space_name FK
+        INTEGER tokens_before
+        INTEGER tokens_after
+    }
     embed_spaces {
         TEXT name PK
         TEXT model
@@ -378,6 +386,23 @@ nor resends them and promotion counts them as done.
 
 **Primary key:** `(chunk_id, space_name)`. **Trigger:** `chunks_au_refusals` deletes a chunk's refusals when its
 `content` changes, so new text is tried again.
+
+### embed_truncations
+
+Schema v4 (#620). The chunks a space stored cut to fit `KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS`, written with the vector,
+so a backfill reports them even after it was interrupted and resumed. Ingest splits long chunks and never cuts one, so
+only a chunk stored before that (#604) or under a larger limit can appear here.
+
+| Column          | Type    | Constraints                                                 | Description                                  |
+| --------------- | ------- | ----------------------------------------------------------- | -------------------------------------------- |
+| `chunk_id`      | INTEGER | NOT NULL, REFERENCES `chunks(id)` ON DELETE CASCADE         | The chunk stored cut                         |
+| `space_name`    | TEXT    | NOT NULL, REFERENCES `embed_spaces(name)` ON DELETE CASCADE | The space whose vector embeds only its start |
+| `tokens_before` | INTEGER | NOT NULL                                                    | The chunk's tokens, as the embedder counts   |
+| `tokens_after`  | INTEGER | NOT NULL                                                    | The tokens of the part it embedded           |
+
+**Primary key:** `(chunk_id, space_name)`. **Trigger:** `chunks_au_truncations` deletes a chunk's records when its
+`content` really changes (`WHEN old.content IS NOT new.content`): a metadata-only `redact --rewrite` keeps the vector
+and its record.
 
 ---
 

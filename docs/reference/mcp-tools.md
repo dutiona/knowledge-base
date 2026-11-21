@@ -806,8 +806,11 @@ Backfill an embedding space with chunk embeddings. Resumable -- interrupted back
 **Returns:**
 
 ```json
-{ "space": "bge_m3_1024", "chunks_processed": 1500, "chunks_refused": 0, "total_chunks": 1500 }
+{ "space": "bge_m3_1024", "chunks_processed": 1500, "chunks_refused": 0, "truncated_chunks": [], "total_chunks": 1500 }
 ```
+
+`truncated_chunks` lists every chunk of the space stored cut to fit `KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS`, as
+`{"chunk_id", "source_uri", "tokens_before", "tokens_after"}`, never its text; reingesting such a document splits it.
 
 ### promote_embed_space_tool
 

@@ -163,7 +163,7 @@ The image carries no embedding declaration: pass the `KNOWLEDGE_BASE_EMBED_*` va
 `KNOWLEDGE_BASE_EMBED_API_KEY` through `--env-file` or a secret, never in the unit file. Without them the server
 exits 78 at start (see the README's Configuration section). A llama.cpp embedder with a known model file declares its
 served artifact too (`KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256`, `_POOLING`, `_NORMALIZATION`, `_MAX_INPUT_TOKENS`, all
-four), so the store records the exact ADR-0015 identity. A database from before schema v3 needs
+four), so the store records the exact ADR-0015 identity. A database from before schema v4 needs
 `knowledge-base-ingest migrate` with the unit stopped before the new image starts.
 
 Maintenance commands run through the same image as the unit, with the same user namespace, both volumes (the named

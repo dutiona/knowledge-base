@@ -388,7 +388,7 @@ makes, which is why a served artifact is accepted only for `llama.cpp` or `opena
 | Folder summaries | truncated: one vector per folder; the stored summary text stays whole |
 | Figure, image and element-capture descriptions | truncated: one chunk per figure keeps the figure's metadata |
 | Queries | truncated |
-| Stored chunks during `re-embed` | truncated: a stored chunk is one row; reingesting its document splits it |
+| Stored chunks during `re-embed` | truncated: a stored chunk is one row; the result's `truncated_chunks` names it and its document, and reingesting the document splits it |
 
 A split PDF piece keeps its parent's pages and lists the images whose reference starts in it; a reference on its
 own line is never cut, unless that line is longer than half a piece. A split Python piece keeps its function's line
