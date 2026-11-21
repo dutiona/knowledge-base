@@ -16,12 +16,12 @@ from ..auth import calling_machine
 from ..exceptions import KnowledgeBaseError
 from ..ingest import ingest_directory, ingest_file, ingest_text as _ingest_text, reingest_file
 from ..web import configure_browser, ingest_url as _ingest_url
-from . import RACE, embedder_failure
+from . import RACE, embedder_failure, tool
 
 mcp = FastMCP("ingestion-routes")
 
 
-@mcp.tool()
+@tool(mcp)
 def ingest(
     path: str,
     source_type: str | None = None,
@@ -59,7 +59,7 @@ def ingest(
         return json.dumps(result)
 
 
-@mcp.tool()
+@tool(mcp)
 def reingest(
     path: str,
     source_type: str | None = None,
@@ -113,7 +113,7 @@ _NAME_RULE = (
 )
 
 
-@mcp.tool()
+@tool(mcp)
 def ingest_text(name: str, content: str) -> str:
     """Ingest a text or markdown document you pass in, under a name search results will cite.
 
@@ -151,7 +151,7 @@ def ingest_text(name: str, content: str) -> str:
     return json.dumps({"source_uri": source_uri, "source_type": "markdown", **stored})
 
 
-@mcp.tool()
+@tool(mcp)
 def ingest_url(url: str, session_id: str | None = None) -> str:
     """Ingest a web page by URL. Fetches the page, extracts main content, and indexes it.
 
@@ -176,7 +176,7 @@ def ingest_url(url: str, session_id: str | None = None) -> str:
         raise ToolError(f"{kind}; the page's text was not stored" + (", retry later" if retryable else "")) from e
 
 
-@mcp.tool()
+@tool(mcp)
 def configure_chunking(strategy: str | None = None) -> str:
     """Configure the chunking strategy for PDF ingestion.
 
@@ -204,7 +204,7 @@ def configure_chunking(strategy: str | None = None) -> str:
     return json.dumps({"chunk_strategy": strategy})
 
 
-@mcp.tool()
+@tool(mcp)
 def configure_browser_tool(
     cdp_endpoint: str | None = None,
     venv_path: str | None = None,

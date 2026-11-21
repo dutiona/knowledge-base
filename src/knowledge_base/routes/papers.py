@@ -8,6 +8,7 @@ from pathlib import Path
 from fastmcp import FastMCP
 
 from .._conn import _get_conn
+from . import tool
 from ..bibtex import export_bibtex, sync_bibtex
 from ..conclusions import (
     get_conclusion_chain,
@@ -47,7 +48,7 @@ def _validate_bib_path(output_path: str) -> Path:
     return p
 
 
-@mcp.tool()
+@tool(mcp)
 def register_paper_tool(
     title: str,
     authors: list[str] | None = None,
@@ -80,7 +81,7 @@ def register_paper_tool(
     return json.dumps(result)
 
 
-@mcp.tool()
+@tool(mcp)
 def get_paper_tool(
     paper_id: int | None = None,
     title_pattern: str | None = None,
@@ -97,7 +98,7 @@ def get_paper_tool(
     return json.dumps(get_paper(conn, paper_id, title_pattern, doi))
 
 
-@mcp.tool()
+@tool(mcp)
 def add_relationship_tool(
     source_paper_id: int,
     target_paper_id: int,
@@ -131,7 +132,7 @@ def add_relationship_tool(
         return json.dumps(err)
 
 
-@mcp.tool()
+@tool(mcp)
 def get_relationships_tool(
     paper_id: int,
     relation_type: str | None = None,
@@ -148,7 +149,7 @@ def get_relationships_tool(
     return json.dumps(get_relationships(conn, paper_id, relation_type, direction))
 
 
-@mcp.tool()
+@tool(mcp)
 def record_conclusion_tool(
     claim: str,
     confidence: float = 1.0,
@@ -171,7 +172,7 @@ def record_conclusion_tool(
         return json.dumps(err)
 
 
-@mcp.tool()
+@tool(mcp)
 def get_conclusions_tool(
     keyword: str | None = None,
     min_confidence: float = 0.0,
@@ -188,7 +189,7 @@ def get_conclusions_tool(
     return json.dumps(get_conclusions(conn, keyword, min_confidence, include_superseded))
 
 
-@mcp.tool()
+@tool(mcp)
 def supersede_conclusion_tool(
     old_conclusion_id: int,
     new_claim: str,
@@ -222,7 +223,7 @@ def supersede_conclusion_tool(
         return json.dumps(err)
 
 
-@mcp.tool()
+@tool(mcp)
 def get_conclusion_chain_tool(conclusion_id: int) -> str:
     """Follow the supersession chain for a conclusion (oldest to newest).
 
@@ -233,7 +234,7 @@ def get_conclusion_chain_tool(conclusion_id: int) -> str:
     return json.dumps(get_conclusion_chain(conn, conclusion_id))
 
 
-@mcp.tool()
+@tool(mcp)
 def export_bibtex_tool(
     paper_ids: list[int] | None = None,
     title_pattern: str | None = None,
@@ -259,7 +260,7 @@ def export_bibtex_tool(
     return json.dumps({"bibtex": bibtex_str, "entries": bibtex_str.count("@")})
 
 
-@mcp.tool()
+@tool(mcp)
 def sync_bibtex_tool(
     output_path: str,
     paper_ids: list[int] | None = None,
@@ -284,7 +285,7 @@ def sync_bibtex_tool(
         return json.dumps({"error": f"Failed to sync {p}: {e}"})
 
 
-@mcp.tool()
+@tool(mcp)
 def suggest_relationships_tool(paper_id: int) -> str:
     """Suggest citation relationships by matching DOIs, title words, and author+year.
 
@@ -298,7 +299,7 @@ def suggest_relationships_tool(paper_id: int) -> str:
     return json.dumps(suggest_relationships(conn, paper_id))
 
 
-@mcp.tool()
+@tool(mcp)
 def scan_relationships(paper_id: int | None = None) -> str:
     """Scan for embedding-similarity relationships between papers.
 
@@ -330,7 +331,7 @@ def scan_relationships(paper_id: int | None = None) -> str:
     return json.dumps({"jobs_submitted": submitted})
 
 
-@mcp.tool()
+@tool(mcp)
 def relocate_paper_tool(paper_id: int, new_path: str) -> str:
     """Update a paper's filesystem path after moving/renaming the file.
 
@@ -348,7 +349,7 @@ def relocate_paper_tool(paper_id: int, new_path: str) -> str:
         return json.dumps(err)
 
 
-@mcp.tool()
+@tool(mcp)
 def get_paper_paths_tool(paper_id: int) -> str:
     """List all registered filesystem paths for a paper.
 

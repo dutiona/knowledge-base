@@ -7,6 +7,7 @@ import json
 from fastmcp import FastMCP
 
 from .._conn import _get_conn
+from . import tool
 from ..exceptions import ExtractionError, KnowledgeBaseError
 from ..extraction import (
     _MAX_WORKERS_LIMIT,
@@ -25,7 +26,7 @@ from ..vision import configure_omniparser, configure_vision, estimate_figures_ti
 mcp = FastMCP("extraction-routes")
 
 
-@mcp.tool()
+@tool(mcp)
 def record_method_tool(
     name: str,
     paper_id: int,
@@ -42,7 +43,7 @@ def record_method_tool(
     return json.dumps(record_method(conn, name, paper_id, description))
 
 
-@mcp.tool()
+@tool(mcp)
 def record_dataset_tool(
     name: str,
     paper_id: int,
@@ -59,7 +60,7 @@ def record_dataset_tool(
     return json.dumps(record_dataset(conn, name, paper_id, description))
 
 
-@mcp.tool()
+@tool(mcp)
 def record_metric_tool(
     name: str,
     value: float,
@@ -82,7 +83,7 @@ def record_metric_tool(
     return json.dumps(record_metric(conn, name, value, paper_id, method_id, dataset_id, unit))
 
 
-@mcp.tool()
+@tool(mcp)
 def compare_papers_tool(paper_ids: list[int]) -> str:
     """Compare metrics across papers on shared datasets.
 
@@ -95,7 +96,7 @@ def compare_papers_tool(paper_ids: list[int]) -> str:
     return json.dumps(compare_papers(conn, paper_ids))
 
 
-@mcp.tool()
+@tool(mcp)
 def extract_structure_tool(
     paper_id: int,
     confirmed: bool = False,
@@ -174,7 +175,7 @@ def extract_structure_tool(
     )
 
 
-@mcp.tool()
+@tool(mcp)
 def configure_llm_tool(
     provider: str = "ollama",
     base_url: str | None = None,
@@ -202,7 +203,7 @@ def configure_llm_tool(
         return json.dumps(err)
 
 
-@mcp.tool()
+@tool(mcp)
 def get_entities_tool(paper_id: int) -> str:
     """List resolved entities for a paper with their surface forms and chunk mentions.
 
@@ -213,7 +214,7 @@ def get_entities_tool(paper_id: int) -> str:
     return json.dumps(get_entities(conn, paper_id))
 
 
-@mcp.tool()
+@tool(mcp)
 def extract_figures_tool(paper_id: int, pages: list[int] | None = None, confirmed: bool = False) -> str:
     """Extract figures from a paper's PDF using a vision model.
 
@@ -267,7 +268,7 @@ def extract_figures_tool(paper_id: int, pages: list[int] | None = None, confirme
     )
 
 
-@mcp.tool()
+@tool(mcp)
 def configure_vision_tool(
     model: str | None = None,
     base_url: str | None = None,
@@ -287,7 +288,7 @@ def configure_vision_tool(
         return json.dumps({"error": str(e), **e.details})
 
 
-@mcp.tool()
+@tool(mcp)
 def configure_omniparser_tool(path: str | None = None, server_url: str | None = None) -> str:
     """Configure OmniParser for figure enrichment.
 

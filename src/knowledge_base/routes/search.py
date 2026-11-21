@@ -14,12 +14,12 @@ from ..embed_swap import get_embed_config, get_space
 from ..exceptions import KnowledgeBaseError
 from ..prediction_errors import detect_and_log, get_prediction_error_count
 from ..search import search
-from . import embedder_failure
+from . import embedder_failure, tool
 
 mcp = FastMCP("search-routes")
 
 
-@mcp.tool()
+@tool(mcp)
 def search_index(
     query: str,
     top_k: int = 10,
@@ -92,7 +92,7 @@ def search_index(
     )
 
 
-@mcp.tool()
+@tool(mcp)
 def co_occurrence(min_sessions: int = 1) -> str:
     """Find document pairs that were ingested together in the same session.
 
@@ -107,7 +107,7 @@ def co_occurrence(min_sessions: int = 1) -> str:
     return json.dumps(co_occurrence_pairs(conn, min_sessions))
 
 
-@mcp.tool()
+@tool(mcp)
 def status() -> str:
     """Get index statistics: chunk counts by type, recent ingestions, DB size."""
     conn = _get_conn()

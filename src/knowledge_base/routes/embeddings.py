@@ -7,6 +7,7 @@ import json
 from fastmcp import FastMCP
 
 from .._conn import _get_conn
+from . import tool
 from ..comparison import batch_compare_spaces, compare_spaces
 from ..db import get_active_space
 from ..exceptions import KnowledgeBaseError
@@ -23,7 +24,7 @@ from ..embed_swap import (
 mcp = FastMCP("embeddings-routes")
 
 
-@mcp.tool()
+@tool(mcp)
 def embed_config() -> str:
     """Get current embedding provider configuration (provider, model, dimension)."""
     conn = _get_conn()
@@ -39,14 +40,14 @@ def embed_config() -> str:
     return json.dumps(config)
 
 
-@mcp.tool()
+@tool(mcp)
 def list_embed_spaces_tool() -> str:
     """List all embedding spaces with status, progress, and chunk strategy."""
     conn = _get_conn()
     return json.dumps(list_spaces(conn))
 
 
-@mcp.tool()
+@tool(mcp)
 def create_embed_space_tool(
     name: str,
     model: str,
@@ -84,7 +85,7 @@ def create_embed_space_tool(
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool()
+@tool(mcp)
 def backfill_embed_space_tool(name: str, batch_size: int = 32) -> str:
     """Backfill an embedding space with chunk embeddings. Resumable.
 
@@ -101,7 +102,7 @@ def backfill_embed_space_tool(name: str, batch_size: int = 32) -> str:
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool()
+@tool(mcp)
 def promote_embed_space_tool(name: str) -> str:
     """Promote an embedding space to active. Deprecates the current active space.
 
@@ -123,7 +124,7 @@ def promote_embed_space_tool(name: str) -> str:
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool()
+@tool(mcp)
 def deprecate_embed_space_tool(name: str) -> str:
     """Mark an embedding space as deprecated.
 
@@ -138,7 +139,7 @@ def deprecate_embed_space_tool(name: str) -> str:
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool()
+@tool(mcp)
 def cleanup_embed_space_tool(name: str) -> str:
     """Drop a deprecated space's vec table and remove its registry entry.
 
@@ -153,7 +154,7 @@ def cleanup_embed_space_tool(name: str) -> str:
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool()
+@tool(mcp)
 def compare_spaces_tool(
     query: str,
     space_a: str,
@@ -180,7 +181,7 @@ def compare_spaces_tool(
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool()
+@tool(mcp)
 def batch_compare_spaces_tool(
     space_a: str,
     space_b: str,
@@ -207,7 +208,7 @@ def batch_compare_spaces_tool(
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool()
+@tool(mcp)
 def benchmark_spaces_tool(
     baseline_space: str | None = None,
     sample_queries: int = 50,

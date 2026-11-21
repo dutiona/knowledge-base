@@ -616,3 +616,88 @@ def test_a_transition_against_a_running_server_names_it(served, monkeypatch, cap
     assert codes == [1]
     error = json.loads(capsys.readouterr().err)["error"]
     assert f"{_SERVER_LINE[transport]}{os.getpid()}, since " in error
+
+
+# --- Every tool call ends with no transaction open (#597's class) ---
+
+
+def _call(tool: str, arguments: dict):
+    from fastmcp import Client
+
+    async def _run():
+        async with Client(server.mcp) as client:
+            return await client.call_tool(tool, arguments, raise_on_error=False)
+
+    return asyncio.run(_run())
+
+
+@pytest.fixture
+def fresh_thread_connections(monkeypatch):
+    """Tool calls open their thread's connection on this test's database, not a connection an earlier test left."""
+    import threading
+
+    monkeypatch.setattr("knowledge_base._conn._local", threading.local())
+
+
+def _writes_at_once() -> None:
+    from knowledge_base.db import get_connection
+
+    other = get_connection()
+    try:
+        other.execute("PRAGMA busy_timeout = 0")
+        other.execute("BEGIN IMMEDIATE")  # refused with "database is locked" while a call still holds a write
+        other.rollback()
+    finally:
+        other.close()
+
+
+def test_a_failed_tool_call_leaves_no_transaction_open(declared_db, fresh_thread_connections, tmp_path):
+    from knowledge_base.db import get_connection
+
+    pdf = tmp_path / "p.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    with patch("knowledge_base.papers.compute_file_hash", side_effect=RuntimeError("disk on fire")):
+        result = _call("register_paper_tool", {"title": "P", "source_uri": str(pdf)})  # fails after its first insert
+    assert result.is_error
+    _writes_at_once()
+    conn = get_connection()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_a_tool_that_returns_with_a_transaction_open_is_rolled_back(declared_db, fresh_thread_connections, caplog):
+    from knowledge_base.db import get_connection
+
+    def _forgets_to_commit(conn, job_id):
+        conn.execute("INSERT INTO config (key, value) VALUES ('probe', 'x')")
+        return {"id": job_id}
+
+    with patch("knowledge_base.routes.operations.get_job", _forgets_to_commit):
+        assert not _call("get_job_status_tool", {"job_id": 1}).is_error
+    _writes_at_once()
+    conn = get_connection()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM config WHERE key = 'probe'").fetchone()[0] == 0
+    finally:
+        conn.close()
+    assert any("get_job_status_tool" in r.getMessage() for r in caplog.records if r.levelname == "WARNING")
+
+
+def test_every_tool_is_registered_through_the_boundary():
+    """A tool decorated with ``@mcp.tool()`` directly skips the call boundary that ends its transaction."""
+    import ast
+    from pathlib import Path
+
+    from knowledge_base import routes
+
+    direct = []
+    for source in Path(routes.__file__).parent.glob("*.py"):
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                for decorator in node.decorator_list:
+                    call = decorator.func if isinstance(decorator, ast.Call) else decorator
+                    if isinstance(call, ast.Attribute) and call.attr == "tool":
+                        direct.append(f"{source.stem}.{node.name}")
+    assert direct == [], f"register these through routes.tool(mcp): {sorted(direct)}"

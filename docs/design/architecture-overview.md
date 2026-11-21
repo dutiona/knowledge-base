@@ -143,7 +143,7 @@ flowchart TD
 
 The server uses three mechanisms for thread safety:
 
-**Thread-local connections.** Each thread gets its own `sqlite3.Connection` via `threading.local()`. SQLite connections are not thread-safe, so sharing is avoided entirely.
+**Thread-local connections.** Each thread gets its own `sqlite3.Connection` via `threading.local()`. SQLite connections are not thread-safe, so sharing is avoided entirely. Every tool is registered through `routes.tool(mcp)`, a call boundary that runs on the tool's own thread: a call that fails rolls back its connection's open transaction, and one that returns with a transaction open is logged and rolled back, so no call leaves a partial write for the thread's next commit or holds the write lock against other threads.
 
 **Double-checked locking for schema init.** A module-level `threading.Lock` with a `_schema_ready` boolean flag ensures `init_schema()` runs exactly once, even when multiple threads call `_get_conn()` concurrently. The outer check avoids lock acquisition on the hot path.
 
