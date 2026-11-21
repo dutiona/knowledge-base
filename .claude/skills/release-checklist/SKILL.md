@@ -1,6 +1,6 @@
 ---
 name: release-checklist
-description: "Use when releasing knowledge-base to its durable home — promoting a built pinned runtime into ~/.local/opt/knowledge-base/{data,venv} that the harness consumes (never the in-repo dev `uv run`). Runs an execute-with-gates procedure: build the wheel, run the quality gate (pytest/ruff), back up the live DB, migrate + verify the schema version, then atomically promote the venv and write a RELEASE manifest — STOP on any failure, explicit go before each irreversible step (DB migrate, promote). Triggers on /release-checklist, 'release knowledge-base', 'promote knowledge-base to ~/.local/opt', 'cut a knowledge-base release'."
+description: "Use when releasing knowledge-base to its durable home — promoting a built pinned runtime into ~/.local/opt/knowledge-base/{data,venv} that the harness consumes (never the in-repo dev `uv run`). Runs an execute-with-gates procedure: build the wheel, run the quality gate (the AGENTS.md Verify list and the slow tests), back up the live DB, migrate + verify the schema version, then atomically promote the venv and write a RELEASE manifest — STOP on any failure, explicit go before each irreversible step (DB migrate, promote). Triggers on /release-checklist, 'release knowledge-base', 'promote knowledge-base to ~/.local/opt', 'cut a knowledge-base release'."
 ---
 
 # /release-checklist — knowledge-base durable release
@@ -95,9 +95,19 @@ Run in order; **STOP on the first failure** — a failure here means **do not re
 source ~/.local/opt/knowledge-base/.release-env
 cd "$REPO"
 git diff-index --quiet HEAD -- || { echo "STOP: uncommitted changes — commit/stash so the manifest git_sha matches what is built"; exit 1; }
-uv run pytest                         # LLM/embedding-dependent tests need Ollama up
-uv run ruff format --check .
-uv run ruff check .
+```
+
+Then, in `$REPO`, run every command of the `## Verify` list in `AGENTS.md`, in its order. The merge gate is the
+release gate, so this checklist keeps no copy of it. Its image step builds only when an image input differs from
+`origin/master`, so on a merged release commit it skips; every PR that changed one built it. Last, run the slow tests
+that list deselects: the real-PDF extraction through pymupdf4llm's layout model, and OmniParser's, which skip when it
+is not installed. The two deselected ones duplicate a fast test or pass whether or not image references come out
+(#635):
+
+```bash
+uv run pytest tests/ -q -m slow \
+    --deselect tests/test_pymupdf4llm_integration.py::test_fallback_on_import_error \
+    --deselect tests/test_pymupdf4llm_integration.py::test_real_pdf_image_refs
 ```
 
 Version-bump check: confirm `version` in `pyproject.toml` was bumped for this release (SemVer).
