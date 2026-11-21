@@ -37,7 +37,7 @@ from .redact import redact_json, scrub
 from .embed_swap import declared_provider_config
 from .embeddings import embed, split_inputs, truncate_embedding
 from .exceptions import NotFoundError, ValidationError
-from .folder_summaries import update_folder_summary
+from .folder_summaries import drop_summary, update_folder_summary
 from .utils import content_hash as _content_hash
 from .utils import without_userinfo
 
@@ -620,6 +620,13 @@ def reingest_file(
 
     # Check that this source_uri was previously ingested
     existing = conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (source_uri,)).fetchall()
+    if not path.exists():
+        if existing:
+            raise NotFoundError(
+                f"{source_uri} no longer exists: remove its document with knowledge-base-ingest remove {source_uri} "
+                "(server stopped)"
+            )
+        raise NotFoundError(f"Path does not exist: {source_uri}")
     if not existing:
         raise NotFoundError(f"No chunks found for source_uri: {source_uri}")
 
@@ -742,21 +749,26 @@ def reingest_file(
 
 
 def remove_document(conn: sqlite3.Connection, source_uri: str) -> dict:
-    """Remove the URL or content document stored under *source_uri* (#595), in one transaction.
+    """Remove the document stored under *source_uri* (#595, #631), in one transaction.
 
     Every chunk under it goes, a web page's figures included, with its vectors in every space and every reference to
-    it. A file document is refused: ``reingest`` replaces it from its file.
+    it. A file document is removed only once its file is gone (deleted or moved), with its folder's summary, which
+    the folder's next ingest rebuilds; while the file exists it is refused, since ``reingest`` replaces it.
     """
     uri = without_userinfo(source_uri)  # ingest stores a URL without its userinfo
-    if not uri.lower().startswith(("http://", "https://", "content://")):
+    is_file = not uri.lower().startswith(("http://", "https://", "content://"))
+    if is_file and Path(uri).exists():
         raise ValidationError(
-            f"{uri} is a file document: reingest replaces it from its file; remove takes URL and content:// documents"
+            f"{uri} exists: reingest replaces a file document from its file; remove takes a URL, a content:// "
+            "document, or a file document whose file is gone"
         )
     ids = [r["id"] for r in conn.execute("SELECT id FROM chunks WHERE source_uri = ?", (uri,))]
     if not ids:
         raise NotFoundError(f"no document is stored under {uri}")
     try:
         delete_chunks_cascade(conn, ids)
+        if is_file:
+            drop_summary(conn, Path(uri).parent.as_posix())
         conn.commit()
     except BaseException:
         conn.rollback()

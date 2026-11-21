@@ -166,8 +166,8 @@ connects to the address it checked. Endpoints the operator's environment declare
   previous declaration instead of rerunning, restore it and run `knowledge-base-ingest rebind`.
 - **Moving the embedder** (server stopped): set the new `KNOWLEDGE_BASE_EMBED_URL`, run
   `knowledge-base-ingest rebind`, start the server.
-- **Removing a URL or content document** (server stopped): `knowledge-base-ingest remove <source_uri>` deletes it, its
-  chunks and every reference to them. A passage is stored once, under the first document that held it, so a later
+- **Removing a document** (server stopped): `knowledge-base-ingest remove <source_uri>` deletes a URL or content
+  document, or a file document whose file is gone, with its chunks and every reference to them. A passage is stored once, under the first document that held it, so a later
   document that repeated it loses it too. See
   [Removing a Document](docs/usage/ingesting-documents.md#removing-a-document).
 - **Redacting rows stored before redaction existed** (server stopped): `knowledge-base-ingest redact` reports them
@@ -456,7 +456,7 @@ database and checked at every start (see [Configuration](#configuration)).
 
 - One process (SQLite WAL mode, no concurrent writers), shared over HTTP by every machine holding a token; each
   reaches only the three network tools
-- Only the maintenance command `knowledge-base-ingest remove` removes a document ingested by URL or by content;
-  re-ingesting changed text keeps the earlier version searchable
+- Only the maintenance command `knowledge-base-ingest remove` removes a document ingested by URL or by content, or a
+  file document whose file is gone; re-ingesting changed text keeps the earlier version searchable
 - AST-aware chunking only for Python files; other code uses fixed-size chunks
 - Embedding model swap re-embeds all chunks sequentially (can be slow for large indexes)

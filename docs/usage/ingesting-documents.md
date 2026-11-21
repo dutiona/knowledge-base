@@ -173,8 +173,9 @@ The response includes per-file results:
 
 ## Re-Ingestion
 
-`reingest` is for files, over stdio. A document ingested by URL or by content is removed with
-`knowledge-base-ingest remove` (see [Removing a Document](#removing-a-document)), then ingested again.
+`reingest` is for files that exist, over stdio. A document ingested by URL or by content is removed with
+`knowledge-base-ingest remove` (see [Removing a Document](#removing-a-document)), then ingested again. `reingest` of
+a file that is gone refuses and names `knowledge-base-ingest remove`, which removes its document.
 
 Use the `reingest` tool to force a full re-ingest. This deletes all existing chunks for the file and inserts the new ones. A chunk another document already holds (the same text; after redaction, a passage that differs only by a secret) is linked to the file's sessions instead of inserted again. Use this after a file has been updated.
 
@@ -190,13 +191,21 @@ Use the `reingest` tool to force a full re-ingest. This deletes all existing chu
 ## Removing a Document
 
 `knowledge-base-ingest remove <source_uri>` removes one document stored by URL (`https://…`, matched without its
-userinfo) or by content (`content://<machine>/<name>`), with the server stopped (the store lock refuses otherwise). In
+userinfo), by content (`content://<machine>/<name>`), or from a file that no longer exists (its absolute path), with the server stopped (the store lock refuses otherwise). In
 one transaction it deletes every chunk under that `source_uri`, a web page's figures included, their vectors in every
 embedding space, and every reference to them, as `reingest` does; it embeds nothing, so it needs no embedding
 declaration, and prints `{"source_uri": …, "chunks_deleted": N}`. An unknown `source_uri` exits 1 and changes
-nothing. A file document is refused: `reingest` replaces it from its file.
+nothing.
 
-What stays: papers keep their metadata (an abstract link to a removed chunk becomes empty), and the removed text's
+A file document is removed only once its file is gone, deleted or moved; while the file exists, `remove` refuses and
+`reingest` replaces it. Removing a file document also drops its folder's summary, so the folder's other documents lose
+their folder boost in ranking until the folder's next ingest or reingest, or `redact --rewrite`, rebuilds it; `remove`
+still embeds nothing. For a moved file, remove the old path, then ingest the new one: ingested first, the moved file
+stores nothing new, since its passages are the old document's. A registered paper's file that moved is moved with
+`relocate_paper_tool` instead, which keeps its chunks; after a `remove`, a relocation moves only the paper's record.
+
+What stays: papers keep their metadata and their recorded path (an abstract link to a removed chunk becomes empty),
+images extracted from a removed PDF stay unsearchable under the data directory, and the removed text's
 bytes stay in the database file's free pages, FTS segments and WAL until `knowledge-base-ingest redact --rewrite`,
 which always purges them.
 

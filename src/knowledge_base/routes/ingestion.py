@@ -76,10 +76,6 @@ def reingest(
     """
     conn = _get_conn()
     p = Path(path).expanduser().resolve()
-
-    if not p.exists():
-        return json.dumps({"error": f"Path does not exist: {p}"})
-
     try:
         result = reingest_file(conn, p, source_type, session_id=session_id)
     except KnowledgeBaseError as e:
