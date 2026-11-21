@@ -354,6 +354,27 @@ def test_a_merge_drops_the_duplicate_s_truncation_record_with_its_vector(kb_conn
     conn.close()
 
 
+def test_a_merge_does_not_hand_the_duplicate_s_refusal_to_the_survivor(kb_conn, tmp_path, vectors):
+    """A refusal is about the duplicate's old text; moved to the survivor it would keep the survivor out of that
+    space's backfill for good, and promotion would count it done."""
+    from knowledge_base.embed_swap import create_space
+
+    db = tmp_path / "test.db"
+    keep = _with_vector(kb_conn, "token [REDACTED:github-pat] x", uri="/d/k.md")
+    dup = _with_vector(kb_conn, f"token {SECRET} x", uri="/d/dup.md")
+    create_space(kb_conn, "alt", "other-model", TEST_EMBED_DIM)
+    kb_conn.execute("INSERT INTO embed_refusals (chunk_id, space_name) VALUES (?, 'alt')", (dup,))
+    kb_conn.commit()
+    kb_conn.close()
+
+    assert _run(db, "redact", "--rewrite") == 0
+
+    conn = _open(db)
+    assert [r[0] for r in conn.execute("SELECT id FROM chunks")] == [keep]
+    assert conn.execute("SELECT COUNT(*) FROM embed_refusals").fetchone()[0] == 0
+    conn.close()
+
+
 def test_rewrite_reembeds_from_redacted_text(kb_conn, tmp_path, vectors):
     from knowledge_base.embed_swap import _check_promotable, backfill_space
 
