@@ -240,7 +240,7 @@ A passage is stored once, under the first document that contained it. Removing t
 
 ## Redaction
 
-Before KB embeds or stores an ingested document's text, it replaces token-shaped secrets with `[REDACTED:<rule>]`. The rules are memory-engine's (`crates/memory-engine/src/bootstrap/redact.rs`), with Michaël's rulings of 2026-11-17, in priority order:
+Before KB embeds or stores an ingested document's text, it replaces token-shaped secrets with `[REDACTED:<rule>]`. The rules are memory-engine's (`crates/memory-engine/src/redact/mod.rs`), with Michaël's rulings of 2026-11-17, in priority order:
 
 | Rule | Matches |
 | --- | --- |

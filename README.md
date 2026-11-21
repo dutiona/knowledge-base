@@ -450,7 +450,7 @@ database and checked at every start (see [Configuration](#configuration)).
 | `llm_provider`   | `ollama`      | LLM provider: `ollama` (native API) or `openai_compat` (OpenAI-compatible) |
 | `llm_model`      | `qwen3.5:27b` | Model name passed to the provider                                          |
 | `llm_base_url`   | _(unset)_     | Base URL for `openai_compat` provider (e.g. `http://192.168.1.41:1234`)    |
-| `schema_version` | `2`           | Applied DB schema version (managed by `migrate`; see Upgrading above)      |
+| `schema_version` | `3`           | Applied DB schema version (managed by `migrate`; see Upgrading above)      |
 
 ## Limitations
 

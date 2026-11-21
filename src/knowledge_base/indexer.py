@@ -140,7 +140,7 @@ def cmd_reingest(args: argparse.Namespace) -> None:
     result = reingest_file(conn, p, args.source_type, session_id=args.session_id)
 
     # Post-reingest: invalidate stale "similar" relationships and submit
-    # auto_relate jobs for affected papers (mirrors routes/ingestion.py:83-99).
+    # auto_relate jobs for affected papers (as the reingest tool does).
     source_uri = p.as_posix()
     affected = conn.execute("SELECT paper_id FROM paper_paths WHERE path = ?", (source_uri,)).fetchall()
     submitted_job_ids: list[int] = []
