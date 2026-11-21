@@ -163,10 +163,14 @@ def needs_rewrite(result: dict) -> bool:
 
 
 def _merge_into(conn: sqlite3.Connection, dup: int, keep: int) -> None:
-    """Move every reference from chunk ``dup`` to ``keep``, then delete ``dup``: ingest-time dedup's end state."""
+    """Move every reference from chunk ``dup`` to ``keep``, then delete ``dup``: ingest-time dedup's end state.
+
+    A truncation record (#620) is not moved: it describes ``dup``'s own vector, which is deleted, so it leaves with
+    ``dup`` by cascade.
+    """
     refs = conn.execute(
         'SELECT m.name AS t, p."from" AS c FROM sqlite_master AS m, pragma_foreign_key_list(m.name) AS p '
-        "WHERE m.type = 'table' AND p.\"table\" = 'chunks'"
+        "WHERE m.type = 'table' AND p.\"table\" = 'chunks' AND m.name != 'embed_truncations'"
     ).fetchall()
     for table, column in refs:
         conn.execute(f"UPDATE OR IGNORE [{table}] SET [{column}] = ? WHERE [{column}] = ?", (keep, dup))  # noqa: S608  # names from sqlite_master
