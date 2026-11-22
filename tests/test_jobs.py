@@ -2,6 +2,7 @@
 
 import json
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -278,3 +279,79 @@ def test_worker_stop_reset(tmp_path):
     assert worker._thread is None
     # Reset after stop is safe
     worker.reset()
+
+
+# --- A job's uncommitted writes (#643) ---
+
+
+def _run_once(tmp_path, fake):
+    """Submit one job, let the real worker run it once on this connection; read the outcome through another."""
+    conn, db_path = _setup(tmp_path)
+    paper_id = _make_paper(conn)
+    job_id = submit_job(conn, paper_id, "extract_structure")
+    with patch("knowledge_base.extraction.extract_structure", side_effect=fake):
+        _JobWorker()._tick(conn)
+    other = get_connection(db_path)
+    try:
+        job = get_job(other, job_id)
+        names = [r["name"] for r in other.execute("SELECT name FROM methods ORDER BY name")]
+    finally:
+        other.close()
+    assert job is not None
+    return job, names
+
+
+@pytest.mark.parametrize("progress", [False, True], ids=["quiet", "progress"])
+@pytest.mark.parametrize("outcome", ["completes", "extraction-error", "raises"])
+def test_a_job_s_uncommitted_writes_land_only_with_its_completion(tmp_path, outcome, progress):
+    from knowledge_base.exceptions import ExtractionError
+
+    def fake(conn_, paper_id_, confirmed=False, *, on_progress, **kwargs):
+        conn_.execute("INSERT INTO methods (name, paper_id) VALUES ('leak', ?)", (paper_id_,))
+        if progress:
+            on_progress("storing results...")
+        if outcome == "extraction-error":
+            raise ExtractionError("boom", errors=[{"chunk_id": 1, "error": "boom"}])
+        if outcome == "raises":
+            raise RuntimeError("boom")
+        return {}
+
+    job, names = _run_once(tmp_path, fake)
+
+    if outcome == "completes":
+        assert (job["status"], names) == ("completed", ["leak"])
+        return
+    assert (job["status"], names) == ("failed", [])
+    assert "boom" in job["error"]
+    if outcome == "extraction-error":
+        assert json.loads(job["result"])["errors"] == [{"chunk_id": 1, "error": "boom"}]
+
+
+def test_a_failed_job_keeps_the_unit_it_committed_itself(tmp_path):
+    def fake(conn_, paper_id_, confirmed=False, on_progress=None, **kwargs):
+        conn_.execute("INSERT INTO methods (name, paper_id) VALUES ('kept', ?)", (paper_id_,))
+        conn_.commit()
+        conn_.execute("INSERT INTO methods (name, paper_id) VALUES ('leak', ?)", (paper_id_,))
+        raise RuntimeError("boom")
+
+    job, names = _run_once(tmp_path, fake)
+
+    assert (job["status"], names) == ("failed", ["kept"])
+
+
+def test_progress_is_visible_while_its_job_runs(tmp_path):
+    seen = []
+
+    def fake(conn_, paper_id_, confirmed=False, *, on_progress, **kwargs):
+        on_progress("resolving entities...")
+        other = get_connection(Path(conn_.execute("PRAGMA database_list").fetchone()["file"]))
+        try:
+            seen.append(other.execute("SELECT progress FROM jobs").fetchone()["progress"])
+        finally:
+            other.close()
+        return {}
+
+    job, _names = _run_once(tmp_path, fake)
+
+    assert job["status"] == "completed"
+    assert seen == ["resolving entities..."]

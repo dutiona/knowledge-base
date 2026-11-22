@@ -146,7 +146,11 @@ class _JobWorker:
                 logger.exception("Unexpected error in job worker loop")
 
     def _tick(self, conn: sqlite3.Connection) -> None:
-        """Process one job or sleep."""
+        """Process one job or sleep.
+
+        What a job leaves uncommitted commits with its completion, is rolled back before its failure is recorded
+        (#643), and is never committed by its progress reports. A unit the job commits itself stays.
+        """
         # Atomic claim: UPDATE ... RETURNING
         row = conn.execute(
             "UPDATE jobs SET status = 'running', started_at = datetime('now')"
@@ -175,8 +179,11 @@ class _JobWorker:
             # Throttle: write every 5th call, or on phase transitions (non-"chunk" messages)
             if _progress_counter % 5 != 0 and msg.startswith("chunk "):
                 return
+            # Inside the job's open transaction the row rides with it: committing here would store the job's writes.
+            opened = not conn.in_transaction
             conn.execute("UPDATE jobs SET progress = ? WHERE id = ?", (msg, job_id))
-            conn.commit()
+            if opened:
+                conn.commit()
 
         try:
             # Verify paper still exists
@@ -192,6 +199,7 @@ class _JobWorker:
             conn.commit()
             logger.info("Job %d completed", job_id)
         except ExtractionError as exc:
+            conn.rollback()  # what the job left uncommitted must not commit with its failure (#643)
             # Preserve structured error data (per-chunk failures, raw LLM output)
             result_data: dict[str, Any] = {"error": str(exc)}
             if exc.errors:
@@ -205,6 +213,7 @@ class _JobWorker:
             conn.commit()
             logger.error("Job %d failed: %s", job_id, exc)
         except Exception as exc:
+            conn.rollback()  # as above (#643)
             conn.execute(
                 "UPDATE jobs SET status = 'failed', error = ?, completed_at = datetime('now') WHERE id = ?",
                 (str(exc), job_id),
