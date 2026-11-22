@@ -390,8 +390,10 @@ nor resends them and promotion counts them as done.
 ### embed_truncations
 
 Schema v4 (#620). The chunks a space stored cut to fit `KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS`, written with the vector,
-so a backfill reports them even after it was interrupted and resumed. Ingest splits long chunks and never cuts one, so
-only a chunk stored before that (#604) or under a larger limit can appear here.
+so a backfill reports them even after it was interrupted and resumed. Ingest splits a long document chunk and never
+cuts one; it cuts a long figure, image or element-capture description by design and records nothing, and a backfill
+records that cut like any other. So a record names such a description, a chunk stored before the split (#604), or one
+stored under a larger limit.
 
 | Column          | Type    | Constraints                                                 | Description                                  |
 | --------------- | ------- | ----------------------------------------------------------- | -------------------------------------------- |
