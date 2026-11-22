@@ -322,24 +322,26 @@ class TestMarkdownHandlesVectorDrawings:
         assert isinstance(md, str)
         assert len(md) > 0
 
-    def test_vector_drawing_output_documented(self, tmp_path: Path) -> None:
-        """Document what pymupdf4llm produces for vector-only pages.
+    def test_a_vector_only_page_yields_an_extracted_image(self, tmp_path: Path) -> None:
+        """Ingest's own extraction turns the page's drawing cluster into an image file the vision pipeline reads (#649).
 
-        This test always passes but prints diagnostic output.
+        A vector figure that becomes an extracted image is described from that file; one that does not falls back
+        to the full-page render (docs/usage/figure-extraction.md).
         """
+        from knowledge_base.chunking import IMAGE_REF_RE
+        from knowledge_base.ingest import _extract_pdf_markdown
+
         pdf = _make_vector_pdf(tmp_path / "vector_heavy.pdf", num_drawings=150)
-        md = _extract_markdown(pdf)
-        flat = _extract_flat(pdf)
+        image_dir = tmp_path / "extracted"
 
-        # Print for manual inspection during evaluation
-        print(f"\n--- Vector PDF: flat text ({len(flat)} chars) ---")
-        print(flat[:300] if flat.strip() else "(empty)")
-        print(f"\n--- Vector PDF: markdown ({len(md)} chars) ---")
-        print(md[:300] if md.strip() else "(empty)")
+        text, page_map = _extract_pdf_markdown(pdf, image_dir=image_dir)
 
-        # Check if any image references were generated from vectors
-        has_img = "![" in md or "<img" in md.lower()
-        print(f"\nImage references from vectors: {has_img}")
+        assert page_map, "the flat fallback ran, not pymupdf4llm"
+        assert "Architecture Overview" in text
+        refs = [Path(m.group(2)) for m in IMAGE_REF_RE.finditer(text)]
+        assert refs, f"no image reference for the vector drawings. Text:\n{text[:500]}"
+        for ref in refs:
+            assert ref.parent == image_dir and ref.is_file(), f"{ref} is not a file written to {image_dir}"
 
 
 class TestMarkdownTableExtraction:
