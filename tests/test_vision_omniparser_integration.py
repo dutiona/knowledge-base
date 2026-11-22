@@ -233,7 +233,7 @@ def test_ocr_section_appears_with_caption_and_description(mock_img_dir, mock_vis
             "entities_mentioned": ["ResNet"],
         }
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     result = extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
 
@@ -274,7 +274,7 @@ def test_enrichment_layers_includes_omniparser(mock_img_dir, mock_vision, mock_e
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
 
@@ -310,7 +310,7 @@ def test_ocr_source_metadata(mock_img_dir, mock_vision, mock_embed, tmp_path):
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
 
@@ -348,7 +348,7 @@ def test_ocr_text_not_in_description_section(mock_img_dir, mock_vision, mock_emb
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
 
@@ -428,7 +428,7 @@ def test_no_ocr_section_for_blank_image(mock_img_dir, mock_vision, mock_embed, t
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     result = extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
 

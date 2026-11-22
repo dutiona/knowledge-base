@@ -506,7 +506,7 @@ class TestDeclaredEndpointExemption:
         http_requests.handlers["embedder.example.test"] = lambda request: httpx.Response(
             200, json={"data": [{"index": 0, "embedding": [1.0] + [0.0] * 7}]}
         )
-        vectors = _embed_with_config(declared, ["hello"])
+        vectors, _cuts = _embed_with_config(declared, ["hello"])
         assert len(vectors) == 1
         assert [str(r.url) for r in http_requests] == ["https://embedder.example.test/v1/embeddings"]
         assert http_requests[0].headers["Authorization"] == "Bearer sk-test-only"

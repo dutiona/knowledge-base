@@ -595,7 +595,7 @@ def test_report_reads_a_document_stored_by_the_new_chunker_as_clean(kb_conn, tmp
     db = tmp_path / "test.db"
     text = " ".join(f"word{i} https://data.example.test/t?api_key={'ab' * 16}&n={i} {SECRET}" for i in range(60))
     with pytest.MonkeyPatch.context() as m:
-        m.setattr("knowledge_base.ingest._embed_with_config", lambda conn, texts: [None] * len(texts))
+        m.setattr("knowledge_base.ingest._embed_with_config", lambda conn, texts: ([None] * len(texts), {}))
         ingest_text(kb_conn, text, source_uri="content://notes/long", source_type="markdown")
     contents = [r[0] for r in kb_conn.execute("SELECT content FROM chunks ORDER BY chunk_index")]
     assert any(a[-200:] == b[:200] for a, b in pairwise(contents)), "some rows must be read in context"

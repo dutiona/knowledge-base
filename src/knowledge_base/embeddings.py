@@ -552,9 +552,19 @@ def embed(
     expected_dim: int | None = None,
     *,
     _provider_cfg: ProviderConfig,
+    cuts: Cuts | None = None,
 ) -> list[list[float] | None]:
-    """Embed a batch of texts with the provider *_provider_cfg* selects."""
-    return get_provider(cfg=_provider_cfg).embed(texts, model=model, expected_dim=expected_dim)
+    """Embed a batch of texts with the provider *_provider_cfg* selects.
+
+    *cuts*, when given, receives the inputs the provider cut to fit (#648). It is an out-parameter, not a second
+    return value, because tests fake this function by name with fakes that return vectors only.
+    """
+    provider = get_provider(cfg=_provider_cfg)
+    if cuts is None:
+        return provider.embed(texts, model=model, expected_dim=expected_dim)
+    vectors, found = embed_with_cuts(provider, texts, model, expected_dim)
+    cuts.update(found)
+    return vectors
 
 
 def embed_with_cuts(

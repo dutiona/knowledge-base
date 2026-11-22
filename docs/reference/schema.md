@@ -389,11 +389,11 @@ nor resends them and promotion counts them as done.
 
 ### embed_truncations
 
-Schema v4 (#620). The chunks a space stored cut to fit `KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS`, written with the vector
-by a backfill or a `redact --rewrite` (#638), so either reports them even after it was interrupted and rerun. Ingest
-splits a long document chunk and never cuts one; it cuts a long figure, image or element-capture description by design
-and records nothing, and a backfill records that cut like any other. So a record names such a description, a chunk
-stored before the split (#604), or one stored under a larger limit.
+Schema v4 (#620). The chunks a space stored cut to fit `KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS`, each written with its
+vector by whichever path stored it: ingest, a backfill or a `redact --rewrite` (#638, #648), so a backfill or rewrite
+reports them even after it was interrupted and rerun. Ingest splits a long document chunk and never cuts one; it cuts a
+long figure, image or element-capture description by design. So a record names such a description, a chunk stored
+before the split (#604), or one stored under a larger limit.
 
 | Column          | Type    | Constraints                                                 | Description                                  |
 | --------------- | ------- | ----------------------------------------------------------- | -------------------------------------------- |
