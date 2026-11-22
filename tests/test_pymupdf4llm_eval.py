@@ -326,7 +326,8 @@ class TestMarkdownHandlesVectorDrawings:
         """Ingest's own extraction turns the page's drawing cluster into an image file the vision pipeline reads (#649).
 
         A vector figure that becomes an extracted image is described from that file; one that does not falls back
-        to the full-page render (docs/usage/figure-extraction.md).
+        to the full-page render (docs/usage/figure-extraction.md). Whether this synthetic page's drawings form one
+        picture is pymupdf4llm's grouping, so a failure right after a pymupdf4llm bump is that change first.
         """
         from knowledge_base.chunking import IMAGE_REF_RE
         from knowledge_base.ingest import _extract_pdf_markdown
