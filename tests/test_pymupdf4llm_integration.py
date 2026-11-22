@@ -1,7 +1,6 @@
 """Integration tests for pymupdf4llm production extraction.
 
 These tests run the actual ONNX model on small synthetic PDFs.
-Mark with @pytest.mark.slow for CI gating if needed.
 
 Phase 2 of issue #60.
 """
