@@ -260,7 +260,8 @@ def _apply(
             )
             if c["reembed"] and (vector := embedded.get(c["id"])) is not None:
                 insert_chunk_vec(conn, c["id"], vector, table_name=active)
-                if c["id"] in cuts and space_name is not None:
+                if c["id"] in cuts:
+                    assert space_name is not None  # noqa: S101  # internal invariant: a cut comes from a re-embed, which resolved the space
                     record_truncation(conn, c["id"], space_name, cuts[c["id"]])
         stale = [r[0] for r in conn.execute("SELECT folder_path, summary FROM folder_summaries") if scrub(r[1]) != r[1]]
         for path in stale:
