@@ -194,6 +194,15 @@ def space_embedder(
     return embed
 
 
+def record_truncation(conn: sqlite3.Connection, chunk_id: int, space_name: str, cut: tuple[int, int]) -> None:
+    """Record that *space_name* stores *chunk_id*'s vector cut to fit, as (tokens counted, tokens kept) (#620)."""
+    conn.execute(
+        "INSERT OR REPLACE INTO embed_truncations (chunk_id, space_name, tokens_before, tokens_after)"
+        " VALUES (?, ?, ?, ?)",
+        (chunk_id, space_name, *cut),
+    )
+
+
 def truncated_chunks(conn: sqlite3.Connection, space_name: str) -> list[dict]:
     """Every chunk *space_name* stores cut, by id, document and token counts, never its text (#620)."""
     return [
@@ -274,11 +283,7 @@ def backfill_space(
                     (row["id"], _serialize_f32(vec), row["id"]),
                 )
                 if i in cuts:
-                    conn.execute(
-                        "INSERT OR REPLACE INTO embed_truncations (chunk_id, space_name, tokens_before, tokens_after)"
-                        " VALUES (?, ?, ?, ?)",
-                        (row["id"], space_name, *cuts[i]),
-                    )
+                    record_truncation(conn, row["id"], space_name, cuts[i])
                 batch_stored += 1
             conn.execute(
                 "UPDATE embed_spaces SET chunk_count = chunk_count + ? WHERE name = ?", (batch_stored, space_name)

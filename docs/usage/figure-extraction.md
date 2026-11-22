@@ -12,7 +12,7 @@ During PDF ingestion, pymupdf4llm extracts raster images and records them in chu
 
 ### Fallback path: full-page rendering
 
-Some figures are vector-drawn (plots, diagrams composed of PDF drawing primitives). pymupdf4llm cannot extract these as images. The pipeline detects such pages by counting fitz drawing objects (>10 threshold) on pages that have no extracted images, then renders those pages at 2x resolution for the vision model.
+Some figures are vector-drawn (plots, diagrams composed of PDF drawing primitives). pymupdf4llm extracts one as an image when it groups the drawings into a picture, and the figure then takes the primary path; a vector figure it does not extract leaves its page without extracted images. The pipeline detects such pages by counting fitz drawing objects (>10 threshold) on pages that have no extracted images, then renders those pages at 2x resolution for the vision model.
 
 ### Full pipeline
 

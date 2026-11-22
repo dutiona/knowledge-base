@@ -437,7 +437,7 @@ def _extract_html_images(
 
     # --- Compute embeddings (last fallible step) ---
     texts = [desc for desc, _ in collected]
-    embeddings = _embed_with_config(conn, texts)
+    embeddings, cuts = _embed_with_config(conn, texts)
 
     # --- Replace the page's inline image figures (only after embeddings succeed) ---
     added, _ = _replace_figures(
@@ -445,7 +445,7 @@ def _extract_html_images(
         source_url,
         (_WEB_IMAGE_CHUNK_INDEX_START, _WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START),
         [
-            (_WEB_IMAGE_CHUNK_INDEX_START + idx, desc, json.dumps(meta), emb_vec)
+            (_WEB_IMAGE_CHUNK_INDEX_START + idx, desc, json.dumps(meta), emb_vec, cuts.get(idx))
             for idx, ((desc, meta), emb_vec) in enumerate(zip(collected, embeddings, strict=True))
         ],
     )
@@ -766,7 +766,7 @@ def _extract_web_figures(
     if not texts:
         return 0
 
-    embeddings = _embed_with_config(conn, texts)
+    embeddings, cuts = _embed_with_config(conn, texts)
 
     # Replace the screenshot figures only: inline images and element captures keep their own index ranges.
     figures_added, _ = _replace_figures(
@@ -787,6 +787,7 @@ def _extract_web_figures(
                     }
                 ),
                 emb_vec,
+                cuts.get(idx),
             )
             for idx, (fig, desc, emb_vec) in enumerate(zip(valid_figures, texts, embeddings, strict=True))
         ],
@@ -880,7 +881,7 @@ def _extract_element_captures(
 
     # --- Phase 2: Batch embed (fallible: embedding calls) ---
     texts = [desc for desc, _, _ in collected]
-    embeddings = _embed_with_config(conn, texts)
+    embeddings, cuts = _embed_with_config(conn, texts)
 
     # --- Phase 3: replace the element captures in one transaction ---
     figures_added, _ = _replace_figures(
@@ -888,8 +889,9 @@ def _extract_element_captures(
         source_url,
         (_WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START, None),
         [
-            (_WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START + cap_idx, desc, json.dumps(meta), emb_vec)
-            for (desc, meta, cap_idx), emb_vec in zip(collected, embeddings, strict=True)
+            # A cut is keyed by the text's position in the batch; cap_idx skips the captures that gave no text.
+            (_WEB_ELEMENT_CAPTURE_CHUNK_INDEX_START + cap_idx, desc, json.dumps(meta), emb_vec, cuts.get(pos))
+            for pos, ((desc, meta, cap_idx), emb_vec) in enumerate(zip(collected, embeddings, strict=True))
         ],
     )
     return figures_added
@@ -899,14 +901,14 @@ def _replace_figures(
     conn: sqlite3.Connection,
     source_url: str,
     index_range: tuple[int, int | None],
-    figures: list[tuple[int, str, str, list[float] | None]],
+    figures: list[tuple[int, str, str, list[float] | None, tuple[int, int] | None]],
 ) -> tuple[int, int]:
     """Replace *source_url*'s figure chunks whose index is in *index_range* by *figures*, in one transaction (#597).
 
-    Each figure is ``(chunk_index, text, metadata_json, vector)``; one whose text another chunk already holds is
-    skipped. Each writer owns its own index range, so the screenshot, inline-image and element-capture figures of a
-    page are replaced independently. Commits; any failure rolls back, so the old figures stay and the thread's
-    connection carries nothing to the next commit.
+    Each figure is ``(chunk_index, text, metadata_json, vector, cut)``, *cut* the embedder's cut of *text* or None
+    (#648); one whose text another chunk already holds is skipped. Each writer owns its own index range, so the
+    screenshot, inline-image and element-capture figures of a page are replaced independently. Commits; any failure
+    rolls back, so the old figures stay and the thread's connection carries nothing to the next commit.
 
     Returns ``(figures_added, figures_removed)``.
     """
@@ -925,7 +927,7 @@ def _replace_figures(
         # One vec table for every insert and one chunk_count bump of the vectors inserted (#392).
         vec_table = get_vec_table_name(conn)
         added = n_inserted = 0
-        for chunk_index, text, meta_json, vector in figures:
+        for chunk_index, text, meta_json, vector, cut in figures:
             chunk_hash = _content_hash(text)
             if conn.execute("SELECT 1 FROM chunks WHERE content_hash = ?", (chunk_hash,)).fetchone():
                 continue
@@ -940,6 +942,7 @@ def _replace_figures(
                 metadata=meta_json,
                 vec_table=vec_table,
                 bump_count=False,
+                cut=cut,
             )
             added += 1
             n_inserted += vector is not None

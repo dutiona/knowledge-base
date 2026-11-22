@@ -309,7 +309,7 @@ class TestMultiFigureIntegration:
         monkeypatch.setattr(
             vision,
             "_embed_with_config",
-            lambda conn, texts: [[0.0] * TEST_EMBED_DIM] * len(texts),
+            lambda conn, texts: ([[0.0] * TEST_EMBED_DIM] * len(texts), {}),
         )
 
         result = vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
@@ -355,7 +355,7 @@ class TestMultiFigureIntegration:
         monkeypatch.setattr(
             vision,
             "_embed_with_config",
-            lambda conn, texts: [[0.0] * TEST_EMBED_DIM] * len(texts),
+            lambda conn, texts: ([[0.0] * TEST_EMBED_DIM] * len(texts), {}),
         )
 
         result = vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
@@ -397,7 +397,7 @@ class TestMultiFigureIntegration:
         monkeypatch.setattr(
             vision,
             "_embed_with_config",
-            lambda conn, texts: [[0.0] * TEST_EMBED_DIM] * len(texts),
+            lambda conn, texts: ([[0.0] * TEST_EMBED_DIM] * len(texts), {}),
         )
 
         vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)
@@ -430,7 +430,7 @@ class TestMultiFigureIntegration:
         monkeypatch.setattr(
             vision,
             "_embed_with_config",
-            lambda conn, texts: [[0.0] * TEST_EMBED_DIM] * len(texts),
+            lambda conn, texts: ([[0.0] * TEST_EMBED_DIM] * len(texts), {}),
         )
 
         result = vision.extract_figures(conn, paper_id=1, pages=[0], confirmed=True)

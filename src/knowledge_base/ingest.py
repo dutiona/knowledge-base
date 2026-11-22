@@ -34,8 +34,8 @@ from .db import (
 )
 from .migrate import _main_db_path
 from .redact import redact_json, scrub
-from .embed_swap import declared_provider_config
-from .embeddings import embed, split_inputs, truncate_embedding
+from .embed_swap import declared_provider_config, record_truncation
+from .embeddings import Cuts, embed, split_inputs, truncate_embedding
 from .exceptions import NotFoundError, ValidationError
 from .folder_summaries import drop_summary, update_folder_summary
 from .utils import content_hash as _content_hash
@@ -115,18 +115,22 @@ def _detect_source_type(path: Path) -> str:
     return "markdown"
 
 
-def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> list[list[float] | None]:
+def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> tuple[list[list[float] | None], Cuts]:
     """Embed document *texts* into the active space, after its identity check (ADR-0015 §3, #573).
 
-    Returns None entries for texts whose embeddings had zero norm.
+    Returns the vectors, None for a text whose embedding had zero norm, and the texts the embedder cut to fit its
+    input limit, by position, for the store to record with their vectors (#648).
     """
     active = require_active_space(conn)
     provider_cfg = declared_provider_config(conn, active)
     base_dim = active["matryoshka_base_dim"]
+    cuts: Cuts = {}
+    vecs = embed(
+        texts, model=active["model"], expected_dim=base_dim or active["dim"], _provider_cfg=provider_cfg, cuts=cuts
+    )
     if base_dim:
-        vecs = embed(texts, model=active["model"], expected_dim=base_dim, _provider_cfg=provider_cfg)
-        return [truncate_embedding(v, active["dim"]) if v is not None else None for v in vecs]
-    return embed(texts, model=active["model"], expected_dim=active["dim"], _provider_cfg=provider_cfg)
+        vecs = [truncate_embedding(v, active["dim"]) if v is not None else None for v in vecs]
+    return vecs, cuts
 
 
 def _bounded_chunks(conn: sqlite3.Connection, texts: list[str]) -> list[list[str]]:
@@ -185,10 +189,12 @@ def _insert_chunk(
     metadata: str = "{}",
     vec_table: str | None = None,
     bump_count: bool = True,
+    cut: tuple[int, int] | None = None,
 ) -> int:
     """Insert a single chunk row, its embedding, and session links.
 
-    Returns the new chunk id.
+    Returns the new chunk id. *cut* is the (tokens counted, tokens kept) of an *embedding* the embedder cut to fit,
+    recorded with the vector against the space that owns *vec_table* (#648).
 
     *bump_count* is threaded straight through to :func:`insert_chunk_vec`: batch
     callers pass ``False`` to skip the per-row ``chunk_count`` UPDATE and instead
@@ -235,6 +241,11 @@ def _insert_chunk(
 
     if embedding is not None:
         insert_chunk_vec(conn, chunk_id, embedding, table_name=vec_table, bump_count=bump_count)
+        if cut is not None:
+            (space,) = conn.execute(
+                "SELECT name FROM embed_spaces WHERE table_name = ?", (vec_table or get_vec_table_name(conn),)
+            ).fetchone()
+            record_truncation(conn, chunk_id, space, cut)
 
     return chunk_id
 
@@ -470,12 +481,12 @@ def _insert_chunks(
     if not new_items:
         return (0, skipped, stored)
 
-    embeddings = _embed_with_config(conn, [item[1] for item in new_items])
+    embeddings, cuts = _embed_with_config(conn, [item[1] for item in new_items])
 
     # One vec table for every insert and the single batched chunk_count bump, which counts the vectors inserted (#392).
     vec_table = get_vec_table_name(conn)
     n_inserted = 0
-    for (idx, chunk_text, chunk_hash, meta_json), emb_vec in zip(new_items, embeddings, strict=True):
+    for i, ((idx, chunk_text, chunk_hash, meta_json), emb_vec) in enumerate(zip(new_items, embeddings, strict=True)):
         _insert_chunk(
             conn,
             content_hash=chunk_hash,
@@ -490,6 +501,7 @@ def _insert_chunks(
             metadata=meta_json,
             vec_table=vec_table,
             bump_count=False,
+            cut=cuts.get(i),
         )
         if emb_vec is not None:
             n_inserted += 1

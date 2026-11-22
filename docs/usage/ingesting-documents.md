@@ -395,7 +395,7 @@ makes, which is why a served artifact is accepted only for `llama.cpp` or `opena
 | --- | --- |
 | Chunks from file ingest (every chunker) and from stored text or a URL | split at ingest into consecutive pieces of about equal count that each fit and together are exactly the chunk, cut after a line end, else whitespace, when that keeps at least half the piece; no overlap. A piece identical to a stored chunk is stored once, as every repeated chunk is |
 | Folder summaries | truncated: one vector per folder; the stored summary text stays whole |
-| Figure, image and element-capture descriptions | truncated: one chunk per figure keeps the figure's metadata |
+| Figure, image and element-capture descriptions | truncated: one chunk per figure keeps the figure's metadata, and the cut is recorded with its vector |
 | Queries | truncated |
 | Stored chunks during `re-embed` and `redact --rewrite` | truncated: a stored chunk is one row; the result's `truncated_chunks` names it and its document, and reingesting the document splits it |
 

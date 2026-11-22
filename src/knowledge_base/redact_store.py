@@ -26,7 +26,7 @@ from .db import (
     purge_deleted_content,
     require_active_space,
 )
-from .embed_swap import space_embedder, truncated_chunks
+from .embed_swap import record_truncation, space_embedder, truncated_chunks
 from .folder_summaries import update_folder_summary
 from .chunking import CHUNK_OVERLAP
 from .ingest import _WHOLE_URL, redact_metadata
@@ -261,11 +261,8 @@ def _apply(
             if c["reembed"] and (vector := embedded.get(c["id"])) is not None:
                 insert_chunk_vec(conn, c["id"], vector, table_name=active)
                 if c["id"] in cuts:
-                    conn.execute(
-                        "INSERT OR REPLACE INTO embed_truncations (chunk_id, space_name, tokens_before, tokens_after)"
-                        " VALUES (?, ?, ?, ?)",
-                        (c["id"], space_name, *cuts[c["id"]]),
-                    )
+                    assert space_name is not None  # noqa: S101  # internal invariant: a cut comes from a re-embed, which resolved the space
+                    record_truncation(conn, c["id"], space_name, cuts[c["id"]])
         stale = [r[0] for r in conn.execute("SELECT folder_path, summary FROM folder_summaries") if scrub(r[1]) != r[1]]
         for path in stale:
             conn.execute("DELETE FROM folder_summaries WHERE folder_path = ?", (path,))

@@ -25,7 +25,7 @@ import fitz
 import httpx
 from PIL import Image
 
-from .embeddings import _get_ollama_url
+from .embeddings import Cuts, _get_ollama_url
 from .db import bump_chunk_count, delete_chunks_cascade, get_vec_table_name
 from .exceptions import NotFoundError, ValidationError
 from .redact import scrub
@@ -1979,8 +1979,9 @@ def _persist_figures(
     # Compute embeddings in one batch. _embed_with_config may yield None for
     # items that fail to embed; _insert_chunk accepts embedding=None.
     embeddings: list[list[float] | None] = []
+    cuts: Cuts = {}
     if texts:
-        embeddings = _embed_with_config(conn, texts)
+        embeddings, cuts = _embed_with_config(conn, texts)
 
     # Resolve the active vec table once (already done here) and bump chunk_count
     # in a single batched UPDATE after the loop instead of per-row (#392).
@@ -2056,6 +2057,7 @@ def _persist_figures(
                     metadata=metadata,
                     vec_table=vec_table,
                     bump_count=False,
+                    cut=cuts.get(i),
                 )
                 chunks_created += 1
                 if embeddings[i] is not None:

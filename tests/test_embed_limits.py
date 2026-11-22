@@ -482,3 +482,85 @@ def test_a_resumed_rewrite_still_reports_the_cut_its_interrupted_run_stored(conn
 
     assert [entry["chunk_id"] for entry in result["truncated_chunks"]] == [long]
     assert "zqxsentinel" not in json.dumps(result)
+
+
+def _truncations(conn: sqlite3.Connection) -> list[tuple]:
+    return [
+        tuple(r)
+        for r in conn.execute("SELECT chunk_id, space_name, tokens_before, tokens_after FROM embed_truncations")
+    ]
+
+
+def _assert_figure_cut_recorded(conn, bounded_embedder, caplog) -> None:
+    """The one stored figure keeps its whole text and is recorded cut, as a backfill records a chunk (#648)."""
+    assert bounded_embedder.refused == 0
+    (sent,) = [t for batch in bounded_embedder.inputs for t in batch if t.startswith("zqxsentinel")]
+    ((figure, stored),) = conn.execute("SELECT id, content FROM chunks WHERE source_type = 'figure'").fetchall()
+    (active,) = conn.execute("SELECT name FROM embed_spaces WHERE status = 'active'").fetchone()
+    assert LONG in stored
+    assert count(sent) <= LIMIT < count(stored)
+    assert _truncations(conn) == [(figure, active, count(stored), count(sent))]
+    assert "zqxsentinel" not in caplog.text
+
+
+def test_a_pdf_figure_stored_cut_records_its_truncation(conn, bounded_embedder, caplog):
+    from knowledge_base.vision import CaptionMap, _persist_figures
+
+    figure = {"description": LONG, "figure_type": "diagram", "title": "T", "entities_mentioned": []}
+    with caplog.at_level("DEBUG"):
+        _persist_figures(conn, "/docs/paper.pdf", None, {0: [figure]}, CaptionMap({}, {}), "vision-model", None)
+
+    _assert_figure_cut_recorded(conn, bounded_embedder, caplog)
+
+
+def _png() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (200, 200), color=(128, 128, 128)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _html_images(conn, tmp_path, fake_dns, http_requests) -> None:
+    from knowledge_base.web import _extract_html_images
+
+    fake_dns["img.example.test"] = ["203.0.113.7"]
+    http_requests.handlers["img.example.test"] = lambda request: httpx.Response(200, content=_png())
+    _extract_html_images(conn, '<img src="http://img.example.test/a.png" alt="a">', "https://page.example.test/")
+
+
+def _web_screenshot(conn, tmp_path, fake_dns, http_requests) -> None:
+    from knowledge_base.web import _extract_web_figures
+
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(_png())
+    _extract_web_figures(conn, "https://page.example.test/", shot)
+
+
+def _element_captures(conn, tmp_path, fake_dns, http_requests) -> None:
+    from knowledge_base.web import _extract_element_captures
+
+    shot = tmp_path / "canvas.png"
+    shot.write_bytes(_png())
+    # The first capture is gone, so the stored figure's capture index (1) is not its position in the batch (0).
+    captures = [{"path": tmp_path / "missing.png", "tag": "svg"}, {"path": shot, "tag": "canvas"}]
+    _extract_element_captures(conn, "https://page.example.test/", captures)
+
+
+@pytest.mark.parametrize("writer", [_html_images, _web_screenshot, _element_captures])
+def test_a_web_figure_stored_cut_records_its_truncation(
+    conn, bounded_embedder, fake_dns, http_requests, public_net, tmp_path, caplog, writer
+):
+    vision = {"base_url": "http://vision.example.test", "model": "vision-model"}
+    answer = [{"description": LONG, "figure_type": "diagram", "title": "T"}]
+    with (
+        patch("knowledge_base.vision._get_vision_config", return_value=vision),
+        patch("knowledge_base.vision._vision_call", return_value=answer),
+        patch("knowledge_base.vision._get_omniparser_config", return_value=None),
+        caplog.at_level("DEBUG"),
+    ):
+        writer(conn, tmp_path, fake_dns, http_requests)
+
+    _assert_figure_cut_recorded(conn, bounded_embedder, caplog)

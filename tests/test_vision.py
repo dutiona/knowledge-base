@@ -849,7 +849,7 @@ def test_extract_figures_end_to_end(mock_vision, mock_embed, tmp_path):
         }
     ]
     mock_vision.return_value = mock_figures
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
 
@@ -897,7 +897,7 @@ def test_extract_figures_idempotent(mock_vision, mock_embed, tmp_path):
         }
     ]
     mock_vision.return_value = mock_figures
-    mock_embed.return_value = [[0.2] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.2] * TEST_EMBED_DIM], {})
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
@@ -943,7 +943,7 @@ def test_extract_figures_idempotent_with_fk_references(mock_vision, mock_embed, 
         }
     ]
     mock_vision.return_value = mock_figures
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
@@ -1031,7 +1031,7 @@ def test_extract_figures_cleans_conclusions_and_other_fk_refs(mock_vision, mock_
         }
     ]
     mock_vision.return_value = mock_figures
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
@@ -1129,7 +1129,7 @@ def test_extract_figures_pages_hint(mock_vision, mock_embed, tmp_path):
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.3] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.3] * TEST_EMBED_DIM], {})
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0 text", "Page 1 text", "Page 2 text"])
 
@@ -1171,12 +1171,12 @@ def test_extract_figures_scoped_delete_preserves_other_pages(mock_vision, mock_e
 
     # Extract page 0
     mock_vision.return_value = fig_page0
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
     extract_figures(conn, paper_id=paper_id, pages=[0])
 
     # Extract page 2
     mock_vision.return_value = fig_page2
-    mock_embed.return_value = [[0.2] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.2] * TEST_EMBED_DIM], {})
     extract_figures(conn, paper_id=paper_id, pages=[2])
 
     # Both pages should have figure chunks
@@ -1197,7 +1197,7 @@ def test_extract_figures_scoped_delete_preserves_other_pages(mock_vision, mock_e
         }
     ]
     mock_vision.return_value = fig_page0_v2
-    mock_embed.return_value = [[0.3] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.3] * TEST_EMBED_DIM], {})
     extract_figures(conn, paper_id=paper_id, pages=[0])
 
     rows = conn.execute(
@@ -1231,7 +1231,7 @@ def test_extract_figures_fig_idx_overflow_capped(mock_vision, mock_embed, tmp_pa
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Dense page"])
 
     mock_vision.return_value = figures
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM] * overflow_count
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM] * overflow_count, {})
 
     import logging
 
@@ -1269,7 +1269,7 @@ def test_extract_figures_full_extraction_deletes_all(mock_vision, mock_embed, tm
 
     # Extract page 0 only
     mock_vision.return_value = fig
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
     extract_figures(conn, paper_id=paper_id, pages=[0])
     assert conn.execute("SELECT COUNT(*) as c FROM chunks WHERE source_type = 'figure'").fetchone()["c"] == 1
 
@@ -1322,7 +1322,7 @@ def test_extract_figures_per_page_error(mock_vision, mock_embed, tmp_path):
         raise RuntimeError("Vision API timeout")
 
     mock_vision.side_effect = side_effect
-    mock_embed.return_value = [[0.4] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.4] * TEST_EMBED_DIM], {})
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path, ["Page 0 with Figure 1: test", "Page 1 with Figure 2: test"])
 
@@ -1370,7 +1370,7 @@ def test_extract_figures_zero_indexed_boundary(tmp_path):
     # It will fail at vision call (no mock), but should not return page-range error
     with (
         patch("knowledge_base.vision._vision_call", return_value=[]),
-        patch("knowledge_base.vision._embed_with_config", return_value=[]),
+        patch("knowledge_base.vision._embed_with_config", return_value=([], {})),
     ):
         result = extract_figures(conn, paper_id=paper_id, pages=[2])
     assert "error" not in result
@@ -1405,7 +1405,7 @@ def test_extract_figures_transaction_rollback(mock_vision, mock_embed, tmp_path)
             "entities_mentioned": [],
         },
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM, [0.2] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM, [0.2] * TEST_EMBED_DIM], {})
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
@@ -1909,7 +1909,7 @@ def test_extract_figures_with_omniparser_single_figure(mock_omni, mock_vision, m
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
     mock_omni.return_value = _OMNI_ELEMENTS
 
     conn, paper_id, _pdf_path = _setup_paper_with_pdf(tmp_path)
@@ -1961,7 +1961,7 @@ def test_extract_figures_with_omniparser_multi_figure(mock_omni, mock_vision, mo
             "entities_mentioned": [],
         },
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM, [0.2] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM, [0.2] * TEST_EMBED_DIM], {})
     mock_omni.return_value = _OMNI_ELEMENTS
 
     conn, paper_id, _pdf_path = _setup_paper_with_pdf(tmp_path)
@@ -2005,7 +2005,7 @@ def test_extract_figures_omniparser_failure_graceful(mock_omni, mock_vision, moc
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
     mock_omni.return_value = None  # omniparser failed
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
@@ -2038,7 +2038,7 @@ def test_extract_figures_without_omniparser(mock_vision, mock_embed, tmp_path):
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
@@ -2072,7 +2072,7 @@ def test_extract_figures_returns_timing(mock_vision, mock_embed, tmp_path):
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
     result = extract_figures(conn, paper_id=paper_id, pages=[0])
@@ -2103,7 +2103,7 @@ def test_extract_figures_timing_with_omniparser(mock_vision, mock_embed, tmp_pat
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
 
@@ -2564,7 +2564,7 @@ def test_extract_figures_uses_extracted_images(mock_embed, mock_vision, mock_ima
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * 1024]
+    mock_embed.return_value = ([[0.1] * 1024], {})
 
     from knowledge_base.vision import extract_figures
 
@@ -2642,7 +2642,7 @@ def test_extract_figures_multi_image_same_page(mock_embed, mock_vision, mock_ima
         ]
 
     mock_vision.side_effect = vision_side_effect
-    mock_embed.return_value = [[0.1] * 1024, [0.2] * 1024]
+    mock_embed.return_value = ([[0.1] * 1024, [0.2] * 1024], {})
 
     from knowledge_base.vision import extract_figures
 
@@ -2696,7 +2696,7 @@ def test_extract_figures_falls_back_to_render_for_vector_pages(
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * 1024]
+    mock_embed.return_value = ([[0.1] * 1024], {})
 
     from knowledge_base.vision import extract_figures
 
@@ -2980,7 +2980,7 @@ def test_extract_figures_processes_mixed_page_vector_regions(
         ]
 
     mock_vision.side_effect = vision_side_effect
-    mock_embed.return_value = [[0.1] * 1024, [0.2] * 1024]
+    mock_embed.return_value = ([[0.1] * 1024, [0.2] * 1024], {})
 
     from knowledge_base.vision import extract_figures
 
@@ -3015,7 +3015,7 @@ def test_extract_figures_mixed_page_explicit_pages(mock_embed, mock_vision, mock
         ]
 
     mock_vision.side_effect = vision_side_effect
-    mock_embed.return_value = [[0.1] * 1024, [0.2] * 1024]
+    mock_embed.return_value = ([[0.1] * 1024, [0.2] * 1024], {})
 
     from knowledge_base.vision import extract_figures
 
@@ -3076,7 +3076,7 @@ def test_extract_figures_no_regression_pure_raster(mock_embed, mock_vision, mock
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * 1024]
+    mock_embed.return_value = ([[0.1] * 1024], {})
 
     from knowledge_base.vision import extract_figures
 
@@ -3364,7 +3364,7 @@ def test_extract_figures_hybrid_content(mock_vision, mock_embed, mock_img_dir, t
         }
     ]
     mock_vision.return_value = mock_figures
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
 
@@ -3437,7 +3437,7 @@ def test_extract_figures_metadata_enrichment_layers(mock_vision, mock_embed, tmp
         }
     ]
     mock_vision.return_value = mock_figures
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     conn, paper_id, _ = _setup_paper_with_pdf(tmp_path)
     extract_figures(conn, paper_id=paper_id, pages=[0], confirmed=True)
@@ -3465,7 +3465,7 @@ def test_extract_figures_degrades_to_caption_on_vision_failure(mock_vision, mock
     import zlib
 
     mock_vision.side_effect = Exception("Vision API timeout")
-    mock_embed.return_value = [[0.1] * TEST_EMBED_DIM]
+    mock_embed.return_value = ([[0.1] * TEST_EMBED_DIM], {})
 
     conn, paper_id, pdf_path = _setup_paper_with_pdf(tmp_path)
 
@@ -3548,7 +3548,7 @@ def test_extract_figures_no_regression_pure_vector(mock_embed, mock_vision, mock
             "entities_mentioned": [],
         }
     ]
-    mock_embed.return_value = [[0.1] * 1024]
+    mock_embed.return_value = ([[0.1] * 1024], {})
 
     from knowledge_base.vision import extract_figures
 
@@ -3634,7 +3634,7 @@ def test_extract_figures_mixed_page_no_key_collision(mock_embed, mock_vision, mo
         ]
 
     mock_vision.side_effect = vision_side_effect
-    mock_embed.return_value = [[float(i) / 10] * 1024 for i in range(4)]
+    mock_embed.return_value = ([[float(i) / 10] * 1024 for i in range(4)], {})
 
     from knowledge_base.vision import extract_figures
 
@@ -4121,7 +4121,7 @@ def test_extract_figures_render_path_isolated_from_home(
     mock_vision.return_value = [
         {"figure_type": "diagram", "description": "A vector diagram.", "title": None, "entities_mentioned": []}
     ]
-    mock_embed.return_value = [[0.1] * 1024]
+    mock_embed.return_value = ([[0.1] * 1024], {})
 
     data_dir = tmp_path / "kb-data"
     monkeypatch.setenv("KNOWLEDGE_BASE_DATA_DIR", str(data_dir))
