@@ -81,10 +81,12 @@ with a new one rather than deleting it. The full chain is retrievable via
 
 ### Jobs
 
-Background tasks for expensive operations. Two job types:
+Background tasks for expensive operations. Three job types:
 
 - **extract_structure** -- LLM-based extraction of methods, datasets, metrics
 - **extract_figures** -- vision model analysis of PDF pages
+- **auto_relate** -- links papers whose chunks embed alike (`similar` relationships); queued when a paper is registered
+  with a `source_uri`
 
 Jobs go through states: `pending` -> `running` -> `completed` | `failed`.
 Poll progress with `get_job_status_tool(job_id)`. Jobs are queued when the estimated
