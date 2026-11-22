@@ -101,13 +101,11 @@ Then, in `$REPO`, run every command of the `## Verify` list in `AGENTS.md`, in i
 release gate, so this checklist keeps no copy of it. Its image step builds only when an image input differs from
 `origin/master`, so on a merged release commit it skips; every PR that changed one built it. Last, run the slow tests
 that list deselects: the real-PDF extraction through pymupdf4llm's layout model, and OmniParser's, which skip when it
-is not installed. The two deselected ones duplicate a fast test or pass whether or not image references come out
-(#635):
+is not installed. The extraction's image-reference test fails on a pymupdf4llm that drops image references (#465,
+#644):
 
 ```bash
-uv run pytest tests/ -q -m slow \
-    --deselect tests/test_pymupdf4llm_integration.py::test_fallback_on_import_error \
-    --deselect tests/test_pymupdf4llm_integration.py::test_real_pdf_image_refs
+uv run pytest tests/ -q -m slow
 ```
 
 Version-bump check: confirm `version` in `pyproject.toml` was bumped for this release (SemVer).

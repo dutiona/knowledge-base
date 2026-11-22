@@ -9,16 +9,13 @@ Phase 2 of issue #60.
 from __future__ import annotations
 
 import re
-import shutil
-import sys
 from pathlib import Path
 
 import fitz
 import pytest
 
-from knowledge_base.ingest import _extract_pdf_markdown, _extract_pdf_text
-
-_has_tessdata = shutil.which("tesseract") is not None
+from knowledge_base.chunking import IMAGE_REF_RE
+from knowledge_base.ingest import _extract_pdf_markdown
 
 # ---------------------------------------------------------------------------
 # Synthetic PDF builders (adapted from test_pymupdf4llm_eval.py)
@@ -149,9 +146,8 @@ def test_real_pdf_table_intact(tmp_path):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _has_tessdata, reason="tesseract OCR not installed")
 def test_real_pdf_image_refs(tmp_path):
-    """Real PDF with embedded image + write_images=True -> ![](…) in output."""
+    """A PDF holding an image yields a reference to its extracted file (#465: 1.27.2.2 and 1.27.2.3 drop it)."""
     from PIL import Image
 
     img_path = tmp_path / "test_figure.png"
@@ -161,36 +157,14 @@ def test_real_pdf_image_refs(tmp_path):
     pdf = _make_image_pdf(tmp_path / "image.pdf", img_path)
     image_dir = tmp_path / "extracted_images"
 
-    text, _page_map = _extract_pdf_markdown(pdf, image_dir=image_dir)
+    text, page_map = _extract_pdf_markdown(pdf, image_dir=image_dir)
 
-    # pymupdf4llm may or may not produce ![](…) refs depending on detection.
-    # Check permissively: if refs are present, verify files exist.
-    if "![" in text:
-        extracted = list(image_dir.glob("*.png")) if image_dir.exists() else []
-        assert len(extracted) >= 1, "Image refs found but no files extracted"
-
-
-@pytest.mark.slow
-def test_fallback_on_import_error(tmp_path):
-    """When pymupdf4llm import fails, falls back to _extract_pdf_text."""
-    pdf = _make_structured_pdf(tmp_path / "fallback.pdf")
-
-    saved = sys.modules.pop("pymupdf4llm", None)
-    saved_subs = {k: sys.modules.pop(k) for k in list(sys.modules) if k.startswith("pymupdf4llm.")}
-    try:
-        from unittest.mock import patch
-
-        with patch.dict(sys.modules, {"pymupdf4llm": None}):
-            text, page_map = _extract_pdf_markdown(pdf)
-    finally:
-        if saved is not None:
-            sys.modules["pymupdf4llm"] = saved
-        sys.modules.update(saved_subs)
-
-    assert len(text) > 0
-    assert page_map == {}
-    flat = _extract_pdf_text(pdf)
-    assert text == flat
+    assert page_map, "the flat fallback ran, not pymupdf4llm"
+    refs = [Path(m.group(2)) for m in IMAGE_REF_RE.finditer(text)]
+    written = sorted(p.name for p in image_dir.glob("*.png"))
+    assert refs, f"no image reference; files written: {written}. Text:\n{text[:500]}"
+    for ref in refs:
+        assert ref.parent == image_dir and ref.is_file(), f"{ref} is not a file written to {image_dir}"
 
 
 @pytest.mark.slow
