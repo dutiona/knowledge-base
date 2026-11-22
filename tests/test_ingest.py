@@ -13,6 +13,7 @@ from knowledge_base.chunking import chunk_text as _chunk_text
 from knowledge_base.db import _cleanup_conclusion_refs, get_connection, init_schema
 from knowledge_base.ingest import (
     _extract_pdf_markdown,
+    _extract_pdf_text,
     ingest_directory,
     ingest_file,
     pdf_image_dir,
@@ -3281,6 +3282,7 @@ def test_extract_pdf_markdown_fallback_on_import_error(tmp_path):
 
     assert "Hello fallback world" in text
     assert page_map == {}
+    assert text == _extract_pdf_text(pdf)
 
 
 @patch("knowledge_base.folder_summaries.embed", _fake_embed)

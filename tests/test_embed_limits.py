@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
@@ -400,4 +401,84 @@ def test_re_embed_reports_the_chunks_its_backfill_truncates(conn, bounded_embedd
     result = re_embed(conn)
 
     assert [(e["chunk_id"], e["source_uri"]) for e in result["truncated_chunks"]] == [(chunk, "/docs/old.md")]
+    assert "zqxsentinel" not in json.dumps(result)
+
+
+#: Two token shapes a redaction rule matches, built here and nowhere committed as one (#638).
+SECRET_A = "ghp_" + "Aq7Xw3Rt9Lp2Vb6Nm4Kc8Hd1Fs5Gj0Ay"
+SECRET_B = "ghp_" + "Dq7Xw3Rt9Lp2Vb6Nm4Kc8Hd1Fs5Gj0Ay"
+
+
+def _windows(text: str, size: int = 12) -> set[str]:
+    return {text[i : i + size] for i in range(len(text) - size + 1)}
+
+
+def _store_dirty(conn: sqlite3.Connection) -> tuple[int, int]:
+    """A short and a long row stored before redaction; their content changes on rewrite, so the trigger fires."""
+    from knowledge_base.utils import content_hash
+
+    ids = [
+        conn.execute(
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) VALUES (?, ?, ?, ?, 0)",
+            (content_hash(text), text, "markdown", uri),
+        ).lastrowid
+        for uri, text in (("/docs/short.md", "a short note " + SECRET_A), ("/docs/long.md", LONG + " " + SECRET_B))
+    ]
+    conn.commit()
+    short, long = (int(i or 0) for i in ids)
+    return short, long
+
+
+def test_a_rewrite_records_and_reports_the_chunk_it_re_embeds_cut(conn, bounded_embedder, capsys):
+    import os
+
+    from knowledge_base.db import get_connection
+    from knowledge_base.indexer import main
+
+    _short, long = _store_dirty(conn)
+    (active,) = conn.execute("SELECT name FROM embed_spaces WHERE status = 'active'").fetchone()
+    conn.close()
+
+    with pytest.raises(SystemExit) as done:
+        main(["--db", os.environ["KNOWLEDGE_BASE_DB"], "redact", "--rewrite"])
+    out, err = capsys.readouterr()
+
+    assert done.value.code in (0, None)
+    assert bounded_embedder.refused == 0
+    (sent,) = [t for batch in bounded_embedder.inputs for t in batch if t.startswith("zqxsentinel")]
+    check = get_connection(Path(os.environ["KNOWLEDGE_BASE_DB"]))
+    try:
+        (stored,) = check.execute("SELECT content FROM chunks WHERE id = ?", (long,)).fetchone()
+        rows = [
+            tuple(r)
+            for r in check.execute("SELECT chunk_id, space_name, tokens_before, tokens_after FROM embed_truncations")
+        ]
+    finally:
+        check.close()
+    assert rows == [(long, active, count(stored), count(sent))]
+    assert json.loads(out)["truncated_chunks"] == [
+        {"chunk_id": long, "source_uri": "/docs/long.md", "tokens_before": count(stored), "tokens_after": count(sent)}
+    ]
+    for secret in (SECRET_A, SECRET_B):
+        assert not _windows(secret) & _windows(out + err)
+    assert "zqxsentinel" not in out + err
+
+
+def test_a_resumed_rewrite_still_reports_the_cut_its_interrupted_run_stored(conn, bounded_embedder, monkeypatch):
+    from knowledge_base import redact_store
+    from knowledge_base.exceptions import KnowledgeBaseError
+
+    _short, long = _store_dirty(conn)
+
+    def boom(*_a, **_k):
+        raise KnowledgeBaseError("interrupted after the rows committed")
+
+    with monkeypatch.context() as m:
+        m.setattr(redact_store, "_rebuild_summaries", boom)
+        with pytest.raises(KnowledgeBaseError):
+            redact_store.rewrite(conn, batch_size=1)
+
+    result = redact_store.rewrite(conn)
+
+    assert [entry["chunk_id"] for entry in result["truncated_chunks"]] == [long]
     assert "zqxsentinel" not in json.dumps(result)

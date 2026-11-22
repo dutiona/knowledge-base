@@ -19,14 +19,17 @@ from . import migrate as _migrate
 from .db import (
     _batched_select,
     delete_chunk_vecs,
+    get_active_space,
     get_vec_table_name,
     held_exclusively,
     insert_chunk_vec,
     purge_deleted_content,
+    require_active_space,
 )
+from .embed_swap import space_embedder, truncated_chunks
 from .folder_summaries import update_folder_summary
 from .chunking import CHUNK_OVERLAP
-from .ingest import _WHOLE_URL, _embed_with_config, redact_metadata
+from .ingest import _WHOLE_URL, redact_metadata
 from .redact import findings, redact_in_context, scrub
 from .utils import content_hash, without_userinfo
 
@@ -222,8 +225,19 @@ def _plan(conn: sqlite3.Connection) -> tuple[list[dict], list[tuple[int, int]]]:
     return changes, merges
 
 
-def _apply(conn: sqlite3.Connection, changes: list[dict], merges: list[tuple[int, int]], embedded: dict) -> dict:
-    """One transaction: rows, merges, vectors in every space, stale summaries, and the pending marker."""
+def _apply(
+    conn: sqlite3.Connection,
+    changes: list[dict],
+    merges: list[tuple[int, int]],
+    embedded: dict[int, list[float] | None],
+    cuts: dict[int, tuple[int, int]],
+    space_name: str | None,
+) -> dict:
+    """One transaction: rows, merges, vectors in every space, stale summaries, and the pending marker.
+
+    A re-embedded chunk cut to fit the embedder's input limit is recorded with its vector (#638), after its row's
+    update: the update's trigger drops the chunk's earlier records.
+    """
     tables = [r[0] for r in conn.execute("SELECT table_name FROM embed_spaces").fetchall()]
     active = get_vec_table_name(conn)
     dropped = [c["id"] for c in changes if c["reembed"]] + [dup for dup, _ in merges]
@@ -244,8 +258,14 @@ def _apply(conn: sqlite3.Connection, changes: list[dict], merges: list[tuple[int
                 " WHERE id = ?",
                 (c["content"], c["hash"], c["metadata"], c["uri"], c["id"]),
             )
-            if c["reembed"] and embedded.get(c["id"]) is not None:
-                insert_chunk_vec(conn, c["id"], embedded[c["id"]], table_name=active)
+            if c["reembed"] and (vector := embedded.get(c["id"])) is not None:
+                insert_chunk_vec(conn, c["id"], vector, table_name=active)
+                if c["id"] in cuts:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO embed_truncations (chunk_id, space_name, tokens_before, tokens_after)"
+                        " VALUES (?, ?, ?, ?)",
+                        (c["id"], space_name, *cuts[c["id"]]),
+                    )
         stale = [r[0] for r in conn.execute("SELECT folder_path, summary FROM folder_summaries") if scrub(r[1]) != r[1]]
         for path in stale:
             conn.execute("DELETE FROM folder_summaries WHERE folder_path = ?", (path,))
@@ -269,22 +289,38 @@ def _rebuild_summaries(conn: sqlite3.Connection) -> int:
 
 
 def rewrite(conn: sqlite3.Connection, batch_size: int = 32) -> dict:
-    """Store every row as ingest now would, with the server stopped; a rerun finishes an interrupted run."""
+    """Store every row as ingest now would, with the server stopped; a rerun finishes an interrupted run.
+
+    ``truncated_chunks`` lists every chunk of the active space stored cut, as ``backfill_space`` does.
+    """
     with held_exclusively(conn):
         changes, merges = _plan(conn)
         reembed = [c for c in changes if c["reembed"]]
         embedded: dict[int, list[float] | None] = {}
-        for i in range(0, len(reembed), batch_size):  # every vector before the first write
-            batch = reembed[i : i + batch_size]
-            embedded.update(
-                zip((c["id"] for c in batch), _embed_with_config(conn, [c["content"] for c in batch]), strict=True)
-            )
-        removed = _apply(conn, changes, merges, embedded)
+        cuts: dict[int, tuple[int, int]] = {}
+        space_name = None
+        if reembed:
+            space = require_active_space(conn)
+            space_name = space["name"]
+            embed = space_embedder(conn, space)
+            for i in range(0, len(reembed), batch_size):  # every vector before the first write
+                ids = [c["id"] for c in reembed[i : i + batch_size]]
+                vectors, batch_cuts = embed([c["content"] for c in reembed[i : i + batch_size]])
+                embedded.update(zip(ids, vectors, strict=True))
+                cuts.update({ids[k]: cut for k, cut in batch_cuts.items()})
+        removed = _apply(conn, changes, merges, embedded, cuts, space_name)
         rebuilt = _rebuild_summaries(conn)
         purge_deleted_content(conn)
         conn.execute("DELETE FROM config WHERE key = ?", (PENDING_KEY,))
         conn.commit()
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     result = report(conn)
-    result.update(rewritten=len(changes), merged=len(merges), vectors_removed=removed, folders_rebuilt=rebuilt)
+    active = get_active_space(conn)
+    result.update(
+        rewritten=len(changes),
+        merged=len(merges),
+        vectors_removed=removed,
+        folders_rebuilt=rebuilt,
+        truncated_chunks=truncated_chunks(conn, active["name"]) if active is not None else [],
+    )
     return result
