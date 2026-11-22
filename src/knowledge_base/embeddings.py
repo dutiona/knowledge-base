@@ -167,7 +167,7 @@ class OllamaProvider:
     def embed(
         self,
         texts: list[str],
-        model: str = "bge-m3",
+        model: str,
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
         results = []
@@ -406,7 +406,7 @@ class OpenAICompatProvider:
     def embed(
         self,
         texts: list[str],
-        model: str = "text-embedding-3-large",
+        model: str,
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
         return self._embed_with_cuts(texts, model, expected_dim)[0]
@@ -461,7 +461,7 @@ class ONNXProvider:
     def embed(
         self,
         texts: list[str],
-        model: str = "bge-m3",
+        model: str,
         expected_dim: int | None = None,
     ) -> list[list[float] | None]:
         import numpy as np
