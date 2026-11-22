@@ -10,7 +10,8 @@ import logging
 import re
 import sqlite3
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from typing import Any
 
 
 from .db import (
@@ -20,7 +21,7 @@ from .db import (
     get_active_space,
     space_table_name,
 )
-from .embeddings import EmbeddingProvider, ProviderConfig, embed_with_cuts, get_provider, truncate_embedding
+from .embeddings import Cuts, EmbeddingProvider, ProviderConfig, embed_with_cuts, get_provider, truncate_embedding
 from .exceptions import KnowledgeBaseError
 from .settings import IDENTITY_FIELDS, declared_identity, load_embed_settings, require_identity, serving_identity
 from .utils import loopback_opt_in
@@ -174,6 +175,37 @@ def _pending_chunks(table: str) -> str:
     )
 
 
+def space_embedder(
+    conn: sqlite3.Connection, space: Mapping[str, Any]
+) -> Callable[[list[str]], tuple[list[list[float] | None], Cuts]]:
+    """Embed stored texts into *space*: its vectors, and the inputs its provider cut to fit (#620, #638).
+
+    The provider is resolved once, through the identity check, before the first request.
+    """
+    provider = get_provider(cfg=declared_provider_config(conn, space))
+    model, dim, base_dim = space["model"], space["dim"], space["matryoshka_base_dim"]
+
+    def embed(texts: list[str]) -> tuple[list[list[float] | None], Cuts]:
+        vectors, cuts = embed_with_cuts(provider, texts, model=model, expected_dim=base_dim or dim)
+        if base_dim:
+            vectors = [truncate_embedding(v, dim) if v is not None else None for v in vectors]
+        return vectors, cuts
+
+    return embed
+
+
+def truncated_chunks(conn: sqlite3.Connection, space_name: str) -> list[dict]:
+    """Every chunk *space_name* stores cut, by id, document and token counts, never its text (#620)."""
+    return [
+        dict(row)
+        for row in conn.execute(
+            "SELECT t.chunk_id, c.source_uri, t.tokens_before, t.tokens_after FROM embed_truncations t"
+            " JOIN chunks c ON c.id = t.chunk_id WHERE t.space_name = ? ORDER BY t.chunk_id",
+            (space_name,),
+        )
+    ]
+
+
 def backfill_space(
     conn: sqlite3.Connection,
     space_name: str,
@@ -195,12 +227,8 @@ def backfill_space(
 
     tbl = space["table_name"]
     model = space["model"]
-    dim = space["dim"]
     chunk_strategy = space["chunk_strategy"]
-    matryoshka_base_dim = space["matryoshka_base_dim"]
-    embed_dim = matryoshka_base_dim or dim
-
-    embed_provider = get_provider(cfg=declared_provider_config(conn, dict(space)))
+    embed = space_embedder(conn, dict(space))
 
     processed = stored = refused = 0
     last_id = 0
@@ -212,11 +240,7 @@ def backfill_space(
         if not batch:
             break
         last_id = batch[-1]["id"]
-        embeddings, cuts = embed_with_cuts(
-            embed_provider, [row["content"] for row in batch], model=model, expected_dim=embed_dim
-        )
-        if matryoshka_base_dim:
-            embeddings = [truncate_embedding(e, dim) if e is not None else None for e in embeddings]
+        embeddings, cuts = embed([row["content"] for row in batch])
         processed += len(batch)
 
         conn.execute("BEGIN IMMEDIATE")
@@ -265,16 +289,11 @@ def backfill_space(
             raise
         stored += batch_stored
 
-    truncated = conn.execute(
-        "SELECT t.chunk_id, c.source_uri, t.tokens_before, t.tokens_after FROM embed_truncations t"
-        " JOIN chunks c ON c.id = t.chunk_id WHERE t.space_name = ? ORDER BY t.chunk_id",
-        (space_name,),
-    ).fetchall()
     return {
         "space": space_name,
         "chunks_processed": processed,
         "chunks_refused": refused,
-        "truncated_chunks": [dict(row) for row in truncated],
+        "truncated_chunks": truncated_chunks(conn, space_name),
         "total_chunks": space["total_chunks"],
     }
 
