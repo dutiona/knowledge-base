@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import secrets
 
 import pytest
 
@@ -73,6 +74,27 @@ def test_complete_openai_compat_declaration(declare):
 def test_no_key_means_no_key_source(declare):
     declare(**_OPENAI_COMPAT, url="https://embedder.example.test")
     assert load_embed_settings().api_key_source is None
+
+
+@pytest.mark.parametrize("shape", ["{k} ", " {k}", "{k}\r", "{k}\nmore", "{k}\u00e9", "{k}\x01"])
+def test_an_embedder_key_the_http_client_would_echo_is_refused(declare, shape):
+    # h11 echoes a header value it rejects, and httpx cannot encode a non-ASCII one: refuse at start instead.
+    key = secrets.token_hex(16)
+    declare(**_OPENAI_COMPAT, url="https://embedder.example.test", api_key=shape.format(k=key))
+    with pytest.raises(ValidationError, match=r"^KNOWLEDGE_BASE_EMBED_API_KEY must") as refused:
+        load_embed_settings()
+    assert key not in str(refused.value)
+
+
+def test_a_padded_env_key_still_starts_a_provider_that_never_sends_it(declare):
+    declare(
+        provider="ollama",
+        model="bge-m3",
+        dim="1024",
+        url="http://embedder.example.test:11434",
+        api_key=f"{secrets.token_hex(16)} ",
+    )
+    assert load_embed_settings().api_key_source == "env:KNOWLEDGE_BASE_EMBED_API_KEY"
 
 
 def test_ollama_keeps_a_v1_suffix(declare):

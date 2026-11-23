@@ -96,6 +96,9 @@ _OPENAI_FAMILIES = ("openai_compat", "openai", "llama.cpp")
 _COUNTING_PROVIDERS = ("llama.cpp", "openai_compat")
 _DIM_RE = re.compile(r"[1-9][0-9]*")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+#: A key as one Bearer token: h11 echoes a header value with surrounding whitespace or a line break in its error, and
+#: httpx cannot encode a non-ASCII one, so anything else is refused at start rather than leaked by a request (#660).
+_KEY_RE = re.compile(r"[!-~]+")
 #: The only endpoint besides Ollama known to serve the model a request names (Decision 4 of the #573 plan).
 _OPENAI_ORIGIN = "https://api.openai.com"
 
@@ -164,6 +167,16 @@ def _served_artifact() -> dict[str, str | int | None]:
     return dict.fromkeys(_SERVED_FIELDS)
 
 
+def _key_source(provider: str) -> str | None:
+    """The declared key's spec, naming its variable; a request resolves the key (``utils._resolve_api_key``)."""
+    if _get(API_KEY_VAR) is None:
+        return None
+    # The raw value is what a request sends; ollama and onnx never send it.
+    if provider in _OPENAI_FAMILIES and not _KEY_RE.fullmatch(os.environ[API_KEY_VAR]):
+        raise ValidationError(f"{API_KEY_VAR} must hold the key alone: visible ASCII characters, no whitespace")
+    return f"env:{API_KEY_VAR}"
+
+
 def load_embed_settings() -> EmbedSettings:
     """Parse the declaration; the first failing rule raises, its message starting with the variable."""
     if _get(_DEPRECATED_VAR):
@@ -213,12 +226,13 @@ def load_embed_settings() -> EmbedSettings:
             f"{VARIABLES['batch_size']} applies to {', '.join(_OPENAI_FAMILIES)}; "
             f"got {VARIABLES['provider']}={provider}"
         )
+    api_key_source = _key_source(provider)
     return EmbedSettings(
         provider=provider,
         model=model,
         dim=dim,
         base_url=base_url,
-        api_key_source=f"env:{API_KEY_VAR}" if _get(API_KEY_VAR) else None,
+        api_key_source=api_key_source,
         matryoshka_base_dim=base_dim,
         batch_size=batch_size or 1,
         **served,  # pyright: ignore[reportArgumentType]  # typed per field above
