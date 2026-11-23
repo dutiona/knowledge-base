@@ -468,3 +468,31 @@ def test_without_userinfo(url, expected):
     from knowledge_base.utils import without_userinfo
 
     assert without_userinfo(url) == expected
+
+
+# --- #660: the one file-backed spec ---
+
+
+def test_resolve_api_key_reads_the_key_file_once(monkeypatch, tmp_path):
+    import secrets
+
+    from knowledge_base.utils import _resolve_api_key
+
+    first, second = secrets.token_hex(16), secrets.token_hex(16)
+    path = tmp_path / "embed-key"
+    path.write_text(first + "\n")
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_API_KEY_FILE", str(path))
+    assert _resolve_api_key("file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE") == first
+    path.write_text(second)
+    assert _resolve_api_key("file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE") == first
+    # Any other file: string is an inline value, never a path to read.
+    assert _resolve_api_key(f"file:{path}") == f"file:{path}"
+
+
+def test_resolve_api_key_refuses_the_key_file_spec_without_the_variable(monkeypatch):
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.utils import _resolve_api_key
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_EMBED_API_KEY_FILE", raising=False)
+    with pytest.raises(ValidationError, match=r"^KNOWLEDGE_BASE_EMBED_API_KEY_FILE"):
+        _resolve_api_key("file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE")

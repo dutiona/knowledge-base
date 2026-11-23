@@ -36,7 +36,7 @@ def get_embed_config(conn: sqlite3.Connection) -> dict:
     ``api_key`` is the **raw** spec (inline or ``env:VARNAME``) — resolved only at call
     time, never returned by tools. The rows record the ``KNOWLEDGE_BASE_EMBED_*``
     declaration: seeded on a blank database (``db._seed_default_config``) and bound to it at
-    every start (#569); the key spec is only ever the declared ``env:`` source.
+    every start (#569); the key spec names the declared variable (``env:`` or, #660, ``file:``).
     """
     model = conn.execute("SELECT value FROM config WHERE key = 'embed_model'").fetchone()
     dim = conn.execute("SELECT value FROM config WHERE key = 'embed_dim'").fetchone()

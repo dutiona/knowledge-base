@@ -135,7 +135,7 @@ class ProviderConfig:
     The frozen tuple ``(family, base_url, api_key, allow_loopback, max_input_tokens, batch_size)`` is the provider
     *cache key*, so two ``openai_compat`` configs with different ``base_url`` never
     collide. ``api_key`` holds the **raw** config
-    spec (inline value or ``env:VARNAME`` indirection, never a resolved secret); it is
+    spec (inline value, ``env:VARNAME`` or the declared ``file:`` source, never a resolved secret); it is
     omitted from ``__repr__`` so no key reaches a log line.
     """
 
@@ -317,7 +317,7 @@ class OpenAICompatProvider:
     ``base_url`` is normalized FIRST (``rstrip('/').removesuffix('/v1')``) and that
     same normalized value is what ``validate_base_url`` checks and what the request
     targets — closing the suffix-strip smuggle gap (ADR-0018 §4/§5). ``api_key`` is
-    the raw spec (inline or ``env:VARNAME``), resolved at call time, never logged.
+    the raw spec (inline, ``env:VARNAME`` or the declared ``file:`` source), resolved at call time, never logged.
     """
 
     def __init__(

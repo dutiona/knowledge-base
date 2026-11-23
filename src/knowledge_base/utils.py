@@ -23,7 +23,7 @@ import httpcore
 import httpx
 
 from knowledge_base.exceptions import ValidationError
-from knowledge_base.settings import host_networks
+from knowledge_base.settings import API_KEY_FILE_VAR, embed_key_from_file, host_networks
 
 __all__ = [
     "STOPWORDS",
@@ -396,13 +396,16 @@ def _sanitize_url(url: str) -> str:
 def _resolve_api_key(raw: str | None) -> str | None:
     """Resolve an api_key spec to the actual secret at call time.
 
-    ``env:VARNAME`` indirection reads ``os.environ[VARNAME]`` (None if unset); a
-    plain string is returned as-is; ``None`` stays ``None``. The resolved secret is
-    **never persisted** — only the raw spec (``env:VARNAME`` or inline) is stored in
-    config (ADR-0018 §4).
+    ``env:VARNAME`` indirection reads ``os.environ[VARNAME]`` (None if unset); exactly
+    ``file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE`` is the embedder key read from that file at
+    start (#660); any other string, another ``file:`` one included, is an inline value
+    returned as-is, which the LLM key guard refuses; ``None`` stays ``None``. The resolved
+    secret is **never persisted** — only the raw spec is stored in config (ADR-0018 §4).
     """
     if raw is None:
         return None
+    if raw == f"file:{API_KEY_FILE_VAR}":
+        return embed_key_from_file()
     if raw.startswith("env:"):
         return os.environ.get(raw[4:])
     return raw

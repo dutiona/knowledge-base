@@ -554,6 +554,40 @@ def test_the_key_comes_from_the_declaration_not_the_config_row(monkeypatch, fake
     assert http_requests[0].headers["Authorization"] == "Bearer sk-test-only"
 
 
+def test_a_key_file_key_is_sent_and_never_logged(monkeypatch, fake_dns, tmp_path, http_requests, caplog):
+    """#660: the key read from KNOWLEDGE_BASE_EMBED_API_KEY_FILE authenticates the request and is never recorded."""
+    import secrets
+
+    import httpx
+
+    from knowledge_base.db import open_declared_db
+    from knowledge_base.ingest import _embed_with_config
+
+    key = secrets.token_hex(16)
+    key_file = tmp_path / "embed-key"
+    key_file.write_text(key + "\n")
+    fake_dns["embedder.example.test"] = ["100.64.0.10"]
+    for name, value in {
+        "KNOWLEDGE_BASE_EMBED_PROVIDER": "openai_compat",
+        "KNOWLEDGE_BASE_EMBED_MODEL": "qwen3-embedding",
+        "KNOWLEDGE_BASE_EMBED_DIM": "8",
+        "KNOWLEDGE_BASE_EMBED_URL": "https://embedder.example.test",
+        "KNOWLEDGE_BASE_EMBED_API_KEY_FILE": str(key_file),
+    }.items():
+        monkeypatch.setenv(name, value)
+    http_requests.handlers["embedder.example.test"] = lambda request: httpx.Response(
+        200, json={"data": [{"index": 0, "embedding": [1.0] + [0.0] * 7}]}
+    )
+    with caplog.at_level("DEBUG"):
+        conn = open_declared_db(tmp_path / "kb.db")
+        _embed_with_config(conn, ["hello"])
+    values = [row[0] for row in conn.execute("SELECT value FROM config").fetchall()]
+    conn.close()
+    assert http_requests[0].headers["Authorization"] == f"Bearer {key}"
+    assert key not in caplog.text
+    assert not any(key in value for value in values)
+
+
 class TestLlamaCppProvider:
     """#573: ADR-0015 §5 pins provider ``llama.cpp``; it speaks the openai_compat wire."""
 

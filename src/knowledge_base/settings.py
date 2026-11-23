@@ -10,6 +10,7 @@ exceptions, so any module may depend on it.
 
 from __future__ import annotations
 
+import functools
 import ipaddress
 import os
 import re
@@ -21,6 +22,7 @@ from urllib.parse import urlparse
 from .exceptions import EmbeddingModelMismatchError, ValidationError
 
 __all__ = [
+    "API_KEY_FILE_VAR",
     "API_KEY_VAR",
     "BROWSER_VAR",
     "EMBED_PROVIDERS",
@@ -38,6 +40,7 @@ __all__ = [
     "check_environment",
     "declared_embed_host",
     "declared_identity",
+    "embed_key_from_file",
     "fetch_limits",
     "host_networks",
     "identity_mismatch",
@@ -77,6 +80,7 @@ IDENTITY_FIELDS = (
 )
 _SERVED_FIELDS = IDENTITY_FIELDS[5:]
 API_KEY_VAR = "KNOWLEDGE_BASE_EMBED_API_KEY"
+API_KEY_FILE_VAR = "KNOWLEDGE_BASE_EMBED_API_KEY_FILE"
 LLM_API_KEY_VAR = "KNOWLEDGE_BASE_LLM_API_KEY"
 VISION_VAR = "KNOWLEDGE_BASE_VISION"
 BROWSER_VAR = "KNOWLEDGE_BASE_BROWSER"
@@ -105,7 +109,8 @@ _OPENAI_ORIGIN = "https://api.openai.com"
 
 @dataclass(frozen=True, slots=True)
 class EmbedSettings:
-    """A parsed declaration. ``api_key_source`` is the ``env:`` spec, never the secret."""
+    """A parsed declaration. ``api_key_source`` is the ``env:`` or ``file:`` spec naming the variable, never the
+    path or the secret."""
 
     provider: str
     model: str
@@ -167,8 +172,39 @@ def _served_artifact() -> dict[str, str | int | None]:
     return dict.fromkeys(_SERVED_FIELDS)
 
 
+@functools.cache
+def _read_key_file(path: str) -> str:
+    """The key in *path*, read once per process (#660). No message names the path or the content: an operator who
+    swapped the two variables put the key where the path belongs, and ``OSError`` text quotes the path."""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as exc:
+        raise ValidationError(f"{API_KEY_FILE_VAR} names a file KB cannot read ({type(exc).__name__})") from None
+    key = raw.strip().decode("latin-1")  # total, so no decode error can quote a byte; the rule refuses non-ASCII
+    if not key:
+        raise ValidationError(f"{API_KEY_FILE_VAR} names an empty file")
+    if not _KEY_RE.fullmatch(key):
+        raise ValidationError(
+            f"{API_KEY_FILE_VAR} names a file that does not hold the key alone: one line of visible ASCII characters"
+        )
+    return key
+
+
+def embed_key_from_file() -> str:
+    """The key the ``file:`` source declares; refused when the variable is gone, so no request goes out without it."""
+    path = _get(API_KEY_FILE_VAR)
+    if path is None:
+        raise ValidationError(f"{API_KEY_FILE_VAR} is not set but the declared key source names it")
+    return _read_key_file(path)
+
+
 def _key_source(provider: str) -> str | None:
     """The declared key's spec, naming its variable; a request resolves the key (``utils._resolve_api_key``)."""
+    if _get(API_KEY_FILE_VAR) is not None:
+        if _get(API_KEY_VAR) is not None:
+            raise ValidationError(f"{API_KEY_FILE_VAR} and {API_KEY_VAR} are both set; set one")
+        embed_key_from_file()  # the start-up read; every later one is the cache
+        return f"file:{API_KEY_FILE_VAR}"
     if _get(API_KEY_VAR) is None:
         return None
     # The raw value is what a request sends; ollama and onnx never send it.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import secrets
+from pathlib import Path
 
 import pytest
 
@@ -36,6 +37,7 @@ _EMBED_VARS = (
     "KNOWLEDGE_BASE_EMBED_DIM",
     "KNOWLEDGE_BASE_EMBED_URL",
     "KNOWLEDGE_BASE_EMBED_API_KEY",
+    "KNOWLEDGE_BASE_EMBED_API_KEY_FILE",
     "KNOWLEDGE_BASE_EMBED_MATRYOSHKA_BASE_DIM",
     "KNOWLEDGE_BASE_EMBED_BATCH_SIZE",
     *(f"KNOWLEDGE_BASE_EMBED_{field.upper()}" for field in _SERVED),
@@ -492,3 +494,104 @@ def test_a_batch_size_is_refused_where_it_would_do_nothing(declare, values, tmp_
     with pytest.raises(ValidationError, match=r"^KNOWLEDGE_BASE_EMBED_BATCH_SIZE") as error:
         load_embed_settings()
     assert values["provider"] in str(error.value)
+
+
+# --- #660: the key from a file ---
+
+_FILE_VAR = "KNOWLEDGE_BASE_EMBED_API_KEY_FILE"
+
+
+def _key_file(tmp_path, content: bytes) -> Path:
+    path = tmp_path / "embed-key"
+    path.write_bytes(content)
+    return path
+
+
+@pytest.mark.parametrize("shape", [b"{k}\n", b" {k}\r\n"])
+def test_a_key_file_declares_the_file_source(declare, tmp_path, shape):
+    key = secrets.token_hex(16)
+    path = _key_file(tmp_path, shape.replace(b"{k}", key.encode()))
+    declare(**_OPENAI_COMPAT, url="https://embedder.example.test", api_key_file=str(path))
+    settings = check_environment()
+    assert settings.api_key_source == "file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE"
+    assert key not in repr(settings)
+    assert str(path) not in repr(settings)
+
+
+def _refusal(exc_info) -> str:
+    exc = exc_info.value
+    assert exc.__cause__ is None
+    assert exc.__context__ is None or exc.__suppress_context__
+    return str(exc)
+
+
+@pytest.mark.parametrize(
+    ("case", "provider"),
+    [
+        ("missing", "openai_compat"),
+        ("directory", "openai_compat"),
+        ("empty", "openai_compat"),
+        ("whitespace", "openai_compat"),
+        ("two lines", "openai_compat"),
+        ("inner space", "openai_compat"),
+        ("not utf-8", "openai_compat"),
+        ("bom", "openai_compat"),
+        ("empty", "ollama"),
+    ],
+)
+def test_a_bad_key_file_refuses_naming_the_variable(declare, tmp_path, case, provider):
+    key = secrets.token_hex(16)
+    contents = {
+        "empty": b"",
+        "whitespace": b" \n\t\r\n",
+        "two lines": f"{key}\nmore\n".encode(),
+        "inner space": f"{key} {key}".encode(),
+        "not utf-8": key.encode() + b"\xff",
+        "bom": b"\xef\xbb\xbf" + key.encode(),
+    }
+    path = tmp_path / "embed-key"
+    if case == "directory":
+        path.mkdir()
+    elif case != "missing":
+        path.write_bytes(contents[case])
+    if provider == "ollama":
+        declare(
+            provider="ollama",
+            model="bge-m3",
+            dim="1024",
+            url="http://embedder.example.test:11434",
+            api_key_file=str(path),
+        )
+    else:
+        declare(**_OPENAI_COMPAT, url="https://embedder.example.test", api_key_file=str(path))
+    with pytest.raises(ValidationError, match=rf"^{_FILE_VAR}") as refused:
+        check_environment()
+    message = _refusal(refused)
+    assert key not in message
+    assert "more" not in message
+    assert str(path) not in message
+
+
+def test_a_key_file_set_to_the_key_never_echoes_it(declare):
+    key = secrets.token_hex(16)
+    declare(**_OPENAI_COMPAT, url="https://embedder.example.test", api_key_file=key)
+    with pytest.raises(ValidationError, match=rf"^{_FILE_VAR}") as refused:
+        check_environment()
+    assert key not in _refusal(refused)
+
+
+def test_the_key_and_the_key_file_together_are_refused(declare, tmp_path):
+    key = secrets.token_hex(16)
+    path = _key_file(tmp_path, key.encode())
+    declare(**_OPENAI_COMPAT, url="https://embedder.example.test", api_key=key, api_key_file=str(path))
+    with pytest.raises(ValidationError, match=_FILE_VAR) as refused:
+        check_environment()
+    message = _refusal(refused)
+    assert "and KNOWLEDGE_BASE_EMBED_API_KEY are both set" in message
+    assert key not in message
+
+
+def test_a_blank_key_beside_a_key_file_is_not_both(declare, tmp_path):
+    path = _key_file(tmp_path, secrets.token_hex(16).encode())
+    declare(**_OPENAI_COMPAT, url="https://embedder.example.test", api_key="  ", api_key_file=str(path))
+    assert check_environment().api_key_source == "file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE"
