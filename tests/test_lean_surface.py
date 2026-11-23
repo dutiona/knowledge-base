@@ -154,7 +154,7 @@ def test_ingest_text_refuses_a_lone_surrogate_name(kb_http):
     assert _count("chunks") == 0
 
 
-def test_a_concurrent_duplicate_rolls_back_and_a_retry_completes(kb_http, monkeypatch):
+def test_a_concurrent_duplicate_rolls_back_and_a_retry_completes(kb_http, stub_document_embedder):
     from knowledge_base.chunking import chunk_text
     from knowledge_base.db import get_connection
     from knowledge_base.utils import content_hash
@@ -176,7 +176,7 @@ def test_a_concurrent_duplicate_rolls_back_and_a_retry_completes(kb_http, monkey
             other.close()
         return [[0.1] * (expected_dim or TEST_EMBED_DIM) for _ in batch]
 
-    monkeypatch.setattr("knowledge_base.ingest.embed", _racing_embed)
+    stub_document_embedder.answer = _racing_embed
     lost = _call(kb_http, "ingest_text", {"name": "race.md", "content": _DOCUMENT})
     assert lost["isError"] is True
     assert "another ingest stored some of the same passages meanwhile" in _text(lost)

@@ -24,11 +24,6 @@ from tests.declared_env import TEST_EMBED_DIM
 # ---------------------------------------------------------------------------
 
 
-def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
-    return [[0.1] * dim for _ in texts]
-
-
 def _fake_embed_single(text, model="bge-m3", **_kwargs):
     return [0.1] * TEST_EMBED_DIM
 
@@ -101,8 +96,7 @@ def test_sigmoid():
 # ---------------------------------------------------------------------------
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_disabled_by_default(tmp_path):
     """Search without rerank=True uses RRF ordering, no reranker called."""
@@ -119,8 +113,7 @@ def test_rerank_disabled_by_default(tmp_path):
     assert len(results) >= 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_reorders_results(tmp_path):
     """With rerank=True, mock reranker reorders results differently from RRF."""
@@ -149,8 +142,7 @@ def test_rerank_reorders_results(tmp_path):
     assert all(r.match_type == "reranked" for r in results)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_top_n_limits_candidates(tmp_path):
     """Mock reranker receives at most rerank_top_n candidates."""
@@ -176,8 +168,7 @@ def test_rerank_top_n_limits_candidates(tmp_path):
     assert len(calls[0]) <= 3
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_with_empty_results(tmp_path):
     """Empty search returns [] even with rerank=True."""
@@ -189,8 +180,7 @@ def test_rerank_with_empty_results(tmp_path):
     assert results == []
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_score_monotonic(tmp_path):
     """Within the reranked tier, scores are monotonically descending.
@@ -217,8 +207,7 @@ def test_rerank_score_monotonic(tmp_path):
         assert results[i].score >= results[i + 1].score
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_match_type(tmp_path):
     """Reranked results have match_type='reranked'."""
@@ -236,8 +225,7 @@ def test_rerank_match_type(tmp_path):
     assert all(r.match_type == "reranked" for r in results)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_with_source_type_filter(tmp_path):
     """source_type filtering applies before reranking."""
@@ -267,8 +255,7 @@ def test_rerank_with_source_type_filter(tmp_path):
     assert all(r.source_type == "pdf" for r in results)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_search_index_rerank_passthrough(tmp_path):
     """server.py passes rerank parameter through to search()."""
@@ -308,8 +295,7 @@ def _insert_graded_chunks(conn, n):
     conn.commit()
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_poor_scores_stay_above_unreranked_tail(tmp_path):
     """Reranked items rank above the un-reranked tail even with poor scores (#387).
@@ -335,8 +321,7 @@ def test_rerank_poor_scores_stay_above_unreranked_tail(tmp_path):
     assert {r.source_uri for r in results[:2]} == {"/tmp/graded_0.md", "/tmp/graded_1.md"}
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_orders_within_tiers(tmp_path):
     """Cross-encoder order wins inside the reranked tier; the tail keeps RRF order."""
@@ -359,8 +344,7 @@ def test_rerank_orders_within_tiers(tmp_path):
     ]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_preserves_result_count(tmp_path):
     """Fixing #387 must not drop the un-reranked tail from the result set."""
@@ -376,8 +360,7 @@ def test_rerank_preserves_result_count(tmp_path):
     assert len(results) == 5
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_tiering_with_source_type_filter(tmp_path):
     """Filtered pool: reranked hits stay above the filter-passing tail (#387).
@@ -421,8 +404,7 @@ def test_rerank_tiering_with_source_type_filter(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_error_falls_back_to_rrf(tmp_path):
     """Reranker raising RuntimeError degrades to pure RRF ordering."""
@@ -439,8 +421,7 @@ def test_rerank_error_falls_back_to_rrf(tmp_path):
     assert all(r.match_type == "fts" for r in results)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_wrong_length_scores_clean_fallback(tmp_path):
     """A misbehaving provider returning too few scores must not leak state.
@@ -464,9 +445,8 @@ def test_rerank_wrong_length_scores_clean_fallback(tmp_path):
     assert all(r.match_type == "fts" for r in results)
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.parametrize("exc_type", [ImportError, RuntimeError, ValueError, OSError])
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_rerank_error_catch_set_locks_fallback(tmp_path, caplog, exc_type):
     """Every exception in the rerank catch set degrades to clean RRF + a logged warning.

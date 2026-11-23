@@ -439,17 +439,27 @@ def _key_has_context(key: str) -> bool:
 
 
 def redact_json(value: Any, leaf: Callable[[str], str] = scrub) -> Any:
-    """``leaf`` applied to every string value of a JSON document; keys and non-strings are kept.
+    """``leaf`` applied to every string value of a JSON document, :func:`scrub` to every object key; non-strings kept.
 
-    A member whose value is entirely a run of 32 or more hex digits, under a key whose last word is a context word,
-    becomes ``[REDACTED:hex-secret]`` before any leaf sees it; an array element reads no key.
+    memory-engine's ``scrub_json`` (dutiona/knowledge-base#652): an object is rebuilt in key order, each value judged
+    under its key as written, then the key scrubbed as a string; keys that scrub to one text keep every member, the
+    later ones renamed with the first free ``~1``, ``~2``, …. A key is content, never the stored reference a ``leaf``
+    may treat apart. A member whose value is entirely a run of 32 or more hex digits, under a key whose last word is a
+    context word, becomes ``[REDACTED:hex-secret]`` before any leaf sees it; an array element reads no key.
     """
     if isinstance(value, str):
         return leaf(value)
     if isinstance(value, list):
         return [redact_json(v, leaf) for v in value]
     if isinstance(value, dict):
-        return {k: _redact_member(k, v, leaf) for k, v in value.items()}
+        out: dict[str, Any] = {}
+        for key in sorted(value):  # memory-engine's map is ordered by key: UTF-8 byte order is code-point order
+            member = _redact_member(key, value[key], leaf)
+            clean = scrub(key)
+            if clean in out:
+                clean = next(f"{clean}~{i}" for i in range(1, len(out) + 2) if f"{clean}~{i}" not in out)
+            out[clean] = member
+        return out
     return value
 
 

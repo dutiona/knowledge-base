@@ -19,7 +19,7 @@ import pytest
 from knowledge_base import utils
 from knowledge_base.exceptions import ValidationError
 from knowledge_base.web import _extract_html_images, ingest_url
-from tests.declared_env import TEST_EMBED_DIM
+from tests.conftest import fake_embedding_provider
 
 _URL = "https://page.example.test/start"
 _ARTICLE = (
@@ -27,10 +27,6 @@ _ARTICLE = (
     + "The dominant sequence transduction models are based on recurrent networks. " * 12
     + "</p></article></body></html>"
 ).encode()
-
-
-def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    return [[0.1] * (expected_dim or TEST_EMBED_DIM) for _ in texts]
 
 
 class _Clock:
@@ -53,7 +49,7 @@ def _world(monkeypatch, fake_dns, public_net) -> Iterator[None]:
     monkeypatch.delenv("KNOWLEDGE_BASE_BROWSER")
     monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
     fake_dns.update({"page.example.test": ["203.0.113.10"], "img.example.test": ["203.0.113.11"]})
-    with patch("knowledge_base.ingest.embed", _fake_embed), patch("knowledge_base.folder_summaries.embed", _fake_embed):
+    with fake_embedding_provider():
         yield
 
 

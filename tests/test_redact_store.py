@@ -15,6 +15,7 @@ from knowledge_base.embed_swap import create_space
 from knowledge_base.exceptions import KnowledgeBaseError
 from knowledge_base.ingest import _insert_chunk
 from knowledge_base.utils import content_hash, serialize_f32
+from tests.conftest import StubEmbedder
 from tests.declared_env import TEST_EMBED_DIM, TEST_EMBED_MODEL
 
 SECRET = "ghp_" + "Zq7Xw3Rt9Lp2Vb6Nm4Kc8Hd1Fs5Gj0Ay"  # an example shape, built here and nowhere committed as one
@@ -196,6 +197,35 @@ def test_report_counts_without_printing_matches(kb_conn, tmp_path, capsys):
     assert list(kb_conn.iterdump()) == before
 
 
+def test_report_counts_a_hex_secret_under_a_metadata_key(kb_conn, tmp_path, capsys):
+    """#626's member rule redacts a whole hex value under a context key: the report counts it as the rewrite does."""
+    cid = _raw_chunk(kb_conn, "plain", metadata=json.dumps({"api_key": "0123456789abcdef" * 2}))
+    kb_conn.commit()
+    assert _run(tmp_path / "test.db", "redact") == 1
+    report = json.loads(capsys.readouterr().out)
+    assert (report["chunk_ids"], report["rows_to_rewrite"]["metadata"]) == ([cid], 1)
+    assert report["spans"] == {"hex-secret": 1}
+
+
+def test_report_and_rewrite_redact_a_secret_metadata_key(kb_conn, tmp_path, vectors, capsys):
+    """A row whose only secret is a metadata key is reported and rewritten with the key redacted (#652)."""
+    cid = _raw_chunk(kb_conn, "plain", metadata=json.dumps({AWS_KEY: "value"}))
+    kb_conn.commit()
+    kb_conn.close()
+    assert _run(tmp_path / "test.db", "redact") == 1
+    report = json.loads(capsys.readouterr().out)
+    assert (report["chunk_ids"], report["rows_to_rewrite"]["metadata"], report["spans"]) == (
+        [cid],
+        1,
+        {"aws-access-key": 1},
+    )
+    assert _run(tmp_path / "test.db", "redact", "--rewrite") == 0
+    conn = _open(tmp_path / "test.db")
+    stored = conn.execute("SELECT metadata FROM chunks WHERE id = ?", (cid,)).fetchone()[0]
+    conn.close()
+    assert json.loads(stored) == {"[REDACTED:aws-access-key]": "value"}
+
+
 def test_report_on_a_clean_database_exits_zero(kb_conn, tmp_path, capsys):
     meta = json.dumps({"image_url": f"https://docs.example.test/i.png?sig={QUERY_VALUE}"})
     _insert_chunk(
@@ -233,31 +263,13 @@ def _hash_vector(text: str) -> list[float]:
     return _vector(int(content_hash(text)[:12], 16))
 
 
-class _Embedder(list):
-    """Every text embedded, by any path; while ``down`` it fails as an unreachable endpoint does."""
-
-    down = False
-
-    def __call__(self, texts, *_args, expected_dim=None, **_kwargs):
-        from tests.conftest import embedder_error
-
-        if self.down:
-            raise embedder_error(503)
-        self.extend(texts)
-        return [_hash_vector(t)[: expected_dim or TEST_EMBED_DIM] for t in texts]
-
-
 @pytest.fixture
-def vectors(monkeypatch) -> _Embedder:
-    from unittest.mock import MagicMock
-
-    embedder = _Embedder()
-    provider = MagicMock()
-    provider.embed.side_effect = lambda texts, model=None, expected_dim=TEST_EMBED_DIM: embedder(texts)
-    monkeypatch.setattr("knowledge_base.ingest.embed", embedder)
-    monkeypatch.setattr("knowledge_base.folder_summaries.embed", embedder)
-    monkeypatch.setattr("knowledge_base.embed_swap.get_provider", lambda **_kw: provider)
-    return embedder
+def vectors(stub_document_embedder) -> StubEmbedder:
+    """Every text embedded, by any path, answered with its hash vector; while ``down`` it fails as an endpoint does."""
+    stub_document_embedder.answer = lambda texts, model=None, expected_dim=None: [
+        _hash_vector(t)[: expected_dim or TEST_EMBED_DIM] for t in texts
+    ]
+    return stub_document_embedder
 
 
 def _with_vector(conn, content: str, **kw) -> int:
@@ -473,7 +485,7 @@ def test_rewrite_embedder_failure_changes_nothing(kb_conn, tmp_path, vectors):
     kb_conn.commit()
     kb_conn.close()
     before = _rows(db)
-    vectors.down = True
+    vectors.down = 503
     assert _run(db, "redact", "--rewrite") == 1
     assert _rows(db) == before
 
@@ -508,12 +520,19 @@ def test_rewrite_resumes_after_an_interruption(kb_conn, tmp_path, vectors, monke
         if stage == "after-commit":
             m.setattr(redact_store, "_rebuild_summaries", boom)
         elif stage == "summaries":
-            m.setattr("knowledge_base.folder_summaries.embed", boom)
+            real_rebuild = redact_store._rebuild_summaries
+
+            def _embedder_down_for_summaries(conn):
+                vectors.down = 503  # the chunks re-embedded; the endpoint fails as the summaries rebuild
+                return real_rebuild(conn)
+
+            m.setattr(redact_store, "_rebuild_summaries", _embedder_down_for_summaries)
         elif stage == "before-vacuum":
             m.setattr(redact_store, "purge_deleted_content", boom)
         else:
             m.setattr(redact_store, "purge_deleted_content", lambda conn: (real_purge(conn), boom()))
         assert _run(db, "redact", "--rewrite") == 1
+    vectors.down = None
     capsys.readouterr()
     assert _run(db, "redact") == 1
     assert json.loads(capsys.readouterr().out)["rewrite_incomplete"] is True

@@ -75,11 +75,6 @@ def _by_path(routes):
     return lambda request: routes.get(request.url.path, _respond(404))(request)
 
 
-def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
-    return [[0.1] * dim for _ in texts]
-
-
 def _fake_embed_odd_none(texts, model="bge-m3", expected_dim=None, **_kwargs):
     """Like _fake_embed but returns None at odd indices — mimics embed() yielding
     None for zero-norm vectors, so some chunks get NO vec row. Used to prove the
@@ -108,8 +103,7 @@ def test_chunk_text_empty():
     assert _chunk_text("   ") == []
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_markdown_file(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -127,8 +121,7 @@ def test_ingest_markdown_file(tmp_path):
     assert len(rows) >= 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_file_result_uses_forward_slashes(tmp_path):
     """ingest_file return dict 'file' key must use forward slashes (#158)."""
     db_path = tmp_path / "test.db"
@@ -143,8 +136,7 @@ def test_ingest_file_result_uses_forward_slashes(tmp_path):
     assert result["file"] == md_file.as_posix()
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_dedup(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -161,8 +153,7 @@ def test_ingest_dedup(tmp_path):
     assert r2["chunks_skipped"] == 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_multichunk_doc_chunk_count_matches_per_row(tmp_path):
     """#392: batched chunk_count bump must equal the per-row result.
 
@@ -194,9 +185,7 @@ def test_ingest_multichunk_doc_chunk_count_matches_per_row(tmp_path):
     assert active == vec_rows
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed_odd_none)
-def test_ingest_partial_none_embeddings_chunk_count_counts_vec_inserts(tmp_path):
+def test_ingest_partial_none_embeddings_chunk_count_counts_vec_inserts(tmp_path, stub_document_embedder):
     """#392: the batched bump must count VEC INSERTS, not chunk iterations.
 
     With some embeddings None (zero-norm), those chunk rows are still recorded
@@ -205,6 +194,7 @@ def test_ingest_partial_none_embeddings_chunk_count_counts_vec_inserts(tmp_path)
     actual inserts; a regression to bump_chunk_count(vec_table, len(chunks)) would
     make chunk_count == start + added != start + vec_rows and fail here.
     """
+    stub_document_embedder.answer = _fake_embed_odd_none
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
@@ -229,8 +219,7 @@ def test_ingest_partial_none_embeddings_chunk_count_counts_vec_inserts(tmp_path)
 # --- reingest_file ---
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_updates_paper_paths_hash(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -258,8 +247,7 @@ def test_reingest_updates_paper_paths_hash(tmp_path):
     assert new_hash is not None
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_replaces_chunks(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -291,8 +279,7 @@ def test_reingest_replaces_chunks(tmp_path):
     assert any("reinforcement" in r["content"] for r in rows)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_updates_fts(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -314,8 +301,7 @@ def test_reingest_updates_fts(tmp_path):
     assert len(new_matches) >= 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_cleans_vec_table(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -336,8 +322,7 @@ def test_reingest_cleans_vec_table(tmp_path):
     assert new_vec_count == old_vec_count
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_relinks_paper_abstract_chunk(tmp_path):
     """After reingest, abstract_chunk_id should point to the new first chunk."""
     db_path = tmp_path / "test.db"
@@ -369,8 +354,7 @@ def test_reingest_relinks_paper_abstract_chunk(tmp_path):
     assert chunk["chunk_index"] == 0
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_relinks_multiple_papers_same_source(tmp_path):
     """Multiple papers linked to same source should all get relinked."""
     db_path = tmp_path / "test.db"
@@ -398,8 +382,7 @@ def test_reingest_relinks_multiple_papers_same_source(tmp_path):
     assert papers_a[0]["abstract_chunk_id"] == papers_b[0]["abstract_chunk_id"]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_does_not_relink_unrelated_papers(tmp_path):
     """Papers linked to a different source should not be affected."""
     db_path = tmp_path / "test.db"
@@ -427,8 +410,7 @@ def test_reingest_does_not_relink_unrelated_papers(tmp_path):
     assert papers_b[0]["abstract_chunk_id"] == old_b_chunk
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_nullifies_relationship_evidence(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -451,8 +433,7 @@ def test_reingest_nullifies_relationship_evidence(tmp_path):
     assert rels[0]["evidence_chunk_id"] is None
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_deletes_zombie_conclusion_with_empty_chunk_refs(tmp_path):
     """Conclusion whose *all* source_chunk_ids are removed should be deleted (#160)."""
     db_path = tmp_path / "test.db"
@@ -473,8 +454,7 @@ def test_reingest_deletes_zombie_conclusion_with_empty_chunk_refs(tmp_path):
     assert len(conclusions) == 0, "Zombie conclusion with no evidence should be deleted"
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_keeps_conclusion_with_remaining_chunk_refs(tmp_path):
     """Conclusion with some surviving source_chunk_ids should be kept (#160)."""
     db_path = tmp_path / "test.db"
@@ -504,8 +484,7 @@ def test_reingest_keeps_conclusion_with_remaining_chunk_refs(tmp_path):
     assert chunk_id_2 in conclusions[0]["source_chunk_ids"]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_zombie_deletion_clears_superseded_by_fk(tmp_path):
     """Deleting a zombie must not violate superseded_by FK constraint (#160)."""
     db_path = tmp_path / "test.db"
@@ -554,8 +533,7 @@ def test_cleanup_conclusion_refs_only_touches_affected_rows(tmp_path):
     assert json.loads(rows[1]["source_chunk_ids"]) == [30, 40]  # untouched
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_relinks_method_by_name_search(tmp_path):
     """After reingest, method.chunk_id should point to the new chunk containing the method name."""
     db_path = tmp_path / "test.db"
@@ -604,8 +582,7 @@ def test_reingest_relinks_method_by_name_search(tmp_path):
     assert "TransformerXL" in new_chunk["content"]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_relinks_dataset_by_name_search(tmp_path):
     """After reingest, dataset.chunk_id should point to the new chunk containing the dataset name."""
     db_path = tmp_path / "test.db"
@@ -643,8 +620,7 @@ def test_reingest_relinks_dataset_by_name_search(tmp_path):
     assert row["chunk_id"] != old_chunk_id
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_relinks_metric_by_name_search(tmp_path):
     """After reingest, metric.chunk_id should point to the new chunk containing the metric name."""
     db_path = tmp_path / "test.db"
@@ -682,8 +658,7 @@ def test_reingest_relinks_metric_by_name_search(tmp_path):
     assert row["chunk_id"] != old_chunk_id
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_relinks_entity_at_chunk_index_zero(tmp_path):
     """Entities linked to chunk_index=0 should be re-linked to the new first chunk."""
     db_path = tmp_path / "test.db"
@@ -714,8 +689,7 @@ def test_reingest_relinks_entity_at_chunk_index_zero(tmp_path):
     assert row["chunk_id"] != old_chunk_id
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_leaves_null_when_no_name_match(tmp_path):
     """If the entity name doesn't appear in any new chunk, chunk_id stays NULL."""
     db_path = tmp_path / "test.db"
@@ -745,8 +719,7 @@ def test_reingest_leaves_null_when_no_name_match(tmp_path):
     assert row["chunk_id"] is None, "Should remain NULL when name not found in new chunks"
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_does_not_relink_unrelated_entities(tmp_path):
     """Entities from other papers should not be affected by reingest."""
     db_path = tmp_path / "test.db"
@@ -782,8 +755,7 @@ def test_reingest_does_not_relink_unrelated_entities(tmp_path):
     assert row["chunk_id"] == old_b_chunk_id, "Unrelated entity should not be affected"
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_nonexistent_source(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -796,8 +768,7 @@ def test_reingest_nonexistent_source(tmp_path):
         reingest_file(conn, md)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_idempotent_content(tmp_path):
     """Reingest same content = delete old + insert new (same result)."""
     db_path = tmp_path / "test.db"
@@ -819,8 +790,7 @@ def test_reingest_idempotent_content(tmp_path):
 # --- reingest batching (issue #40) ---
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.db._SQL_BATCH_SIZE", 2)
 def test_reingest_batches_in_clauses(tmp_path):
     """reingest_file works when old chunk count exceeds _SQL_BATCH_SIZE.
@@ -938,8 +908,7 @@ def fake_page(http_requests):
     http_requests.handlers["example.com"] = _respond(html=FAKE_HTML)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.usefixtures("fake_page")
 def test_ingest_url_basic(tmp_path):
     db_path = tmp_path / "test.db"
@@ -957,8 +926,7 @@ def test_ingest_url_basic(tmp_path):
     assert all(r["source_type"] == "web" for r in rows)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_url_multichunk_chunk_count_matches_per_row(http_requests, tmp_path):
     """#392: the batched chunk_count bump on the web-text path must equal the per-row result.
 
@@ -987,8 +955,7 @@ def test_ingest_url_multichunk_chunk_count_matches_per_row(http_requests, tmp_pa
     assert active == vec_rows
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.usefixtures("fake_page")
 def test_ingest_url_dedup(tmp_path):
     db_path = tmp_path / "test.db"
@@ -1003,8 +970,7 @@ def test_ingest_url_dedup(tmp_path):
     assert r2["chunks_skipped"] >= 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.usefixtures("fake_page")
 def test_ingest_url_stores_title_in_metadata(tmp_path):
     db_path = tmp_path / "test.db"
@@ -1018,8 +984,7 @@ def test_ingest_url_stores_title_in_metadata(tmp_path):
     assert "title" in meta
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_url_http_error(http_requests, tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -1046,8 +1011,7 @@ def test_ingest_url_rejects_non_http_schemes(tmp_path):
         ingest_url(conn, "ftp://internal/data")
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_url_no_content(http_requests, tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -1128,8 +1092,7 @@ def test_chunk_python_ast_module_level():
     assert "CONSTANT = 42" in module_chunk["text"]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_python_file_uses_ast(tmp_path):
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
@@ -1178,8 +1141,7 @@ def _create_entity_with_mention(conn, paper_id, canonical_name, chunk_id, surfac
     return entity_id
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_deletes_entity_mentions(tmp_path):
     """reingest_file must delete entity_mentions referencing old chunks."""
     db_path = tmp_path / "test.db"
@@ -1207,8 +1169,7 @@ def test_reingest_deletes_entity_mentions(tmp_path):
     assert remaining == 0
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_preserves_unrelated_entity_mentions(tmp_path):
     """reingest_file must not delete entity_mentions for other source files."""
     db_path = tmp_path / "test.db"
@@ -1573,8 +1534,7 @@ def js_only_page(http_requests):
     http_requests.handlers["example.com"] = _respond(html=_JS_ONLY_HTML)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.usefixtures("js_only_page")
 @patch("knowledge_base.web._render_with_browser")
 def test_ingest_url_browser_rendered(mock_render, tmp_path):
@@ -1601,8 +1561,7 @@ def test_ingest_url_browser_rendered(mock_render, tmp_path):
     assert result["browser_rendered"] is True
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.usefixtures("js_only_page")
 def test_ingest_url_no_browser_configured(tmp_path):
     """No browser config → 0 chunks, browser_rendered False."""
@@ -1614,8 +1573,7 @@ def test_ingest_url_no_browser_configured(tmp_path):
     assert result["browser_rendered"] is False
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.usefixtures("js_only_page")
 @patch("knowledge_base.web._render_with_browser")
 def test_ingest_url_browser_fallback_also_empty(mock_render, tmp_path):
@@ -1640,8 +1598,7 @@ def test_ingest_url_browser_fallback_also_empty(mock_render, tmp_path):
     assert result["chunks_added"] == 0
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.usefixtures("fake_page")
 @patch("knowledge_base.web._render_with_browser")
 def test_ingest_url_no_fallback_when_trafilatura_succeeds(mock_render, tmp_path):
@@ -1655,8 +1612,7 @@ def test_ingest_url_no_fallback_when_trafilatura_succeeds(mock_render, tmp_path)
     mock_render.assert_not_called()
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.usefixtures("js_only_page")
 @patch("knowledge_base.web._render_with_browser")
 def test_ingest_url_browser_fallback_near_empty(mock_render, tmp_path):
@@ -1682,8 +1638,7 @@ def test_ingest_url_browser_fallback_near_empty(mock_render, tmp_path):
     assert result["chunks_added"] >= 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.usefixtures("js_only_page")
 @patch("knowledge_base.web._render_with_browser")
 def test_ingest_url_browser_fallback_tmpdir_cleanup(mock_render, tmp_path):
@@ -1714,8 +1669,7 @@ def test_ingest_url_browser_fallback_tmpdir_cleanup(mock_render, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 def test_extract_web_figures_success(mock_vision_cfg, mock_vision_call, tmp_path):
@@ -1753,8 +1707,7 @@ def test_extract_web_figures_success(mock_vision_cfg, mock_vision_call, tmp_path
     assert meta["figure_type"] == "chart"
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._get_vision_config")
 def test_extract_web_figures_no_vision_config(mock_vision_cfg, tmp_path):
     """Returns 0 when vision is not configured."""
@@ -1770,8 +1723,7 @@ def test_extract_web_figures_no_vision_config(mock_vision_cfg, tmp_path):
     assert count == 0
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 def test_extract_web_figures_dedup(mock_vision_cfg, mock_vision_call, tmp_path):
@@ -1808,8 +1760,7 @@ def test_extract_web_figures_dedup(mock_vision_cfg, mock_vision_call, tmp_path):
     assert total == 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 def test_extract_web_figures_chunk_count_matches_per_row(mock_vision_cfg, mock_vision_call, tmp_path):
@@ -2127,7 +2078,7 @@ def test_parse_image_candidates_img_srcset_without_src():
 # --- Integration: srcset/picture through _extract_html_images ---
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2163,7 +2114,7 @@ def test_extract_html_images_srcset_end_to_end(_mock_ip, mock_vision_cfg, mock_v
 # --- Core extraction ---
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2195,7 +2146,7 @@ def test_extract_html_images_basic(_mock_ip, mock_vision_cfg, mock_vision_call, 
     assert meta["image_url"] == "https://example.com/diagram.png"
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2232,7 +2183,7 @@ def test_extract_html_images_multiple(_mock_ip, mock_vision_cfg, mock_vision_cal
     assert count == 3
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2274,7 +2225,7 @@ def test_extract_html_images_chunk_count_matches_per_row(
 # --- Filtering ---
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 def test_extract_html_images_filters_small_html_attrs(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
@@ -2289,7 +2240,7 @@ def test_extract_html_images_filters_small_html_attrs(_mock_ip, mock_vision_cfg,
     assert http_requests == []
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 def test_extract_html_images_filters_small_pixels(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
@@ -2306,7 +2257,7 @@ def test_extract_html_images_filters_small_pixels(_mock_ip, mock_vision_cfg, htt
     assert count == 0
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 def test_extract_html_images_filters_decorative_url(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
@@ -2321,7 +2272,7 @@ def test_extract_html_images_filters_decorative_url(_mock_ip, mock_vision_cfg, h
     assert http_requests == []
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 def test_extract_html_images_filters_decorative_alt(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
@@ -2336,7 +2287,7 @@ def test_extract_html_images_filters_decorative_alt(_mock_ip, mock_vision_cfg, h
     assert http_requests == []
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 def test_extract_html_images_filters_svg(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
@@ -2351,7 +2302,7 @@ def test_extract_html_images_filters_svg(_mock_ip, mock_vision_cfg, http_request
     assert http_requests == []
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 def test_extract_html_images_filters_data_uri(_mock_ip, mock_vision_cfg, http_requests, tmp_path):
@@ -2369,7 +2320,7 @@ def test_extract_html_images_filters_data_uri(_mock_ip, mock_vision_cfg, http_re
 # --- URL handling ---
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2392,7 +2343,7 @@ def test_extract_html_images_resolves_relative_urls(
     assert http_requests.urls() == ["https://example.com/images/fig1.png"]
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._get_vision_config")
 def test_extract_html_images_rejects_private_ip(mock_vision_cfg, http_requests, tmp_path):
     """SSRF guard: rejects private IP image URLs."""
@@ -2459,7 +2410,7 @@ def test_validate_image_url():
     assert _validate_image_url("https://93.184.216.34/img.png") is True
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._get_vision_config")
 @patch(
     "knowledge_base.web.is_private_ip",
@@ -2485,7 +2436,7 @@ def test_extract_html_images_rejects_redirect_to_private(_mock_ip, mock_vision_c
 # --- Dedup ---
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2505,7 +2456,7 @@ def test_extract_html_images_dedup_by_url(_mock_ip, mock_vision_cfg, mock_vision
     assert len(http_requests) == 1
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2528,7 +2479,7 @@ def test_extract_html_images_dedup_by_content_hash(
     assert count == 1
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2558,7 +2509,7 @@ def test_extract_html_images_cross_page_content_hash(
 # --- Error handling ---
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2583,7 +2534,7 @@ def test_extract_html_images_download_failure(_mock_ip, mock_vision_cfg, mock_vi
     assert count == 1
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2609,7 +2560,7 @@ def test_extract_html_images_non_png_conversion(_mock_ip, mock_vision_cfg, mock_
     assert decoded[:4] == b"\x89PNG"
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 def test_extract_html_images_oversized_download(_mock_ip, mock_vision_cfg, http_requests, tmp_path, monkeypatch):
@@ -2631,7 +2582,7 @@ def test_extract_html_images_oversized_download(_mock_ip, mock_vision_cfg, http_
 # --- Lifecycle ---
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2683,7 +2634,7 @@ def test_extract_html_images_stale_cleanup(_mock_ip, mock_vision_cfg, mock_visio
     assert "New figure" in row["content"]
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2720,7 +2671,7 @@ def test_extract_html_images_reingest_same_description(
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
 def test_extract_html_images_embed_failure_preserves_old(
-    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path
+    _mock_ip, mock_vision_cfg, mock_vision_call, http_requests, tmp_path, stub_document_embedder
 ):
     """If embedding fails, old chunks are preserved (no data loss)."""
     conn = get_connection(tmp_path / "test.db")
@@ -2732,24 +2683,26 @@ def test_extract_html_images_embed_failure_preserves_old(
     source_url = "https://example.com/page"
     html = '<html><body><img src="https://example.com/fig.png"></body></html>'
 
-    # First extraction with real embed mock
-    with patch("knowledge_base.ingest.embed", _fake_embed):
-        http_requests.handlers["example.com"] = _respond(content=png_bytes)
-        count1 = _extract_html_images(conn, html, source_url)
-        assert count1 == 1
+    # First extraction with the fake embedder
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
+    count1 = _extract_html_images(conn, html, source_url)
+    assert count1 == 1
+
+    def _embed_failed(*_args, **_kwargs):
+        raise RuntimeError("embed failed")
 
     # Second extraction: embed raises → should preserve old chunks
-    with patch("knowledge_base.ingest.embed", side_effect=Exception("embed failed")):
-        http_requests.handlers["example.com"] = _respond(content=png_bytes)
-        mock_vision_call.return_value = [
-            {
-                "description": "Different description.",
-                "figure_type": "chart",
-                "title": "X",
-            }
-        ]
-        with contextlib.suppress(Exception):  # Expected to propagate
-            _extract_html_images(conn, html, source_url)
+    stub_document_embedder.answer = _embed_failed
+    http_requests.handlers["example.com"] = _respond(content=png_bytes)
+    mock_vision_call.return_value = [
+        {
+            "description": "Different description.",
+            "figure_type": "chart",
+            "title": "X",
+        }
+    ]
+    with contextlib.suppress(Exception):  # Expected to propagate
+        _extract_html_images(conn, html, source_url)
 
     # Old chunk should still be there
     total = conn.execute(
@@ -2759,7 +2712,7 @@ def test_extract_html_images_embed_failure_preserves_old(
     assert total == 1
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2807,7 +2760,7 @@ def test_cleanup_stale_inline_images_noop_when_none(tmp_path):
 # --- Rendered DOM (Phase 2) ---
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2853,7 +2806,7 @@ def test_extract_html_images_rendered_dom_dedup(_mock_ip, mock_vision_cfg, mock_
     }
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2880,7 +2833,7 @@ def test_extract_html_images_rendered_only_when_static_empty(
     assert count == 1
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -2936,7 +2889,7 @@ def test_extract_html_images_aborts_on_extra_source_parse_failure(
     assert after == before, "existing figure chunks must not be deleted"
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -3000,7 +2953,7 @@ here to ensure we get well past the minimum. More filler text for the threshold.
 </html>"""
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -3019,7 +2972,7 @@ def test_ingest_url_extracts_inline_images(_mock_ip, mock_vision_cfg, mock_visio
     assert result.get("figures_extracted", 0) >= 1
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.web._extract_html_images")
 @patch("knowledge_base.web._extract_web_figures")
 @patch("knowledge_base.web._render_with_browser")
@@ -3057,7 +3010,7 @@ def test_ingest_url_runs_inline_even_with_screenshot_figures(
     assert result["figures_extracted"] == 3
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.web._extract_html_images")
 @patch("knowledge_base.web._extract_web_figures")
 @patch("knowledge_base.web._render_with_browser")
@@ -3105,7 +3058,7 @@ _EMPTY_HTML_WITH_IMG = """<html>
 </html>"""
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -3132,7 +3085,7 @@ def test_ingest_url_extracts_images_even_when_no_text(
     assert result.get("figures_extracted", 0) >= 1
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.vision._vision_call")
 @patch("knowledge_base.vision._get_vision_config")
 @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -3162,8 +3115,7 @@ def test_ingest_url_uses_response_url_for_base(_mock_ip, mock_vision_cfg, mock_v
 # --- duplicate detection by content hash (issue #59, task 10) ---
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_detects_duplicate_by_hash(tmp_path):
     """If a file with same content hash exists under a different path, return info."""
     db_path = tmp_path / "test.db"
@@ -3213,8 +3165,7 @@ _SIMPLE_PAGES = [
 ]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_extract_pdf_markdown_basic(tmp_path):
     """Mock pymupdf4llm returns structured markdown with page map."""
     import sys
@@ -3234,8 +3185,7 @@ def test_extract_pdf_markdown_basic(tmp_path):
     assert 2 in page_map.values()
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_extract_pdf_markdown_with_images(tmp_path):
     """image_dir is created and passed to to_markdown."""
     import sys
@@ -3255,8 +3205,7 @@ def test_extract_pdf_markdown_with_images(tmp_path):
     assert call_kwargs[1]["image_path"] == str(image_dir)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_extract_pdf_markdown_fallback_on_import_error(tmp_path):
     """Falls back to flat extraction when pymupdf4llm is unavailable."""
     import sys
@@ -3285,8 +3234,7 @@ def test_extract_pdf_markdown_fallback_on_import_error(tmp_path):
     assert text == _extract_pdf_text(pdf)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_pdf_uses_markdown_chunks(tmp_path):
     """End-to-end: ingest a PDF → chunks have markdown structure + metadata."""
     import sys
@@ -3315,8 +3263,7 @@ def test_ingest_pdf_uses_markdown_chunks(tmp_path):
         assert meta["extractor"].startswith("pymupdf4llm")
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_pdf_uses_markdown(tmp_path):
     """Reingest produces markdown-aware chunks for PDFs."""
     import sys
@@ -3342,8 +3289,7 @@ def test_reingest_pdf_uses_markdown(tmp_path):
         assert "extractor" in meta
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_pdf_chunk_metadata_extractor(tmp_path):
     """PDF chunk metadata includes extractor version and page numbers."""
     import sys
@@ -3394,7 +3340,7 @@ def test_pdf_image_dir_content_hash(tmp_path):
 # --- Session ID tests ---
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_file_with_session_id(tmp_path):
     """ingest_file stores session_id on all inserted chunks."""
     db_path = tmp_path / "test.db"
@@ -3411,7 +3357,7 @@ def test_ingest_file_with_session_id(tmp_path):
     assert all(r["session_id"] == "test-session-42" for r in rows)
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_file_without_session_id(tmp_path):
     """Omitting session_id stores NULL — backwards compatible."""
     db_path = tmp_path / "test.db"
@@ -3427,7 +3373,7 @@ def test_ingest_file_without_session_id(tmp_path):
     assert all(r["session_id"] is None for r in rows)
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_directory_shares_session_id(tmp_path):
     """All files in a directory ingest share the same session_id."""
     db_path = tmp_path / "test.db"
@@ -3447,7 +3393,7 @@ def test_ingest_directory_shares_session_id(tmp_path):
     assert session_ids[0] is not None  # auto-generated UUID
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_directory_explicit_session_id(tmp_path):
     """Caller-provided session_id is used instead of auto-generated UUID."""
     db_path = tmp_path / "test.db"
@@ -3466,7 +3412,7 @@ def test_ingest_directory_explicit_session_id(tmp_path):
     assert session_ids == ["my-custom-session"]
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_file_with_session_id(tmp_path):
     """reingest_file stores the new session_id on re-inserted chunks."""
     db_path = tmp_path / "test.db"
@@ -3490,8 +3436,7 @@ def test_reingest_file_with_session_id(tmp_path):
 # --- chunk_sessions join table tests (#139) ---
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_file_dedup_records_session(tmp_path):
     """When chunks are deduped, the new session is still recorded in chunk_sessions."""
     db_path = tmp_path / "test.db"
@@ -3521,8 +3466,7 @@ def test_ingest_file_dedup_records_session(tmp_path):
     assert sessions[1]["session_id"] == "session-2"
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.usefixtures("fake_page")
 def test_ingest_url_dedup_records_session(tmp_path):
     """When URL chunks are deduped, the new session is still recorded."""
@@ -3548,8 +3492,7 @@ def test_ingest_url_dedup_records_session(tmp_path):
     assert sessions[1]["session_id"] == "ws-2"
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_preserves_historical_sessions(tmp_path):
     """reingest_file preserves session associations from prior ingestions."""
     db_path = tmp_path / "test.db"
@@ -3585,8 +3528,7 @@ def test_reingest_preserves_historical_sessions(tmp_path):
     assert session_ids == {"sess-1", "sess-2", "sess-3"}
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_multi_session_dedup_co_occurrence(tmp_path):
     """End-to-end: deduped chunks still produce correct co-occurrence counts."""
     from knowledge_base.db import co_occurrence_pairs
@@ -3624,8 +3566,7 @@ def test_multi_session_dedup_co_occurrence(tmp_path):
     assert len(pairs_3) == 0
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_embed_failure_does_not_leave_orphan_session_rows(tmp_path):
     """If _embed_with_config raises, no chunk_sessions rows from the failed call persist.
 
@@ -3715,7 +3656,7 @@ def test_get_chunk_strategy_reads_config(tmp_path):
     assert _get_chunk_strategy(conn) == "semantic"
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_file_mechanical_default(tmp_path):
     """Default config: chunks have chunk_strategy='mechanical'."""
     db_path = tmp_path / "test.db"
@@ -3735,7 +3676,7 @@ def test_ingest_file_mechanical_default(tmp_path):
     assert all(r["chunk_strategy"] == "mechanical" for r in rows)
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_file_semantic_nonpdf(tmp_path):
     """Config 'semantic' with non-PDF file still uses mechanical chunking."""
     db_path = tmp_path / "test.db"
@@ -3772,10 +3713,9 @@ def _fake_embed_with_zero(texts, model="bge-m3", expected_dim=None, **_kwargs):
     return result
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed_with_zero)
-def test_ingest_skips_vec_for_none_embedding(tmp_path):
+def test_ingest_skips_vec_for_none_embedding(tmp_path, stub_document_embedder):
     """Chunks with None embeddings get FTS-indexed but no vec row."""
+    stub_document_embedder.answer = _fake_embed_with_zero
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     init_schema(conn)
@@ -3845,8 +3785,7 @@ class TestElementCapture:
             },
         ]
 
-    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
-    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @pytest.mark.usefixtures("stub_document_embedder")
     @patch("knowledge_base.vision._vision_call")
     @patch("knowledge_base.vision._get_vision_config")
     def test_extract_element_captures_basic(self, mock_vision_cfg, mock_vision_call, tmp_path):
@@ -3884,8 +3823,7 @@ class TestElementCapture:
         assert meta["element_tag"] == "canvas"
         assert "D3.js bar chart" in row["content"]
 
-    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
-    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @pytest.mark.usefixtures("stub_document_embedder")
     @patch("knowledge_base.vision._vision_call")
     @patch("knowledge_base.vision._get_vision_config")
     def test_extract_element_captures_chunk_count_matches_per_row(self, mock_vision_cfg, mock_vision_call, tmp_path):
@@ -3915,8 +3853,7 @@ class TestElementCapture:
         vec_rows = conn.execute("SELECT COUNT(*) AS n FROM chunks_vec").fetchone()["n"]
         assert active == vec_rows
 
-    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
-    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @pytest.mark.usefixtures("stub_document_embedder")
     @patch("knowledge_base.vision._vision_call")
     @patch("knowledge_base.vision._get_vision_config")
     @patch("knowledge_base.web.is_private_ip", return_value=False)
@@ -4012,8 +3949,7 @@ class TestElementCapture:
         count = _extract_element_captures(conn, "https://x.com", [])
         assert count == 0
 
-    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
-    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @pytest.mark.usefixtures("stub_document_embedder")
     @patch("knowledge_base.vision._vision_call")
     @patch("knowledge_base.vision._get_vision_config")
     def test_extract_element_captures_stale_cleanup(self, mock_vision_cfg, mock_vision_call, tmp_path):
@@ -4057,8 +3993,7 @@ class TestElementCapture:
         assert len(rows) == 1
         assert "New chart" in rows[0]["content"]
 
-    @patch("knowledge_base.folder_summaries.embed", _fake_embed)
-    @patch("knowledge_base.ingest.embed", _fake_embed)
+    @pytest.mark.usefixtures("stub_document_embedder")
     @patch("knowledge_base.vision._vision_call")
     @patch("knowledge_base.vision._get_vision_config")
     def test_extract_element_captures_svg(self, mock_vision_cfg, mock_vision_call, tmp_path):
@@ -4117,8 +4052,7 @@ class TestElementCapture:
         assert count == 0
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
     """Two identical chunks in ONE document dedup-skip instead of crashing (#553).
 
@@ -4155,8 +4089,7 @@ def test_ingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
     assert n_links == 2
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_intra_batch_duplicate_of_existing_chunk(tmp_path, monkeypatch):
     """In-batch duplicates of an already-persisted chunk: one session link, once (#553 review)."""
     db_path = tmp_path / "test.db"
@@ -4186,8 +4119,7 @@ def test_ingest_intra_batch_duplicate_of_existing_chunk(tmp_path, monkeypatch):
     assert n_links == 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
     """Reingest of a doc with intra-document duplicate chunks must not crash (#553 review).
 
@@ -4220,8 +4152,7 @@ def test_reingest_intra_document_duplicate_chunks(tmp_path, monkeypatch):
     assert n_vec == 2
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_reingest_rolls_back_on_midway_failure(tmp_path, monkeypatch):
     """A failure after the old chunks are deleted must roll back, not truncate (#554 review).
 
@@ -4265,8 +4196,7 @@ def _page(body: str):
     return _respond(html=html)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_url_with_vision_off_makes_no_vision_request(kb_conn, http_requests, monkeypatch):
     monkeypatch.delenv("KNOWLEDGE_BASE_VISION")
     kb_conn.execute(
@@ -4284,8 +4214,7 @@ def test_ingest_url_with_vision_off_makes_no_vision_request(kb_conn, http_reques
     assert http_requests.hosts() == ["page.example.test"]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_url_with_the_browser_off_launches_nothing(kb_conn, http_requests, monkeypatch, tmp_path):
     from knowledge_base.web import configure_browser
 
@@ -4321,7 +4250,7 @@ def _rows(conn, source_uri):
     ).fetchall()
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_text_stores_chunks_under_its_source_uri(kb_conn):
     from knowledge_base.ingest import ingest_text
 
@@ -4338,7 +4267,7 @@ def test_ingest_text_stores_chunks_under_its_source_uri(kb_conn):
     assert not kb_conn.in_transaction
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_text_skips_identical_text(kb_conn):
     from knowledge_base.ingest import ingest_text
 
@@ -4349,7 +4278,7 @@ def test_ingest_text_skips_identical_text(kb_conn):
     assert again == {"chunks_added": 0, "chunks_skipped": 1}
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_text_adds_a_revision_beside_the_original(kb_conn):
     from knowledge_base.ingest import ingest_text
 
@@ -4362,13 +4291,14 @@ def test_ingest_text_adds_a_revision_beside_the_original(kb_conn):
     assert len(after) == len(before) + 1
 
 
-def test_ingest_text_stores_nothing_when_the_embedder_fails(kb_conn):
+def test_ingest_text_stores_nothing_when_the_embedder_fails(kb_conn, stub_document_embedder):
     from knowledge_base.ingest import ingest_text
 
     def _down(*_args, **_kwargs):
         raise httpx.ConnectError("connection refused")
 
-    with patch("knowledge_base.ingest.embed", _down), pytest.raises(httpx.ConnectError):
+    stub_document_embedder.answer = _down
+    with pytest.raises(httpx.ConnectError):
         ingest_text(kb_conn, "text " * 500, source_uri="content:///x", source_type="markdown", session_id="s")
 
     assert kb_conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
@@ -4376,7 +4306,7 @@ def test_ingest_text_stores_nothing_when_the_embedder_fails(kb_conn):
     assert not kb_conn.in_transaction
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_text_stores_repeated_chunks_once(kb_conn):
     from knowledge_base.ingest import ingest_text
 
@@ -4392,7 +4322,7 @@ def test_ingest_text_stores_repeated_chunks_once(kb_conn):
     assert not kb_conn.in_transaction
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_text_rolls_back_a_failed_write(kb_conn):
     import knowledge_base.ingest as ingest_mod
 
@@ -4421,9 +4351,8 @@ def test_ingest_text_rolls_back_a_failed_write(kb_conn):
 _SHARED_FN = 'def shared_attention(query, key):\n    """Scaled dot-product attention."""\n    return query @ key\n'
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.parametrize("session", [None, "s-new"])
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_reingest_links_a_chunk_another_document_holds(kb_conn, tmp_path, session):
     """B's first function is A's; reingesting B used to insert that chunk again and fail on the UNIQUE hash."""
     a = tmp_path / "a.py"
@@ -4460,11 +4389,10 @@ def test_a_text_file_is_stored_as_its_text_would_be(kb_conn, stub_document_embed
     """Converged onto ingest_text's chunker and store: a file's text through ingest_text stores nothing new."""
     from knowledge_base.ingest import ingest_text
 
-    with patch("knowledge_base.folder_summaries.embed", _fake_embed):
-        f = tmp_path / name
-        f.write_text(body + "".join(f"distinct passage number {i}. " for i in range(120)))
-        stored = ingest_file(kb_conn, f)
-        again = ingest_text(kb_conn, f.read_text(), source_uri="content:///copy", source_type="markdown")
+    f = tmp_path / name
+    f.write_text(body + "".join(f"distinct passage number {i}. " for i in range(120)))
+    stored = ingest_file(kb_conn, f)
+    again = ingest_text(kb_conn, f.read_text(), source_uri="content:///copy", source_type="markdown")
     assert stored["chunks_added"] > 1
     assert (again["chunks_added"], again["chunks_skipped"]) == (0, stored["chunks_added"])
 

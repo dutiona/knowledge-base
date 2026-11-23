@@ -14,7 +14,6 @@ from knowledge_base.embeddings import (
     OllamaProvider,
     ProviderConfig,
     _provider_cache,
-    embed,
     embed_query,
     get_provider,
 )
@@ -286,7 +285,7 @@ class TestProviderConfigCache:
 
 
 class TestEmbedDispatch:
-    """Test that module-level embed()/embed_query() dispatch through providers."""
+    """Test that queries and stored texts dispatch through providers."""
 
     @patch("knowledge_base.embeddings.get_provider")
     def test_embed_query_sends_the_instruction_then_the_text(self, mock_get):
@@ -301,17 +300,12 @@ class TestEmbedDispatch:
         assert args == (["Query: hello"],)
         assert kwargs["expected_dim"] == 3
 
-    @patch("knowledge_base.embeddings.get_provider")
-    def test_embed_sends_documents_unchanged(self, mock_get):
-        mock_provider = MagicMock()
-        mock_provider.embed.return_value = [[0.1, 0.2, 0.3]]
-        mock_get.return_value = mock_provider
+    def test_stored_texts_reach_the_provider_unchanged(self, kb_conn, stub_document_embedder):
+        from knowledge_base.db import require_active_space
+        from knowledge_base.embed_swap import space_embedder
 
-        cfg = ProviderConfig(family="ollama", base_url=_OLLAMA)
-        embed(["hello"], model="bge-m3", _provider_cfg=cfg)
-        mock_get.assert_called_once_with(cfg=cfg)
-        args, _ = mock_provider.embed.call_args
-        assert args == (["hello"],)
+        space_embedder(kb_conn, require_active_space(kb_conn))(["hello"])
+        assert list(stub_document_embedder) == ["hello"]
 
 
 class TestONNXProvider:
@@ -472,7 +466,7 @@ class TestNoImplicitEndpoint:
             patch("knowledge_base.utils.is_private_ip", return_value=False),
             pytest.raises(ValidationError, match="base URL"),
         ):
-            embed(["x"], model="m", expected_dim=3, _provider_cfg=ProviderConfig(family=family))
+            get_provider(cfg=ProviderConfig(family=family))
         assert http_requests == []
 
 

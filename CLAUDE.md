@@ -105,7 +105,7 @@ Read these when the task touches the corresponding area:
 
 - Every module has a corresponding `tests/test_<module>.py`
 - Tests use temporary SQLite databases via `tmp_path` fixtures — never touch the real DB
-- Mock Ollama embeddings and LLM calls with `unittest.mock.patch`
+- Fake embeddings with the `stub_document_embedder` fixture (the provider every embedding path resolves); mock LLM calls with `unittest.mock.patch`
 - `@pytest.mark.slow` for tests requiring real LLM/network access
 - Test/source ratio is 1.35x — maintain or improve it
 

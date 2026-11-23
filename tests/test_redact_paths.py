@@ -21,8 +21,6 @@ from knowledge_base import ingest
 from knowledge_base.db import get_connection, resolve_db_path
 from knowledge_base.redact import scrub
 from knowledge_base.utils import content_hash
-from tests.conftest import StubEmbedder
-from tests.declared_env import TEST_EMBED_DIM
 
 # Example shapes built at run time, so no token literal is committed.
 GITHUB_TOKEN = "ghp_" + "Zq7Xw3Rt9Lp2Vb6Nm4Kc8Hd1Fs5Gj0Ay" + "Ab3d"
@@ -46,18 +44,6 @@ def _assert_clean(conn: sqlite3.Connection, embedded: list[str], *secrets: str) 
         assert not conn.execute("SELECT 1 FROM chunks_fts WHERE chunks_fts MATCH ?", (f'"{term}"',)).fetchone()
     for r in rows:
         assert r["content_hash"] == content_hash(r["content"])
-
-
-@pytest.fixture
-def folder_embedder(monkeypatch) -> StubEmbedder:
-    texts = StubEmbedder()
-
-    def _embed(batch, *_args, expected_dim=None, **_kwargs):
-        texts.extend(batch)
-        return [[0.1] * (expected_dim or TEST_EMBED_DIM) for _ in batch]
-
-    monkeypatch.setattr("knowledge_base.folder_summaries.embed", _embed)
-    return texts
 
 
 def _document(secret: str) -> str:
@@ -128,7 +114,7 @@ def _pdf_module(pages: list[dict]) -> MagicMock:
     return module
 
 
-def test_file_ingest_redacts_markdown_code_and_pdf(kb_conn, stub_document_embedder, folder_embedder, tmp_path):
+def test_file_ingest_redacts_markdown_code_and_pdf(kb_conn, stub_document_embedder, tmp_path):
     md = tmp_path / "deploy.md"
     md.write_text(_document(GITHUB_TOKEN))
     code = tmp_path / "settings.py"
@@ -140,7 +126,7 @@ def test_file_ingest_redacts_markdown_code_and_pdf(kb_conn, stub_document_embedd
     ingest.ingest_file(kb_conn, code)
     with patch.dict(sys.modules, {"pymupdf4llm": _pdf_module(pages)}):
         ingest.ingest_file(kb_conn, pdf, source_type="pdf")
-    _assert_clean(kb_conn, [*stub_document_embedder, *folder_embedder], GITHUB_TOKEN, AWS_KEY)
+    _assert_clean(kb_conn, stub_document_embedder, GITHUB_TOKEN, AWS_KEY)
     names = [json.loads(r["metadata"]).get("name") for r in kb_conn.execute("SELECT metadata FROM chunks")]
     assert "region" in names  # the redacted code still parses into its AST chunks
 
@@ -171,15 +157,24 @@ def test_pdf_page_map_counts_redacted_text(tmp_path):
 QUERY_VALUE = "Xk9Lp2Rt5Yv8Bn1Cx4Df6Qw7Zz0Aa"  # a dotless high-entropy value, as a signed URL carries
 
 
-def test_chunk_metadata_is_redacted_keys_kept(kb_conn, stub_document_embedder):
-    meta = {"title": f"Deploy {GITHUB_TOKEN}", "pages": [1, 2], "nested": {"alt": f"aws {AWS_KEY}"}}
+def test_chunk_metadata_keys_are_redacted(kb_conn, stub_document_embedder):
+    """Keys are content too, as in memory-engine (#652): a key holding a token is stored as its placeholder."""
+    meta = {
+        "title": f"Deploy {GITHUB_TOKEN}",
+        "pages": [1, 2],
+        "nested": {"alt": f"aws {AWS_KEY}", f"note {AWS_KEY}": 1},
+        GITHUB_TOKEN: "value",
+    }
     ingest.ingest_text(kb_conn, "ordinary prose", source_uri="content:///m", source_type="markdown", metadata=meta)
-    stored = json.loads(kb_conn.execute("SELECT metadata FROM chunks").fetchone()["metadata"])
-    assert stored == {
+    raw = kb_conn.execute("SELECT metadata FROM chunks").fetchone()["metadata"]
+    assert json.loads(raw) == {
         "title": "Deploy [REDACTED:github-pat]",
         "pages": [1, 2],
-        "nested": {"alt": "aws [REDACTED:aws-access-key]"},
+        "nested": {"alt": "aws [REDACTED:aws-access-key]", "note [REDACTED:aws-access-key]": 1},
+        "[REDACTED:github-pat]": "value",
     }
+    for secret in (GITHUB_TOKEN, AWS_KEY):
+        assert not _windows(secret) & _windows(raw)
 
 
 def test_metadata_hex_under_a_context_key_is_redacted(kb_conn):
@@ -208,6 +203,7 @@ def test_metadata_urls_keep_their_query(kb_conn):
         "image_url": f"HTTPS://{GITHUB_TOKEN}@docs.example.test/i.png?sig={QUERY_VALUE}",
         "other_url": "Http://reader:example-pass@x.example.test/p?k=v",
         "url_with_newline": "https://reader:example-pass@x.example.test/p\n",
+        "https://reader:example-pass@keys.example.test/k": "a URL used as a key",
     }
     ingest._insert_chunk(
         kb_conn,
@@ -224,6 +220,9 @@ def test_metadata_urls_keep_their_query(kb_conn):
     assert stored["other_url"] == "Http://x.example.test/p?k=v"
     # Not a whole URL (a trailing newline): ordinary text, whose link keeps all but its password.
     assert stored["url_with_newline"] == "https://reader:[REDACTED:connection-string-password]@x.example.test/p\n"
+    # A key is content, not a stored reference: it takes every rule, as in memory-engine, so it keeps its user name.
+    key = "https://reader:[REDACTED:connection-string-password]@keys.example.test/k"
+    assert stored[key] == "a URL used as a key"
 
 
 def _serve_article(http_requests, fake_dns, text: str) -> None:
@@ -264,7 +263,7 @@ def test_ingest_url_stores_the_url_without_userinfo(
 
 
 def test_source_uris_keep_their_identity(
-    kb_conn, stub_document_embedder, folder_embedder, http_requests, fake_dns, public_net, monkeypatch, tmp_path
+    kb_conn, stub_document_embedder, http_requests, fake_dns, public_net, monkeypatch, tmp_path
 ):
     """Ruling 2026-11-17: links are not redacted; file paths and document names are identity."""
     from knowledge_base.routes.ingestion import ingest_text
@@ -487,7 +486,7 @@ def test_ingest_url_keeps_its_figures_when_their_write_fails(
     assert _figure_ids(kb_conn) == [old]
 
 
-def test_folder_summary_is_a_fixpoint(kb_conn, stub_document_embedder, folder_embedder, tmp_path):
+def test_folder_summary_is_a_fixpoint(kb_conn, stub_document_embedder, tmp_path):
     """A summary joins file names (kept as identity), 200-character cuts and joined lines: each can make a match."""
     from tests.conftest import machine_token
 
@@ -500,7 +499,7 @@ def test_folder_summary_is_a_fixpoint(kb_conn, stub_document_embedder, folder_em
         ingest.ingest_file(kb_conn, f)
     summary = kb_conn.execute("SELECT summary FROM folder_summaries").fetchone()["summary"]
     assert summary == scrub(summary)
-    assert folder_embedder and all(t == scrub(t) for t in folder_embedder)
+    assert summary in stub_document_embedder and all(t == scrub(t) for t in stub_document_embedder)
     assert "[REDACTED:machine-token]" in summary and "[REDACTED:hex-secret]" in summary
     assert "[REDACTED:high-entropy]" in summary
 

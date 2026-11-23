@@ -35,6 +35,7 @@ __all__ = [
     "add_v2_space_columns",
     "add_v3_embed_refusals",
     "add_v4_embed_truncations",
+    "add_v5_folder_summary_truncations",
     "backup_database",
     "get_schema_version",
     "migrate",
@@ -47,7 +48,7 @@ __all__ = [
 
 #: The schema version this build targets. A fresh DB is stamped with this; the
 #: read path validates against it.
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 #: `config` key under which the applied schema version is stored.
 SCHEMA_VERSION_KEY = "schema_version"
@@ -121,10 +122,26 @@ def add_v4_embed_truncations(conn: sqlite3.Connection) -> None:
     )
 
 
+def add_v5_folder_summary_truncations(conn: sqlite3.Connection) -> None:
+    """v5 (#656): the folder summaries whose vector was cut to fit ``max_input_tokens``, with counts; commits nothing.
+
+    Folder vectors exist only for the active space, one per folder, so a record is keyed by its folder: a refresh
+    rewrites or deletes it with the vector, a promotion replaces them all, and it leaves with its summary or its space.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS folder_summary_truncations ("
+        " folder_path TEXT PRIMARY KEY REFERENCES folder_summaries(folder_path) ON DELETE CASCADE,"
+        " space_name TEXT NOT NULL REFERENCES embed_spaces(name) ON DELETE CASCADE,"
+        " tokens_before INTEGER NOT NULL,"
+        " tokens_after INTEGER NOT NULL)"
+    )
+
+
 _MIGRATIONS: dict[int, Migration] = {
     2: (add_v2_space_columns, False),
     3: (add_v3_embed_refusals, False),
     4: (add_v4_embed_truncations, False),
+    5: (add_v5_folder_summary_truncations, False),
 }
 
 

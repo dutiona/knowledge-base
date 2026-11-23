@@ -30,12 +30,7 @@ from knowledge_base.extraction import (
 )
 from knowledge_base.ingest import ingest_file
 from knowledge_base.papers import register_paper
-from tests.declared_env import TEST_EMBED_DIM
-
-
-def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
-    return [[0.1] * dim for _ in texts]
+from tests.conftest import fake_embedding_provider
 
 
 def _setup(tmp_path):
@@ -174,8 +169,7 @@ FAKE_LLM_RESPONSE = json.dumps(
 )
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_extract_structure_basic(tmp_path):
     conn = _setup(tmp_path)
 
@@ -205,8 +199,7 @@ def test_extract_structure_basic(tmp_path):
     assert metrics[0]["value"] == 88.5
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_extract_structure_no_chunks(tmp_path):
     conn = _setup(tmp_path)
     p = register_paper(conn, "Empty Paper")["paper_id"]
@@ -231,7 +224,7 @@ def test_entity_tables_exist(tmp_path):
 
     md = tmp_path / "doc.md"
     md.write_text("test content")
-    with patch("knowledge_base.ingest.embed", _fake_embed):
+    with fake_embedding_provider():
         ingest_file(conn, md)
     chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
     conn.execute(
@@ -339,8 +332,7 @@ def test_resolve_entities_merges_aliases(tmp_path):
     assert "the proposed approach" in resolution["groups"][0]["members"]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_store_resolved_writes_entities_and_methods(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
@@ -420,8 +412,7 @@ def test_clear_previous_extraction_idempotent(tmp_path):
     assert len(get_methods(conn, p)) == 0
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_extract_structure_fast_path_short_doc(tmp_path):
     """Short docs (<8000 chars) use single LLM call, no entity resolution."""
     conn = _setup(tmp_path)
@@ -441,8 +432,7 @@ def test_extract_structure_fast_path_short_doc(tmp_path):
     assert result["metrics_added"] == 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_estimate_extraction_time_long_doc(tmp_path):
     """estimate_extraction_time reports is_long for large documents."""
     from knowledge_base.extraction import estimate_extraction_time
@@ -459,8 +449,7 @@ def test_estimate_extraction_time_long_doc(tmp_path):
     assert est["chunk_count"] > 0
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_extract_structure_map_reduce_confirmed(tmp_path):
     """Long docs with confirmed=True run the full pipeline."""
     conn = _setup(tmp_path)
@@ -502,8 +491,7 @@ def test_extract_structure_map_reduce_confirmed(tmp_path):
     assert result["methods_added"] >= 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_get_entities(tmp_path):
     conn = _setup(tmp_path)
     p = register_paper(conn, "Test")["paper_id"]
@@ -535,8 +523,7 @@ def test_get_entities(tmp_path):
 # --- map-reduce error visibility ---
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
     """When all chunks return empty, the error list is populated."""
     conn = _setup(tmp_path)
@@ -559,8 +546,7 @@ def test_map_reduce_all_chunks_fail_reports_errors(tmp_path):
     assert "empty response" in exc_info.value.errors[0]["error"]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_store_resolved_passes_chunk_id_to_metrics(tmp_path):
     """Map-reduce path: record_metric receives chunk_id from per-chunk extraction."""
     conn = _setup(tmp_path)
@@ -607,8 +593,7 @@ def test_store_resolved_passes_chunk_id_to_metrics(tmp_path):
     assert row["chunk_id"] == chunk_id
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
     """Single-pass path: record_metric receives first_chunk_id as approximate provenance."""
     conn = _setup(tmp_path)
@@ -631,8 +616,7 @@ def test_single_pass_passes_first_chunk_id_to_metrics(tmp_path):
     assert row["chunk_id"] == first_chunk_id
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.parametrize("table", ["methods", "datasets"])
 def test_store_resolved_passes_chunk_id_to_methods_and_datasets(tmp_path, table):
     """Map-reduce path: record_method/record_dataset receive chunk_id from mentions."""
@@ -736,8 +720,7 @@ def test_store_resolved_description_and_chunk_id_same_provenance(tmp_path, table
     assert row["chunk_id"] == chunk_2, f"chunk_id should be {chunk_2} (description source) but got {row['chunk_id']}"
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @pytest.mark.parametrize("table", ["methods", "datasets"])
 def test_single_pass_passes_first_chunk_id_to_methods_and_datasets(tmp_path, table):
     """Single-pass path: record_method/record_dataset receive first_chunk_id."""
@@ -817,8 +800,7 @@ def test_batch_commit_atomicity(tmp_path):
 # ── _store_resolved: malformed resolution groups ──────────────────────
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_store_resolved_skips_group_missing_canonical(tmp_path, caplog):
     """Groups without 'canonical' key are skipped with a warning, not KeyError."""
     conn = _setup(tmp_path)
@@ -857,8 +839,7 @@ def test_store_resolved_skips_group_missing_canonical(tmp_path, caplog):
     assert any("missing 'canonical'" in msg for msg in caplog.messages)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_store_resolved_skips_group_with_empty_canonical(tmp_path, caplog):
     """Groups with empty-string canonical are skipped like missing ones."""
     conn = _setup(tmp_path)
@@ -881,8 +862,7 @@ def test_store_resolved_skips_group_with_empty_canonical(tmp_path, caplog):
     assert any("missing 'canonical'" in msg for msg in caplog.messages)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_store_resolved_all_groups_malformed(tmp_path, caplog):
     """All groups malformed — function completes without crash, 0 entities."""
     conn = _setup(tmp_path)
@@ -918,7 +898,7 @@ def test_store_resolved_rollback_on_error(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "doc.md"
     md.write_text("# Test\nSome content")
-    with patch("knowledge_base.ingest.embed", _fake_embed):
+    with fake_embedding_provider():
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -967,7 +947,7 @@ def test_extract_single_pass_rollback_on_error(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "doc.md"
     md.write_text("# Test\nSome content")
-    with patch("knowledge_base.ingest.embed", _fake_embed):
+    with fake_embedding_provider():
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1028,7 +1008,7 @@ def test_store_resolved_handles_none_method_and_dataset(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
     md.write_text("Some content about models.\n")
-    with patch("knowledge_base.ingest.embed", _fake_embed):
+    with fake_embedding_provider():
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
     chunk_id = conn.execute("SELECT id FROM chunks LIMIT 1").fetchone()["id"]
@@ -1068,7 +1048,7 @@ def test_extract_single_pass_handles_none_fields(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "doc.md"
     md.write_text("# Test\nSome content about methods.")
-    with patch("knowledge_base.ingest.embed", _fake_embed):
+    with fake_embedding_provider():
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1113,7 +1093,7 @@ def test_store_resolved_handles_null_containers(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "paper.md"
     md.write_text("Content.\n")
-    with patch("knowledge_base.ingest.embed", _fake_embed):
+    with fake_embedding_provider():
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1130,7 +1110,7 @@ def test_extract_single_pass_handles_null_containers(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "doc.md"
     md.write_text("# Test\nContent.")
-    with patch("knowledge_base.ingest.embed", _fake_embed):
+    with fake_embedding_provider():
         ingest_file(conn, md)
     p = register_paper(conn, "Test Paper", source_uri=str(md.resolve()))["paper_id"]
 
@@ -1196,8 +1176,7 @@ def _mock_llm_for_progress(prompt, *, conn=None, cfg=None, client=None):
     return _MAP_RESPONSE
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_map_reduce_logs_per_chunk_progress(tmp_path, caplog):
     """Each chunk emits an INFO log with chunk number, percentage, timing, and entity counts."""
     conn = _setup(tmp_path)
@@ -1227,8 +1206,7 @@ def test_map_reduce_logs_per_chunk_progress(tmp_path, caplog):
     assert "metrics=" in chunk_logs[0]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_map_reduce_logs_revised_eta_every_5_chunks(tmp_path, caplog):
     """Revised ETA is logged every 5 chunks."""
     conn = _setup(tmp_path)
@@ -1260,8 +1238,7 @@ def test_map_reduce_logs_revised_eta_every_5_chunks(tmp_path, caplog):
     assert len(eta_logs) == expected_eta_count
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_map_reduce_logs_failed_chunk(tmp_path, caplog):
     """Failed chunks log 'FAILED' instead of entity counts."""
     conn = _setup(tmp_path)
@@ -1298,8 +1275,7 @@ def test_map_reduce_logs_failed_chunk(tmp_path, caplog):
         assert "methods=" in chunk_logs[1]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_map_reduce_logs_entity_resolution(tmp_path, caplog):
     """Map phase completion and entity resolution are logged."""
     conn = _setup(tmp_path)
@@ -1326,8 +1302,7 @@ def test_map_reduce_logs_entity_resolution(tmp_path, caplog):
     assert any("Entity resolution complete" in m for m in caplog.messages)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_map_reduce_result_includes_timing(tmp_path):
     """Result dict includes extraction_seconds and resolution_seconds."""
     conn = _setup(tmp_path)
@@ -1357,8 +1332,7 @@ def test_map_reduce_result_includes_timing(tmp_path):
 # --- Parallel map phase (issue #15) ---
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_parallel_map_phase_produces_same_results(tmp_path):
     """Parallel extraction (max_workers>1) produces identical results to sequential."""
     conn = _setup(tmp_path)
@@ -1404,8 +1378,7 @@ def test_parallel_map_phase_produces_same_results(tmp_path):
     assert seq_result["metrics_added"] == par_result["metrics_added"]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_parallel_map_handles_partial_failures(tmp_path):
     """Parallel map phase continues past per-chunk failures."""
     conn = _setup(tmp_path)
@@ -1432,8 +1405,7 @@ def test_parallel_map_handles_partial_failures(tmp_path):
     assert "errors" in result
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_parallel_map_calls_with_cfg_not_conn(tmp_path):
     """Parallel path passes pre-read cfg dict, not conn, to _map_extract."""
     conn = _setup(tmp_path)
@@ -1464,8 +1436,7 @@ def test_parallel_map_calls_with_cfg_not_conn(tmp_path):
     assert all(t[3] == "Client" for t in received_args), f"Expected shared httpx.Client, got: {received_args}"
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_parallel_map_progress_callback(tmp_path):
     """Progress callback fires for each chunk in parallel mode."""
     conn = _setup(tmp_path)
@@ -1489,8 +1460,7 @@ def test_parallel_map_progress_callback(tmp_path):
     assert len(progress_calls) >= len(chunks)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_max_workers_clamped_to_chunk_count(tmp_path):
     """max_workers is clamped to the number of chunks (no idle threads)."""
     conn = _setup(tmp_path)
@@ -1511,8 +1481,7 @@ def test_max_workers_clamped_to_chunk_count(tmp_path):
     assert "error" not in result
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_max_workers_defaults_to_sequential(tmp_path):
     """Default max_workers=1 preserves sequential behavior."""
     conn = _setup(tmp_path)

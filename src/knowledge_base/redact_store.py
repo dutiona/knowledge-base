@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import json
 import posixpath
+import re
 import sqlite3
 from collections import Counter
-from collections.abc import Iterator
 from itertools import groupby, product
-from typing import Any
 
 from . import migrate as _migrate
 from .db import (
@@ -29,7 +28,7 @@ from .db import (
 from .embed_swap import record_truncation, space_embedder, truncated_chunks
 from .folder_summaries import update_folder_summary
 from .chunking import CHUNK_OVERLAP
-from .ingest import _WHOLE_URL, redact_metadata
+from .ingest import redact_metadata
 from .redact import findings, redact_in_context, scrub
 from .utils import content_hash, without_userinfo
 
@@ -44,17 +43,12 @@ def _backups(conn: sqlite3.Connection) -> list[str]:
     return sorted(p.name for p in (db.parent / "backups").glob("*.db"))
 
 
-def _strings(value: Any) -> Iterator[str]:
-    """The metadata strings the rules apply to: every string value but a whole URL, which only loses userinfo."""
-    if isinstance(value, str):
-        if not _WHOLE_URL.fullmatch(value):
-            yield value
-    elif isinstance(value, list):
-        for v in value:
-            yield from _strings(v)
-    elif isinstance(value, dict):
-        for v in value.values():
-            yield from _strings(v)
+_PLACEHOLDER = re.compile(r"\[REDACTED:([a-z0-9-]+)\]")
+
+
+def _added_rules(old: str, new: str) -> Counter[str]:
+    """The placeholders *new* holds beyond *old*'s, by rule: what a metadata rewrite redacts, keys included."""
+    return Counter(_PLACEHOLDER.findall(new)) - Counter(_PLACEHOLDER.findall(old))
 
 
 #: How much of a neighbouring chunk is read as a chunk's context: past any secret a rule matches.
@@ -137,9 +131,9 @@ def report(conn: sqlite3.Connection) -> dict:
             spans.update(contents[row["id"]][1])
             dirty = True
         metadata = row["metadata"] or "{}"
-        if redact_metadata(metadata) != metadata:
+        if (clean := redact_metadata(metadata)) != metadata:
             to_rewrite["metadata"] += 1
-            spans.update(rule for text in _strings(json.loads(metadata)) for rule in findings(text))
+            spans.update(_added_rules(metadata, clean))
             dirty = True
         if without_userinfo(row["source_uri"]) != row["source_uri"]:
             to_rewrite["source_uri"] += 1

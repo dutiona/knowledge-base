@@ -11,8 +11,7 @@ import posixpath
 import sqlite3
 
 from .db import escape_like, require_active_space
-from .embed_swap import declared_provider_config
-from .embeddings import embed, truncate_embedding
+from .embed_swap import record_folder_truncation, space_embedder
 from .redact import scrub
 from .utils import serialize_f32 as _serialize_f32
 
@@ -112,17 +111,10 @@ def update_folder_summary(
     if not summary:
         return False
 
-    # folder_summaries_vec is at the ACTIVE space's dim, so embed with the active space's shape, at the
-    # declared endpoint, after the identity check (#569, #573).
+    # folder_summaries_vec is at the ACTIVE space's dim, so embed into the active space, at the declared endpoint,
+    # after the identity check (#569, #573).
     active = require_active_space(conn)
-    provider_cfg = declared_provider_config(conn, active)
-    base_dim, model, dim = active["matryoshka_base_dim"], active["model"], active["dim"]
-    if base_dim:
-        embedding = embed([summary], model=model, expected_dim=base_dim, _provider_cfg=provider_cfg)[0]
-        if embedding is not None:
-            embedding = truncate_embedding(embedding, dim)
-    else:
-        embedding = embed([summary], model=model, expected_dim=dim, _provider_cfg=provider_cfg)[0]
+    (embedding,), cuts = space_embedder(conn, active)([summary])
 
     # Upsert folder_summaries
     conn.execute(
@@ -145,6 +137,8 @@ def update_folder_summary(
             "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
             (_serialize_f32(embedding), folder_path),
         )
+    # A vector built from the start of a cut summary is recorded with it; the record is cleared once it fits (#656).
+    record_folder_truncation(conn, folder_path, active["name"], cuts.get(0) if embedding is not None else None)
 
     conn.commit()
     return True

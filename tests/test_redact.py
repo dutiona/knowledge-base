@@ -7,8 +7,10 @@ email detector, the ADR-0020 machine-token detector first, and links exempt from
 url-credential. memory-engine#1024 then added sixteen provider prefixes (the ``new-prefix-`` cases) and made
 SendGrid's ``SG.`` and ``eyJ`` need a dot past the prefix. Only ``url-authority-ends-at-multibyte-space`` is
 written by hand: memory-engine panics on it.
-The ``json-`` cases (memory-engine's ``test(redact): share JSON-key hex cases with knowledge-base``, for #626) hold
-JSON documents: each is also its own one-pass text output, and the JSON walk must turn its input into its output too.
+The ``json-`` cases (memory-engine's ``test(redact): share JSON-key hex cases with knowledge-base``, for #626, and its
+key-redaction cases, for #652) hold JSON documents: each is also its own one-pass text output, and the JSON walk must
+turn its input into its output too. Keys that redact to one text cannot be such a case (one text pass leaves two equal
+keys where the walk renames the later one), so each repository tests them itself.
 Change the file only through a linked pair of PRs, memory-engine first, both quoting the same ``sha256sum``.
 """
 
@@ -25,7 +27,7 @@ import pytest
 from knowledge_base.redact import TOKEN_SHAPE, redact, redact_json, scrub
 
 FIXTURE = Path(__file__).parent / "fixtures" / "redaction-cases.jsonl"
-FIXTURE_SHA256 = "0c142e4c7c5823e775e031af3815c754f57a0ed6c6e8576b028e38564ec4f4db"
+FIXTURE_SHA256 = "759798de321854e5f1a99ba45056b7a843a6b5a2afe58a0b20bbb719b8337619"
 _LINES = FIXTURE.read_text(encoding="utf-8").split("\n")
 HEADER = json.loads(_LINES[0])
 CASES = [json.loads(line) for line in _LINES[1:] if line]
@@ -160,9 +162,34 @@ def test_the_key_rule_runs_before_a_custom_leaf():
         "url": "https://example.test/a",
     }
     assert seen == ["https://example.test/a"]
+    assert redact_json({AWS_KEY: "x"}, leaf) == {"[REDACTED:aws-access-key]": "x"}  # a key never reaches the leaf
+    assert seen == ["https://example.test/a", "x"]
 
 
-def test_redact_json_keeps_keys_and_non_strings():
+def test_redact_json_redacts_keys_and_keeps_every_member():
+    """memory-engine's ``scrub_json_redacts_keys_and_keeps_every_member``, without its denylist (#652).
+
+    Keys that redact to one text keep every member, the later ones in key order renamed ``~1``, ``~2``: the two AWS
+    keys are inserted against key order, so only the order of the keys gives ``AWS_KEY`` the bare placeholder.
+    """
+    other = "AKIA" + "IOSFODNN7EXAMPLF"
+    value = {GITHUB_TOKEN: 1, other: 4, AWS_KEY: 3, "plain": {AWS_KEY: 5}}
+    assert redact_json(value) == {
+        "[REDACTED:aws-access-key]": 3,
+        "[REDACTED:aws-access-key]~1": 4,
+        "[REDACTED:github-pat]": 1,
+        "plain": {"[REDACTED:aws-access-key]": 5},
+    }
+
+
+def test_a_renamed_key_never_takes_a_literal_key_s_name():
+    """Literal placeholder keys collide too; the expected value is memory-engine's own ``scrub_json`` output."""
+    p = "[REDACTED:aws-access-key]"
+    value = {AWS_KEY: 1, "AKIA" + "IOSFODNN7EXAMPLF": 4, p: 2, f"{p}~1": 3}
+    assert redact_json(value) == {p: 1, f"{p}~1": 4, f"{p}~2": 2, f"{p}~1~1": 3}
+
+
+def test_redact_json_keeps_clean_keys_and_non_strings():
     value = {
         "description": f"leaked {AWS_KEY} here",
         "nested": {"note": f"token {GITHUB_TOKEN}"},

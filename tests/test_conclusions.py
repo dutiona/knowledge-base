@@ -2,7 +2,6 @@
 
 import contextlib
 import sqlite3
-from unittest.mock import patch
 
 import pytest
 
@@ -15,12 +14,6 @@ from knowledge_base.conclusions import (
     record_conclusion,
     supersede_conclusion,
 )
-from tests.declared_env import TEST_EMBED_DIM
-
-
-def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
-    return [[0.1] * dim for _ in texts]
 
 
 def _setup(tmp_path):
@@ -44,8 +37,7 @@ def test_record_conclusion_basic(tmp_path):
     assert conclusions[0]["confidence"] == 0.9
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_record_conclusion_with_evidence(tmp_path):
     conn = _setup(tmp_path)
     md = tmp_path / "evidence.md"

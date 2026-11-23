@@ -2,15 +2,12 @@
 
 from unittest.mock import patch
 
+import pytest
+
 from knowledge_base.db import get_connection, init_schema
 from knowledge_base.folder_summaries import compute_folder_hash, update_folder_summary
 from knowledge_base.ingest import ingest_file
 from tests.declared_env import TEST_EMBED_DIM
-
-
-def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
-    return [[0.1] * dim for _ in texts]
 
 
 def test_folder_summaries_table_exists(tmp_path):
@@ -53,8 +50,7 @@ def test_folder_summaries_columns(tmp_path):
     assert cols == {"folder_path", "summary", "content_hash", "updated_at"}
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_compute_folder_hash_changes_with_content(tmp_path):
     """Hash changes when folder contents change."""
     db_path = tmp_path / "test.db"
@@ -75,8 +71,7 @@ def test_compute_folder_hash_changes_with_content(tmp_path):
     assert hash1 != hash2
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_update_folder_summary_creates_entry(tmp_path):
     """update_folder_summary inserts a new folder summary."""
     db_path = tmp_path / "test.db"
@@ -100,8 +95,7 @@ def test_update_folder_summary_creates_entry(tmp_path):
     assert update_folder_summary(conn, str(folder)) is False
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_update_folder_summary_skips_when_unchanged(tmp_path):
     """update_folder_summary returns False when content hash hasn't changed."""
     db_path = tmp_path / "test.db"
@@ -117,8 +111,7 @@ def test_update_folder_summary_skips_when_unchanged(tmp_path):
     assert update_folder_summary(conn, str(folder)) is False
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_update_folder_summary_updates_stale_entry(tmp_path):
     """update_folder_summary updates when content changes."""
     db_path = tmp_path / "test.db"
@@ -148,8 +141,7 @@ def test_update_folder_summary_updates_stale_entry(tmp_path):
     assert new_row["summary"] != old_row["summary"]
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_file_triggers_folder_summary(tmp_path):
     """Ingesting a file automatically creates/updates its folder's summary."""
     db_path = tmp_path / "test.db"
@@ -169,8 +161,7 @@ def test_ingest_file_triggers_folder_summary(tmp_path):
     assert row["summary"]  # non-empty
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch(
     "knowledge_base.search.embed_query",
     lambda text, model="bge-m3", **_kw: [0.1] * TEST_EMBED_DIM,
@@ -307,8 +298,7 @@ def test_folder_boost_no_folders_is_noop(tmp_path):
     assert result == scores
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_update_folder_summary_empty_folder(tmp_path):
     """update_folder_summary returns False for a folder with no indexed chunks."""
     db_path = tmp_path / "test.db"
@@ -321,8 +311,7 @@ def test_update_folder_summary_empty_folder(tmp_path):
     assert update_folder_summary(conn, str(empty_folder)) is False
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_folder_summary_ignores_subdirectory_files(tmp_path):
     """Folder summary only includes direct children, not files in subdirectories."""
     db_path = tmp_path / "test.db"
@@ -359,8 +348,7 @@ def test_folder_summary_ignores_subdirectory_files(tmp_path):
     assert "top.md" not in child_row["summary"]
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_folder_hash_escapes_like_wildcards(tmp_path):
     """Underscores in folder names must not act as LIKE wildcards."""
     db_path = tmp_path / "test.db"
@@ -389,8 +377,7 @@ def test_folder_hash_escapes_like_wildcards(tmp_path):
     )
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_ingest_directory_batches_folder_summaries(tmp_path):
     """ingest_directory updates folder summaries once per folder, not per file."""
     from knowledge_base.ingest import ingest_directory
@@ -415,8 +402,7 @@ def test_ingest_directory_batches_folder_summaries(tmp_path):
 # ---------- Windows path normalization (#158) ----------
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_source_uri_uses_forward_slashes(tmp_path):
     """source_uri stored in the DB must always use forward slashes."""
     db_path = tmp_path / "test.db"
@@ -433,8 +419,7 @@ def test_source_uri_uses_forward_slashes(tmp_path):
     assert row["source_uri"] == (folder / "a.md").as_posix()
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_folder_summary_path_uses_forward_slashes(tmp_path):
     """Folder summary folder_path must use forward slashes to match source_uris."""
     db_path = tmp_path / "test.db"

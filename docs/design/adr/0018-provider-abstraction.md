@@ -407,6 +407,14 @@ The bare-name path is removed: the `_PROVIDERS` registry, `OpenAIProvider`, `get
 endpoint, so the #569 amendment's "The bare-name `OpenAIProvider` keeps its literal endpoint" no longer holds: the
 `openai` family builds an `OpenAICompatProvider` on the declared URL, and `OllamaProvider` takes a required URL.
 
+## Amendment (2026-11-23, #654): stored texts embed through one path, and tests fake the provider
+
+Module-level `embed()` is removed. Every stored text (chunks at ingest, backfill and rewrite; folder summaries at
+refresh and at promotion) is embedded through `embed_swap.space_embedder`, which returns the vectors and the inputs the
+provider cut to fit; queries go through `embed_query`. §2's "mocks that `@patch("knowledge_base.ingest.embed")` keep
+working" no longer holds: tests fake the embedder where the provider is built (`embeddings._build_provider`, through
+the `stub_document_embedder` fixture), so the shape of the embedding path is no longer pinned by the tests.
+
 ## References
 
 - Current code: `src/knowledge_base/embeddings.py` (`EmbeddingProvider` Protocol,

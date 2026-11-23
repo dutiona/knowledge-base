@@ -16,11 +16,6 @@ from tests.declared_env import TEST_EMBED_DIM, TEST_EMBED_MODEL
 NEW_DIM = 384
 
 
-def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
-    return [[0.1] * dim for _ in texts]
-
-
 def _fake_embed_new(texts, model="mxbai-embed-large", expected_dim=None, **_kwargs):
     dim = expected_dim if expected_dim is not None else NEW_DIM
     return [[0.2] * dim for _ in texts]
@@ -55,12 +50,11 @@ def _declare_new_model(monkeypatch) -> None:
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_DIM", str(NEW_DIM))
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch(
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_re_embed_changes_model(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
@@ -87,12 +81,11 @@ def test_re_embed_changes_model(mock_provider, tmp_path, monkeypatch):
     assert new_count == old_count
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch(
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
@@ -109,11 +102,11 @@ def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path, monkeypatch):
     assert chunk_ids_before == chunk_ids_after
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch(
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 def test_re_embed_empty_db(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
@@ -125,12 +118,11 @@ def test_re_embed_empty_db(mock_provider, tmp_path, monkeypatch):
     assert result["dim"] == NEW_DIM
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch(
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_re_embed_includes_folder_summaries(mock_provider, tmp_path, monkeypatch):
     """re_embed re-creates folder_summaries_vec with the new model."""
     conn = _setup(tmp_path)
@@ -266,7 +258,15 @@ def test_promote_is_all_or_nothing(kb_conn, failure):
 
     _two_folders(kb_conn)
     create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM)
-    before = (_config_rows(kb_conn), _space_rows(kb_conn), _vec_state(kb_conn))
+    active = kb_conn.execute("SELECT name FROM embed_spaces WHERE status = 'active'").fetchone()[0]
+    kb_conn.execute(
+        "INSERT INTO folder_summary_truncations (folder_path, space_name, tokens_before, tokens_after)"
+        " VALUES ('/docs/a', ?, 9, 4)",
+        (active,),
+    )
+    kb_conn.commit()
+    truncations = "SELECT folder_path, space_name FROM folder_summary_truncations"
+    before = (_config_rows(kb_conn), _space_rows(kb_conn), _vec_state(kb_conn), kb_conn.execute(truncations).fetchall())
     provider = _provider()
     calls = {"n": 0}
     real_serialize = _serialize_f32
@@ -287,13 +287,19 @@ def test_promote_is_all_or_nothing(kb_conn, failure):
         promote_space(kb_conn, "same")
 
     assert kb_conn.isolation_level == ""
-    assert (_config_rows(kb_conn), _space_rows(kb_conn), _vec_state(kb_conn)) == before
+    assert (
+        _config_rows(kb_conn),
+        _space_rows(kb_conn),
+        _vec_state(kb_conn),
+        kb_conn.execute(truncations).fetchall(),
+    ) == before
     fresh = get_connection(Path(kb_conn.execute("PRAGMA database_list").fetchone()["file"]))
-    assert (_config_rows(fresh), _space_rows(fresh), _vec_state(fresh)) == before
+    assert (_config_rows(fresh), _space_rows(fresh), _vec_state(fresh), fresh.execute(truncations).fetchall()) == before
     fresh.close()
     with patch("knowledge_base.embed_swap.get_provider", return_value=_provider()):
         promote_space(kb_conn, "same")  # a retry succeeds
     assert ("same", "active", TEST_EMBED_MODEL) in _space_rows(kb_conn)
+    assert kb_conn.execute(truncations).fetchall() == []  # the promoted space embedded both summaries whole
 
 
 def test_promote_refuses_a_pending_transaction(kb_conn):

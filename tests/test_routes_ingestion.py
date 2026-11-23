@@ -379,11 +379,10 @@ def test_configure_browser_tool_maps_a_domain_error(kb_conn):
 # ---------------------------------------------------------------------------
 
 
-def test_ingest_text_over_stdio_has_no_machine(kb_conn, monkeypatch):
+@pytest.mark.usefixtures("stub_document_embedder")
+def test_ingest_text_over_stdio_has_no_machine(kb_conn):
     from knowledge_base.routes.ingestion import ingest_text
-    from tests.declared_env import TEST_EMBED_DIM
 
-    monkeypatch.setattr("knowledge_base.ingest.embed", lambda batch, *a, **k: [[0.1] * TEST_EMBED_DIM for _ in batch])
     with patch("knowledge_base.routes.ingestion._get_conn", return_value=kb_conn):
         result = json.loads(ingest_text("notes.md", "a stdio note"))
 
