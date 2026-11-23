@@ -357,8 +357,9 @@ KB must not let a tool call redirect its embedding traffic. For the **embedding*
   the server stopped: `knowledge-base-ingest re-embed` (to the declared identity) and
   `knowledge-base-ingest rebind` (a moved endpoint). In a served process, promotion is
   limited to the declared identity.
-- **One key source (§4).** The embedding key is read only from
-  `KNOWLEDGE_BASE_EMBED_API_KEY`; `config` stores the spec `env:KNOWLEDGE_BASE_EMBED_API_KEY`,
+- **One key source (§4).** The embedding key comes only from the declaration:
+  `KNOWLEDGE_BASE_EMBED_API_KEY`, or (#660) the file `KNOWLEDGE_BASE_EMBED_API_KEY_FILE` names, never both;
+  `config` stores the spec `env:KNOWLEDGE_BASE_EMBED_API_KEY` or `file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE`,
   never an inline key. An LLM key is an inline value or exactly `env:KNOWLEDGE_BASE_LLM_API_KEY`.
 - **One floor exemption (§4).** The floor stays for every non-loopback URL with a single
   exception: the declared embedding host, by exact host match, on the embedding request

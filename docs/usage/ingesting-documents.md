@@ -349,6 +349,7 @@ export KNOWLEDGE_BASE_EMBED_MODEL=Qwen/Qwen3-Embedding-0.6B   # the slug also se
 export KNOWLEDGE_BASE_EMBED_DIM=1024
 export KNOWLEDGE_BASE_EMBED_URL=https://embedder.example.test
 export KNOWLEDGE_BASE_EMBED_API_KEY=...   # read per request; config records only env:KNOWLEDGE_BASE_EMBED_API_KEY
+# or: export KNOWLEDGE_BASE_EMBED_API_KEY_FILE=/run/secrets/embed-key  # read once at start; never both
 # The served artifact (ADR-0015 §1, all four or none), as the deployment measured it:
 export KNOWLEDGE_BASE_EMBED_ARTIFACT_SHA256=06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439
 export KNOWLEDGE_BASE_EMBED_POOLING=last
