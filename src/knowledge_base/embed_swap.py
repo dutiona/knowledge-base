@@ -203,6 +203,20 @@ def record_truncation(conn: sqlite3.Connection, chunk_id: int, space_name: str, 
     )
 
 
+def record_folder_truncation(
+    conn: sqlite3.Connection, folder_path: str, space_name: str, cut: tuple[int, int] | None
+) -> None:
+    """Record that *folder_path*'s vector in *space_name* was cut to fit, or that it was not (*cut* None) (#656)."""
+    if cut is None:
+        conn.execute("DELETE FROM folder_summary_truncations WHERE folder_path = ?", (folder_path,))
+    else:
+        conn.execute(
+            "INSERT OR REPLACE INTO folder_summary_truncations (folder_path, space_name, tokens_before, tokens_after)"
+            " VALUES (?, ?, ?, ?)",
+            (folder_path, space_name, *cut),
+        )
+
+
 def truncated_chunks(conn: sqlite3.Connection, space_name: str) -> list[dict]:
     """Every chunk *space_name* stores cut, by id, document and token counts, never its text (#620)."""
     return [
@@ -303,7 +317,8 @@ def backfill_space(
     }
 
 
-_FolderVectors = dict[tuple[str, str], "list[float] | None"]
+#: Each (folder, summary) row's vector, and the (tokens counted, tokens kept) of a summary the embedder cut to fit.
+_FolderVectors = dict[tuple[str, str], "tuple[list[float] | None, tuple[int, int] | None]"]
 
 
 def _folder_rows(conn: sqlite3.Connection) -> list[tuple[str, str]]:
@@ -315,12 +330,16 @@ def _embed_folder_summaries(
 ) -> _FolderVectors:
     if not rows:
         return {}
-    vectors, _cuts = embed([text for _path, text in rows])
-    return dict(zip(rows, vectors, strict=True))
+    vectors, cuts = embed([text for _path, text in rows])
+    return {row: (vector, cuts.get(i)) for i, (row, vector) in enumerate(zip(rows, vectors, strict=True))}
 
 
-def _write_folder_summaries_vec(conn: sqlite3.Connection, dim: int, vectors: _FolderVectors) -> None:
-    """Recreate folder_summaries_vec at *dim* and fill it. Commits nothing: the caller owns the transaction."""
+def _write_folder_summaries_vec(conn: sqlite3.Connection, space_name: str, dim: int, vectors: _FolderVectors) -> None:
+    """Recreate folder_summaries_vec at *dim*, fill it and replace the folder cut records with *space_name*'s.
+
+    Commits nothing: the caller owns the transaction.
+    """
+    conn.execute("DELETE FROM folder_summary_truncations")
     conn.execute("DROP TABLE IF EXISTS folder_summaries_vec")
     conn.execute(f"""
         CREATE VIRTUAL TABLE folder_summaries_vec USING vec0(
@@ -328,12 +347,14 @@ def _write_folder_summaries_vec(conn: sqlite3.Connection, dim: int, vectors: _Fo
             +folder_path TEXT
         )
     """)
-    for (path, _text), vec in vectors.items():
+    for (path, _text), (vec, cut) in vectors.items():
         if vec is not None:
             conn.execute(
                 "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
                 (_serialize_f32(vec), path),
             )
+            if cut is not None:
+                record_folder_truncation(conn, path, space_name, cut)
 
 
 def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
@@ -378,7 +399,7 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
             vectors = {row: snapshot[row] for row in current if row in snapshot}
             vectors.update(_embed_folder_summaries(embed, changed))
             old_name = _swap_active(conn, space)
-            _write_folder_summaries_vec(conn, space["dim"], vectors)
+            _write_folder_summaries_vec(conn, space_name, space["dim"], vectors)
             conn.execute("COMMIT")
         except BaseException:
             conn.execute("ROLLBACK")

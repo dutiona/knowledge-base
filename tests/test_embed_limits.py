@@ -94,6 +94,80 @@ def test_an_over_length_folder_summary_no_longer_fails_its_batch(conn, bounded_e
     assert bounded_embedder.refused == 0
     ((sent,),) = bounded_embedder.inputs
     assert count(sent) <= LIMIT
+    summary = conn.execute("SELECT summary FROM folder_summaries WHERE folder_path = '/docs/f'").fetchone()[0]
+    assert _folder_truncations(conn) == [("/docs/f", _active_space(conn), count(summary), count(sent))]
+
+
+def _active_space(conn: sqlite3.Connection) -> str:
+    return conn.execute("SELECT name FROM embed_spaces WHERE status = 'active'").fetchone()[0]
+
+
+def _folder_truncations(conn: sqlite3.Connection) -> list[tuple]:
+    return [
+        tuple(r)
+        for r in conn.execute(
+            "SELECT folder_path, space_name, tokens_before, tokens_after FROM folder_summary_truncations"
+            " ORDER BY folder_path"
+        )
+    ]
+
+
+def _folder_of(conn: sqlite3.Connection, n_files: int, words: int) -> None:
+    """*n_files* documents in /docs/f whose first chunks hold *words* two-character words each."""
+    conn.execute(r"DELETE FROM chunks WHERE source_uri LIKE '/docs/f/%'")
+    for i in range(n_files):
+        conn.execute(
+            "INSERT INTO chunks (content_hash, content, source_type, source_uri, chunk_index) VALUES (?, ?, ?, ?, 0)",
+            (f"h{words}-{i}", "ab " * words, "markdown", f"/docs/f/file{i}.md"),
+        )
+    conn.commit()
+
+
+def test_a_folder_summary_that_fits_leaves_no_truncation_record(conn, bounded_embedder):
+    from knowledge_base.folder_summaries import update_folder_summary
+
+    _folder_of(conn, 1, 10)
+    assert update_folder_summary(conn, "/docs/f") is True
+    assert conn.execute("SELECT COUNT(*) FROM folder_summaries_vec").fetchone()[0] == 1
+    assert _folder_truncations(conn) == []
+
+
+def test_a_refresh_that_fits_clears_the_folder_truncation_record(conn, bounded_embedder):
+    from knowledge_base.folder_summaries import update_folder_summary
+
+    _folder_of(conn, 3, 100)
+    assert update_folder_summary(conn, "/docs/f") is True
+    assert len(_folder_truncations(conn)) == 1
+
+    _folder_of(conn, 1, 10)
+    assert update_folder_summary(conn, "/docs/f") is True
+    assert _folder_truncations(conn) == []
+    assert conn.execute("SELECT COUNT(*) FROM folder_summaries_vec").fetchone()[0] == 1
+
+
+def test_a_dropped_folder_summary_takes_its_truncation_record(conn, bounded_embedder):
+    from knowledge_base.folder_summaries import update_folder_summary
+
+    _folder_of(conn, 3, 100)
+    assert update_folder_summary(conn, "/docs/f") is True
+    conn.execute(r"DELETE FROM chunks WHERE source_uri LIKE '/docs/f/%'")
+    conn.commit()
+    assert update_folder_summary(conn, "/docs/f") is False
+    assert conn.execute("SELECT COUNT(*) FROM folder_summaries").fetchone()[0] == 0
+    assert _folder_truncations(conn) == []
+
+
+def test_re_embed_records_the_folder_summaries_its_promotion_cuts(conn, bounded_embedder):
+    from knowledge_base.embed_swap import re_embed
+    from knowledge_base.folder_summaries import update_folder_summary
+
+    _folder_of(conn, 3, 100)
+    assert update_folder_summary(conn, "/docs/f") is True
+    (before,) = _folder_truncations(conn)
+
+    result = re_embed(conn)
+
+    assert _folder_truncations(conn) == [(before[0], result["space"], *before[2:])]
 
 
 #: One section of 3 x LIMIT distinct words, under the 1,000 characters every chunker keeps as one chunk.

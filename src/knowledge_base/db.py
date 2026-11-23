@@ -1338,6 +1338,7 @@ def _run_migrations(conn: sqlite3.Connection, embed_dim: int, declared: EmbedSet
         lambda c: _bootstrap_embed_spaces(c, embed_dim, declared),
         lambda c: _migrate.add_v3_embed_refusals(c),
         lambda c: _migrate.add_v4_embed_truncations(c),
+        lambda c: _migrate.add_v5_folder_summary_truncations(c),
         _migrate_normalize_source_uri,
         _migrate_extraction_source,
     )

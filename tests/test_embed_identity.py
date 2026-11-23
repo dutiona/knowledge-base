@@ -53,8 +53,20 @@ def _drop_v3(conn: sqlite3.Connection) -> None:
 
 
 def _drop_v4(conn: sqlite3.Connection) -> None:
+    _drop_v5(conn)
     conn.execute("DROP TRIGGER IF EXISTS chunks_au_truncations")
     conn.execute("DROP TABLE IF EXISTS embed_truncations")
+
+
+def _drop_v5(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS folder_summary_truncations")
+
+
+def _v5_shape(conn: sqlite3.Connection) -> list[tuple]:
+    return [
+        tuple(r)
+        for r in conn.execute("SELECT type, name, sql FROM sqlite_master WHERE name = 'folder_summary_truncations'")
+    ]
 
 
 def _v4_shape(conn: sqlite3.Connection) -> list[tuple]:
@@ -73,6 +85,25 @@ def _v3_shape(conn: sqlite3.Connection) -> list[tuple]:
     ).fetchall()
 
 
+# --- schema v5 (#656) -----------------------------------------------------------
+
+
+def test_a_v4_database_migrates_to_v5(tmp_path):
+    conn = get_connection(tmp_path / "v4.db")
+    init_schema(conn)
+    fresh = _v5_shape(conn)
+    assert [r[1] for r in fresh] == ["folder_summary_truncations"]
+    _drop_v5(conn)
+    migrate.set_schema_version(conn, 4)
+    conn.commit()
+
+    migrate.migrate(conn, backup_dir=tmp_path / "backups")
+
+    conn = get_connection(tmp_path / "v4.db")
+    assert migrate.get_schema_version(conn) == 5
+    assert _v5_shape(conn) == fresh
+
+
 # --- schema v4 (#620) -----------------------------------------------------------
 
 
@@ -88,7 +119,7 @@ def test_a_v3_database_migrates_to_v4(tmp_path):
     migrate.migrate(conn, backup_dir=tmp_path / "backups")
 
     conn = get_connection(tmp_path / "v3.db")
-    assert migrate.get_schema_version(conn) == 4
+    assert migrate.get_schema_version(conn) == migrate.CURRENT_SCHEMA_VERSION
     assert _v4_shape(conn) == fresh
 
 

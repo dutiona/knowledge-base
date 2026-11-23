@@ -204,6 +204,14 @@ erDiagram
     }
 
     folder_summaries ||--o| folder_summaries_vec : "embedding"
+    folder_summaries ||--o| folder_summary_truncations : "stored cut"
+    embed_spaces ||--o{ folder_summary_truncations : "stored cut in"
+    folder_summary_truncations {
+        TEXT folder_path PK, FK
+        TEXT space_name FK
+        INTEGER tokens_before
+        INTEGER tokens_after
+    }
     folder_summaries {
         TEXT folder_path PK
         TEXT summary
@@ -444,6 +452,23 @@ re-embeds every summary into the promoted space and recreates this table at its 
 | ------------- | -------- | --------------------------------------------- |
 | `embedding`   | float[N] | The summary's vector (N = the active space's dim) |
 | `folder_path` | TEXT     | Auxiliary column naming the folder            |
+
+---
+
+### folder_summary_truncations
+
+Schema v5 (#656). Each folder summary whose vector was cut to fit `KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS`: the summary
+text stays whole in `folder_summaries`, and the vector covers only its start, so only the first documents of the
+folder by `source_uri`. A record is written with the vector: `update_folder_summary` writes or deletes the folder's
+when it rebuilds the summary, and a promotion replaces them all with the promoted space's, in its one transaction. Folder
+vectors exist only for the active space, one per folder, so the folder alone is the key.
+
+| Column          | Type    | Constraints                                                          | Description                                |
+| --------------- | ------- | -------------------------------------------------------------------- | ------------------------------------------ |
+| `folder_path`   | TEXT    | PRIMARY KEY, REFERENCES `folder_summaries(folder_path)` ON DELETE CASCADE | The folder whose summary was cut           |
+| `space_name`    | TEXT    | NOT NULL, REFERENCES `embed_spaces(name)` ON DELETE CASCADE          | The space whose vector embeds only its start |
+| `tokens_before` | INTEGER | NOT NULL                                                             | The summary's tokens, as the embedder counts |
+| `tokens_after`  | INTEGER | NOT NULL                                                             | The tokens of the part it embedded         |
 
 ---
 

@@ -202,6 +202,11 @@ earlier backfill counted but could not embed is backfilled once more before it c
 the unit and run `knowledge-base-ingest migrate` once; it backs the database up first and adds `embed_truncations`.
 Until then the server exits 78 naming that command. Cuts stored before v4 are not recorded; a `re-embed` records them.
 
+**Upgrading to schema v5** (#656, the folder summaries whose vector was cut to fit `KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS`):
+stop the unit and run `knowledge-base-ingest migrate` once; it backs the database up first and adds
+`folder_summary_truncations`. Until then the server exits 78 naming that command. A summary cut before v5 is recorded at
+its folder's next refresh or the next `re-embed`.
+
 **Upgrading to schema v2** (the served artifact and each space's query instruction): stop the
 unit and run `knowledge-base-ingest migrate`, which backs the database up first; until then the
 server exits 78 naming that command. The migrated spaces record no served artifact, so they
@@ -406,6 +411,7 @@ reads `KNOWLEDGE_BASE_DB`. Key tables:
 - `embed_spaces` — multiple embedding space configurations
 - `embed_refusals` — the chunks each space's embedder answered with no usable vector (schema v3)
 - `embed_truncations` — the chunks each space stored cut to fit `max_input_tokens` (schema v4)
+- `folder_summary_truncations` — the folder summaries whose vector was cut to fit `max_input_tokens` (schema v5)
 - `chunk_sessions` — N:M ingestion session tracking
 - `folder_summaries` / `folder_summaries_vec` — folder-level semantic embeddings
 - `prediction_errors` — stale result detection
@@ -450,7 +456,7 @@ database and checked at every start (see [Configuration](#configuration)).
 | `llm_provider`   | `ollama`      | LLM provider: `ollama` (native API) or `openai_compat` (OpenAI-compatible) |
 | `llm_model`      | `qwen3.5:27b` | Model name passed to the provider                                          |
 | `llm_base_url`   | _(unset)_     | Base URL for `openai_compat` provider (e.g. `http://192.168.1.41:1234`)    |
-| `schema_version` | `4`           | Applied DB schema version (managed by `migrate`; see Upgrading above)      |
+| `schema_version` | `5`           | Applied DB schema version (managed by `migrate`; see Upgrading above)      |
 
 ## Limitations
 

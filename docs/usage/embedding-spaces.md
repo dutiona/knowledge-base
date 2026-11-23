@@ -104,7 +104,8 @@ Only a space of the whole declared identity (every ADR-0015 field the `KNOWLEDGE
 be promoted: the declaration is the active identity. Every other call into a space (backfill, search, comparison)
 checks that space against its own recorded identity and refuses one the declared endpoint cannot produce. Promotion is
 all or nothing: the folder summaries are embedded first, then the status swap, the `config` rows and the folder-summary
-rebuild commit together, so a failure changes nothing. Under a multi-model endpoint (Ollama), spaces of another model
+rebuild, with its record of each summary cut to fit `KNOWLEDGE_BASE_EMBED_MAX_INPUT_TOKENS`
+(`folder_summary_truncations`), commit together, so a failure changes nothing. Under a multi-model endpoint (Ollama), spaces of another model
 can still be created, backfilled and compared.
 
 #### 4. (Optional) Clean up deprecated spaces

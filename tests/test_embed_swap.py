@@ -258,7 +258,15 @@ def test_promote_is_all_or_nothing(kb_conn, failure):
 
     _two_folders(kb_conn)
     create_space(kb_conn, "same", TEST_EMBED_MODEL, TEST_EMBED_DIM)
-    before = (_config_rows(kb_conn), _space_rows(kb_conn), _vec_state(kb_conn))
+    active = kb_conn.execute("SELECT name FROM embed_spaces WHERE status = 'active'").fetchone()[0]
+    kb_conn.execute(
+        "INSERT INTO folder_summary_truncations (folder_path, space_name, tokens_before, tokens_after)"
+        " VALUES ('/docs/a', ?, 9, 4)",
+        (active,),
+    )
+    kb_conn.commit()
+    truncations = "SELECT folder_path, space_name FROM folder_summary_truncations"
+    before = (_config_rows(kb_conn), _space_rows(kb_conn), _vec_state(kb_conn), kb_conn.execute(truncations).fetchall())
     provider = _provider()
     calls = {"n": 0}
     real_serialize = _serialize_f32
@@ -279,13 +287,19 @@ def test_promote_is_all_or_nothing(kb_conn, failure):
         promote_space(kb_conn, "same")
 
     assert kb_conn.isolation_level == ""
-    assert (_config_rows(kb_conn), _space_rows(kb_conn), _vec_state(kb_conn)) == before
+    assert (
+        _config_rows(kb_conn),
+        _space_rows(kb_conn),
+        _vec_state(kb_conn),
+        kb_conn.execute(truncations).fetchall(),
+    ) == before
     fresh = get_connection(Path(kb_conn.execute("PRAGMA database_list").fetchone()["file"]))
-    assert (_config_rows(fresh), _space_rows(fresh), _vec_state(fresh)) == before
+    assert (_config_rows(fresh), _space_rows(fresh), _vec_state(fresh), fresh.execute(truncations).fetchall()) == before
     fresh.close()
     with patch("knowledge_base.embed_swap.get_provider", return_value=_provider()):
         promote_space(kb_conn, "same")  # a retry succeeds
     assert ("same", "active", TEST_EMBED_MODEL) in _space_rows(kb_conn)
+    assert kb_conn.execute(truncations).fetchall() == []  # the promoted space embedded both summaries whole
 
 
 def test_promote_refuses_a_pending_transaction(kb_conn):

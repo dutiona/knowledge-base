@@ -11,7 +11,7 @@ import posixpath
 import sqlite3
 
 from .db import escape_like, require_active_space
-from .embed_swap import space_embedder
+from .embed_swap import record_folder_truncation, space_embedder
 from .redact import scrub
 from .utils import serialize_f32 as _serialize_f32
 
@@ -113,7 +113,8 @@ def update_folder_summary(
 
     # folder_summaries_vec is at the ACTIVE space's dim, so embed into the active space, at the declared endpoint,
     # after the identity check (#569, #573).
-    (embedding,), _cuts = space_embedder(conn, require_active_space(conn))([summary])
+    active = require_active_space(conn)
+    (embedding,), cuts = space_embedder(conn, active)([summary])
 
     # Upsert folder_summaries
     conn.execute(
@@ -136,6 +137,8 @@ def update_folder_summary(
             "INSERT INTO folder_summaries_vec (embedding, folder_path) VALUES (?, ?)",
             (_serialize_f32(embedding), folder_path),
         )
+    # A vector built from the start of a cut summary is recorded with it; the record is cleared once it fits (#656).
+    record_folder_truncation(conn, folder_path, active["name"], cuts.get(0) if embedding is not None else None)
 
     conn.commit()
     return True
