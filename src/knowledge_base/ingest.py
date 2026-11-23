@@ -150,7 +150,7 @@ def _metadata_leaf(value: str) -> str:
 
 
 def redact_metadata(metadata: str) -> str:
-    """A chunk's metadata JSON with every string value redacted, or ``metadata`` itself when nothing changes."""
+    """A chunk's metadata JSON with every string and object key redacted, or ``metadata`` when nothing changes."""
     value = json.loads(metadata)
     clean = redact_json(value, _metadata_leaf)
     return metadata if clean == value else json.dumps(clean)

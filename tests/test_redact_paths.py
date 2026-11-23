@@ -157,15 +157,24 @@ def test_pdf_page_map_counts_redacted_text(tmp_path):
 QUERY_VALUE = "Xk9Lp2Rt5Yv8Bn1Cx4Df6Qw7Zz0Aa"  # a dotless high-entropy value, as a signed URL carries
 
 
-def test_chunk_metadata_is_redacted_keys_kept(kb_conn, stub_document_embedder):
-    meta = {"title": f"Deploy {GITHUB_TOKEN}", "pages": [1, 2], "nested": {"alt": f"aws {AWS_KEY}"}}
+def test_chunk_metadata_keys_are_redacted(kb_conn, stub_document_embedder):
+    """Keys are content too, as in memory-engine (#652): a key holding a token is stored as its placeholder."""
+    meta = {
+        "title": f"Deploy {GITHUB_TOKEN}",
+        "pages": [1, 2],
+        "nested": {"alt": f"aws {AWS_KEY}", f"note {AWS_KEY}": 1},
+        GITHUB_TOKEN: "value",
+    }
     ingest.ingest_text(kb_conn, "ordinary prose", source_uri="content:///m", source_type="markdown", metadata=meta)
-    stored = json.loads(kb_conn.execute("SELECT metadata FROM chunks").fetchone()["metadata"])
-    assert stored == {
+    raw = kb_conn.execute("SELECT metadata FROM chunks").fetchone()["metadata"]
+    assert json.loads(raw) == {
         "title": "Deploy [REDACTED:github-pat]",
         "pages": [1, 2],
-        "nested": {"alt": "aws [REDACTED:aws-access-key]"},
+        "nested": {"alt": "aws [REDACTED:aws-access-key]", "note [REDACTED:aws-access-key]": 1},
+        "[REDACTED:github-pat]": "value",
     }
+    for secret in (GITHUB_TOKEN, AWS_KEY):
+        assert not _windows(secret) & _windows(raw)
 
 
 def test_metadata_hex_under_a_context_key_is_redacted(kb_conn):
@@ -194,6 +203,7 @@ def test_metadata_urls_keep_their_query(kb_conn):
         "image_url": f"HTTPS://{GITHUB_TOKEN}@docs.example.test/i.png?sig={QUERY_VALUE}",
         "other_url": "Http://reader:example-pass@x.example.test/p?k=v",
         "url_with_newline": "https://reader:example-pass@x.example.test/p\n",
+        "https://reader:example-pass@keys.example.test/k": "a URL used as a key",
     }
     ingest._insert_chunk(
         kb_conn,
@@ -210,6 +220,9 @@ def test_metadata_urls_keep_their_query(kb_conn):
     assert stored["other_url"] == "Http://x.example.test/p?k=v"
     # Not a whole URL (a trailing newline): ordinary text, whose link keeps all but its password.
     assert stored["url_with_newline"] == "https://reader:[REDACTED:connection-string-password]@x.example.test/p\n"
+    # A key is content, not a stored reference: it takes every rule, as in memory-engine, so it keeps its user name.
+    key = "https://reader:[REDACTED:connection-string-password]@keys.example.test/k"
+    assert stored[key] == "a URL used as a key"
 
 
 def _serve_article(http_requests, fake_dns, text: str) -> None:

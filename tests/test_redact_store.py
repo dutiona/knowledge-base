@@ -207,6 +207,25 @@ def test_report_counts_a_hex_secret_under_a_metadata_key(kb_conn, tmp_path, caps
     assert report["spans"] == {"hex-secret": 1}
 
 
+def test_report_and_rewrite_redact_a_secret_metadata_key(kb_conn, tmp_path, vectors, capsys):
+    """A row whose only secret is a metadata key is reported and rewritten with the key redacted (#652)."""
+    cid = _raw_chunk(kb_conn, "plain", metadata=json.dumps({AWS_KEY: "value"}))
+    kb_conn.commit()
+    kb_conn.close()
+    assert _run(tmp_path / "test.db", "redact") == 1
+    report = json.loads(capsys.readouterr().out)
+    assert (report["chunk_ids"], report["rows_to_rewrite"]["metadata"], report["spans"]) == (
+        [cid],
+        1,
+        {"aws-access-key": 1},
+    )
+    assert _run(tmp_path / "test.db", "redact", "--rewrite") == 0
+    conn = _open(tmp_path / "test.db")
+    stored = conn.execute("SELECT metadata FROM chunks WHERE id = ?", (cid,)).fetchone()[0]
+    conn.close()
+    assert json.loads(stored) == {"[REDACTED:aws-access-key]": "value"}
+
+
 def test_report_on_a_clean_database_exits_zero(kb_conn, tmp_path, capsys):
     meta = json.dumps({"image_url": f"https://docs.example.test/i.png?sig={QUERY_VALUE}"})
     _insert_chunk(
