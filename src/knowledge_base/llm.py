@@ -45,8 +45,8 @@ def _require_llm() -> None:
 
 
 def _check_llm_key_spec(spec: str | None) -> None:
-    """An LLM key is inline or ``env:KNOWLEDGE_BASE_LLM_API_KEY``: no other secret of the process."""
-    if spec and spec.startswith("env:") and spec != f"env:{LLM_API_KEY_VAR}":
+    """An LLM key is inline or ``env:KNOWLEDGE_BASE_LLM_API_KEY``: no other secret of the process, and no file."""
+    if spec and spec.startswith(("env:", "file:")) and spec != f"env:{LLM_API_KEY_VAR}":
         raise ValidationError(f"an LLM api_key is an inline value or env:{LLM_API_KEY_VAR}, not {spec!r}")
 
 
