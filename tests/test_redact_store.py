@@ -197,6 +197,16 @@ def test_report_counts_without_printing_matches(kb_conn, tmp_path, capsys):
     assert list(kb_conn.iterdump()) == before
 
 
+def test_report_counts_a_hex_secret_under_a_metadata_key(kb_conn, tmp_path, capsys):
+    """#626's member rule redacts a whole hex value under a context key: the report counts it as the rewrite does."""
+    cid = _raw_chunk(kb_conn, "plain", metadata=json.dumps({"api_key": "0123456789abcdef" * 2}))
+    kb_conn.commit()
+    assert _run(tmp_path / "test.db", "redact") == 1
+    report = json.loads(capsys.readouterr().out)
+    assert (report["chunk_ids"], report["rows_to_rewrite"]["metadata"]) == ([cid], 1)
+    assert report["spans"] == {"hex-secret": 1}
+
+
 def test_report_on_a_clean_database_exits_zero(kb_conn, tmp_path, capsys):
     meta = json.dumps({"image_url": f"https://docs.example.test/i.png?sig={QUERY_VALUE}"})
     _insert_chunk(
