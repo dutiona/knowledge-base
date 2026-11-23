@@ -182,6 +182,13 @@ def test_redact_json_redacts_keys_and_keeps_every_member():
     }
 
 
+def test_a_renamed_key_never_takes_a_literal_key_s_name():
+    """Literal placeholder keys collide too; the expected value is memory-engine's own ``scrub_json`` output."""
+    p = "[REDACTED:aws-access-key]"
+    value = {AWS_KEY: 1, "AKIA" + "IOSFODNN7EXAMPLF": 4, p: 2, f"{p}~1": 3}
+    assert redact_json(value) == {p: 1, f"{p}~1": 4, f"{p}~2": 2, f"{p}~1~1": 3}
+
+
 def test_redact_json_keeps_clean_keys_and_non_strings():
     value = {
         "description": f"leaked {AWS_KEY} here",
