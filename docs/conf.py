@@ -2,7 +2,7 @@
 
 project = "knowledge-base"
 author = "Michael Roynard"
-release = "0.2.0rc1"
+release = "0.2.0rc2"
 
 extensions = [
     "myst_parser",
