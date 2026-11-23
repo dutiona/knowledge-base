@@ -203,6 +203,18 @@ erDiagram
         TEXT query_instruction
     }
 
+    folder_summaries ||--o| folder_summaries_vec : "embedding"
+    folder_summaries {
+        TEXT folder_path PK
+        TEXT summary
+        TEXT content_hash
+        TEXT updated_at
+    }
+    folder_summaries_vec {
+        float embedding
+        TEXT folder_path
+    }
+
     chunks ||--o| chunks_vec : "embedding"
     chunks ||--o{ entity_mentions : "mentioned_in"
     chunks }o--o{ methods : "chunk_id"
@@ -405,6 +417,33 @@ before the split (#604), or one stored under a larger limit.
 **Primary key:** `(chunk_id, space_name)`. **Trigger:** `chunks_au_truncations` deletes a chunk's records when its
 `content` really changes (`WHEN old.content IS NOT new.content`): a metadata-only `redact --rewrite` keeps the vector
 and its record.
+
+---
+
+### folder_summaries
+
+One summary per folder that holds indexed documents, for folder-scoped search boosting: the first chunk of each
+document directly in the folder, 200 characters each, joined and redacted. `update_folder_summary` rewrites it when the
+folder's content hash changes and deletes it when the folder has no chunk left.
+
+| Column         | Type | Constraints | Default           | Description                                                |
+| -------------- | ---- | ----------- | ----------------- | ---------------------------------------------------------- |
+| `folder_path`  | TEXT | PRIMARY KEY | --                | The folder, as its documents' `source_uri` prefix          |
+| `summary`      | TEXT | NOT NULL    | --                | The summary text, stored whole                             |
+| `content_hash` | TEXT | NOT NULL    | --                | Hash of the folder's sorted chunk hashes: the staleness key |
+| `updated_at`   | TEXT | NOT NULL    | `datetime('now')` | When the summary was last written                          |
+
+---
+
+### folder_summaries_vec
+
+{term}`sqlite-vec` virtual table holding each folder summary's vector, always in the **active** space: a promotion
+re-embeds every summary into the promoted space and recreates this table at its dimension.
+
+| Column        | Type     | Description                                   |
+| ------------- | -------- | --------------------------------------------- |
+| `embedding`   | float[N] | The summary's vector (N = the active space's dim) |
+| `folder_path` | TEXT     | Auxiliary column naming the folder            |
 
 ---
 
