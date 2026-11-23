@@ -520,12 +520,19 @@ def test_rewrite_resumes_after_an_interruption(kb_conn, tmp_path, vectors, monke
         if stage == "after-commit":
             m.setattr(redact_store, "_rebuild_summaries", boom)
         elif stage == "summaries":
-            m.setattr(redact_store, "update_folder_summary", boom)  # the summary rebuild fails, as its embedding did
+            real_rebuild = redact_store._rebuild_summaries
+
+            def _embedder_down_for_summaries(conn):
+                vectors.down = 503  # the chunks re-embedded; the endpoint fails as the summaries rebuild
+                return real_rebuild(conn)
+
+            m.setattr(redact_store, "_rebuild_summaries", _embedder_down_for_summaries)
         elif stage == "before-vacuum":
             m.setattr(redact_store, "purge_deleted_content", boom)
         else:
             m.setattr(redact_store, "purge_deleted_content", lambda conn: (real_purge(conn), boom()))
         assert _run(db, "redact", "--rewrite") == 1
+    vectors.down = None
     capsys.readouterr()
     assert _run(db, "redact") == 1
     assert json.loads(capsys.readouterr().out)["rewrite_incomplete"] is True
