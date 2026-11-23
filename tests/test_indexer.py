@@ -19,6 +19,7 @@ from knowledge_base.indexer import (
     cmd_status,
     main,
 )
+from tests.conftest import fake_embedding_provider
 from tests.declared_env import TEST_EMBED_DIM
 
 
@@ -27,11 +28,6 @@ from tests.declared_env import TEST_EMBED_DIM
 # ---------------------------------------------------------------------------
 
 NEW_DIM = 384
-
-
-def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
-    return [[0.1] * dim for _ in texts]
 
 
 def _fake_embed_new(texts, model="mxbai-embed-large", expected_dim=None, **_kwargs):
@@ -194,8 +190,7 @@ def test_build_parser_re_embed_takes_its_identity_from_the_declaration():
 # ---------------------------------------------------------------------------
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_cmd_ingest_file(tmp_path, capsys):
     conn, db_path = _setup(tmp_path)
     conn.close()
@@ -211,8 +206,7 @@ def test_cmd_ingest_file(tmp_path, capsys):
     assert count >= 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_cmd_ingest_directory(tmp_path, capsys):
     conn, db_path = _setup(tmp_path)
     conn.close()
@@ -237,8 +231,7 @@ def test_cmd_ingest_nonexistent(tmp_path):
         cmd_ingest(args)
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_cmd_ingest_source_type_rejected_for_dir(tmp_path):
     _setup(tmp_path)
     sub = tmp_path / "docs"
@@ -255,9 +248,8 @@ def test_cmd_ingest_source_type_rejected_for_dir(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.jobs._ensure_worker_running")
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_cmd_reingest(mock_worker, tmp_path):
     conn, db_path = _setup(tmp_path)
 
@@ -279,10 +271,9 @@ def test_cmd_reingest(mock_worker, tmp_path):
     assert "Updated" in row["content"]
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.indexer._drain_jobs")
 @patch("knowledge_base.jobs._ensure_worker_running")
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_cmd_reingest_auto_relate(mock_drain, mock_worker, tmp_path):
     conn, db_path = _setup(tmp_path)
 
@@ -317,8 +308,7 @@ def test_cmd_reingest_auto_relate(mock_drain, mock_worker, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_cmd_ingest_url(tmp_path, http_requests, fake_dns, public_net):
     fake_dns["example.com"] = ["203.0.113.10"]
     http_requests.handlers["example.com"] = lambda request: httpx.Response(200, html=FAKE_HTML)
@@ -338,12 +328,11 @@ def test_cmd_ingest_url(tmp_path, http_requests, fake_dns, public_net):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch(
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_cmd_re_embed(mock_provider, tmp_path, monkeypatch):
     conn, db_path = _setup(tmp_path)
 
@@ -375,8 +364,7 @@ def test_cmd_re_embed(mock_provider, tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_cmd_status(tmp_path, capsys):
     conn, _db_path = _setup(tmp_path)
 
@@ -440,8 +428,7 @@ def test_drain_jobs_times_out(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_db_override(tmp_path):
     custom_db = tmp_path / "custom" / "test.db"
     custom_db.parent.mkdir()
@@ -465,8 +452,7 @@ def test_db_override(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_main_integration(tmp_path, capsys):
     conn, db_path = _setup(tmp_path)
     conn.close()
@@ -481,8 +467,7 @@ def test_main_integration(tmp_path, capsys):
     assert count >= 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_main_db_path_flag(tmp_path):
     # #449: the canonical --db-path flag selects the database.
     db_path = tmp_path / "via_flag.db"
@@ -499,8 +484,7 @@ def test_main_db_path_flag(tmp_path):
         conn.close()
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_main_env_var_resolves(tmp_path, monkeypatch):
     # #449: with no flag, $KNOWLEDGE_BASE_DB selects the database.
     db_path = tmp_path / "via_env.db"
@@ -578,17 +562,16 @@ def _ollama_embedder(fail_after: int | None = None):
     return _handler
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 def _seed_corpus(tmp_path, n_files: int = 1):
     conn, db_path = _setup(tmp_path)
     from knowledge_base.ingest import ingest_file
 
-    for i in range(n_files):
-        doc = tmp_path / "docs" / f"doc{i}.md"
-        doc.parent.mkdir(exist_ok=True)
-        doc.write_text(f"# Doc {i}\n\nContent number {i} for re-embedding.\n")
-        ingest_file(conn, doc)
+    with fake_embedding_provider():
+        for i in range(n_files):
+            doc = tmp_path / "docs" / f"doc{i}.md"
+            doc.parent.mkdir(exist_ok=True)
+            doc.write_text(f"# Doc {i}\n\nContent number {i} for re-embedding.\n")
+            ingest_file(conn, doc)
     conn.close()
     return db_path
 
@@ -715,7 +698,7 @@ def _store(tmp_path):
     doc.write_text("# Doc\n\nSome text to keep.\n")
     from knowledge_base.ingest import ingest_file
 
-    with patch("knowledge_base.ingest.embed", _fake_embed), patch("knowledge_base.folder_summaries.embed", _fake_embed):
+    with fake_embedding_provider():
         ingest_file(conn, doc)
     conn.close()
     return db, doc
@@ -905,7 +888,7 @@ def test_remove_refuses_a_file_that_exists(tmp_path, capsys):
     assert _exit_of(["--db", str(db), "remove", doc.as_posix()]) == 1
     assert "reingest" in json.loads(capsys.readouterr().err)["error"]
     assert _dump(db) == before
-    with patch("knowledge_base.ingest.embed", _fake_embed), patch("knowledge_base.folder_summaries.embed", _fake_embed):
+    with fake_embedding_provider():
         assert _exit_of(["--db", str(db), "--quiet", "reingest", str(doc)]) == 0
 
 
@@ -923,8 +906,7 @@ def test_remove_a_deleted_files_document(tmp_path, capsys, stub_document_embedde
     notes.mkdir()
     doc = notes / "gone.md"
     doc.write_text("# Gone\n\nA passage about granulometries that will be deleted.\n")
-    with patch("knowledge_base.folder_summaries.embed", _fake_embed):
-        ingest_file(conn, doc)
+    ingest_file(conn, doc)
     uri = doc.resolve().as_posix()
     ingest_text(conn, "Another document entirely.", source_uri="content:///other", source_type="markdown")
     (gone,), (other,) = _chunk_ids(conn, uri), _chunk_ids(conn, "content:///other")
@@ -967,15 +949,13 @@ def test_remove_a_moved_files_document(tmp_path, stub_document_embedder):
     (tmp_path / "b").mkdir()
     old = tmp_path / "a" / "doc.md"
     old.write_text("# Doc\n\n" + "".join(f"distinct passage number {i}. " for i in range(60)))
-    with patch("knowledge_base.folder_summaries.embed", _fake_embed):
-        stored = ingest_file(conn, old)
+    stored = ingest_file(conn, old)
     conn.close()
     new = old.rename(tmp_path / "b" / "doc.md")
 
     assert _exit_of(["--db", str(db), "--quiet", "remove", old.resolve().as_posix()]) == 0
     conn = get_connection(db)
-    with patch("knowledge_base.folder_summaries.embed", _fake_embed):
-        again = ingest_file(conn, new)
+    again = ingest_file(conn, new)
     assert (again["chunks_added"], again["chunks_skipped"]) == (stored["chunks_added"], 0)
 
 

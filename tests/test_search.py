@@ -12,11 +12,6 @@ from knowledge_base.search import search, _rrf_merge
 from tests.declared_env import TEST_EMBED_DIM
 
 
-def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
-    return [[0.1] * dim for _ in texts]
-
-
 def _fake_embed_single(text, model="bge-m3", **_kwargs):
     return [0.1] * TEST_EMBED_DIM
 
@@ -33,8 +28,7 @@ def test_rrf_merge():
     assert 2 in ids[:2]
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_search_fts_mode(tmp_path):
     db_path = tmp_path / "test.db"
@@ -50,8 +44,7 @@ def test_search_fts_mode(tmp_path):
     assert "attention" in results[0].content.lower()
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_search_vec_mode(tmp_path):
     db_path = tmp_path / "test.db"
@@ -66,8 +59,7 @@ def test_search_vec_mode(tmp_path):
     assert len(results) >= 1
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_search_source_type_filter(tmp_path):
     db_path = tmp_path / "test.db"
@@ -87,7 +79,7 @@ def test_search_source_type_filter(tmp_path):
     assert len(results) >= 1
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_search_hybrid_uses_keyword_prefilter(tmp_path):
     """Hybrid search with keyword_prefilter=True extracts intent keywords for FTS."""
@@ -110,7 +102,7 @@ def test_search_hybrid_uses_keyword_prefilter(tmp_path):
     assert "rust" in results[0].content.lower()
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_search_keyword_prefilter_stopword_only_query(tmp_path):
     """When keyword_prefilter=True and query is all stopwords, FTS leg is skipped gracefully."""
@@ -133,7 +125,7 @@ def test_search_keyword_prefilter_stopword_only_query(tmp_path):
     assert isinstance(results, list)
 
 
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_search_fts_with_keyword_prefilter(tmp_path):
     """FTS-only mode also respects keyword_prefilter."""
@@ -157,8 +149,7 @@ def test_search_fts_with_keyword_prefilter(tmp_path):
 # --- chunk_strategy filter tests ---
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_search_no_strategy_filter_by_default(tmp_path):
     """Default search (no chunk_strategy) returns all chunks regardless of strategy."""
@@ -183,8 +174,7 @@ def test_search_no_strategy_filter_by_default(tmp_path):
     assert len(results) == 2
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_search_explicit_strategy_filter(tmp_path):
     """chunk_strategy='semantic' returns only semantic chunks."""
@@ -207,8 +197,7 @@ def test_search_explicit_strategy_filter(tmp_path):
     assert results[0].content.startswith("semantic")
 
 
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch("knowledge_base.search.embed_query", _fake_embed_single)
 def test_search_explicit_strategy_filter_both_directions(tmp_path):
     """Explicit chunk_strategy filters in both directions."""

@@ -15,6 +15,7 @@ from knowledge_base.embed_swap import create_space
 from knowledge_base.exceptions import KnowledgeBaseError
 from knowledge_base.ingest import _insert_chunk
 from knowledge_base.utils import content_hash, serialize_f32
+from tests.conftest import StubEmbedder
 from tests.declared_env import TEST_EMBED_DIM, TEST_EMBED_MODEL
 
 SECRET = "ghp_" + "Zq7Xw3Rt9Lp2Vb6Nm4Kc8Hd1Fs5Gj0Ay"  # an example shape, built here and nowhere committed as one
@@ -233,31 +234,13 @@ def _hash_vector(text: str) -> list[float]:
     return _vector(int(content_hash(text)[:12], 16))
 
 
-class _Embedder(list):
-    """Every text embedded, by any path; while ``down`` it fails as an unreachable endpoint does."""
-
-    down = False
-
-    def __call__(self, texts, *_args, expected_dim=None, **_kwargs):
-        from tests.conftest import embedder_error
-
-        if self.down:
-            raise embedder_error(503)
-        self.extend(texts)
-        return [_hash_vector(t)[: expected_dim or TEST_EMBED_DIM] for t in texts]
-
-
 @pytest.fixture
-def vectors(monkeypatch) -> _Embedder:
-    from unittest.mock import MagicMock
-
-    embedder = _Embedder()
-    provider = MagicMock()
-    provider.embed.side_effect = lambda texts, model=None, expected_dim=TEST_EMBED_DIM: embedder(texts)
-    monkeypatch.setattr("knowledge_base.ingest.embed", embedder)
-    monkeypatch.setattr("knowledge_base.folder_summaries.embed", embedder)
-    monkeypatch.setattr("knowledge_base.embed_swap.get_provider", lambda **_kw: provider)
-    return embedder
+def vectors(stub_document_embedder) -> StubEmbedder:
+    """Every text embedded, by any path, answered with its hash vector; while ``down`` it fails as an endpoint does."""
+    stub_document_embedder.answer = lambda texts, model=None, expected_dim=None: [
+        _hash_vector(t)[: expected_dim or TEST_EMBED_DIM] for t in texts
+    ]
+    return stub_document_embedder
 
 
 def _with_vector(conn, content: str, **kw) -> int:
@@ -473,7 +456,7 @@ def test_rewrite_embedder_failure_changes_nothing(kb_conn, tmp_path, vectors):
     kb_conn.commit()
     kb_conn.close()
     before = _rows(db)
-    vectors.down = True
+    vectors.down = 503
     assert _run(db, "redact", "--rewrite") == 1
     assert _rows(db) == before
 
@@ -508,7 +491,7 @@ def test_rewrite_resumes_after_an_interruption(kb_conn, tmp_path, vectors, monke
         if stage == "after-commit":
             m.setattr(redact_store, "_rebuild_summaries", boom)
         elif stage == "summaries":
-            m.setattr("knowledge_base.folder_summaries.embed", boom)
+            m.setattr(redact_store, "update_folder_summary", boom)  # the summary rebuild fails, as its embedding did
         elif stage == "before-vacuum":
             m.setattr(redact_store, "purge_deleted_content", boom)
         else:

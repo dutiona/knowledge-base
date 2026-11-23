@@ -539,34 +539,6 @@ def get_provider(*, cfg: ProviderConfig) -> EmbeddingProvider:
         return cached
 
 
-# --- Module-level dispatch functions ---
-# These are the primary API. Callers (ingest, folder_summaries, search)
-# import and call these. Provider dispatch happens here.
-# Tests that @patch("knowledge_base.ingest.embed", _fake) replace
-# the name in the caller's namespace, so mocks work unchanged.
-
-
-def embed(
-    texts: list[str],
-    model: str,
-    expected_dim: int | None = None,
-    *,
-    _provider_cfg: ProviderConfig,
-    cuts: Cuts | None = None,
-) -> list[list[float] | None]:
-    """Embed a batch of texts with the provider *_provider_cfg* selects.
-
-    *cuts*, when given, receives the inputs the provider cut to fit (#648). It is an out-parameter, not a second
-    return value, because tests fake this function by name with fakes that return vectors only.
-    """
-    provider = get_provider(cfg=_provider_cfg)
-    if cuts is None:
-        return provider.embed(texts, model=model, expected_dim=expected_dim)
-    vectors, found = embed_with_cuts(provider, texts, model, expected_dim)
-    cuts.update(found)
-    return vectors
-
-
 def embed_with_cuts(
     provider: EmbeddingProvider, texts: list[str], model: str, expected_dim: int | None = None
 ) -> tuple[list[list[float] | None], Cuts]:
@@ -596,6 +568,8 @@ def embed_query(
 ) -> list[float] | None:
     """Embed a search query as its space's *instruction* followed by *text*; None for zero-norm.
 
-    The only place a query input is built (ADR-0015 §6): document paths call ``embed``, which never adds one.
+    The only place a query input is built (ADR-0015 §6): stored texts go through ``embed_swap.space_embedder``,
+    which never adds one.
     """
-    return embed([instruction + text], model=model, expected_dim=expected_dim, _provider_cfg=_provider_cfg)[0]
+    provider = get_provider(cfg=_provider_cfg)
+    return provider.embed([instruction + text], model=model, expected_dim=expected_dim)[0]

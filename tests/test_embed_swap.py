@@ -16,11 +16,6 @@ from tests.declared_env import TEST_EMBED_DIM, TEST_EMBED_MODEL
 NEW_DIM = 384
 
 
-def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
-    return [[0.1] * dim for _ in texts]
-
-
 def _fake_embed_new(texts, model="mxbai-embed-large", expected_dim=None, **_kwargs):
     dim = expected_dim if expected_dim is not None else NEW_DIM
     return [[0.2] * dim for _ in texts]
@@ -55,12 +50,11 @@ def _declare_new_model(monkeypatch) -> None:
     monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_DIM", str(NEW_DIM))
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch(
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_re_embed_changes_model(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
@@ -87,12 +81,11 @@ def test_re_embed_changes_model(mock_provider, tmp_path, monkeypatch):
     assert new_count == old_count
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch(
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
@@ -109,11 +102,11 @@ def test_re_embed_preserves_chunk_ids(mock_provider, tmp_path, monkeypatch):
     assert chunk_ids_before == chunk_ids_after
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch(
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
 def test_re_embed_empty_db(mock_provider, tmp_path, monkeypatch):
     conn = _setup(tmp_path)
 
@@ -125,12 +118,11 @@ def test_re_embed_empty_db(mock_provider, tmp_path, monkeypatch):
     assert result["dim"] == NEW_DIM
 
 
+@pytest.mark.usefixtures("stub_document_embedder")
 @patch(
     "knowledge_base.embed_swap.get_provider",
     return_value=_mock_provider(_fake_embed_new),
 )
-@patch("knowledge_base.folder_summaries.embed", _fake_embed)
-@patch("knowledge_base.ingest.embed", _fake_embed)
 def test_re_embed_includes_folder_summaries(mock_provider, tmp_path, monkeypatch):
     """re_embed re-creates folder_summaries_vec with the new model."""
     conn = _setup(tmp_path)

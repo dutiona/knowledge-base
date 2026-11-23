@@ -34,8 +34,8 @@ from .db import (
 )
 from .migrate import _main_db_path
 from .redact import redact_json, scrub
-from .embed_swap import declared_provider_config, record_truncation
-from .embeddings import Cuts, embed, split_inputs, truncate_embedding
+from .embed_swap import declared_provider_config, record_truncation, space_embedder
+from .embeddings import Cuts, split_inputs
 from .exceptions import NotFoundError, ValidationError
 from .folder_summaries import drop_summary, update_folder_summary
 from .utils import content_hash as _content_hash
@@ -121,16 +121,7 @@ def _embed_with_config(conn: sqlite3.Connection, texts: list[str]) -> tuple[list
     Returns the vectors, None for a text whose embedding had zero norm, and the texts the embedder cut to fit its
     input limit, by position, for the store to record with their vectors (#648).
     """
-    active = require_active_space(conn)
-    provider_cfg = declared_provider_config(conn, active)
-    base_dim = active["matryoshka_base_dim"]
-    cuts: Cuts = {}
-    vecs = embed(
-        texts, model=active["model"], expected_dim=base_dim or active["dim"], _provider_cfg=provider_cfg, cuts=cuts
-    )
-    if base_dim:
-        vecs = [truncate_embedding(v, active["dim"]) if v is not None else None for v in vecs]
-    return vecs, cuts
+    return space_embedder(conn, require_active_space(conn))(texts)
 
 
 def _bounded_chunks(conn: sqlite3.Connection, texts: list[str]) -> list[list[str]]:

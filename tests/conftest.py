@@ -14,7 +14,9 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -273,10 +275,27 @@ def names_the_embedder(text: str) -> bool:
     return str(endpoint.hostname) in text or str(endpoint.port) in text
 
 
+def _constant_vectors(texts, model=None, expected_dim=None, **_kwargs):
+    from tests.declared_env import TEST_EMBED_DIM
+
+    return [[0.1] * (expected_dim or TEST_EMBED_DIM) for _ in texts]
+
+
 class StubEmbedder(list):
-    """The texts an embedding stub received; while ``down`` it raises what a real endpoint raises."""
+    """The texts an embedding stub received; while ``down`` it raises what a real endpoint raises.
+
+    As the document embedder it is also the provider: ``embed`` records each text and returns ``answer``'s vectors,
+    which a test replaces (same signature as a provider's ``embed``) for zero-norm, racing or failing answers.
+    """
 
     down: int | None = None  # the HTTP status to fail with, or None
+    answer: Callable[..., list[list[float] | None]] = staticmethod(_constant_vectors)
+
+    def embed(self, texts: list[str], model: str, expected_dim: int | None = None) -> list[list[float] | None]:
+        if self.down is not None:
+            raise embedder_error(self.down)
+        self.extend(texts)
+        return self.answer(texts, model=model, expected_dim=expected_dim)
 
 
 @pytest.fixture
@@ -296,21 +315,29 @@ def stub_embedder(monkeypatch) -> StubEmbedder:
     return texts
 
 
+@contextmanager
+def fake_embedding_provider() -> Iterator[StubEmbedder]:
+    """Serve every embedding resolved inside the block from one ``StubEmbedder`` (see ``stub_document_embedder``)."""
+    from knowledge_base import embeddings
+
+    fake = StubEmbedder()
+    with (
+        patch.object(embeddings, "_provider_cache", {}),
+        patch.object(embeddings, "_build_provider", lambda _cfg: fake),
+    ):
+        yield fake
+
+
 @pytest.fixture
-def stub_document_embedder(monkeypatch) -> StubEmbedder:
-    """Answer the document embeddings ingest asks for; the fixture is the list of texts it received."""
-    texts = StubEmbedder()
+def stub_document_embedder() -> Iterator[StubEmbedder]:
+    """The provider every embedding resolves in this test; the fixture is the list of texts it received.
 
-    def _embed(batch, *_args, expected_dim=None, **_kwargs):
-        from tests.declared_env import TEST_EMBED_DIM
-
-        if texts.down is not None:
-            raise embedder_error(texts.down)
-        texts.extend(batch)
-        return [[0.1] * (expected_dim or TEST_EMBED_DIM) for _ in batch]
-
-    monkeypatch.setattr("knowledge_base.ingest.embed", _embed)
-    return texts
+    It is registered where providers are built (``embeddings._build_provider``, with an empty cache), so ingest,
+    folder summaries, backfills, promotions, the redact rewrite and any query ``stub_embedder`` does not answer reach
+    it. It counts no tokens: input-limit tests use ``bounded_embedder`` (``tests/test_embed_limits.py``) instead.
+    """
+    with fake_embedding_provider() as fake:
+        yield fake
 
 
 @pytest.fixture

@@ -14,6 +14,7 @@ from fastmcp.exceptions import ToolError
 
 from knowledge_base import migrate, server
 from knowledge_base.db import get_connection, init_schema, resolve_db_path
+from tests.conftest import fake_embedding_provider
 from tests.declared_env import TEST_EMBED_DIM
 
 QWEN = "Qwen/Qwen3-Embedding-0.6B"
@@ -707,7 +708,7 @@ def test_a_keyword_search_embeds_nothing_and_checks_nothing(tmp_path, monkeypatc
     from knowledge_base.search import search
 
     conn = _store(tmp_path)
-    with patch("knowledge_base.ingest.embed", lambda texts, **_kw: [[0.1] * TEST_EMBED_DIM for _ in texts]):
+    with fake_embedding_provider():
         ingest_text(conn, "Attention is all you need.", source_uri="/docs/a.md", source_type="markdown")
     conn.execute("UPDATE embed_spaces SET provider = 'onnx'")
     conn.commit()
@@ -775,7 +776,7 @@ def test_a_keyword_search_needs_no_space(kb_conn, http_requests):
     from knowledge_base.ingest import ingest_text
     from knowledge_base.search import search
 
-    with patch("knowledge_base.ingest.embed", lambda texts, **_kw: [[0.1] * TEST_EMBED_DIM for _ in texts]):
+    with fake_embedding_provider():
         ingest_text(kb_conn, "Attention is all you need.", source_uri="/docs/a.md", source_type="markdown")
     assert search(kb_conn, "attention", mode="fts", space_name="no_such_space")
     assert http_requests == []

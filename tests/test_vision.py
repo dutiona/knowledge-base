@@ -3987,12 +3987,7 @@ class TestOmniParserAutoStart:
         mock_proc.wait.assert_called_once()
 
 
-def _fake_embed(texts, model="bge-m3", expected_dim=None, **_kwargs):
-    dim = expected_dim if expected_dim is not None else TEST_EMBED_DIM
-    return [[0.1] * dim for _ in texts]
-
-
-@patch("knowledge_base.ingest.embed", _fake_embed)
+@pytest.mark.usefixtures("stub_document_embedder")
 def test_persist_figures_chunk_count_matches_per_row(vision_conn):
     """#392: _persist_figures batches the chunk_count bump across N figures.
 

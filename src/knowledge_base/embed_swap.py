@@ -21,7 +21,7 @@ from .db import (
     get_active_space,
     space_table_name,
 )
-from .embeddings import Cuts, EmbeddingProvider, ProviderConfig, embed_with_cuts, get_provider, truncate_embedding
+from .embeddings import Cuts, ProviderConfig, embed_with_cuts, get_provider, truncate_embedding
 from .exceptions import KnowledgeBaseError
 from .settings import IDENTITY_FIELDS, declared_identity, load_embed_settings, require_identity, serving_identity
 from .utils import loopback_opt_in
@@ -311,17 +311,11 @@ def _folder_rows(conn: sqlite3.Connection) -> list[tuple[str, str]]:
 
 
 def _embed_folder_summaries(
-    provider: EmbeddingProvider,
-    rows: list[tuple[str, str]],
-    model: str,
-    dim: int,
-    matryoshka_base_dim: int | None,
+    embed: Callable[[list[str]], tuple[list[list[float] | None], Cuts]], rows: list[tuple[str, str]]
 ) -> _FolderVectors:
     if not rows:
         return {}
-    vectors = provider.embed([text for _path, text in rows], model=model, expected_dim=matryoshka_base_dim or dim)
-    if matryoshka_base_dim:
-        vectors = [truncate_embedding(v, dim) if v is not None else None for v in vectors]
+    vectors, _cuts = embed([text for _path, text in rows])
     return dict(zip(rows, vectors, strict=True))
 
 
@@ -366,9 +360,8 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
     if conn.in_transaction:
         raise KnowledgeBaseError("promote_space needs a connection with no open transaction; commit or roll back first")
     _check_promotable(conn, space)  # fail fast; rechecked under the lock
-    provider = get_provider(cfg=declared_provider_config(conn, dict(space)))
-    shape = (space["model"], space["dim"], space["matryoshka_base_dim"])
-    snapshot = _embed_folder_summaries(provider, _folder_rows(conn), *shape)
+    embed = space_embedder(conn, dict(space))
+    snapshot = _embed_folder_summaries(embed, _folder_rows(conn))
 
     level = conn.isolation_level
     conn.isolation_level = None  # explicit BEGIN: Python's sqlite3 opens no transaction before DDL
@@ -383,7 +376,7 @@ def promote_space(conn: sqlite3.Connection, space_name: str) -> dict:
             current = _folder_rows(conn)
             changed = [row for row in current if row not in snapshot]
             vectors = {row: snapshot[row] for row in current if row in snapshot}
-            vectors.update(_embed_folder_summaries(provider, changed, *shape))
+            vectors.update(_embed_folder_summaries(embed, changed))
             old_name = _swap_active(conn, space)
             _write_folder_summaries_vec(conn, space["dim"], vectors)
             conn.execute("COMMIT")
