@@ -2017,3 +2017,21 @@ def test_a_space_created_before_the_cascade_writes_loses_the_chunks_vectors_too(
     delete_chunks_cascade(kb_conn, [chunk])
     kb_conn.commit()
     assert kb_conn.execute(f"SELECT COUNT(*) FROM [{created[0]}]").fetchone()[0] == 0  # noqa: S608
+
+
+def test_bind_records_the_key_file_source_never_its_path(tmp_path, monkeypatch, caplog):
+    """#660: switching the key to a file rewrites the row to the file spec; neither key nor path is recorded."""
+    import secrets
+
+    key = secrets.token_hex(16)
+    key_file = tmp_path / "embed-key"
+    key_file.write_text(key)
+    conn = _seeded(tmp_path, monkeypatch, api_key=None, api_key_file=str(key_file))
+    with caplog.at_level("DEBUG"):
+        bind_embed_config(conn, load_embed_settings())
+    config = _config(conn)
+    assert config["embed_api_key"] == "file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE"
+    assert "embed_api_key" in caplog.text
+    for secret in (key, str(key_file)):
+        assert secret not in caplog.text
+        assert not any(secret in value for value in config.values())

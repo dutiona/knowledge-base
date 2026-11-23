@@ -266,7 +266,7 @@ Additional keys set via configure tools: `llm_base_url`, `llm_api_key`, `vision_
 | -------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `embed_provider`                             | Embedding API family: `openai_compat` \| `openai` \| `ollama` \| `onnx`                  |
 | `embed_base_url`                             | The declared `KNOWLEDGE_BASE_EMBED_URL`, normalized                                      |
-| `embed_api_key`                              | Always `env:KNOWLEDGE_BASE_EMBED_API_KEY` when a key is declared; never the secret       |
+| `embed_api_key`                              | `env:KNOWLEDGE_BASE_EMBED_API_KEY` or `file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE`, whichever declares the key; never the path or the secret |
 | `embed_model`                                | Embedding model slug — the `model` field of the embedding-identity tuple                 |
 | `llm_provider`                               | Chat API family: `openai_compat` \| `anthropic_compat` \| `ollama`                       |
 | `llm_base_url` / `llm_api_key` / `llm_model` | Chat counterparts (same semantics as the `embed_*` keys)                                 |

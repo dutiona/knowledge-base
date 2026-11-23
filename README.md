@@ -132,7 +132,8 @@ database whose store lock another process holds.
 | `KNOWLEDGE_BASE_EMBED_BATCH_SIZE` | optional; only for `openai_compat`, `openai`, `llama.cpp` | inputs per `/v1/embeddings` request, a whole number of at least 1 (default `1`), so a query from another client sharing the embedder waits for one input, not a batch; each KB process keeps one request in flight per embedder (see the ingesting guide) |
 | `KNOWLEDGE_BASE_EMBED_URL` | for `openai_compat`, `openai`, `llama.cpp`, `ollama`; refused for `onnx` | `http(s)://host[:port][/path]`, no userinfo, query or fragment |
 | `ONNX_EMBED_MODEL_PATH` | for `onnx` | an existing model file |
-| `KNOWLEDGE_BASE_EMBED_API_KEY` | optional | the embedder's key; `config` records only `env:KNOWLEDGE_BASE_EMBED_API_KEY` |
+| `KNOWLEDGE_BASE_EMBED_API_KEY` | optional | the embedder's key, visible ASCII, no whitespace; refused beside `_API_KEY_FILE`; `config` records only `env:KNOWLEDGE_BASE_EMBED_API_KEY` |
+| `KNOWLEDGE_BASE_EMBED_API_KEY_FILE` | optional; refused beside `_API_KEY` | a file holding the embedder's key, read once at start with surrounding whitespace trimmed. It must hold one token of visible ASCII; an unreadable or empty file, or any other content, stops the start naming the variable. `config` records only `file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE`. A new key takes a restart. |
 | `KNOWLEDGE_BASE_VISION`, `KNOWLEDGE_BASE_BROWSER`, `KNOWLEDGE_BASE_LLM` | optional | `on` or `off` (default `off`): figure extraction, the Playwright fallback, LLM extraction |
 | `KNOWLEDGE_BASE_LLM_API_KEY` | optional | the only `env:` source an LLM key may name |
 | `KNOWLEDGE_BASE_HOST_ADDRESSES` | optional | this host's own IP addresses or CIDR networks, comma-separated (e.g. `203.0.113.7,2001:db8:7::/64`); the SSRF floor refuses them though they are public |

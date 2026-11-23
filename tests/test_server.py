@@ -771,3 +771,51 @@ def test_no_stdio_tool_reports_a_failure_as_a_result(
 
     assert len(returned) == 47
     assert sorted(name for name, text in returned.items() if text is not None and _is_error_object(text)) == []
+
+
+# --- #660: the key from a file ---
+
+
+@pytest.mark.parametrize("case", ["missing", "empty", "both set"])
+def test_a_bad_key_file_setting_exits_78_before_the_database(case, monkeypatch, capsys, http_requests, tmp_path):
+    import secrets
+
+    key = secrets.token_hex(16)
+    db = tmp_path / "kb.db"
+    key_file = tmp_path / "embed-key"
+    if case != "missing":
+        key_file.write_text("" if case == "empty" else key)
+    monkeypatch.setenv("KNOWLEDGE_BASE_DB", str(db))
+    for name, value in _OPENAI_COMPAT.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_API_KEY_FILE", str(key_file))
+    if case == "both set":
+        monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_API_KEY", key)
+    with patch.object(server.mcp, "run") as run, pytest.raises(SystemExit) as exit_info:
+        server.main([])
+    assert exit_info.value.code == 78
+    err = capsys.readouterr().err
+    assert "KNOWLEDGE_BASE_EMBED_API_KEY_FILE" in err
+    assert key not in err
+    run.assert_not_called()
+    assert http_requests == []
+    assert not db.exists()
+    assert not (tmp_path / "kb.db.store-lock").exists()
+
+
+def test_help_never_shows_the_key_file_key(monkeypatch, capsys, tmp_path):
+    import secrets
+
+    from knowledge_base import indexer
+
+    key = secrets.token_hex(16)
+    key_file = tmp_path / "embed-key"
+    key_file.write_text(key)
+    monkeypatch.setenv("KNOWLEDGE_BASE_EMBED_API_KEY_FILE", str(key_file))
+    for main in (server.main, indexer.main):
+        with pytest.raises(SystemExit) as exit_info:
+            main(["--help"])
+        assert exit_info.value.code == 0
+    out = capsys.readouterr()
+    assert key not in out.out
+    assert key not in out.err

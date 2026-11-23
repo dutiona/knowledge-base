@@ -102,6 +102,7 @@ def _declared_environment(monkeypatch):
     for name in (
         "EMBED_PROVIDER",
         "KNOWLEDGE_BASE_EMBED_API_KEY",
+        "KNOWLEDGE_BASE_EMBED_API_KEY_FILE",
         "KNOWLEDGE_BASE_LLM_API_KEY",
         "KNOWLEDGE_BASE_HOST_ADDRESSES",
         "KNOWLEDGE_BASE_FETCH_MAX_BYTES",

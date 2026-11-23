@@ -785,8 +785,11 @@ def test_llm_off_refuses_before_any_request(kb_conn, http_requests, monkeypatch)
     assert _config_rows(kb_conn) == before
 
 
-@pytest.mark.parametrize("spec", ["env:KNOWLEDGE_BASE_EMBED_API_KEY", "env:HOME"])
-def test_llm_key_spec_allowlist_refuses_other_env_specs(kb_conn, http_requests, serve, spec):
+@pytest.mark.parametrize(
+    "spec",
+    ["env:KNOWLEDGE_BASE_EMBED_API_KEY", "env:HOME", "file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE", "file:/etc/hostname"],
+)
+def test_llm_key_spec_allowlist_refuses_other_indirect_specs(kb_conn, http_requests, serve, spec):
     from knowledge_base.exceptions import ValidationError
     from knowledge_base.llm import configure_llm
 
@@ -807,15 +810,16 @@ def test_llm_key_spec_allowlist_accepts_its_own_source(kb_conn, serve, spec):
     assert _config_rows(kb_conn)["llm_api_key"] == spec
 
 
-def test_a_stored_foreign_key_spec_is_refused_before_any_request(kb_conn, http_requests, serve):
+@pytest.mark.parametrize("spec", ["env:KNOWLEDGE_BASE_EMBED_API_KEY", "file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE"])
+def test_a_stored_foreign_key_spec_is_refused_before_any_request(kb_conn, http_requests, serve, spec):
     from knowledge_base.exceptions import ValidationError
     from knowledge_base.llm import _get_llm_config, configure_llm
 
     serve("attacker.example.test", _ok)
     kb_conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES "
-        "('llm_provider', 'openai_compat'), ('llm_base_url', 'https://llm.example.test'), "
-        "('llm_api_key', 'env:KNOWLEDGE_BASE_EMBED_API_KEY')"
+        "('llm_provider', 'openai_compat'), ('llm_base_url', 'https://llm.example.test'), ('llm_api_key', ?)",
+        (spec,),
     )
     kb_conn.commit()
     before = _config_rows(kb_conn)
