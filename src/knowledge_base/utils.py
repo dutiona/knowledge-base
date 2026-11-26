@@ -22,7 +22,7 @@ from urllib.parse import urlparse, urlunparse
 import httpcore
 import httpx
 
-from knowledge_base.exceptions import ValidationError
+from knowledge_base.exceptions import RequestFloorError, ValidationError
 from knowledge_base.settings import API_KEY_FILE_VAR, embed_key_from_file, host_networks
 
 __all__ = [
@@ -34,6 +34,7 @@ __all__ = [
     "deadline_left",
     "egress_client",
     "egress_deadline",
+    "error_text",
     "is_private_ip",
     "loopback_opt_in",
     "serialize_f32",
@@ -47,6 +48,10 @@ __all__ = [
 
 
 _IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+
+#: The host-free reason a floor refusal carries: what a caller that must not name the host renders instead (#662).
+_REFUSED = "the endpoint's address is refused by the request floor"
 
 
 def _refusal_message(host: str) -> str:
@@ -76,15 +81,17 @@ def _accepted_addresses(host: str) -> list[_IPAddress]:
         try:
             infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
         except (OSError, UnicodeError):
-            raise ValidationError(f"cannot resolve {host}") from None
+            raise RequestFloorError(
+                f"cannot resolve {host}", host=host, reason="the endpoint's host did not resolve"
+            ) from None
         try:
             answers = list(dict.fromkeys(ipaddress.ip_address(info[4][0]) for info in infos))
         except ValueError:
-            raise ValidationError(_refusal_message(host)) from None
+            raise RequestFloorError(_refusal_message(host), host=host, reason=_REFUSED) from None
     if not answers:
-        raise ValidationError(f"cannot resolve {host}")
+        raise RequestFloorError(f"cannot resolve {host}", host=host, reason="the endpoint's host did not resolve")
     if any(_refused(ip) for ip in answers):
-        raise ValidationError(_refusal_message(host))
+        raise RequestFloorError(_refusal_message(host), host=host, reason=_REFUSED)
     return answers
 
 
@@ -146,7 +153,7 @@ def validate_base_url(url: str, *, allow_loopback: bool = False, exempt_host: st
     if exempt_host is not None and parsed.hostname.rstrip(".").lower() == exempt_host.rstrip(".").lower():
         return  # the declared embedding endpoint (#569)
     if is_private_ip(parsed.hostname):
-        raise ValidationError(_refusal_message(parsed.hostname))
+        raise RequestFloorError(_refusal_message(parsed.hostname), host=parsed.hostname, reason=_REFUSED)
 
 
 def _pinned(request: httpx.Request, name: str, address: _IPAddress) -> httpx.Request:
@@ -409,6 +416,21 @@ def _resolve_api_key(raw: str | None) -> str | None:
     if raw.startswith("env:"):
         return os.environ.get(raw[4:])
     return raw
+
+
+def error_text(exc: BaseException) -> str:
+    """What *exc* says where a caller or a log reads it: an httpx error's class, never its own text.
+
+    httpx puts the endpoint URL in a status error's message, and h11's refusal reaches us as
+    ``httpx.LocalProtocolError`` with the refused header value quoted in its text, so neither is rendered. Every other
+    error is KB's own text, which names a variable rather than a value (#660, #662), and stays whole: a job's ``error``
+    is the operator's only diagnosis.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"{type(exc).__name__} (HTTP {exc.response.status_code})"
+    if isinstance(exc, httpx.HTTPError):
+        return type(exc).__name__
+    return str(exc)
 
 
 def compute_file_hash(path: Path) -> str:

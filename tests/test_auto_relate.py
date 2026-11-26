@@ -481,6 +481,18 @@ class TestOnlyCompareHigher:
 
 
 class TestJobDispatch:
+    @pytest.fixture(autouse=True)
+    def _no_live_worker(self):
+        """Hold the process-global worker off: it would claim these jobs between a submit and its assertions.
+
+        ``submit_job`` starts the singleton on a temp DB that this test deletes at teardown; the same guard
+        tests/test_jobs.py applies (the race is not the subject here).
+        """
+        from unittest.mock import patch
+
+        with patch("knowledge_base.jobs._ensure_worker_running"):
+            yield
+
     def test_auto_relate_job_dispatches(self, conn):
         """submit_job + worker tick → auto_relate runs."""
         from knowledge_base.jobs import submit_job

@@ -567,7 +567,9 @@ For short papers, runs inline. For long papers (>2 min estimated), returns a war
 | `paper_id`  | `int`  | yes      | --      | Paper ID to extract structure from                    |
 | `confirmed` | `bool` | no       | `False` | Set `True` to skip the ETA warning for long documents |
 
-**Returns (short document):** Extraction results inline.
+**Returns (short document):** Extraction results inline. A failed inline extraction raises a `ToolError` whose JSON
+carries the failure class and, for an HTTP failure, its status (`LLM extraction failed: HTTPStatusError (HTTP 503)`);
+it never carries the endpoint's URL or an httpx error's own text.
 
 **Returns (long document, not confirmed):**
 
@@ -680,7 +682,7 @@ With no arguments, returns the current strategy. Non-PDF content always uses mec
 
 ### configure_llm_tool
 
-Configure the LLM used for structured extraction. Runs a connectivity test after saving. Refuses unless the server runs with `KNOWLEDGE_BASE_LLM=on`; `api_key` is an inline value or exactly `env:KNOWLEDGE_BASE_LLM_API_KEY`.
+Configure the LLM used for structured extraction. Runs a connectivity test after saving. Refuses unless the server runs with `KNOWLEDGE_BASE_LLM=on`; `api_key` is an inline value or exactly `env:KNOWLEDGE_BASE_LLM_API_KEY`; a key for an HTTP family is one Bearer token of visible ASCII, refused naming the field otherwise.
 
 | Parameter                 | Type           | Required | Default         | Description                                                                                       |
 | ------------------------- | -------------- | -------- | --------------- | ------------------------------------------------------------------------------------------------- |
@@ -1006,6 +1008,10 @@ Get the status and progress of a background extraction job.
   "started_at": "2025-01-15 10:30:01"
 }
 ```
+
+A failed job's `error` names the failure class and, for an HTTP failure, its status
+(`HTTPStatusError (HTTP 503)`); it never carries the endpoint's URL or an httpx error's own text. `result.errors`
+holds one such message per failed chunk.
 
 ### list_jobs_tool
 

@@ -11,6 +11,7 @@ __all__ = [
     "ExtractionError",
     "KnowledgeBaseError",
     "NotFoundError",
+    "RequestFloorError",
     "ValidationError",
 ]
 
@@ -25,6 +26,19 @@ class NotFoundError(KnowledgeBaseError):
 
 class ValidationError(KnowledgeBaseError):
     """Input parameter fails validation."""
+
+
+class RequestFloorError(ValidationError):
+    """The SSRF request floor refused an address or could not resolve the host.
+
+    Its own message names the host, because the caller supplied it (a web tool's URL, an operator's endpoint). A
+    caller that must not disclose the host, such as the LLM request path, renders :attr:`reason` instead (#662).
+    """
+
+    def __init__(self, message: str, *, host: str, reason: str) -> None:
+        super().__init__(message)
+        self.host = host
+        self.reason = reason
 
 
 class EmbeddingModelMismatchError(KnowledgeBaseError):

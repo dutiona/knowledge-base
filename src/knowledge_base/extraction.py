@@ -16,7 +16,7 @@ import httpx
 
 from .exceptions import ExtractionError, NotFoundError
 from .llm import _get_llm_config, _llm_call
-from .utils import egress_client
+from .utils import egress_client, error_text
 
 logger = logging.getLogger(__name__)
 
@@ -747,7 +747,7 @@ def _extract_single_pass(conn: sqlite3.Connection, paper_id: int, chunks: list[d
     try:
         raw = _llm_call(prompt, conn=conn)
     except Exception as e:
-        raise ExtractionError(f"LLM extraction failed: {e}") from e
+        raise ExtractionError(f"LLM extraction failed: {error_text(e)}") from e
     try:
         extracted = _validate_extraction(json.loads(raw))
     except (json.JSONDecodeError, ValueError) as e:
@@ -934,14 +934,15 @@ def _extract_map_reduce(
                     mt,
                 )
             except Exception as e:
-                errors.append({"chunk_id": chunk["id"], "chunk_index": i, "error": str(e)})
+                detail = error_text(e)  # stored and logged: never httpx's own text (#662)
+                errors.append({"chunk_id": chunk["id"], "chunk_index": i, "error": detail})
                 logger.info(
                     "Chunk %3d/%d (%.1f%%) - %.1fs - FAILED: %s",
                     i + 1,
                     len(chunks),
                     completed_count / len(chunks) * 100,
                     chunk_elapsed,
-                    e,
+                    detail,
                 )
 
             if on_progress:
@@ -981,7 +982,7 @@ def _extract_map_reduce(
     try:
         resolution = _resolve_entities(ordered_results, cfg)
     except Exception as e:
-        logger.warning("Entity resolution failed, proceeding without: %s", e)
+        logger.warning("Entity resolution failed, proceeding without: %s", error_text(e))
         resolution = {"groups": []}
     resolve_elapsed = time.monotonic() - resolve_start
     n_groups = len(resolution.get("groups", []))

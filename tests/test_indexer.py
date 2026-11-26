@@ -989,3 +989,19 @@ def test_remove_help_states_what_dedup_implies(capsys):
     with pytest.raises(SystemExit):
         main(["remove", "--help"])
     assert "only copy of a passage" in " ".join(capsys.readouterr().out.split())
+
+
+def test_cli_stderr_never_names_the_embedder(tmp_path, capsys, stub_document_embedder):
+    """A failed ingest prints the failure class and status, never httpx's text with the endpoint (#662)."""
+    from tests.conftest import names_the_embedder
+
+    _conn, db = _setup(tmp_path)
+    doc = tmp_path / "doc.md"
+    doc.write_text("# Doc\n\nA passage the embedder will refuse.\n")
+    stub_document_embedder.down = 503
+
+    assert _exit_of(["--db", str(db), "ingest", str(doc)]) == 1
+
+    err = capsys.readouterr().err
+    assert not names_the_embedder(err)
+    assert "HTTPStatusError (HTTP 503)" in err

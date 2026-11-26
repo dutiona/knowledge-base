@@ -47,6 +47,7 @@ __all__ = [
     "load_embed_settings",
     "normalize_embed_url",
     "require_identity",
+    "require_key",
     "routes_by_model",
     "serving_identity",
     "switch_on",
@@ -198,6 +199,18 @@ def embed_key_from_file() -> str:
     return _read_key_file(path)
 
 
+def require_key(var: str, raw: str) -> str:
+    """*raw* as the key it holds alone: one Bearer token of visible ASCII, or a refusal naming *var*.
+
+    h11 echoes a header value it refuses and httpx cannot encode a non-ASCII one, so a value that is not one token
+    must not reach a request (#660 for the embedder key, #662 for the LLM key). The refusal names *var* and never
+    quotes *raw*.
+    """
+    if not _KEY_RE.fullmatch(raw):
+        raise ValidationError(f"{var} must hold the key alone: visible ASCII characters, no whitespace")
+    return raw
+
+
 def _key_source(provider: str) -> str | None:
     """The declared key's spec, naming its variable; a request resolves the key (``utils._resolve_api_key``)."""
     if _get(API_KEY_FILE_VAR) is not None:
@@ -208,8 +221,8 @@ def _key_source(provider: str) -> str | None:
     if _get(API_KEY_VAR) is None:
         return None
     # The raw value is what a request sends; ollama and onnx never send it.
-    if provider in _OPENAI_FAMILIES and not _KEY_RE.fullmatch(os.environ[API_KEY_VAR]):
-        raise ValidationError(f"{API_KEY_VAR} must hold the key alone: visible ASCII characters, no whitespace")
+    if provider in _OPENAI_FAMILIES:
+        require_key(API_KEY_VAR, os.environ[API_KEY_VAR])
     return f"env:{API_KEY_VAR}"
 
 

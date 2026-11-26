@@ -135,7 +135,7 @@ database whose store lock another process holds.
 | `KNOWLEDGE_BASE_EMBED_API_KEY` | optional | the embedder's key, visible ASCII, no whitespace; refused beside `_API_KEY_FILE`; `config` records only `env:KNOWLEDGE_BASE_EMBED_API_KEY` |
 | `KNOWLEDGE_BASE_EMBED_API_KEY_FILE` | optional; refused beside `_API_KEY` | a file holding the embedder's key, read once at start with surrounding whitespace trimmed. It must hold one token of visible ASCII; an unreadable or empty file, or any other content, stops the start naming the variable. `config` records only `file:KNOWLEDGE_BASE_EMBED_API_KEY_FILE`. A new key takes a restart. |
 | `KNOWLEDGE_BASE_VISION`, `KNOWLEDGE_BASE_BROWSER`, `KNOWLEDGE_BASE_LLM` | optional | `on` or `off` (default `off`): figure extraction, the Playwright fallback, LLM extraction |
-| `KNOWLEDGE_BASE_LLM_API_KEY` | optional | the only `env:` source an LLM key may name |
+| `KNOWLEDGE_BASE_LLM_API_KEY` | optional | the only `env:` source an LLM key may name; one Bearer token of visible ASCII (as the embedder key since #660) |
 | `KNOWLEDGE_BASE_HOST_ADDRESSES` | optional | this host's own IP addresses or CIDR networks, comma-separated (e.g. `203.0.113.7,2001:db8:7::/64`); the SSRF floor refuses them though they are public |
 | `KNOWLEDGE_BASE_FETCH_MAX_BYTES` | optional | the byte cap on a fetched page or image body (default `52428800`, 50 MiB) |
 | `KNOWLEDGE_BASE_FETCH_MAX_REDIRECTS` | optional | redirects a fetch follows (default `5`; `0` follows none) |

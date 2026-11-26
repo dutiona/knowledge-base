@@ -12,6 +12,7 @@ from typing import Any
 
 from .db import get_connection, init_schema
 from .exceptions import ExtractionError
+from .utils import error_text
 
 logger = logging.getLogger(__name__)
 
@@ -200,26 +201,28 @@ class _JobWorker:
             logger.info("Job %d completed", job_id)
         except ExtractionError as exc:
             conn.rollback()  # what the job left uncommitted must not commit with its failure (#643)
+            detail = error_text(exc)  # a stored, caller-visible error never quotes httpx (#662)
             # Preserve structured error data (per-chunk failures, raw LLM output)
-            result_data: dict[str, Any] = {"error": str(exc)}
+            result_data: dict[str, Any] = {"error": detail}
             if exc.errors:
                 result_data["errors"] = exc.errors
             if exc.raw:
                 result_data["raw"] = exc.raw
             conn.execute(
                 "UPDATE jobs SET status = 'failed', error = ?, result = ?, completed_at = datetime('now') WHERE id = ?",
-                (str(exc), json.dumps(result_data), job_id),
+                (detail, json.dumps(result_data), job_id),
             )
             conn.commit()
-            logger.error("Job %d failed: %s", job_id, exc)
+            logger.error("Job %d failed: %s", job_id, detail)
         except Exception as exc:
             conn.rollback()  # as above (#643)
+            detail = error_text(exc)  # as above (#662)
             conn.execute(
                 "UPDATE jobs SET status = 'failed', error = ?, completed_at = datetime('now') WHERE id = ?",
-                (str(exc), job_id),
+                (detail, job_id),
             )
             conn.commit()
-            logger.error("Job %d failed: %s", job_id, exc)
+            logger.error("Job %d failed: %s", job_id, detail)
 
     def _dispatch(
         self,
