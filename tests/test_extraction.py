@@ -2082,3 +2082,37 @@ def test_a_failed_chunk_is_recorded_without_the_endpoint(tmp_path, caplog):
     assert exc_info.value.errors[0]["error"] == "HTTPStatusError (HTTP 503)"
     assert "llm.example.test" not in rendered
     assert "llm.example.test" not in caplog.text
+
+
+@pytest.mark.usefixtures("stub_document_embedder")
+def test_a_request_floor_failure_in_a_chunk_names_no_host(tmp_path, caplog, fake_dns):
+    """Every chunk failing at the request floor reports the reason; the LLM hostname stays out (#662)."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content " * 200)
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test", source_uri=str(md.resolve()))["paper_id"]
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES "
+        "('llm_provider', 'openai_compat'), ('llm_base_url', 'https://llm.example.test'), ('llm_model', 'm')"
+    )
+    conn.commit()
+    chunks = [
+        {"id": row["id"], "content": row["content"]}
+        for row in conn.execute(
+            "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+            (str(md.resolve()),),
+        ).fetchall()
+    ]
+
+    with (
+        caplog.at_level(logging.INFO, logger="knowledge_base.extraction"),
+        pytest.raises(ExtractionError) as exc_info,
+    ):
+        _extract_map_reduce(conn, p, chunks)
+
+    assert exc_info.value.errors is not None
+    rendered = json.dumps(exc_info.value.errors)
+    assert "did not resolve" in rendered
+    assert "llm.example.test" not in rendered
+    assert "llm.example.test" not in caplog.text

@@ -500,3 +500,24 @@ def test_the_inline_extraction_tool_names_no_endpoint(kb_conn, tmp_path, stub_do
     payload = json.loads(str(refused.value))
     assert payload["error"].startswith("LLM extraction failed: HTTPStatusError (HTTP 503)")
     assert "llm.example.test" not in str(refused.value)
+
+
+def test_the_inline_extraction_tool_hides_the_request_floor_host(kb_conn, tmp_path, stub_document_embedder, fake_dns):
+    """The caller-facing ToolError of a floor refusal names the reason, never the LLM hostname (#662)."""
+    from knowledge_base.ingest import ingest_file
+
+    doc = tmp_path / "short.md"
+    doc.write_text("A short paper about morphological operators.\n")
+    ingest_file(kb_conn, doc)
+    paper_id = register_paper(kb_conn, "Short", source_uri=str(doc.resolve()))["paper_id"]
+    kb_conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES "
+        "('llm_provider', 'openai_compat'), ('llm_base_url', 'https://llm.example.test'), ('llm_model', 'm')"
+    )
+    kb_conn.commit()
+
+    with _patch_conn(kb_conn), pytest.raises(ToolError) as refused:
+        extract_structure_tool(paper_id=paper_id)
+
+    assert "did not resolve" in str(refused.value)
+    assert "llm.example.test" not in str(refused.value)

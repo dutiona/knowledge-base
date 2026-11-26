@@ -395,3 +395,29 @@ def test_a_failed_job_stores_no_endpoint_and_no_header_value(tmp_path, caplog, f
     assert key not in json.dumps(job["result"])
     assert "llm.example.test" not in caplog.text
     assert key not in caplog.text
+
+
+def test_a_request_floor_failure_stores_no_host_in_the_job(tmp_path, caplog, fake_dns):
+    """A job whose LLM request is refused by the floor stores the reason, never the LLM hostname (#662)."""
+    import logging
+
+    from knowledge_base.llm import _llm_call
+
+    def fake(conn_, paper_id_, confirmed=False, *, on_progress, **kwargs):
+        _llm_call("prompt", conn=conn_)  # the real request path: the floor refuses the host
+
+    conn, _db_path = _setup(tmp_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES "
+        "('llm_provider', 'openai_compat'), ('llm_base_url', 'https://llm.example.test'), ('llm_model', 'm')"
+    )
+    conn.commit()
+
+    with caplog.at_level(logging.ERROR, logger="knowledge_base.jobs"):
+        job, _names = _run_once(tmp_path, fake)
+
+    assert job["status"] == "failed"
+    assert "llm.example.test" not in job["error"]
+    assert "did not resolve" in job["error"]
+    assert "llm.example.test" not in caplog.text
+    assert "llm.example.test" not in json.dumps(job["result"])

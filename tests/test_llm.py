@@ -533,8 +533,9 @@ def test_a_stored_row_from_before_is_refused_at_use(tmp_path, http_requests, fak
         "INSERT OR REPLACE INTO config (key, value) VALUES ('llm_base_url', 'http://tailnet.example.test:11434')"
     )
     conn.commit()
-    with pytest.raises(ValidationError, match="private"):
+    with pytest.raises(ValidationError, match="refused by the request floor") as refused:
         _llm_call("p", conn=conn)
+    assert "tailnet.example.test" not in str(refused.value)
     assert http_requests == []
 
 
@@ -552,8 +553,9 @@ def test_a_stored_url_rebinding_at_use_is_refused(tmp_path, http_requests, fake_
     http_requests.handlers["llm.example.test"] = _ok
     configure_llm(conn, provider="openai_compat", base_url="https://llm.example.test", model="m")
     http_requests.clear()
-    with pytest.raises(ValidationError, match="private"):
+    with pytest.raises(ValidationError, match="refused by the request floor") as refused:
         _llm_call("p", conn=conn)
+    assert "llm.example.test" not in str(refused.value)
     assert http_requests == []
 
 
@@ -589,8 +591,9 @@ def test_ssrf_blocks_openai_compat_llm_call(tmp_path):
         "model": "test",
         "api_key": None,
     }
-    with pytest.raises(ValidationError, match="private"):
+    with pytest.raises(ValidationError, match="refused by the request floor") as refused:
         _llm_call("test", cfg=cfg)
+    assert "169.254.169.254" not in str(refused.value)
 
 
 def _redirecting(request):
@@ -680,8 +683,9 @@ def test_llm_call_anthropic_ssrf_blocked():
         "model": "claude-x",
         "api_key": "k",
     }
-    with pytest.raises(ValidationError, match="private"):
+    with pytest.raises(ValidationError, match="refused by the request floor") as refused:
         _llm_call("x", cfg=cfg)
+    assert "169.254.169.254" not in str(refused.value)
 
 
 def test_configure_llm_accepts_anthropic_compat(tmp_path, serve):
@@ -908,3 +912,35 @@ def test_a_stored_padded_key_is_refused_when_the_provider_switches_to_an_http_fa
     assert key not in str(refused.value)
     assert len(http_requests) == sent
     assert _config_rows(kb_conn) == before
+
+
+# --- #662: a request-floor failure names the reason, never the LLM host ---
+
+
+@pytest.mark.parametrize("mode", ["unresolvable", "refused"])
+def test_a_request_floor_failure_names_no_host(kb_conn, http_requests, fake_dns, mode):
+    """A host that stops resolving, or resolves to a refused address, must not reach the error text (#662).
+
+    The URL resolved when it was configured; the request path floors it again, and that refusal carries the hostname
+    in the floor's own message. The LLM boundary renders the reason instead.
+    """
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.llm import _llm_call
+
+    kb_conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES "
+        "('llm_provider', 'openai_compat'), ('llm_base_url', 'https://llm.example.test'), ('llm_model', 'm')"
+    )
+    kb_conn.commit()
+    if mode == "refused":
+        fake_dns["llm.example.test"] = ["10.0.0.7"]
+
+    with pytest.raises(ValidationError) as refused:
+        _llm_call("prompt", conn=kb_conn)
+
+    assert "llm.example.test" not in str(refused.value)
+    assert http_requests == []
+    if mode == "unresolvable":
+        assert "did not resolve" in str(refused.value)
+    else:
+        assert "refused by the request floor" in str(refused.value)

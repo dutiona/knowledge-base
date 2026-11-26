@@ -19,7 +19,7 @@ import sqlite3
 import httpx
 
 from .embeddings import _get_ollama_url
-from .exceptions import ValidationError
+from .exceptions import RequestFloorError, ValidationError
 from .settings import LLM_API_KEY_VAR, LLM_VAR, require_key, switch_on
 from .utils import _resolve_api_key, _sanitize_url, egress_client, loopback_opt_in, validate_base_url
 
@@ -199,6 +199,14 @@ def _llm_call(
             raise ValueError("Either conn or cfg must be provided to _llm_call")
         cfg = _get_llm_config(conn)
 
+    try:
+        return _llm_call_with(cfg, prompt, client)
+    except RequestFloorError as exc:  # the request floor names the host; no caller may learn it (#662)
+        raise ValidationError(f"LLM request refused: {exc.reason}") from None
+
+
+def _llm_call_with(cfg: dict, prompt: str, client: httpx.Client | None) -> str:
+    """One request with *cfg*, or the same call on a client of its own; ``_llm_call`` renders floor refusals."""
     if client is None:
         # The client floors and pins a stored URL on every request (#572); the operator's endpoint is plain.
         with egress_client(floor=cfg.get("floor", True), allow_loopback=cfg.get("allow_loopback", False)) as own:
