@@ -472,3 +472,31 @@ def test_configure_vision_tool_with_vision_off_raises_a_tool_error(kb_conn, monk
         pytest.raises(ToolError, match="KNOWLEDGE_BASE_VISION"),
     ):
         ext.configure_vision_tool(model="m")
+
+
+def test_the_inline_extraction_tool_names_no_endpoint(kb_conn, tmp_path, stub_document_embedder):
+    """The caller-facing ToolError of a failed inline extraction renders class and status, never the URL (#662)."""
+    import httpx
+
+    from knowledge_base.ingest import ingest_file
+
+    doc = tmp_path / "short.md"
+    doc.write_text("A short paper about morphological operators.\n")
+    ingest_file(kb_conn, doc)
+    paper_id = register_paper(kb_conn, "Short", source_uri=str(doc.resolve()))["paper_id"]
+
+    request = httpx.Request("POST", "http://llm.example.test:1234/v1/chat/completions")
+    failure = httpx.HTTPStatusError(
+        f"Server error '503' for url '{request.url}'", request=request, response=httpx.Response(503, request=request)
+    )
+
+    with (
+        _patch_conn(kb_conn),
+        patch("knowledge_base.extraction._llm_call", side_effect=failure),
+        pytest.raises(ToolError) as refused,
+    ):
+        extract_structure_tool(paper_id=paper_id)
+
+    payload = json.loads(str(refused.value))
+    assert payload["error"].startswith("LLM extraction failed: HTTPStatusError (HTTP 503)")
+    assert "llm.example.test" not in str(refused.value)

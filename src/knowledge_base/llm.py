@@ -20,7 +20,7 @@ import httpx
 
 from .embeddings import _get_ollama_url
 from .exceptions import ValidationError
-from .settings import LLM_API_KEY_VAR, LLM_VAR, switch_on
+from .settings import LLM_API_KEY_VAR, LLM_VAR, require_key, switch_on
 from .utils import _resolve_api_key, _sanitize_url, egress_client, loopback_opt_in, validate_base_url
 
 # Re-exported for back-compat: _sanitize_url moved to utils.py (ADR-0018 §4) so
@@ -44,10 +44,27 @@ def _require_llm() -> None:
         raise ValidationError(f"LLM extraction is off; set {LLM_VAR}=on to enable it")
 
 
-def _check_llm_key_spec(spec: str | None) -> None:
-    """An LLM key is inline or ``env:KNOWLEDGE_BASE_LLM_API_KEY``: no other secret of the process, and no file."""
+def _key_to_send(spec: str | None) -> str | None:
+    """The key *spec* resolves to now, refused unless it is one Bearer token of visible ASCII, or None.
+
+    The last gate before a header value: ``env:`` reads its variable at call time, and a ``cfg`` read earlier can be
+    stale. An unset variable is no key, so a keyless endpoint stays usable (#662).
+    """
+    key = _resolve_api_key(spec)
+    if key is None:
+        return None
+    return require_key(spec[4:] if spec and spec.startswith("env:") else "llm_api_key", key)
+
+
+def _check_llm_key_spec(spec: str | None, provider: str) -> None:
+    """An LLM key is inline or ``env:KNOWLEDGE_BASE_LLM_API_KEY``, and for a provider that sends it one token."""
     if spec and spec.startswith(("env:", "file:")) and spec != f"env:{LLM_API_KEY_VAR}":
-        raise ValidationError(f"an LLM api_key is an inline value or env:{LLM_API_KEY_VAR}, not {spec!r}")
+        raise ValidationError(
+            f"an LLM api_key is an inline value or env:{LLM_API_KEY_VAR}: no other variable of this process, "
+            "and no file"
+        )
+    if provider in _HTTP_LLM_FAMILIES:
+        _key_to_send(spec)
 
 
 def _get_llm_config(conn: sqlite3.Connection) -> dict:
@@ -59,7 +76,7 @@ def _get_llm_config(conn: sqlite3.Connection) -> dict:
     api_key_row = conn.execute("SELECT value FROM config WHERE key = 'llm_api_key'").fetchone()
 
     prov = provider["value"] if provider else "ollama"
-    _check_llm_key_spec(api_key_row["value"] if api_key_row else None)
+    _check_llm_key_spec(api_key_row["value"] if api_key_row else None, prov)
 
     if base_url_row:
         base_url = base_url_row["value"]
@@ -223,7 +240,7 @@ def _llm_call(
         raw = resp.json()["response"]
     elif cfg["provider"] == "anthropic_compat":
         headers = {"anthropic-version": _ANTHROPIC_VERSION}
-        resolved_key = _resolve_api_key(cfg.get("api_key"))
+        resolved_key = _key_to_send(cfg.get("api_key"))
         if resolved_key:
             headers["x-api-key"] = resolved_key
         resp = post(
@@ -243,7 +260,7 @@ def _llm_call(
         raw = "".join(block["text"] for block in resp.json()["content"] if block.get("type") == "text")
     else:  # openai_compat
         headers = {}
-        resolved_key = _resolve_api_key(cfg.get("api_key"))
+        resolved_key = _key_to_send(cfg.get("api_key"))
         if resolved_key:
             headers["Authorization"] = f"Bearer {resolved_key}"
         resp = post(
@@ -286,7 +303,7 @@ def _probe(client: httpx.Client, provider: str, base_url: str, api_key: str | No
         return
     # openai_compat
     headers: dict[str, str] = {}
-    resolved_key = _resolve_api_key(api_key)  # env:VARNAME resolved at probe time
+    resolved_key = _key_to_send(api_key)  # env:VARNAME resolved and checked at probe time
     if resolved_key:
         headers["Authorization"] = f"Bearer {resolved_key}"
     resp = client.get(f"{base_url}/v1/models", headers=headers)
@@ -354,16 +371,17 @@ def configure_llm(
 
     Note: ``api_key`` is stored as plain text in the SQLite config table (or as an
     ``env:VARNAME`` indirection). Acceptable for local-only use; keyring hardening is
-    deferred.
+    deferred. For an HTTP family the key must be one Bearer token of visible ASCII, or the
+    configure call is refused naming the field (#662).
     """
     _require_llm()
     if provider not in ("ollama", *_HTTP_LLM_FAMILIES):
         raise ValidationError(f"Unknown provider: {provider}. Use 'ollama', 'openai_compat', or 'anthropic_compat'.")
     if api_key or provider == "ollama":
-        _check_llm_key_spec(api_key)
+        _check_llm_key_spec(api_key, provider)
     else:  # an HTTP provider configured without a key keeps the stored one
         row = conn.execute("SELECT value FROM config WHERE key = 'llm_api_key'").fetchone()
-        _check_llm_key_spec(row["value"] if row else None)
+        _check_llm_key_spec(row["value"] if row else None, provider)
     if provider in _HTTP_LLM_FAMILIES and not base_url:
         raise ValidationError(f"base_url is required for {provider} provider")
     # Preserve the shared loopback flag unless the caller set it explicitly.

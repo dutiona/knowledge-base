@@ -22,6 +22,7 @@ from ..extraction import (
 )
 from ..jobs import submit_job
 from ..llm import _require_llm, configure_llm
+from ..utils import error_text
 from ..vision import configure_omniparser, configure_vision, estimate_figures_time
 
 mcp = FastMCP("extraction-routes")
@@ -132,7 +133,7 @@ def extract_structure_tool(
                 )
             )
         except ExtractionError as e:  # the text a failed extraction job records as its result
-            result: dict[str, object] = {"error": str(e)}
+            result: dict[str, object] = {"error": error_text(e)}  # rendered at :750; never httpx's own text (#662)
             if e.errors:
                 result["errors"] = e.errors
             if e.raw:

@@ -280,7 +280,8 @@ was recorded before the served artifact existed (schema v1). The active space mu
 embeds into or queries. `config` mirrors only `embed_provider`, `embed_model` and `embed_dim`. An
 `env:` key spec is resolved at call time and is **never** stored as the resolved secret. An inline
 `llm_api_key` is stored plaintext-at-rest (local-only posture); an LLM key may name only
-`env:KNOWLEDGE_BASE_LLM_API_KEY`.
+`env:KNOWLEDGE_BASE_LLM_API_KEY`. An LLM key for an HTTP family holds one Bearer token of visible ASCII, refused at
+configure time and again before each request.
 
 ---
 

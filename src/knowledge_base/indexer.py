@@ -23,6 +23,7 @@ from .db import get_connection, init_schema, open_declared_db, resolve_db_path
 from .exceptions import KnowledgeBaseError
 from .jobs import shutdown_worker
 from .store_lock import hold
+from .utils import error_text
 
 logger = logging.getLogger(__name__)
 
@@ -468,10 +469,10 @@ def main(argv: list[str] | None = None) -> None:
             finally:
                 shutdown_worker()
     except (KnowledgeBaseError, ValueError) as exc:
-        _print_error({"error": str(exc)})
+        _print_error({"error": error_text(exc)})
         sys.exit(1)
     except httpx.HTTPError as exc:
-        _print_error({"error": f"{args.command} failed: {exc}; rerun it"})
+        _print_error({"error": f"{args.command} failed: {error_text(exc)}; rerun it"})
         sys.exit(1)
 
 

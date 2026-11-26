@@ -1,6 +1,7 @@
 """Tests for LLM configuration, calling, and connectivity (llm.py)."""
 
 import json
+import secrets
 
 import httpx
 import pytest
@@ -828,4 +829,82 @@ def test_a_stored_foreign_key_spec_is_refused_before_any_request(kb_conn, http_r
     with pytest.raises(ValidationError, match="KNOWLEDGE_BASE_LLM_API_KEY"):
         configure_llm(kb_conn, "openai_compat", "https://attacker.example.test")
     assert http_requests == []
+    assert _config_rows(kb_conn) == before
+
+
+# --- #662: the LLM key is one Bearer token of visible ASCII, refused before any header ---
+
+
+@pytest.mark.parametrize("provider", ["openai_compat", "anthropic_compat"])
+@pytest.mark.parametrize("padded", ["{k} ", " {k}", "{k}\r", "{k}\nmore", "{k}\u00e9", "{k}\x01"])
+def test_a_padded_llm_key_is_refused_naming_the_field(kb_conn, http_requests, serve, provider, padded):
+    """A key h11 or httpx cannot put on the wire is refused at configure time, never stored, never sent (#662)."""
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.llm import configure_llm
+
+    serve("llm.example.test", _ok)
+    key = secrets.token_hex(16)
+    before = _config_rows(kb_conn)
+    with pytest.raises(ValidationError, match=r"^llm_api_key must") as refused:
+        configure_llm(kb_conn, provider, "https://llm.example.test", api_key=padded.format(k=key))
+    assert key not in str(refused.value)
+    assert http_requests == []
+    assert _config_rows(kb_conn) == before
+
+
+def test_a_padded_env_llm_key_is_refused_before_any_request(kb_conn, http_requests, serve, monkeypatch):
+    """The env key is checked on the resolved bytes at the header, because a config read can be stale (#662)."""
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.llm import _llm_call
+
+    serve("llm.example.test", _ok)
+    key = secrets.token_hex(16)
+    monkeypatch.setenv("KNOWLEDGE_BASE_LLM_API_KEY", f"{key} ")
+    cfg = {
+        "provider": "openai_compat",
+        "base_url": "https://llm.example.test",
+        "model": "m",
+        "api_key": "env:KNOWLEDGE_BASE_LLM_API_KEY",
+        "allow_loopback": False,
+        "floor": True,
+    }
+    with pytest.raises(ValidationError, match=r"^KNOWLEDGE_BASE_LLM_API_KEY must") as refused:
+        _llm_call("prompt", cfg=cfg)
+    assert key not in str(refused.value)
+    assert http_requests == []
+
+
+def test_an_unset_llm_key_variable_stays_keyless(kb_conn, http_requests, serve, monkeypatch):
+    """A keyless local server keeps working: no variable, no Authorization header, the request still goes out."""
+    from knowledge_base.llm import _llm_call
+
+    monkeypatch.delenv("KNOWLEDGE_BASE_LLM_API_KEY", raising=False)
+    serve("llm.example.test", lambda request: httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]}))
+    cfg = {
+        "provider": "openai_compat",
+        "base_url": "https://llm.example.test",
+        "model": "m",
+        "api_key": "env:KNOWLEDGE_BASE_LLM_API_KEY",
+        "allow_loopback": False,
+        "floor": True,
+    }
+    assert _llm_call("prompt", cfg=cfg) == "{}"
+    assert len(http_requests) == 1
+    assert "Authorization" not in http_requests[0].headers
+
+
+def test_a_stored_padded_key_is_refused_when_the_provider_switches_to_an_http_family(kb_conn, http_requests, serve):
+    """A key stored while it was never sent cannot ride into an HTTP provider's header (#662)."""
+    from knowledge_base.exceptions import ValidationError
+    from knowledge_base.llm import configure_llm
+
+    serve("llm.example.test", _ok)
+    key = secrets.token_hex(16)
+    configure_llm(kb_conn, "ollama", "https://llm.example.test", api_key=f"{key} ")
+    before = _config_rows(kb_conn)
+    sent = len(http_requests)  # the ollama probe above is the only request so far
+    with pytest.raises(ValidationError, match=r"^llm_api_key must") as refused:
+        configure_llm(kb_conn, "openai_compat", "https://llm.example.test")
+    assert key not in str(refused.value)
+    assert len(http_requests) == sent
     assert _config_rows(kb_conn) == before

@@ -1,10 +1,12 @@
 """Tests for deferred extraction job queue."""
 
 import json
+import secrets
 import time
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from knowledge_base.db import get_connection, init_schema
@@ -355,3 +357,41 @@ def test_progress_is_visible_while_its_job_runs(tmp_path):
 
     assert job["status"] == "completed"
     assert seen == ["resolving entities..."]
+
+
+# --- #662: a failed job stores and logs no endpoint and no header value ---
+
+_LLM_URL = "http://llm.example.test:1234/v1/chat/completions"
+
+
+def _llm_status_error() -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", _LLM_URL)
+    response = httpx.Response(503, request=request)
+    return httpx.HTTPStatusError(f"Server error '503' for url '{request.url}'", request=request, response=response)
+
+
+@pytest.mark.parametrize("failure", ["status", "protocol"], ids=["status-error", "h11-refusal"])
+def test_a_failed_job_stores_no_endpoint_and_no_header_value(tmp_path, caplog, failure):
+    """The caller-visible job row and the log carry the failure class, never httpx's text (#662)."""
+    import logging
+
+    key = secrets.token_hex(16)
+
+    def fake(conn_, paper_id_, confirmed=False, *, on_progress, **kwargs):
+        if failure == "status":
+            raise _llm_status_error()
+        # h11's own shape: the refused header value is quoted in the message
+        raise httpx.LocalProtocolError(f"Illegal header value b'Bearer {key}'")
+
+    with caplog.at_level(logging.ERROR, logger="knowledge_base.jobs"):
+        job, _names = _run_once(tmp_path, fake)
+
+    assert job["status"] == "failed"
+    if failure == "status":
+        assert job["error"] == "HTTPStatusError (HTTP 503)"
+    assert "llm.example.test" not in job["error"]
+    assert key not in job["error"]
+    assert "llm.example.test" not in json.dumps(job["result"])
+    assert key not in json.dumps(job["result"])
+    assert "llm.example.test" not in caplog.text
+    assert key not in caplog.text

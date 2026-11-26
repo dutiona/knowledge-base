@@ -154,6 +154,8 @@ Returns a list of entities with their canonical name, type (method/dataset/metri
 LLM extraction is off unless the server runs with `KNOWLEDGE_BASE_LLM=on`: until then `configure_llm_tool` and every
 extraction refuse. An LLM `api_key` is an inline value or exactly `env:KNOWLEDGE_BASE_LLM_API_KEY`; any other `env:`
 spec is refused, so no tool call can send another secret of the server (such as the embedder key) to a host it names.
+For `openai_compat` or `anthropic_compat` the key is one token of visible ASCII: a padded, multi-line or non-ASCII
+value is refused naming the field, and never echoed, instead of failing inside the HTTP client.
 With it on, configure the LLM used for structured extraction:
 
 ```json
@@ -197,5 +199,6 @@ the address it checked, so a name that later resolves to a private address is re
 
 The API key, if provided inline, is stored as plain text in the SQLite config table (acceptable
 for local use, not for network-exposed deployments). Prefer the `env:KNOWLEDGE_BASE_LLM_API_KEY` indirection, the only `env:` spec an LLM key may name —
-the secret is resolved at call time and never written to the DB. No vendor SDK is added; all three
+the secret is resolved at call time and never written to the DB. A stored value that is not one token is refused
+at every read, so re-run `configure_llm` if an older build accepted a padded key. No vendor SDK is added; all three
 families use `httpx` directly. Streaming, tool-calling, and multi-turn are out of scope.

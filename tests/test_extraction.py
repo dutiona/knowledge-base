@@ -5,6 +5,8 @@ import logging
 import re
 from unittest.mock import patch
 
+import httpx
+
 from knowledge_base.db import get_connection, init_schema
 from knowledge_base.exceptions import ExtractionError, NotFoundError
 import pytest
@@ -2017,3 +2019,66 @@ def test_the_map_phase_client_is_floored(tmp_path, http_requests, fake_dns, publ
         _extract_map_reduce(conn, 1, [{"id": 1, "content": "a"}, {"id": 2, "content": "b"}])
 
     assert http_requests.targets() == ["203.0.113.20", "203.0.113.20"]
+
+
+# --- #662: a failed LLM call names no endpoint in its message, its chunks or the log ---
+
+_EXTRACTION_LLM_URL = "http://llm.example.test:1234/v1/chat/completions"
+
+
+def _llm_status_error() -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", _EXTRACTION_LLM_URL)
+    response = httpx.Response(503, request=request)
+    return httpx.HTTPStatusError(f"Server error '503' for url '{request.url}'", request=request, response=response)
+
+
+@pytest.mark.usefixtures("stub_document_embedder")
+def test_a_failed_single_pass_call_names_no_endpoint(tmp_path):
+    """The composed ExtractionError renders the httpx class and status, never its own text (#662)."""
+    from knowledge_base.extraction import _extract_single_pass
+
+    conn = _setup(tmp_path)
+    md = tmp_path / "short.md"
+    md.write_text("A short paper about morphological operators.\n")
+    ingest_file(conn, md)
+    p = register_paper(conn, "Short", source_uri=str(md.resolve()))["paper_id"]
+    chunks = [{"id": 1, "content": "text"}]
+
+    with (
+        patch("knowledge_base.extraction._llm_call", side_effect=_llm_status_error()),
+        pytest.raises(ExtractionError) as exc_info,
+    ):
+        _extract_single_pass(conn, p, chunks)
+
+    assert "HTTPStatusError (HTTP 503)" in str(exc_info.value)
+    assert "llm.example.test" not in str(exc_info.value)
+
+
+@pytest.mark.usefixtures("stub_document_embedder")
+def test_a_failed_chunk_is_recorded_without_the_endpoint(tmp_path, caplog):
+    """Each failed chunk's stored message renders the class and status, and the FAILED log carries no host (#662)."""
+    conn = _setup(tmp_path)
+    md = tmp_path / "paper.md"
+    md.write_text("Content " * 200)
+    ingest_file(conn, md)
+    p = register_paper(conn, "Test", source_uri=str(md.resolve()))["paper_id"]
+    chunks = [
+        {"id": row["id"], "content": row["content"]}
+        for row in conn.execute(
+            "SELECT id, content FROM chunks WHERE source_uri = ? ORDER BY chunk_index",
+            (str(md.resolve()),),
+        ).fetchall()
+    ]
+
+    with (
+        caplog.at_level(logging.INFO, logger="knowledge_base.extraction"),
+        patch("knowledge_base.extraction._llm_call", side_effect=_llm_status_error()),
+        pytest.raises(ExtractionError) as exc_info,
+    ):
+        _extract_map_reduce(conn, p, chunks)
+
+    assert exc_info.value.errors is not None
+    rendered = json.dumps(exc_info.value.errors)
+    assert exc_info.value.errors[0]["error"] == "HTTPStatusError (HTTP 503)"
+    assert "llm.example.test" not in rendered
+    assert "llm.example.test" not in caplog.text
