@@ -220,25 +220,63 @@ def test_token_shape_is_the_adr_shape():
     assert not re.fullmatch(TOKEN_SHAPE, "me_types")
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "=eyJ" * (2**21 // 4),
-        "://u:p@" * (2**21 // 7),
-        "token=a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6 " * (2**21 // 39),
-        "-----BEGIN " * (2**21 // 11),
-        "_a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6" * (2**21 // 33),
-        # One word, one underscore: a copied context-word tail made this quadratic (15 s at 8 MiB, now 0.6 s).
-        "_" + ("g" + "0" * 32) * (2**23 // 33),
-        ("me_" + "0" * 32 + " Ab3dE5fG7hI9jK1lM2nO ") * (2**21 // 57),  # two detectors' spans interleave
-    ],
-    ids=["jwt-prefix", "url-authority", "hex-context", "pem-line", "hex-words", "one-long-word", "interleaved"],
-)
-def test_redaction_is_linear_on_hostile_input(text):
-    """``ingest_text`` takes 4 MiB over HTTP. At 2 MiB a quadratic shape that costs 2.5 s at 1 MiB takes 10 s."""
-    started = time.monotonic()
-    scrub(text)
-    assert time.monotonic() - started < 6
+#: The smaller size the linearity check reads. N + 2N is less scrub work than the single 2 MiB run it replaces.
+_SMALL = 2**19
+#: t(2N)/t(N) = 2 + 2Q/(Q+L) for a quadratic term Q and a linear one L at N, so this bound fires exactly when Q > L.
+#: Measured: linear shapes 1.72-2.30 over 42 pairs (idle, and 40 competing loops on one core); the #592 regression,
+#: run at this N from the pre-fix module, 3.52; a pure quadratic double 3.85+.
+_MAX_GROWTH = 2.8
+
+_HOSTILE = {  # the seven hostile shapes, each a builder of n bytes; the ids are the contract
+    "jwt-prefix": lambda n: "=eyJ" * (n // 4),
+    "url-authority": lambda n: "://u:p@" * (n // 7),
+    "hex-context": lambda n: "token=a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6 " * (n // 39),
+    "pem-line": lambda n: "-----BEGIN " * (n // 11),
+    "hex-words": lambda n: "_a3f1b2c4d5e6f7a8b9c0d1e2f3a4b5c6" * (n // 33),
+    # One word, one underscore: a copied context-word tail made this quadratic (15 s at 8 MiB, now 0.6 s).
+    "one-long-word": lambda n: "_" + ("g" + "0" * 32) * (n // 33),
+    "interleaved": lambda n: ("me_" + "0" * 32 + " Ab3dE5fG7hI9jK1lM2nO ") * (n // 57),
+}
+
+
+def _cpu_seconds(run, text: str) -> float:
+    started = time.process_time()
+    run(text)
+    return time.process_time() - started
+
+
+def _assert_linear(run, make, *, small: int = _SMALL) -> None:
+    """Assert *run* over *make*'s shape grows about linearly: t(2N)/t(N) < ``_MAX_GROWTH``.
+
+    A ratio of the same work at two sizes is a property of the algorithm; the absolute bound this replaces was a
+    property of the runner (8.2 s against 6 s on a shared runner, #664). CPU time keeps a noisy neighbour's
+    descheduling out, and each shape is built outside the clock.
+    """
+    t_small = _cpu_seconds(run, make(small))
+    t_large = _cpu_seconds(run, make(small * 2))
+    ratio = t_large / max(t_small, 1e-6)
+    assert ratio < _MAX_GROWTH, f"t(2N)/t(N) = {ratio:.2f} at N = {small} bytes: a linear pass doubles"
+
+
+def _rescan(text: str) -> None:
+    """A deliberately quadratic detector: one full scan per character."""
+    for _ in range(len(text)):
+        text.count("x")
+
+
+scrub("warm")  # the regex module builds its caches lazily; one warm-up keeps them out of the first timed run
+
+
+@pytest.mark.parametrize("make", list(_HOSTILE.values()), ids=list(_HOSTILE))
+def test_redaction_is_linear_on_hostile_input(make):
+    """The ids are #664's contract: ``[url-authority]`` was the shape that failed on a shared runner."""
+    _assert_linear(scrub, make)
+
+
+def test_the_linearity_check_rejects_a_quadratic_shape():
+    """The check is the deliverable: a quadratic detector must raise, not merely be slow."""
+    with pytest.raises(AssertionError, match=r"t\(2N\)/t\(N\)"):
+        _assert_linear(_rescan, lambda n: "x" * n, small=2**13)
 
 
 def test_a_text_is_read_between_its_neighbours():
